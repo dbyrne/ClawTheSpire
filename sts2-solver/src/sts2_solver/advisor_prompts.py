@@ -190,7 +190,7 @@ def build_event_message(state: dict, game_data: GameDataDB) -> str:
     lines.append("")
     lines.append("OPTIONS:")
     for i, opt in enumerate(options):
-        idx = opt.get("index", i)
+        idx = opt.get("index", opt.get("i", i))
         # Raw state uses "title" + "description"; agent_view uses "line"
         title = opt.get("title") or opt.get("name", "")
         desc = strip_markup(opt.get("description", ""))
