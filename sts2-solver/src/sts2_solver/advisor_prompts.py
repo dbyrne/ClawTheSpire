@@ -289,8 +289,6 @@ def build_generic_message(state: dict, game_data: GameDataDB) -> str:
 # Actions that can be handled without an LLM call
 AUTO_ACTIONS = {
     "proceed",
-    "collect_rewards_and_proceed",
-    "confirm_modal",
     "open_chest",
     "open_shop_inventory",
 }

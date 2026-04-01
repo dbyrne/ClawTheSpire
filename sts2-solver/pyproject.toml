@@ -10,10 +10,12 @@ requires-python = ">=3.11"
 dependencies = [
     "fastmcp>=3.1.0,<4.0.0",
     "openai>=1.30.0,<2.0.0",
+    "rich>=13.0",
 ]
 
 [project.scripts]
 sts2-solver-mcp = "sts2_solver.mcp_server:main"
+sts2-run = "sts2_solver.runner:main"
 
 [dependency-groups]
 dev = ["pytest>=8.0"]

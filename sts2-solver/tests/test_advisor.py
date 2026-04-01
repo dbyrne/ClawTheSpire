@@ -153,8 +153,8 @@ class TestDetectScreenType:
     def test_auto_proceed(self):
         assert detect_screen_type(["proceed"]) == "auto"
 
-    def test_auto_confirm(self):
-        assert detect_screen_type(["confirm_modal"]) == "auto"
+    def test_confirm_modal_not_auto(self):
+        assert detect_screen_type(["confirm_modal"]) == "generic"
 
     def test_generic_fallback(self):
         assert detect_screen_type(["some_unknown_action"]) == "generic"
