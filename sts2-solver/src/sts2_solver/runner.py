@@ -708,8 +708,15 @@ class Runner:
     # Action execution with retry
     # ------------------------------------------------------------------
 
-    def _wait_for_ready(self, timeout: float = 10.0, poll: float = 0.2) -> None:
-        """Poll until the game is ready to accept actions (no 409)."""
+    def _wait_for_ready(
+        self, timeout: float = 10.0, poll: float = 0.2, min_wait: float = 0.3,
+    ) -> None:
+        """Poll until the game is ready to accept actions (no 409).
+
+        min_wait ensures we don't return too fast — the game can respond to
+        state queries while still transitioning screens (e.g. combat -> reward).
+        """
+        time.sleep(min_wait)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             try:
