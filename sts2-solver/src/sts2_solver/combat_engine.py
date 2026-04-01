@@ -30,6 +30,9 @@ def can_play_card(state: CombatState, card_idx: int) -> bool:
     if card_idx < 0 or card_idx >= len(state.player.hand):
         return False
     card = state.player.hand[card_idx]
+    # Unplayable cards (Status, Curse) use cost -1 in game data
+    if card.cost < 0:
+        return False
     cost = effective_cost(state, card)
     if cost > state.player.energy:
         return False

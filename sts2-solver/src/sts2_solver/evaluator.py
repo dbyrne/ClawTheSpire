@@ -44,9 +44,9 @@ def evaluate_turn(state: CombatState, initial_state: CombatState) -> float:
         else:
             # Partial damage: valuable but less than a kill
             # Weighted by how close to lethal (% HP removed)
-            score += damage_dealt * 1.0
+            score += damage_dealt * 1.5
             kill_proximity = damage_dealt / initial_hp if initial_hp > 0 else 0
-            score += kill_proximity * 5.0
+            score += kill_proximity * 8.0
 
     # -----------------------------------------------------------------------
     # 2. Block vs incoming damage
@@ -60,10 +60,10 @@ def evaluate_turn(state: CombatState, initial_state: CombatState) -> float:
     if total_incoming > 0:
         effective_block = min(state.player.block, total_incoming)
         wasted_block = state.player.block - effective_block
-        # Blocking incoming damage is very valuable
-        score += effective_block * 2.0
+        # Blocking incoming damage is valuable
+        score += effective_block * 1.5
         # Over-blocking is slightly wasteful (but not terrible)
-        score -= wasted_block * 0.15
+        score -= wasted_block * 0.2
     else:
         # No attack incoming: block has less immediate value
         # Still worth something if enemies are alive (future turns)

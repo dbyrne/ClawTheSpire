@@ -497,6 +497,7 @@ class Runner:
         # Solve
         try:
             sim_state = state_from_mcp(gs, self.card_db)
+            original_hand = list(sim_state.player.hand)  # snapshot before solve
             t0 = time.perf_counter()
             result = solve_turn(sim_state, card_db=self.card_db)
             solve_ms = (time.perf_counter() - t0) * 1000
@@ -504,9 +505,12 @@ class Runner:
             self._log_action(f"[red]Solver error: {e}[/red]")
             return
 
+        # Restore hand for format_solution (solve_turn may have mutated it)
+        sim_state.player.hand = original_hand
+
         # Update solver panel
         solution_str = format_solution(result, sim_state)
-        hand_str = ", ".join(c.name for c in sim_state.player.hand)
+        hand_str = ", ".join(c.name for c in original_hand)
         self._solver_text = (
             f"[bold]Turn {turn}[/bold] | "
             f"HP {player.get('current_hp', '?')}/{player.get('max_hp', '?')} | "
@@ -538,12 +542,12 @@ class Runner:
         # Execute
         from .bridge import actions_to_mcp_sequence
         mcp_actions = actions_to_mcp_sequence(result.actions)
-        exec_hand = list(sim_state.player.hand)
+        exec_hand = list(original_hand)
 
         for solver_action, mcp_action in zip(result.actions, mcp_actions):
             if solver_action.action_type == "end_turn":
                 label = "End Turn"
-            else:
+            elif solver_action.card_idx is not None and solver_action.card_idx < len(exec_hand):
                 card = exec_hand[solver_action.card_idx]
                 target = (
                     f" -> enemy {solver_action.target_idx}"
@@ -551,6 +555,8 @@ class Runner:
                 )
                 label = f"{card.name}{target}"
                 exec_hand.pop(solver_action.card_idx)
+            else:
+                label = f"card_idx={solver_action.card_idx}"
 
             try:
                 self._execute_with_retry(
@@ -564,13 +570,13 @@ class Runner:
                 self._log_action(f"  [red]X {label}: {e}[/red]")
                 break
 
-            time.sleep(0.5)
+            self._wait_for_ready()
             self._refresh()
 
         self.turn_count += 1
 
         # Check for combat end
-        time.sleep(0.5)
+        self._wait_for_ready()
         try:
             post = self.client.get_state()
             if "COMBAT" not in post.get("screen", "").upper():
@@ -684,11 +690,13 @@ class Runner:
             self._log_action(
                 f"[bold green]VICTORY![/bold green] Floor {floor} | HP {hp}"
             )
+            self.logger.log_combat_end(gs, "win")
             self.logger.log_run_end(gs, "victory")
         else:
             self._log_action(
                 f"[bold red]DEFEAT[/bold red] Floor {floor} | HP {hp}"
             )
+            self.logger.log_combat_end(gs, "defeat")
             self.logger.log_run_end(gs, "defeat")
 
         self._log_action(
@@ -700,6 +708,22 @@ class Runner:
     # Action execution with retry
     # ------------------------------------------------------------------
 
+    def _wait_for_ready(self, timeout: float = 10.0, poll: float = 0.2) -> None:
+        """Poll until the game is ready to accept actions (no 409)."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                self.client.get_state()
+                return  # Game responded without error — ready
+            except ConnectionError as e:
+                if "409" in str(e):
+                    time.sleep(poll)
+                    continue
+                return  # Non-409 error, let the action call handle it
+            except Exception:
+                return
+        # Timeout — proceed anyway, the action call will retry if needed
+
     def _execute_with_retry(
         self,
         action: str,
@@ -707,8 +731,8 @@ class Runner:
         card_index: int | None = None,
         target_index: int | None = None,
         option_index: int | None = None,
-        retries: int = 5,
-        delay: float = 1.0,
+        retries: int = 10,
+        delay: float = 0.3,
     ) -> dict:
         """Execute a game action, retrying on 409 Conflict (game busy/animating)."""
         for attempt in range(retries + 1):
@@ -722,11 +746,8 @@ class Runner:
             except ConnectionError as e:
                 if "409" in str(e):
                     if attempt < retries:
-                        self._log_action(
-                            f"  [dim]waiting for animation... ({attempt + 1}/{retries})[/dim]"
-                        )
-                        time.sleep(delay)
-                        self._refresh()
+                        wait = min(delay * (1.5 ** attempt), 2.0)
+                        time.sleep(wait)
                         continue
                     self._log_action(
                         f"  [yellow]skipped (game busy after {retries} retries)[/yellow]"

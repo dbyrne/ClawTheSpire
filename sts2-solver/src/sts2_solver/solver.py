@@ -142,11 +142,13 @@ def format_solution(result: SolverResult, state: CombatState) -> str:
     for action in result.actions:
         if action.action_type == "end_turn":
             lines.append("  -> End Turn")
-        else:
+        elif action.card_idx is not None and action.card_idx < len(hand):
             card = hand[action.card_idx]
             if action.target_idx is not None:
                 lines.append(f"  -> {card.name} [{card.cost}] -> enemy {action.target_idx}")
             else:
                 lines.append(f"  -> {card.name} [{card.cost}]")
             hand.pop(action.card_idx)
+        else:
+            lines.append(f"  -> card_idx={action.card_idx} (out of range)")
     return "\n".join(lines)

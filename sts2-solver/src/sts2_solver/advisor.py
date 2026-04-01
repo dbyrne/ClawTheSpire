@@ -115,7 +115,11 @@ class StrategicAdvisor:
                 game_state=game_state,
                 screen_type=screen_type,
                 options=actions,
-                choice={"action": decision.action, "option_index": decision.option_index},
+                choice={
+                    "action": decision.action,
+                    "option_index": decision.option_index,
+                    "reasoning": decision.reasoning,
+                },
                 source="advisor",
                 latency_ms=latency_ms,
             )

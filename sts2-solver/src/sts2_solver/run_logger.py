@@ -134,7 +134,9 @@ class RunLogger:
         })
 
     def log_combat_end(self, game_state: dict, outcome: str) -> None:
-        """Log end of combat. outcome is 'win' or 'loss'."""
+        """Log end of combat. outcome is 'win', 'defeat', or 'loss'."""
+        if self._combat_start_hp is None:
+            return  # No active combat to close
         run = game_state.get("run") or {}
         hp_after = run.get("current_hp") or (game_state.get("combat", {}).get("player", {}).get("current_hp"))
 

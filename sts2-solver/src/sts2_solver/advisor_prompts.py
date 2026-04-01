@@ -10,14 +10,15 @@ You are an expert Slay the Spire 2 strategic advisor. You make non-combat decisi
 for an AI player. You receive the current game state and must choose the best action.
 
 CORE STRATEGY PRINCIPLES:
-- Deck quality over deck size. Skip weak card rewards rather than bloating your deck.
+- Deck quality over deck size. A lean 12-15 card deck draws key cards more often.
+- SKIP card rewards unless the card actively improves your deck archetype. Most cards are skips.
 - Front-load damage in Act 1. You need to kill enemies fast before scaling matters.
 - Scaling (Strength, multi-hit, powers) matters more in Act 2+.
 - HP is a resource. Spend it at events/elites when the payoff is worth it.
 - Track your deck archetype (strength-scaling, exhaust, block-heavy, etc.) and draft toward it.
 - Elite fights give better rewards but are risky. Don't path into elites below ~50% HP without potions.
-- Removing Strikes is almost always correct at shops. Removing Defends is good once you have better block.
-- Rest vs. Upgrade: upgrade if HP > 60%, rest if HP < 40%, judgment call in between.
+- At shops, ALWAYS prioritize card removal over buying cards. Remove Strikes first, then Defends once you have better block. Only buy cards/relics after removal.
+- Rest vs. Upgrade: upgrade if HP > 60%, rest if HP < 40%, judgment call in between. BUT always rest before a boss fight if HP < 70%.
 - Boss relics: evaluate against your specific deck composition, not in isolation.
 - Potions are powerful — buy them when cheap, use them to survive elites.
 
@@ -101,7 +102,12 @@ def build_card_reward_message(state: dict, game_data: GameDataDB) -> str:
     lines.append("")
     lines.append("AVAILABLE ACTIONS: choose_reward_card (with option_index), skip_reward_cards")
     lines.append("")
-    lines.append("Which card should we pick, or should we skip? Consider deck synergy and archetype.")
+
+    deck_size = len(_get_deck(state))
+    if deck_size >= 15:
+        lines.append(f"Deck has {deck_size} cards — SKIP unless a card is exceptional for your archetype. Lean decks win runs.")
+    else:
+        lines.append("Which card should we pick, or should we skip? Consider deck synergy and archetype. Skip mediocre cards.")
 
     return "\n".join(lines)
 
@@ -121,13 +127,28 @@ def build_map_message(state: dict, game_data: GameDataDB) -> str:
 
     lines.append("AVAILABLE MAP NODES:")
     for i, node in enumerate(nodes):
-        node_type = node.get("type") or node.get("icon") or node.get("symbol", "?")
+        node_type = (
+            node.get("node_type")
+            or node.get("type")
+            or node.get("icon")
+            or node.get("symbol", "?")
+        )
+        idx = node.get("index", i)
         extra = ""
-        if node.get("elite"):
-            extra = " [ELITE]"
-        elif node.get("boss"):
+        node_type_lower = node_type.lower() if node_type else ""
+        if "elite" in node_type_lower:
+            extra = " [ELITE - risky but better rewards]"
+        elif "boss" in node_type_lower:
             extra = " [BOSS]"
-        lines.append(f"  option_index={i}: {node_type}{extra}")
+        elif "rest" in node_type_lower:
+            extra = " [REST - heal or upgrade]"
+        elif "shop" in node_type_lower or "merchant" in node_type_lower:
+            extra = " [SHOP]"
+        elif "event" in node_type_lower or "unknown" in node_type_lower or "mystery" in node_type_lower:
+            extra = " [EVENT - random encounter]"
+        elif "treasure" in node_type_lower or "chest" in node_type_lower:
+            extra = " [TREASURE]"
+        lines.append(f"  option_index={idx}: {node_type}{extra}")
 
     lines.append("")
     lines.append("AVAILABLE ACTIONS: choose_map_node (with option_index)")
@@ -207,7 +228,9 @@ def build_shop_message(state: dict, game_data: GameDataDB) -> str:
     lines.append("")
     lines.append("AVAILABLE ACTIONS: buy_card, buy_relic, buy_potion (with option_index), remove_card_at_shop, close_shop_inventory")
     lines.append("")
-    lines.append("What should we buy, remove, or should we leave? Consider gold budget and deck needs.")
+    lines.append("PRIORITY ORDER: 1) Remove a card (Strikes first, then Defends) if available and affordable. "
+                 "2) Buy a key relic if it fits your archetype. 3) Buy a potion if cheap. "
+                 "4) Buy a card ONLY if it's a strong archetype fit. 5) Leave if nothing is worth the gold.")
 
     return "\n".join(lines)
 
@@ -236,8 +259,15 @@ def build_rest_message(state: dict, game_data: GameDataDB) -> str:
     run = state.get("run", {})
     hp = run.get("current_hp", 0)
     max_hp = run.get("max_hp", 1)
+    floor = run.get("floor", 0)
     hp_pct = hp / max_hp if max_hp > 0 else 0
-    lines.append(f"HP is at {hp_pct:.0%}. Upgrade if >60%, rest if <40%, judgment call in between.")
+
+    # Boss floors are typically 17, 34, 52
+    pre_boss = floor in (15, 16, 33, 34, 51, 52)
+    if pre_boss:
+        lines.append(f"HP is at {hp_pct:.0%}. BOSS FIGHT IS NEXT — rest/heal if HP < 70%. Only upgrade if HP > 80%.")
+    else:
+        lines.append(f"HP is at {hp_pct:.0%}. Upgrade if >60%, rest if <40%, judgment call in between.")
 
     return "\n".join(lines)
 
