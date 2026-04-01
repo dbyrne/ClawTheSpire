@@ -1,0 +1,339 @@
+"""Event-sourced run logger.
+
+Captures a full state snapshot at run start, then logs only deltas and
+decisions.  Output is one JSONL file per run under ``logs/``.
+
+To reconstruct state at any point, replay events from the initial snapshot.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+
+LOGS_DIR = Path(os.environ.get(
+    "STS2_LOGS_DIR",
+    Path(__file__).resolve().parents[3] / "logs",
+))
+
+
+class RunLogger:
+    """Tracks a single run, emitting events to a JSONL file."""
+
+    def __init__(self, logs_dir: Path | None = None):
+        self.logs_dir = logs_dir or LOGS_DIR
+        self.game_version: str | None = None
+        self._file = None
+        self._run_id: str | None = None
+        self._prev_state: dict | None = None
+        self._turn_start_hp: int | None = None
+        self._combat_start_hp: int | None = None
+        self._combat_enemies: list[dict] | None = None
+        self._combat_turn: int = 0
+
+    def __del__(self) -> None:
+        self.close()
+
+    def __enter__(self) -> RunLogger:
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    def ensure_run(self, game_state: dict) -> None:
+        """Start tracking a run if not already, or detect a new run."""
+        run = game_state.get("run") or {}
+        run_id = game_state.get("run_id") or run.get("run_id")
+
+        if run_id and run_id != self._run_id:
+            self._start_run(game_state, run_id)
+
+    def close(self) -> None:
+        """Flush and close the current log file."""
+        if self._file:
+            self._file.close()
+            self._file = None
+        self._run_id = None
+        self._prev_state = None
+
+    # ------------------------------------------------------------------
+    # Event emitters — called by mcp_server
+    # ------------------------------------------------------------------
+
+    def log_decision(
+        self,
+        game_state: dict,
+        screen_type: str,
+        options: Any,
+        choice: dict,
+        source: str,
+        latency_ms: float | None = None,
+    ) -> None:
+        """Log a strategic or auto decision."""
+        self.ensure_run(game_state)
+        self._emit_diffs(game_state)
+
+        event: dict[str, Any] = {
+            "type": "decision",
+            "screen_type": screen_type,
+            "options": options,
+            "choice": choice,
+            "source": source,
+        }
+        if latency_ms is not None:
+            event["latency_ms"] = round(latency_ms, 1)
+
+        self._emit(event)
+
+    def log_combat_start(self, game_state: dict) -> None:
+        """Log the beginning of a combat encounter."""
+        self.ensure_run(game_state)
+        combat = game_state.get("combat") or {}
+        enemies = combat.get("enemies") or []
+        player = combat.get("player") or {}
+
+        self._combat_start_hp = player.get("current_hp")
+        self._combat_turn = 0
+        self._combat_enemies = [
+            {"name": e.get("name", "?"), "hp": e.get("current_hp", 0), "max_hp": e.get("max_hp", 0)}
+            for e in enemies if e.get("is_alive", True)
+        ]
+
+        run = game_state.get("run") or {}
+        self._emit({
+            "type": "combat_start",
+            "floor": run.get("floor"),
+            "enemies": self._combat_enemies,
+        })
+
+    def log_combat_turn(
+        self,
+        cards_played: list[str],
+        score: float,
+        states_evaluated: int,
+        solve_ms: float,
+    ) -> None:
+        """Log a single combat turn's solver output."""
+        self._combat_turn += 1
+        self._emit({
+            "type": "combat_turn",
+            "turn": self._combat_turn,
+            "cards_played": cards_played,
+            "score": round(score, 1),
+            "states_evaluated": states_evaluated,
+            "solve_ms": round(solve_ms, 1),
+        })
+
+    def log_combat_end(self, game_state: dict, outcome: str) -> None:
+        """Log end of combat. outcome is 'win' or 'loss'."""
+        run = game_state.get("run") or {}
+        hp_after = run.get("current_hp") or (game_state.get("combat", {}).get("player", {}).get("current_hp"))
+
+        self._emit({
+            "type": "combat_end",
+            "outcome": outcome,
+            "turns": self._combat_turn,
+            "hp_before": self._combat_start_hp,
+            "hp_after": hp_after,
+        })
+        self._combat_start_hp = None
+        self._combat_enemies = None
+        self._combat_turn = 0
+
+    def log_run_end(self, game_state: dict, outcome: str) -> None:
+        """Log the end of a run."""
+        run = game_state.get("run") or {}
+        deck = run.get("deck", [])
+        relics = run.get("relics", [])
+
+        self._emit({
+            "type": "run_end",
+            "outcome": outcome,
+            "floor": run.get("floor"),
+            "final_deck": _summarize_deck_list(deck),
+            "final_relics": [r.get("name") or r.get("relic_id", "?") for r in relics],
+            "final_hp": run.get("current_hp"),
+            "final_max_hp": run.get("max_hp"),
+            "final_gold": run.get("gold"),
+        })
+        self.close()
+
+    # ------------------------------------------------------------------
+    # State diffing
+    # ------------------------------------------------------------------
+
+    def _emit_diffs(self, game_state: dict) -> None:
+        """Compare current state to previous and emit delta events."""
+        if self._prev_state is None:
+            self._prev_state = game_state
+            return
+
+        prev_run = self._prev_state.get("run") or {}
+        curr_run = game_state.get("run") or {}
+
+        # HP change
+        prev_hp = prev_run.get("current_hp")
+        curr_hp = curr_run.get("current_hp")
+        prev_max = prev_run.get("max_hp")
+        curr_max = curr_run.get("max_hp")
+        if (prev_hp, prev_max) != (curr_hp, curr_max) and curr_hp is not None:
+            self._emit({
+                "type": "hp_change",
+                "hp": curr_hp,
+                "max_hp": curr_max,
+                "delta": (curr_hp - prev_hp) if prev_hp is not None and curr_hp is not None else None,
+            })
+
+        # Gold change
+        prev_gold = prev_run.get("gold")
+        curr_gold = curr_run.get("gold")
+        if prev_gold != curr_gold and curr_gold is not None:
+            self._emit({
+                "type": "gold_change",
+                "gold": curr_gold,
+                "delta": (curr_gold - prev_gold) if prev_gold is not None else None,
+            })
+
+        # Deck changes
+        prev_deck = _deck_counts(prev_run.get("deck", []))
+        curr_deck = _deck_counts(curr_run.get("deck", []))
+        if prev_deck != curr_deck:
+            added = {k: curr_deck[k] - prev_deck.get(k, 0) for k in curr_deck if curr_deck[k] > prev_deck.get(k, 0)}
+            removed = {k: prev_deck[k] - curr_deck.get(k, 0) for k in prev_deck if prev_deck[k] > curr_deck.get(k, 0)}
+            if added or removed:
+                self._emit({
+                    "type": "deck_change",
+                    "added": added if added else None,
+                    "removed": removed if removed else None,
+                    "deck_size": sum(curr_deck.values()),
+                })
+
+        # Relic changes
+        prev_relics = {r.get("relic_id") or r.get("id", "") for r in prev_run.get("relics", [])}
+        curr_relics_list = curr_run.get("relics", [])
+        curr_relics = {r.get("relic_id") or r.get("id", "") for r in curr_relics_list}
+        new_relics = curr_relics - prev_relics
+        for relic_id in new_relics:
+            relic = next((r for r in curr_relics_list if (r.get("relic_id") or r.get("id", "")) == relic_id), {})
+            self._emit({
+                "type": "relic_gained",
+                "relic_id": relic_id,
+                "name": relic.get("name", relic_id),
+            })
+
+        # Potion changes
+        prev_potions = _potion_slots(prev_run.get("potions", []))
+        curr_potions = _potion_slots(curr_run.get("potions", []))
+        if prev_potions != curr_potions:
+            for slot, curr_pot in curr_potions.items():
+                prev_pot = prev_potions.get(slot)
+                if curr_pot != prev_pot:
+                    self._emit({
+                        "type": "potion_change",
+                        "slot": slot,
+                        "potion": curr_pot,
+                        "previous": prev_pot,
+                    })
+
+        # Map — log once when first available
+        if not self._prev_state.get("map") and game_state.get("map"):
+            self._emit({
+                "type": "map_revealed",
+                "map": game_state["map"],
+            })
+
+        self._prev_state = game_state
+
+    # ------------------------------------------------------------------
+    # Internal
+    # ------------------------------------------------------------------
+
+    def _start_run(self, game_state: dict, run_id: str) -> None:
+        """Open a new log file and emit the run_start snapshot."""
+        self.close()
+        self._run_id = run_id
+
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        path = self.logs_dir / f"run_{run_id}_{ts}.jsonl"
+        self._file = open(path, "a", encoding="utf-8")
+
+        run = game_state.get("run") or {}
+        deck = run.get("deck", [])
+        relics = run.get("relics", [])
+        potions = run.get("potions", [])
+
+        event: dict[str, Any] = {
+            "type": "run_start",
+            "run_id": run_id,
+            "game_version": self.game_version,
+            "character": run.get("character_name") or run.get("character_id"),
+            "floor": run.get("floor"),
+            "hp": run.get("current_hp"),
+            "max_hp": run.get("max_hp"),
+            "gold": run.get("gold"),
+            "max_energy": run.get("max_energy"),
+            "deck": _summarize_deck_list(deck),
+            "relics": [r.get("name") or r.get("relic_id", "?") for r in relics],
+            "potions": [
+                p.get("name") if p.get("occupied") else None
+                for p in potions
+            ],
+            "map": game_state.get("map"),
+        }
+        self._emit(event)
+
+        self._prev_state = game_state
+
+    def _emit(self, event: dict) -> None:
+        """Write a single event line to the JSONL file."""
+        if self._file is None:
+            return
+        event["ts"] = datetime.now(timezone.utc).isoformat()
+        self._file.write(json.dumps(event, separators=(",", ":"), default=str) + "\n")
+        self._file.flush()
+
+
+# ------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------
+
+
+def _deck_counts(deck: list[dict]) -> dict[str, int]:
+    """Build {card_name: count} from a deck list."""
+    counts: dict[str, int] = {}
+    for card in deck:
+        name = card.get("name") or card.get("card_id", "?")
+        if card.get("upgraded"):
+            name += "+"
+        counts[name] = counts.get(name, 0) + 1
+    return counts
+
+
+def _potion_slots(potions: list[dict]) -> dict[int, str | None]:
+    """Build {slot_index: potion_name_or_none}."""
+    result: dict[int, str | None] = {}
+    for i, p in enumerate(potions):
+        idx = p.get("index", i)
+        result[idx] = p.get("name") if p.get("occupied") else None
+    return result
+
+
+def _summarize_deck_list(deck: list[dict]) -> list[str]:
+    """Return a compact list of card names (with + for upgraded)."""
+    result = []
+    for card in deck:
+        name = card.get("name") or card.get("card_id", "?")
+        if card.get("upgraded"):
+            name += "+"
+        result.append(name)
+    return sorted(result)
