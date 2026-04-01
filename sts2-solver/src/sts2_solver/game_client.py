@@ -64,6 +64,15 @@ class GameClient:
         try:
             with request.urlopen(req, timeout=10) as resp:
                 body = json.loads(resp.read().decode("utf-8"))
+        except error.HTTPError as e:
+            detail = ""
+            try:
+                detail = e.read().decode("utf-8", errors="replace")
+            except Exception:
+                pass
+            raise ConnectionError(
+                f"HTTP {e.code} from {url}: {detail or e.reason}"
+            ) from e
         except error.URLError as e:
             raise ConnectionError(f"Cannot reach game API at {url}: {e}") from e
         return self._unwrap(body)

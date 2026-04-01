@@ -300,6 +300,49 @@ def build_boss_relic_message(state: dict, game_data: GameDataDB) -> str:
     return "\n".join(lines)
 
 
+def build_deck_select_message(state: dict, game_data: GameDataDB) -> str:
+    """Build prompt for deck card selection (upgrade, remove, transform, etc.)."""
+    lines = [f"RUN: {summarize_run(state)}", f"DECK: {summarize_deck(_get_deck(state))}", ""]
+
+    selection = state.get("selection") or {}
+    if not selection:
+        agent_view = state.get("agent_view", {})
+        selection = agent_view.get("selection") or {}
+
+    prompt_text = strip_markup(selection.get("prompt", "Select a card"))
+    cards = selection.get("cards", [])
+
+    lines.append(f"ACTION: {prompt_text}")
+    lines.append("")
+    lines.append("CARDS TO CHOOSE FROM:")
+    for card in cards:
+        idx = card.get("index", 0)
+        name = card.get("name", card.get("card_id", "?"))
+        if card.get("upgraded"):
+            name += "+"
+        desc = ""
+        card_id = card.get("card_id") or card.get("id", "")
+        if card_id:
+            desc = f" — {game_data.card_description(card_id)}"
+        lines.append(f"  option_index={idx}: {name}{desc}")
+
+    lines.append("")
+    lines.append("AVAILABLE ACTIONS: select_deck_card (with option_index)")
+    lines.append("")
+
+    prompt_lower = prompt_text.lower()
+    if "remove" in prompt_lower:
+        lines.append("Which card should we REMOVE? Remove Strikes first, then Defends. "
+                     "Removing weak cards makes your deck more consistent.")
+    elif "upgrade" in prompt_lower:
+        lines.append("Which card should we UPGRADE? Prioritize key scaling cards, "
+                     "high-impact attacks, or cards you play every combat.")
+    else:
+        lines.append("Which card should we select? Consider how it fits our deck strategy.")
+
+    return "\n".join(lines)
+
+
 def build_generic_message(state: dict, game_data: GameDataDB) -> str:
     """Fallback for screens without a specific builder."""
     lines = [f"RUN: {summarize_run(state)}", ""]
@@ -321,6 +364,7 @@ AUTO_ACTIONS = {
     "proceed",
     "open_chest",
     "open_shop_inventory",
+    "confirm_selection",
 }
 
 
@@ -358,6 +402,7 @@ _BUILDERS = {
     "shop": build_shop_message,
     "rest": build_rest_message,
     "boss_relic": build_boss_relic_message,
+    "deck_select": build_deck_select_message,
     "generic": build_generic_message,
 }
 
