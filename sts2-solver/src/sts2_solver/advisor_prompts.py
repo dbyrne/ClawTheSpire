@@ -169,23 +169,49 @@ def build_event_message(state: dict, game_data: GameDataDB) -> str:
         agent_view = state.get("agent_view", {})
         event = agent_view.get("event") or {}
 
-    event_name = event.get("name", "Unknown Event")
+    event_name = event.get("title") or event.get("name", "Unknown Event")
     event_desc = strip_markup(event.get("description", ""))
     options = event.get("options", [])
 
     # Try to look up event data for richer descriptions
-    event_id = event.get("id") or event.get("event_id", "")
+    event_id = event.get("event_id") or event.get("id", "")
     event_data = game_data.event_info(event_id) if event_id else None
 
-    lines.append(f"EVENT: {event_name}")
+    lines.append(f"EVENT: {strip_markup(event_name)}")
     if event_desc:
-        lines.append(f"Description: {event_desc[:500]}")
+        lines.append(f"Description: {strip_markup(event_desc[:500])}")
+
+    # Enrich with static game data if available
+    if event_data and not event_desc:
+        static_desc = strip_markup(event_data.get("description", ""))
+        if static_desc:
+            lines.append(f"Description: {static_desc[:500]}")
+
     lines.append("")
     lines.append("OPTIONS:")
     for i, opt in enumerate(options):
-        title = opt.get("title") or opt.get("name", f"Option {i}")
+        idx = opt.get("index", i)
+        # Raw state uses "title" + "description"; agent_view uses "line"
+        title = opt.get("title") or opt.get("name", "")
         desc = strip_markup(opt.get("description", ""))
-        lines.append(f"  option_index={i}: {title} — {desc}")
+        line = opt.get("line", "")
+
+        if title and desc:
+            lines.append(f"  option_index={idx}: {strip_markup(title)} — {desc}")
+        elif line:
+            lines.append(f"  option_index={idx}: {strip_markup(line)}")
+        elif title:
+            lines.append(f"  option_index={idx}: {strip_markup(title)}")
+        else:
+            # Fall back to static game data
+            static_opts = (event_data or {}).get("options", [])
+            if i < len(static_opts):
+                so = static_opts[i]
+                s_title = strip_markup(so.get("title", f"Option {idx}"))
+                s_desc = strip_markup(so.get("description", ""))
+                lines.append(f"  option_index={idx}: {s_title} — {s_desc}")
+            else:
+                lines.append(f"  option_index={idx}: Option {idx}")
 
     lines.append("")
     lines.append("AVAILABLE ACTIONS: choose_event_option (with option_index)")
