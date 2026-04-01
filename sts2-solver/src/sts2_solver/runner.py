@@ -575,13 +575,23 @@ class Runner:
 
         self.turn_count += 1
 
-        # Check for combat end
+        # Check for combat end — only log "win" if all enemies are dead,
+        # not just because the screen changed (boss phase transitions leave
+        # combat temporarily for card selection screens).
         self._wait_for_ready()
         try:
             post = self.client.get_state()
-            if "COMBAT" not in post.get("screen", "").upper():
-                self._log_action("[bold green]Combat won![/bold green]")
-                self.logger.log_combat_end(post, "win")
+            post_screen = post.get("screen", "").upper()
+            if "COMBAT" not in post_screen:
+                # Verify enemies are actually dead (not a mid-combat phase transition)
+                combat = post.get("combat") or {}
+                enemies = combat.get("enemies") or []
+                all_dead = not enemies or all(
+                    e.get("current_hp", 0) <= 0 for e in enemies
+                )
+                if all_dead:
+                    self._log_action("[bold green]Combat won![/bold green]")
+                    self.logger.log_combat_end(post, "win")
         except Exception:
             pass
 
@@ -709,27 +719,28 @@ class Runner:
     # ------------------------------------------------------------------
 
     def _wait_for_ready(
-        self, timeout: float = 10.0, poll: float = 0.2, min_wait: float = 0.3,
+        self, timeout: float = 15.0, poll: float = 0.25, min_wait: float = 0.3,
     ) -> None:
-        """Poll until the game is ready to accept actions (no 409).
+        """Poll game state until actions are available (player can act).
 
-        min_wait ensures we don't return too fast — the game can respond to
-        state queries while still transitioning screens (e.g. combat -> reward).
+        The game always responds 200 to GET /state, so we check whether
+        available_actions is non-empty to know the game is ready for input.
+        min_wait gives animations time to start before we begin polling.
         """
         time.sleep(min_wait)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             try:
-                self.client.get_state()
-                return  # Game responded without error — ready
-            except ConnectionError as e:
-                if "409" in str(e):
-                    time.sleep(poll)
-                    continue
-                return  # Non-409 error, let the action call handle it
+                gs = self.client.get_state()
+                actions = gs.get("available_actions", [])
+                screen = gs.get("screen", "")
+                # Ready if: player has actions, or we left combat, or game over
+                if actions or screen == "GAME_OVER":
+                    return
+                time.sleep(poll)
             except Exception:
                 return
-        # Timeout — proceed anyway, the action call will retry if needed
+        # Timeout — proceed anyway
 
     def _execute_with_retry(
         self,
@@ -741,7 +752,12 @@ class Runner:
         retries: int = 10,
         delay: float = 0.3,
     ) -> dict:
-        """Execute a game action, retrying on 409 Conflict (game busy/animating)."""
+        """Execute a game action, retrying on retriable 409 errors.
+
+        The game mod returns 409 for both "action not available in current
+        state" (retriable — game is animating) and permanent errors like
+        "invalid_target" or "card cannot be played" (not retriable).
+        """
         for attempt in range(retries + 1):
             try:
                 return self.client.execute_action(
@@ -751,16 +767,27 @@ class Runner:
                     option_index=option_index,
                 )
             except ConnectionError as e:
-                if "409" in str(e):
-                    if attempt < retries:
-                        wait = min(delay * (1.5 ** attempt), 2.0)
-                        time.sleep(wait)
-                        continue
+                err_str = str(e)
+                if "409" not in err_str:
+                    raise
+                # Permanent errors — don't retry
+                if any(kw in err_str for kw in (
+                    "invalid_target", "cannot be played", "out of range",
+                    "is locked", "out of stock", "not supported",
+                )):
                     self._log_action(
-                        f"  [yellow]skipped (game busy after {retries} retries)[/yellow]"
+                        f"  [yellow]rejected: {err_str[:120]}[/yellow]"
                     )
                     return {}
-                raise
+                # Retriable (action not available — likely animating)
+                if attempt < retries:
+                    wait = min(delay * (1.5 ** attempt), 2.0)
+                    time.sleep(wait)
+                    continue
+                self._log_action(
+                    f"  [yellow]skipped (game busy after {retries} retries)[/yellow]"
+                )
+                return {}
 
 
 def _load_env_from_mcp_json() -> None:

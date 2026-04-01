@@ -18,6 +18,7 @@ CORE STRATEGY PRINCIPLES:
 - Track your deck archetype (strength-scaling, exhaust, block-heavy, etc.) and draft toward it.
 - Elite fights give better rewards but are risky. Don't path into elites below ~50% HP without potions.
 - At shops, ALWAYS prioritize card removal over buying cards. Remove Strikes first, then Defends once you have better block. Only buy cards/relics after removal.
+- NEVER remove or transform Bash — it's your only source of Vulnerable (50% more damage).
 - Rest vs. Upgrade: upgrade if HP > 60%, rest if HP < 40%, judgment call in between. BUT always rest before a boss fight if HP < 70%.
 - Boss relics: evaluate against your specific deck composition, not in isolation.
 - Potions are powerful — buy them when cheap, use them to survive elites.
@@ -363,8 +364,12 @@ def build_deck_select_message(state: dict, game_data: GameDataDB) -> str:
     elif "upgrade" in prompt_lower:
         lines.append("Which card should we UPGRADE? Prioritize key scaling cards, "
                      "high-impact attacks, or cards you play every combat.")
+    elif "transform" in prompt_lower:
+        lines.append("Which card should we TRANSFORM? Transform weak cards (Strikes, Defends). "
+                     "NEVER transform Bash — it's your only source of Vulnerable.")
     else:
-        lines.append("Which card should we select? Consider how it fits our deck strategy.")
+        lines.append("Which card should we select? Consider how it fits our deck strategy. "
+                     "NEVER select Bash for removal or transform — it applies Vulnerable.")
 
     return "\n".join(lines)
 
