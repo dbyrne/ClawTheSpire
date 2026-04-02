@@ -113,6 +113,17 @@ class StrategicAdvisor:
                 f"Raw response: {raw_response}"
             )
 
+        # Coerce null option_index to 0 for actions that require an index
+        _INDEXED_ACTIONS = {
+            "choose_map_node", "choose_event_option", "choose_rest_option",
+            "choose_reward_card", "choose_treasure_relic", "select_deck_card",
+            "buy_card", "buy_relic", "buy_potion", "claim_reward",
+        }
+        if decision.option_index is None and decision.action in _INDEXED_ACTIONS:
+            decision = AdvisorDecision(
+                action=decision.action, option_index=0, reasoning=decision.reasoning,
+            )
+
         # Validate the action is available
         if decision.action not in actions:
             return (

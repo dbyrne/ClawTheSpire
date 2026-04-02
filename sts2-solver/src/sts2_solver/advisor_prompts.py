@@ -75,6 +75,14 @@ def _get_deck(state: dict) -> list[dict]:
     return state.get("run", {}).get("deck", [])
 
 
+def _get_section(state: dict, key: str) -> dict:
+    """Get a top-level section, falling back to agent_view."""
+    val = state.get(key) or {}
+    if not val:
+        val = (state.get("agent_view") or {}).get(key) or {}
+    return val
+
+
 # ---------------------------------------------------------------------------
 # Per-screen message builders
 # ---------------------------------------------------------------------------
@@ -87,12 +95,8 @@ def build_card_reward_message(state: dict, game_data: GameDataDB) -> str:
     # Extract reward card options — different locations depending on API format
     reward = state.get("reward") or state.get("selection") or {}
     cards = reward.get("cards", []) or reward.get("card_options", [])
-
-    # Also check agent_view for card info
     if not cards:
-        agent_view = state.get("agent_view", {})
-        selection = agent_view.get("selection") or {}
-        cards = selection.get("cards", [])
+        cards = _get_section(state, "selection").get("cards", [])
 
     lines.append("CARD REWARD OPTIONS:")
     for i, card in enumerate(cards):
@@ -105,7 +109,7 @@ def build_card_reward_message(state: dict, game_data: GameDataDB) -> str:
         lines.append(f"  option_index={i}: {desc}")
 
     lines.append("")
-    lines.append("AVAILABLE ACTIONS: choose_reward_card (with option_index)")
+    lines.append("AVAILABLE ACTIONS: choose_reward_card (with option_index), OR skip_reward_cards to take nothing")
     lines.append("")
 
     # Detect deck archetype
@@ -129,11 +133,26 @@ def build_card_reward_message(state: dict, game_data: GameDataDB) -> str:
 
     deck_size = len(deck)
     if deck_size >= 15:
-        lines.append(f"DECK HAS {deck_size} CARDS. Pick the card that helps you WIN — scaling powers (Inflame, Demon Form, Barricade), key draw, or strong AOE. Avoid filler attacks/skills that just bloat the deck.")
+        lines.append(f"DECK HAS {deck_size} CARDS — TOO BLOATED. You should SKIP unless a card is build-defining "
+                     "(scaling powers like Demon Form, Barricade, or key draw). Every mediocre card you add dilutes your best cards.")
     elif deck_size >= 12:
-        lines.append(f"Deck has {deck_size} cards. Pick ONLY if a card is genuinely excellent for your archetype — scaling, draw, or a key synergy piece.")
+        lines.append(f"Deck has {deck_size} cards — getting large. SKIP unless a card is genuinely excellent for your archetype. "
+                     "A lean deck draws key cards more often.")
     else:
-        lines.append("Pick the card that best builds toward your archetype. Prioritize: Strength scaling, powers, draw, Vulnerable synergy.")
+        lines.append("Pick the card that best builds toward your archetype. Prioritize: Strength scaling, powers, draw, Vulnerable synergy. "
+                     "If none of the options fit your archetype or are high-quality, SKIP with skip_reward_cards.")
+
+    # Nudge toward defense if deck has none
+    _DEFENSE_CARDS = {"Shrug It Off", "Impervious", "Flame Barrier", "True Grit",
+                      "Power Through", "Metallicize", "Feel No Pain", "Ghostly Armor"}
+    if not (deck_names & _DEFENSE_CARDS):
+        run = state.get("run") or {}
+        floor = run.get("floor", 0)
+        if floor >= 4:
+            lines.append("")
+            lines.append("WARNING: Your deck has ZERO dedicated block cards. You need at least 1-2 "
+                         "(Shrug It Off, Impervious, Flame Barrier, Feel No Pain) to survive elites and bosses. "
+                         "Prioritize a block card if one is offered.")
 
     return "\n".join(lines)
 
@@ -142,14 +161,8 @@ def build_map_message(state: dict, game_data: GameDataDB) -> str:
     """Build prompt for map navigation decisions."""
     lines = [f"RUN: {summarize_run(state)}", f"DECK ({len(_get_deck(state))} cards): {summarize_deck(_get_deck(state))}", ""]
 
-    map_data = state.get("map") or {}
+    map_data = _get_section(state, "map")
     nodes = map_data.get("available_nodes") or map_data.get("nodes") or []
-
-    # Also check agent_view
-    if not nodes:
-        agent_view = state.get("agent_view", {})
-        map_view = agent_view.get("map") or {}
-        nodes = map_view.get("available_nodes") or map_view.get("nodes") or []
 
     lines.append("AVAILABLE MAP NODES:")
     for i, node in enumerate(nodes):
@@ -223,12 +236,7 @@ def build_event_message(state: dict, game_data: GameDataDB) -> str:
     """Build prompt for event decisions."""
     lines = [f"RUN: {summarize_run(state)}", f"DECK: {summarize_deck(_get_deck(state))}", ""]
 
-    event = state.get("event") or {}
-
-    # Check agent_view
-    if not event:
-        agent_view = state.get("agent_view", {})
-        event = agent_view.get("event") or {}
+    event = _get_section(state, "event")
 
     event_name = event.get("title") or event.get("name", "Unknown Event")
     event_desc = strip_markup(event.get("description", ""))
@@ -251,6 +259,9 @@ def build_event_message(state: dict, game_data: GameDataDB) -> str:
     lines.append("")
     lines.append("OPTIONS:")
     for i, opt in enumerate(options):
+        # Skip locked/unavailable options — don't show choices the player can't make
+        if opt.get("locked"):
+            continue
         idx = opt.get("index", opt.get("i", i))
         # Raw state uses "title" + "description"; agent_view uses "line"
         title = opt.get("title") or opt.get("name", "")
@@ -284,6 +295,16 @@ def build_event_message(state: dict, game_data: GameDataDB) -> str:
         lines.append("This is Neow's starting bonus. Card removal and relic options are almost always better than 'Proceed'.")
         lines.append("")
 
+    # HP-based risk guidance
+    run = state.get("run") or {}
+    hp = run.get("current_hp", 0)
+    max_hp = run.get("max_hp", 1)
+    hp_pct = hp / max_hp if max_hp > 0 else 0
+    if hp_pct < 0.25:
+        lines.append(f"HP CRITICAL ({hp}/{max_hp} = {hp_pct:.0%}). NEVER pick options that cost HP. "
+                     "Survival is the only priority.")
+        lines.append("")
+
     lines.append("Which option is best given our current run state?")
 
     return "\n".join(lines)
@@ -293,39 +314,40 @@ def build_shop_message(state: dict, game_data: GameDataDB) -> str:
     """Build prompt for shop decisions."""
     lines = [f"RUN: {summarize_run(state)}", f"DECK: {summarize_deck(_get_deck(state))}", ""]
 
-    shop = state.get("shop") or {}
-    if not shop:
-        agent_view = state.get("agent_view", {})
-        shop = agent_view.get("shop") or {}
+    shop = _get_section(state, "shop")
 
     run = state.get("run") or {}
     gold = run.get("gold", 0)
 
     lines.append(f"GOLD: {gold}")
     lines.append("")
-    lines.append("SHOP INVENTORY:")
+    lines.append("SHOP INVENTORY (only showing items you can afford):")
     any_affordable = False
     for section in ("cards", "relics", "potions"):
         items = shop.get(section, [])
-        if items:
+        if not items:
+            continue
+        affordable_items = []
+        for i, item in enumerate(items):
+            price = item.get("price", item.get("cost", 0))
+            if not isinstance(price, int) or price > gold:
+                continue
+            name = item.get("name", item.get("id", "?"))
+            desc = ""
+            item_id = item.get("id") or item.get("card_id") or item.get("relic_id", "")
+            if section == "cards" and item_id:
+                desc = f" — {game_data.card_description(item_id)}"
+            elif section == "relics" and item_id:
+                desc = f" — {game_data.relic_description(item_id)}"
+            affordable_items.append(f"    option_index={i}: {name} ({price}g){desc}")
+            any_affordable = True
+        if affordable_items:
             lines.append(f"  {section.upper()}:")
-            for i, item in enumerate(items):
-                name = item.get("name", item.get("id", "?"))
-                price = item.get("price", item.get("cost", 0))
-                desc = ""
-                item_id = item.get("id") or item.get("card_id") or item.get("relic_id", "")
-                if section == "cards" and item_id:
-                    desc = f" — {game_data.card_description(item_id)}"
-                elif section == "relics" and item_id:
-                    desc = f" — {game_data.relic_description(item_id)}"
-                affordable = " [CAN AFFORD]" if isinstance(price, int) and price <= gold else " [TOO EXPENSIVE]"
-                if isinstance(price, int) and price <= gold:
-                    any_affordable = True
-                lines.append(f"    option_index={i}: {name} ({price}g){affordable}{desc}")
+            lines.extend(affordable_items)
 
     can_remove = shop.get("can_remove_card", False)
     remove_cost = shop.get("remove_cost", "?")
-    if can_remove:
+    if can_remove and isinstance(remove_cost, int) and remove_cost <= gold:
         lines.append(f"  CARD REMOVAL: {remove_cost}g")
         any_affordable = True
 
@@ -346,7 +368,6 @@ def build_shop_message(state: dict, game_data: GameDataDB) -> str:
                      "4) Buy a card ONLY if it's a strong archetype fit. 5) Leave (close_shop_inventory) if nothing else is worth the gold.")
     else:
         lines.append("Card removal already done or unavailable. "
-                     "Buy ONLY items marked [CAN AFFORD]. "
                      "Buy a potion if cheap. Buy a strong archetype card if affordable. "
                      "Otherwise leave (close_shop_inventory).")
 
@@ -357,10 +378,7 @@ def build_rest_message(state: dict, game_data: GameDataDB) -> str:
     """Build prompt for rest site decisions."""
     lines = [f"RUN: {summarize_run(state)}", f"DECK: {summarize_deck(_get_deck(state))}", ""]
 
-    rest = state.get("rest") or {}
-    if not rest:
-        agent_view = state.get("agent_view", {})
-        rest = agent_view.get("rest") or {}
+    rest = _get_section(state, "rest")
 
     options = rest.get("options", [])
 
@@ -406,9 +424,7 @@ def build_boss_relic_message(state: dict, game_data: GameDataDB) -> str:
     relics = chest.get("relics", []) or reward.get("relics", [])
 
     if not relics:
-        agent_view = state.get("agent_view", {})
-        chest_view = agent_view.get("chest") or {}
-        relics = chest_view.get("relics", [])
+        relics = _get_section(state, "chest").get("relics", [])
 
     lines.append("RELIC OPTIONS:")
     for i, relic in enumerate(relics):
@@ -428,10 +444,7 @@ def build_deck_select_message(state: dict, game_data: GameDataDB) -> str:
     """Build prompt for deck card selection (upgrade, remove, transform, etc.)."""
     lines = [f"RUN: {summarize_run(state)}", f"DECK: {summarize_deck(_get_deck(state))}", ""]
 
-    selection = state.get("selection") or {}
-    if not selection:
-        agent_view = state.get("agent_view", {})
-        selection = agent_view.get("selection") or {}
+    selection = _get_section(state, "selection")
 
     prompt_text = strip_markup(selection.get("prompt", "Select a card"))
     cards = selection.get("cards", [])

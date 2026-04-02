@@ -32,6 +32,7 @@ from rich.text import Text
 
 from .advisor import StrategicAdvisor
 from .advisor_prompts import AUTO_ACTIONS, detect_screen_type
+from .game_data import strip_markup
 from .bridge import state_from_mcp
 from .data_loader import load_cards
 from .game_client import GameClient
@@ -824,7 +825,7 @@ class Runner:
                 return
 
             sel = gs.get("selection") or {}
-            prompt = (sel.get("prompt") or "").lower()
+            prompt = strip_markup(sel.get("prompt") or "").lower()
             # Decision keywords that need advisor input
             is_decision = any(kw in prompt for kw in (
                 "choose", "remove", "upgrade", "transform", "add", "select",
@@ -841,19 +842,17 @@ class Runner:
                         pass
             return
 
-        # For map screens with a single node, skip the LLM and just pick it
-        if screen_type == "map" and "choose_map_node" in actions:
-            map_data = gs.get("map") or {}
-            nodes = map_data.get("available_nodes") or map_data.get("nodes") or []
-            if not nodes:
-                agent_view = gs.get("agent_view", {})
-                map_view = agent_view.get("map") or {}
-                nodes = map_view.get("available_nodes") or map_view.get("nodes") or []
-            if len(nodes) == 1:
-                self._log_action("  [dim]auto: choose_map_node(0) — single node[/dim]")
+        # For finished events with only a "Proceed" option, auto-handle
+        if screen_type == "event" and "choose_event_option" in actions:
+            event = gs.get("event") or {}
+            options = event.get("options") or []
+            if event.get("finished") or (
+                len(options) == 1 and options[0].get("proceed")
+            ):
+                self._log_action("  [dim]auto: choose_event_option(0) — proceed[/dim]")
                 if not self.dry_run:
                     try:
-                        self._execute_with_retry("choose_map_node", option_index=0)
+                        self._execute_with_retry("choose_event_option", option_index=0)
                         self.action_count += 1
                     except Exception as e:
                         self._log_action(f"  [red]Failed: {e}[/red]")
@@ -869,6 +868,48 @@ class Runner:
             sel_cards = sel.get("cards") or []
             if not card_options and not sel_cards:
                 self._log_action("  [dim]Card reward data not ready — waiting[/dim]")
+                return
+
+        # General single-option auto-pick: if the screen has exactly one
+        # indexed option, pick it without calling the LLM.  Applies to map,
+        # event, rest, boss_relic — any screen where there's no real choice.
+        _SINGLE_OPT_ACTIONS = {
+            "map": "choose_map_node",
+            "event": "choose_event_option",
+            "rest": "choose_rest_option",
+            "boss_relic": "choose_treasure_relic",
+        }
+        single_action = _SINGLE_OPT_ACTIONS.get(screen_type)
+        if single_action and single_action in actions:
+            # Count available options from the game state
+            option_sources = {
+                "map": lambda: (gs.get("map") or {}).get("available_nodes")
+                    or (gs.get("map") or {}).get("nodes")
+                    or ((gs.get("agent_view") or {}).get("map") or {}).get("available_nodes")
+                    or ((gs.get("agent_view") or {}).get("map") or {}).get("nodes")
+                    or [],
+                "event": lambda: [
+                    o for o in ((gs.get("event") or {}).get("options") or [])
+                    if not o.get("locked")
+                ],
+                "rest": lambda: (gs.get("rest") or {}).get("options")
+                    or ((gs.get("agent_view") or {}).get("rest") or {}).get("options")
+                    or [],
+                "boss_relic": lambda: (gs.get("chest") or {}).get("relics")
+                    or (gs.get("reward") or {}).get("relics")
+                    or ((gs.get("agent_view") or {}).get("chest") or {}).get("relics")
+                    or [],
+            }
+            opts = option_sources.get(screen_type, lambda: [])()
+            if len(opts) == 1:
+                idx = opts[0].get("index", opts[0].get("i", 0)) if isinstance(opts[0], dict) else 0
+                self._log_action(f"  [dim]auto: {single_action}({idx}) — single option[/dim]")
+                if not self.dry_run:
+                    try:
+                        self._execute_with_retry(single_action, option_index=idx)
+                        self.action_count += 1
+                    except Exception as e:
+                        self._log_action(f"  [red]Failed: {e}[/red]")
                 return
 
         # LLM-based decision
@@ -889,38 +930,29 @@ class Runner:
         # If the advisor recommended an invalid/failed action, fall back to a safe default
         if "not available" in result_str or "FAILED" in result_str:
             self._log_action(f"  [yellow]Invalid action — falling back[/yellow]")
-            # For map: force choose_map_node(0)
-            if screen_type == "map" and "choose_map_node" in actions:
+            # Ordered list of fallback actions to try
+            _FALLBACKS = [
+                ("choose_map_node", 0),
+                ("choose_event_option", 0),
+                ("choose_rest_option", 0),
+                ("close_shop_inventory", None),
+                ("proceed", None),
+                ("confirm_modal", None),
+                ("dismiss_modal", None),
+            ]
+            for fb_action, fb_idx in _FALLBACKS:
+                if fb_action not in actions:
+                    continue
                 if not self.dry_run:
                     try:
-                        self._execute_with_retry("choose_map_node", option_index=0)
+                        self._execute_with_retry(fb_action, option_index=fb_idx)
                     except Exception:
                         pass
-                self._log_action("  [dim]auto: choose_map_node(0) (fallback)[/dim]")
+                if fb_action == "close_shop_inventory":
+                    self._shop_visited = True
+                self._log_action(f"  [dim]auto: {fb_action}({fb_idx}) (fallback)[/dim]")
                 self.action_count += 1
                 return
-            # For shops: close and leave
-            if screen_type == "shop" and "close_shop_inventory" in actions:
-                if not self.dry_run:
-                    try:
-                        self._execute_with_retry("close_shop_inventory")
-                    except Exception:
-                        pass
-                self._shop_visited = True
-                self._log_action("  [dim]auto: close_shop_inventory (fallback)[/dim]")
-                self.action_count += 1
-                return
-            # For other screens: try proceed/confirm
-            for fallback in ("proceed", "confirm_modal", "dismiss_modal"):
-                if fallback in actions:
-                    if not self.dry_run:
-                        try:
-                            self._execute_with_retry(fallback)
-                        except Exception:
-                            pass
-                    self._log_action(f"  [dim]auto: {fallback} (fallback)[/dim]")
-                    self.action_count += 1
-                    return
             return  # Nothing we can do, let next tick try
 
         # Mark card reward as handled so we don't re-open it
@@ -960,7 +992,7 @@ class Runner:
         unreliable via the API.
         """
         sel = gs.get("selection") or {}
-        prompt_text = (sel.get("prompt") or "").lower()
+        prompt_text = strip_markup(sel.get("prompt") or "").lower()
         cards = sel.get("cards", [])
 
         # Detect multi-select from prompt (e.g. "Choose 2 cards to Remove")

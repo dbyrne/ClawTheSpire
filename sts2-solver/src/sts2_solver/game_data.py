@@ -9,7 +9,7 @@ from pathlib import Path
 from .data_loader import DEFAULT_DATA_DIR
 
 
-_MARKUP_RE = re.compile(r"\[/?(?:gold|green|blue|red|white|gray|grey)\]")
+_MARKUP_RE = re.compile(r"\[/?(?:gold|green|blue|red|white|gray|grey|sine)\]")
 
 
 def strip_markup(text: str) -> str:
