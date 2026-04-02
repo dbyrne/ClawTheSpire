@@ -727,14 +727,15 @@ class Runner:
     def _handle_deck_select(self, gs: dict) -> None:
         """Handle deck card selection screens (add, remove, upgrade, transform).
 
-        select_deck_card toggles cards on/off. After each pick we re-poll
-        and check: did the screen change? Did confirm_selection appear?
-        Do we need more picks?
+        select_deck_card toggles cards on/off. We track selected_count
+        to know when our pick actually stuck. For multi-select (e.g.
+        "Choose 2 to Remove"), we loop until the screen changes.
         """
-        max_picks = 10  # safety limit
-        consecutive_failures = 0
+        max_attempts = 20  # safety limit
+        prev_selected = (gs.get("selection") or {}).get("selected_count", 0)
+        selected_indices: list[int] = []
 
-        for pick in range(max_picks):
+        for attempt in range(max_attempts):
             # Ask the advisor
             try:
                 result_str = self.advisor.advise(gs, execute=not self.dry_run)
@@ -742,10 +743,8 @@ class Runner:
                 self._log_action(f"[red]Advisor error: {e}[/red]")
                 return
 
-            # Check if the advisor actually executed successfully
             executed_ok = "-> OK" in result_str
 
-            # Extract what was picked
             lines = result_str.split("\n")
             decision_line = next(
                 (l for l in lines if l.startswith("Decision:")),
@@ -756,24 +755,23 @@ class Runner:
             self._refresh()
 
             if not executed_ok:
-                consecutive_failures += 1
-                self._log_action(f"  [yellow]Advisor did not execute (attempt {consecutive_failures})[/yellow]")
-                if consecutive_failures >= 3:
-                    # Fall back: just pick the first card
-                    self._log_action("  [yellow]Falling back to first card[/yellow]")
-                    if not self.dry_run:
-                        try:
-                            self._execute_with_retry("select_deck_card", option_index=0)
-                        except Exception:
-                            pass
-                    # Continue to re-poll below
-                else:
-                    time.sleep(0.5)
-                    continue
-            else:
-                consecutive_failures = 0
+                # Advisor failed — fall back to picking first non-selected card
+                sel = gs.get("selection") or {}
+                cards = sel.get("cards", [])
+                fallback_idx = 0
+                for card in cards:
+                    cidx = card.get("index", card.get("i", 0))
+                    if cidx not in selected_indices:
+                        fallback_idx = cidx
+                        break
+                self._log_action(f"  [yellow]Fallback: selecting index {fallback_idx}[/yellow]")
+                if not self.dry_run:
+                    try:
+                        self._execute_with_retry("select_deck_card", option_index=fallback_idx)
+                    except Exception:
+                        pass
 
-            # Wait and re-poll
+            # Re-poll
             time.sleep(0.5)
             try:
                 gs = self.client.get_state()
@@ -794,11 +792,22 @@ class Runner:
                 self._log_action("  [dim]auto: confirm_selection[/dim]")
                 return
 
-            # Screen changed away from card selection — done
+            # Screen changed — done
             if "select_deck_card" not in actions:
                 return
 
-            # Still on selection — filter out discard_potion for next advisor call
+            # Check if selection count changed
+            sel = gs.get("selection") or {}
+            curr_selected = sel.get("selected_count", 0)
+            if curr_selected > prev_selected:
+                # Pick stuck — track it to avoid re-selecting
+                # (We don't know exactly which idx, but track the advisor's pick)
+                prev_selected = curr_selected
+            elif curr_selected < prev_selected:
+                # We toggled something off — that's bad, try again
+                prev_selected = curr_selected
+
+            # Filter for next iteration
             filtered = [a for a in actions if a != "discard_potion"]
             if filtered:
                 gs = dict(gs)
