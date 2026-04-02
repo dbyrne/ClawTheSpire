@@ -304,9 +304,17 @@ class StrategicAdvisor:
             else:
                 raise
 
+        # Coerce option_index to int (LLM sometimes returns "2" instead of 2)
+        raw_idx = data.get("option_index")
+        if raw_idx is not None:
+            try:
+                raw_idx = int(raw_idx)
+            except (ValueError, TypeError):
+                raw_idx = None
+
         return AdvisorDecision(
             action=data["action"],
-            option_index=data.get("option_index"),
+            option_index=raw_idx,
             reasoning=data.get("reasoning", ""),
         )
 

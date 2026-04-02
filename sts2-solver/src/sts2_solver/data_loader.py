@@ -67,7 +67,14 @@ def _parse_spawns(raw: list[dict] | None) -> tuple[str, ...]:
 def _card_from_json(raw: dict) -> Card:
     """Parse a single card JSON object into a Card dataclass."""
     cost = raw.get("cost")
-    if cost is None or cost == -1:
+    keywords = raw.get("keywords") or []
+    is_unplayable = any(
+        k.lower() == "unplayable" if isinstance(k, str) else False
+        for k in keywords
+    )
+    if is_unplayable or cost == -1:
+        cost = -1  # Unplayable cards keep cost -1 (blocked by can_play_card)
+    elif cost is None:
         cost = 0  # X-cost cards default to 0 base cost
 
     return Card(

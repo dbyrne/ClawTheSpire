@@ -155,10 +155,18 @@ def _card_from_runtime(raw: dict, card_db: CardDB) -> Card:
     except ValueError:
         card_type = CardType.SKILL
 
+    # Check for Unplayable keyword or -1 cost (Status/Curse cards)
+    runtime_cost = raw.get("energy_cost", 0)
+    runtime_keywords = raw.get("keywords") or []
+    is_unplayable = runtime_cost == -1 or any(
+        (k.lower() if isinstance(k, str) else "") == "unplayable"
+        for k in runtime_keywords
+    )
+
     return Card(
         id=card_id,
         name=raw.get("name", card_id),
-        cost=raw.get("energy_cost", 0),
+        cost=-1 if is_unplayable else runtime_cost,
         card_type=card_type,
         target=target,
         upgraded=upgraded,
