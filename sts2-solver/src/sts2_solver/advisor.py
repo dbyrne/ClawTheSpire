@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 
 DEFAULT_MODEL = os.environ.get("STS2_ADVISOR_MODEL", "gpt-4o-mini")
 DEFAULT_MAX_TOKENS = int(os.environ.get("STS2_ADVISOR_MAX_TOKENS", "256"))
+DEFAULT_BASE_URL = os.environ.get("STS2_ADVISOR_BASE_URL", "")  # empty = OpenAI default
 
 
 @dataclass
@@ -41,18 +42,29 @@ class StrategicAdvisor:
         game_data: GameDataDB,
         client: GameClient,
         model: str = DEFAULT_MODEL,
+        base_url: str = DEFAULT_BASE_URL,
         logger: RunLogger | None = None,
     ):
         self.game_data = game_data
         self.client = client
         self.model = model
+        self.base_url = base_url
         self.logger = logger
         self._openai_client = None
+
+    @property
+    def is_local(self) -> bool:
+        """True if using a local model (Ollama, vLLM, etc.)."""
+        return bool(self.base_url)
 
     def _get_openai_client(self):
         if self._openai_client is None:
             from openai import OpenAI
-            self._openai_client = OpenAI()
+            kwargs = {}
+            if self.base_url:
+                kwargs["base_url"] = self.base_url
+                kwargs["api_key"] = "ollama"  # Ollama doesn't need a real key
+            self._openai_client = OpenAI(**kwargs)
         return self._openai_client
 
     def advise(self, game_state: dict, execute: bool = True) -> str:
@@ -149,28 +161,56 @@ class StrategicAdvisor:
         return "No auto-action found."
 
     def _call_llm(self, system: str, user: str) -> str:
-        """Call OpenAI API and return the response text."""
+        """Call LLM API and return the response text."""
         client = self._get_openai_client()
-        response = client.chat.completions.create(
-            model=self.model,
-            messages=[
+        kwargs: dict = {
+            "model": self.model,
+            "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            max_tokens=DEFAULT_MAX_TOKENS,
-            temperature=0.3,
-            response_format={"type": "json_object"},
-        )
+            "max_tokens": DEFAULT_MAX_TOKENS,
+            "temperature": 0.3,
+        }
+        # JSON mode: OpenAI and some Ollama models support it
+        try:
+            kwargs["response_format"] = {"type": "json_object"}
+            response = client.chat.completions.create(**kwargs)
+        except Exception:
+            # Fall back without JSON mode (some local models don't support it)
+            del kwargs["response_format"]
+            response = client.chat.completions.create(**kwargs)
         return response.choices[0].message.content
 
     def _parse_response(self, raw: str) -> AdvisorDecision:
-        """Parse the JSON response from the LLM."""
-        # Strip code fences if present
+        """Parse the JSON response from the LLM.
+
+        Handles: bare JSON, code-fenced JSON, JSON embedded in text,
+        and Qwen3's <think>...</think> blocks.
+        """
         text = raw.strip()
+
+        # Strip Qwen3 thinking blocks
+        if "<think>" in text:
+            import re
+            text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+        # Strip code fences
         if text.startswith("```"):
             text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
 
-        data = json.loads(text)
+        # Try direct parse first
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            # Extract first JSON object from freeform text
+            start = text.find("{")
+            end = text.rfind("}") + 1
+            if start >= 0 and end > start:
+                data = json.loads(text[start:end])
+            else:
+                raise
+
         return AdvisorDecision(
             action=data["action"],
             option_index=data.get("option_index"),

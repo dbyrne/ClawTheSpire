@@ -952,7 +952,22 @@ def main():
         "--character", type=str, default=DEFAULT_CHARACTER,
         help=f"Character to play (default: {DEFAULT_CHARACTER})",
     )
+    parser.add_argument(
+        "--local", action="store_true",
+        help="Use local Ollama model instead of OpenAI API",
+    )
+    parser.add_argument(
+        "--model", type=str, default=None,
+        help="Override advisor model (e.g. qwen3:8b, gpt-4o-mini)",
+    )
     args = parser.parse_args()
+
+    # Set env vars for local mode before Runner init
+    if args.local:
+        os.environ.setdefault("STS2_ADVISOR_BASE_URL", "http://localhost:11434/v1")
+        os.environ.setdefault("STS2_ADVISOR_MODEL", "qwen3:8b")
+    if args.model:
+        os.environ["STS2_ADVISOR_MODEL"] = args.model
 
     runner = Runner(
         step_mode=args.step,
