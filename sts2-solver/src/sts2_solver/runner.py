@@ -692,11 +692,25 @@ class Runner:
             gs["available_actions"] = filtered_actions
 
         # Multi-select deck screens (e.g. "Choose 2 cards to Add/Remove"):
-        # select_deck_card toggles a card on/off. We must track which cards
-        # are already selected and loop until the screen changes or
-        # confirm_selection appears.
+        # select_deck_card: check if this is a real decision or an
+        # informational overlay (e.g. Havoc showing "Draw 3 cards")
         if screen_type == "deck_select":
-            self._handle_deck_select(gs)
+            sel = gs.get("selection") or {}
+            prompt = (sel.get("prompt") or "").lower()
+            # Decision keywords that need advisor input
+            is_decision = any(kw in prompt for kw in (
+                "choose", "remove", "upgrade", "transform", "add", "select",
+            ))
+            if is_decision:
+                self._handle_deck_select(gs)
+            else:
+                # Informational overlay — auto-select first card to dismiss
+                self._log_action(f"  [dim]auto: select_deck_card (overlay)[/dim]")
+                if not self.dry_run:
+                    try:
+                        self._execute_with_retry("select_deck_card", option_index=0)
+                    except Exception:
+                        pass
             return
 
         # LLM-based decision
