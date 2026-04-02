@@ -1,0 +1,291 @@
+{
+  "runs": [
+    {
+      "run_number": 1,
+      "floor": 17,
+      "gen": "gen1",
+      "model": "unknown",
+      "run_id": "J9PXKHDENN"
+    },
+    {
+      "run_number": 2,
+      "floor": 17,
+      "gen": "gen1",
+      "model": "unknown",
+      "run_id": "KD9H6V335Z"
+    },
+    {
+      "run_number": 3,
+      "floor": 12,
+      "gen": "gen1",
+      "model": "unknown",
+      "run_id": "B6CWJBGYDD"
+    },
+    {
+      "run_number": 4,
+      "floor": 17,
+      "gen": "gen1",
+      "model": "unknown",
+      "run_id": "M5P30B21SF"
+    },
+    {
+      "run_number": 5,
+      "floor": 17,
+      "gen": "gen1",
+      "model": "unknown",
+      "run_id": "GRPSTET0VP"
+    },
+    {
+      "run_number": 6,
+      "floor": 8,
+      "gen": "gen1",
+      "model": "unknown",
+      "run_id": "MU97QFTXDP"
+    },
+    {
+      "run_number": 7,
+      "floor": 5,
+      "gen": "gen1",
+      "model": "unknown",
+      "run_id": "5N7G1K38TC"
+    },
+    {
+      "run_number": 8,
+      "floor": 5,
+      "gen": "gen1",
+      "model": "unknown",
+      "run_id": "U8TXMAYJS0"
+    },
+    {
+      "run_number": 9,
+      "floor": 11,
+      "gen": "gen1",
+      "model": "unknown",
+      "run_id": "UVSKW7PY6Q"
+    },
+    {
+      "run_number": 10,
+      "floor": 7,
+      "gen": "gen1",
+      "model": "unknown",
+      "run_id": "DM0862GA9G"
+    },
+    {
+      "run_number": 11,
+      "floor": 17,
+      "gen": "gen1",
+      "model": "unknown",
+      "run_id": "VUMPM4FAVD"
+    },
+    {
+      "run_number": 12,
+      "floor": 11,
+      "gen": "gen1",
+      "model": "unknown",
+      "run_id": "93FV6SX8R4"
+    },
+    {
+      "run_number": 13,
+      "floor": 17,
+      "gen": "gen1",
+      "model": "unknown",
+      "run_id": "YZ53K119R4"
+    },
+    {
+      "run_number": 14,
+      "floor": 8,
+      "gen": "gen1",
+      "model": "unknown",
+      "run_id": "VNW7PYB0M8"
+    },
+    {
+      "run_number": 15,
+      "floor": 17,
+      "gen": "gen1",
+      "model": "unknown",
+      "run_id": "RMQ0BC0ELD"
+    },
+    {
+      "run_number": 16,
+      "floor": 15,
+      "gen": "gen1",
+      "model": "unknown",
+      "run_id": "E7KRH8Z96X"
+    },
+    {
+      "run_number": 17,
+      "floor": 17,
+      "gen": "gen1",
+      "model": "unknown",
+      "run_id": "9QKSBDKWJP"
+    },
+    {
+      "run_number": 18,
+      "floor": 11,
+      "gen": "gen1",
+      "model": "unknown",
+      "run_id": "5S7KWP6EU8"
+    },
+    {
+      "run_number": 19,
+      "floor": 17,
+      "gen": "gen1",
+      "model": "unknown",
+      "run_id": "32XE22Q9N1"
+    },
+    {
+      "run_number": 20,
+      "floor": 8,
+      "gen": "gen1",
+      "model": "unknown",
+      "run_id": "RBYEJXHBXN"
+    },
+    {
+      "run_number": 21,
+      "floor": 6,
+      "gen": "gen1",
+      "model": "unknown",
+      "run_id": "UJAM6UXJ6Y"
+    },
+    {
+      "run_number": 22,
+      "floor": 15,
+      "gen": "gen1",
+      "model": "unknown",
+      "run_id": "2WSLNRQ1V9"
+    },
+    {
+      "run_number": 23,
+      "floor": 9,
+      "gen": "gen1",
+      "model": "unknown",
+      "run_id": "X62UMHT7VE"
+    },
+    {
+      "run_number": 24,
+      "floor": 6,
+      "gen": "gen1",
+      "model": "unknown",
+      "run_id": "Q83YYSL049"
+    },
+    {
+      "run_number": 25,
+      "floor": 9,
+      "gen": "gen1",
+      "model": "unknown",
+      "run_id": "3Y4M257USC"
+    },
+    {
+      "run_number": 26,
+      "floor": 9,
+      "gen": "gen1",
+      "model": "unknown",
+      "run_id": "VMDNZZKQJM"
+    },
+    {
+      "run_number": 27,
+      "floor": 17,
+      "gen": "gen1",
+      "model": "unknown",
+      "run_id": "QMPX988CLT"
+    },
+    {
+      "run_number": 28,
+      "floor": 17,
+      "gen": "gen1",
+      "model": "unknown",
+      "run_id": "7DRWE9CYA6"
+    },
+    {
+      "run_number": 29,
+      "floor": 13,
+      "gen": "gen2",
+      "model": "unknown",
+      "run_id": "FFHX4FM02S"
+    },
+    {
+      "run_number": 30,
+      "floor": 7,
+      "gen": "gen2",
+      "model": "unknown",
+      "run_id": "SFZGTSKTYG"
+    },
+    {
+      "run_number": 31,
+      "floor": 13,
+      "gen": "gen2",
+      "model": "unknown",
+      "run_id": "MTADPSTRJ2"
+    },
+    {
+      "run_number": 32,
+      "floor": 2,
+      "gen": "gen2",
+      "model": "unknown",
+      "run_id": "MPNBZSXPTH"
+    },
+    {
+      "run_number": 33,
+      "floor": 11,
+      "gen": "gen2",
+      "model": "unknown",
+      "run_id": "1YZKPCR5Y1"
+    },
+    {
+      "run_number": 34,
+      "floor": 8,
+      "gen": "gen3",
+      "model": "unknown",
+      "run_id": "6BFFGNEURP"
+    },
+    {
+      "run_number": 35,
+      "floor": 17,
+      "gen": "gen3",
+      "model": "unknown",
+      "run_id": "QY0G8SCNU9"
+    },
+    {
+      "run_number": 36,
+      "floor": 13,
+      "gen": "gen3",
+      "model": "unknown",
+      "run_id": "1J8GKSG8QK"
+    },
+    {
+      "run_number": 37,
+      "floor": 7,
+      "gen": "gen4",
+      "model": "gpt-4o-mini",
+      "run_id": "HPFY323ZAC"
+    },
+    {
+      "run_number": 38,
+      "floor": 12,
+      "gen": "gen4",
+      "model": "gpt-4o-mini",
+      "run_id": "N2HK0E54AC"
+    },
+    {
+      "run_number": 39,
+      "floor": 13,
+      "gen": "gen4",
+      "model": "gpt-4o-mini",
+      "run_id": "Y8URBSPM55"
+    },
+    {
+      "run_number": 40,
+      "floor": 24,
+      "gen": "current",
+      "model": "gpt-4o-mini",
+      "run_id": "GELTZQFJXA"
+    }
+  ],
+  "gen_boundaries": {
+    "gen1": 28,
+    "gen2": 33,
+    "gen3": 36,
+    "gen4": 39,
+    "current": 40
+  }
+}
