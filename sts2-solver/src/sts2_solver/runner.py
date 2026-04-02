@@ -630,26 +630,27 @@ class Runner:
                     self._log_action(f"  [red]Failed to discard potion: {e}[/red]")
             return
 
-        # Reward screen: has collect_rewards_and_proceed + claim_reward.
-        # claim_reward claims individual rewards (gold, potions, card pick).
-        # We must claim the card reward (which triggers choose_reward_card)
-        # rather than auto-collecting everything.
-        if "collect_rewards_and_proceed" in actions:
-            if "claim_reward" in actions:
-                # There are unclaimed rewards — claim them to trigger card pick
-                if not self.dry_run:
-                    try:
-                        self._execute_with_retry("claim_reward", option_index=0)
-                        self.action_count += 1
-                    except Exception as e:
-                        self._log_action(f"  [red]claim_reward failed: {e}[/red]")
-                self._log_action("  [dim]auto: claim_reward[/dim]")
-                return  # Next tick will see the card reward screen or more claims
-
-            if screen_type == "card_reward":
-                pass  # Fall through to LLM decision below
+        # Reward screen: collect_rewards_and_proceed skips everything.
+        # If there's a pending card choice, we must NOT auto-proceed —
+        # wait for choose_reward_card to appear so the advisor can pick.
+        if "collect_rewards_and_proceed" in actions and screen_type != "card_reward":
+            # Check if card reward is pending
+            reward = gs.get("reward") or {}
+            has_card_choice = (
+                reward.get("pending_card_choice")
+                or "choose_reward_card" in actions
+                or "skip_reward_cards" in actions
+            )
+            if has_card_choice:
+                # Card choice pending — wait for it to appear in actions
+                if "choose_reward_card" in actions or "skip_reward_cards" in actions:
+                    screen_type = "card_reward"
+                    # Fall through to LLM decision below
+                else:
+                    # Not ready yet — return and let next tick handle it
+                    return
             else:
-                # No more rewards to claim — proceed
+                # No card choice — safe to auto-proceed
                 self._log_action("  [dim]auto: collect_rewards_and_proceed[/dim]")
                 if not self.dry_run:
                     try:
