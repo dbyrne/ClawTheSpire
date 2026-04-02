@@ -164,12 +164,22 @@ class StrategicAdvisor:
     def _call_llm(self, system: str, user: str) -> str:
         """Call LLM API and return the response text."""
         client = self._get_openai_client()
+
+        # Qwen3 uses thinking mode by default — disable it for faster,
+        # direct JSON responses by prepending /no_think
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
+        if self.is_local and "qwen3" in self.model.lower():
+            messages[-1] = {
+                "role": "user",
+                "content": "/no_think\n" + user,
+            }
+
         kwargs: dict = {
             "model": self.model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
+            "messages": messages,
             "max_tokens": DEFAULT_MAX_TOKENS,
             "temperature": 0.3,
         }
@@ -179,9 +189,36 @@ class StrategicAdvisor:
             response = client.chat.completions.create(**kwargs)
         except Exception:
             # Fall back without JSON mode (some local models don't support it)
-            del kwargs["response_format"]
+            kwargs.pop("response_format", None)
             response = client.chat.completions.create(**kwargs)
-        return response.choices[0].message.content
+
+        content = response.choices[0].message.content or ""
+
+        # Ollama OpenAI-compat may put Qwen3 thinking in 'reasoning' field
+        # with empty content — fall back to native API
+        if not content.strip() and self.is_local:
+            content = self._call_ollama_native(messages)
+
+        return content
+
+    def _call_ollama_native(self, messages: list[dict]) -> str:
+        """Fall back to Ollama native API when OpenAI compat fails."""
+        import urllib.request
+        import urllib.error
+
+        base = self.base_url.replace("/v1", "")
+        url = f"{base}/api/chat"
+        payload = json.dumps({
+            "model": self.model,
+            "messages": messages,
+            "stream": False,
+            "options": {"temperature": 0.3, "num_predict": DEFAULT_MAX_TOKENS},
+        }).encode()
+        req = urllib.request.Request(url, data=payload, method="POST")
+        req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read())
+        return data.get("message", {}).get("content", "")
 
     def _parse_response(self, raw: str) -> AdvisorDecision:
         """Parse the JSON response from the LLM.
