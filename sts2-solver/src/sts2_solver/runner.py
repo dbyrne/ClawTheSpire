@@ -724,17 +724,12 @@ class Runner:
     # ------------------------------------------------------------------
 
     def _handle_deck_select(self, gs: dict) -> None:
-        """Handle multi-select deck card screens (add, remove, upgrade, transform).
+        """Handle deck card selection screens (add, remove, upgrade, transform).
 
-        select_deck_card toggles cards on/off, so we must:
-        1. Ask the advisor which card to pick
-        2. Execute the selection
-        3. Re-poll state — if still on CARD_SELECTION with select_deck_card,
-           we need another pick (exclude already-selected indices)
-        4. If confirm_selection appeared, auto-confirm
-        5. If the screen changed, we're done
+        select_deck_card toggles cards on/off. After each pick we re-poll
+        and check: did the screen change? Did confirm_selection appear?
+        Do we need more picks?
         """
-        selected_indices: set[int] = set()
         max_picks = 10  # safety limit
 
         for pick in range(max_picks):
@@ -766,16 +761,18 @@ class Runner:
             screen = gs.get("screen", "")
             actions = gs.get("available_actions", [])
 
-            # Screen changed — selection completed
-            if "CARD_SELECTION" not in screen.upper() and "select_deck_card" not in actions:
-                # Auto-confirm if needed
-                if "confirm_selection" in actions:
-                    if not self.dry_run:
-                        try:
-                            self._execute_with_retry("confirm_selection")
-                        except Exception:
-                            pass
-                    self._log_action("  [dim]auto: confirm_selection[/dim]")
+            # confirm_selection available — auto-confirm and done
+            if "confirm_selection" in actions:
+                if not self.dry_run:
+                    try:
+                        self._execute_with_retry("confirm_selection")
+                    except Exception:
+                        pass
+                self._log_action("  [dim]auto: confirm_selection[/dim]")
+                return
+
+            # Screen changed away from card selection — done
+            if "select_deck_card" not in actions:
                 return
 
             # Still on selection — filter out discard_potion for next advisor call
