@@ -630,46 +630,33 @@ class Runner:
                     self._log_action(f"  [red]Failed to discard potion: {e}[/red]")
             return
 
-        # collect_rewards_and_proceed: auto only when no card reward pending.
-        # The reward screen loads in stages — card choices may not be in the
-        # first state poll. Poll multiple times to catch card rewards.
-        if "collect_rewards_and_proceed" in actions and screen_type != "card_reward":
-            if not self.dry_run:
-                # Poll up to 3 times over 3s to see if card reward appears
-                found_card_reward = False
-                for _attempt in range(3):
-                    time.sleep(1.0)
+        # Reward screen: has collect_rewards_and_proceed + claim_reward.
+        # claim_reward claims individual rewards (gold, potions, card pick).
+        # We must claim the card reward (which triggers choose_reward_card)
+        # rather than auto-collecting everything.
+        if "collect_rewards_and_proceed" in actions:
+            if "claim_reward" in actions:
+                # There are unclaimed rewards — claim them to trigger card pick
+                if not self.dry_run:
                     try:
-                        fresh = self.client.get_state()
-                        fresh_actions = fresh.get("available_actions", [])
-                        if "choose_reward_card" in fresh_actions:
-                            self.game_state = fresh
-                            gs = fresh
-                            actions = fresh_actions
-                            screen_type = "card_reward"
-                            found_card_reward = True
-                            break
-                        # If actions changed to something other than collect, stop polling
-                        if "collect_rewards_and_proceed" not in fresh_actions:
-                            break
-                    except Exception:
-                        break
-                if not found_card_reward:
-                    self._log_action("  [dim]auto: collect_rewards_and_proceed[/dim]")
+                        self._execute_with_retry("claim_reward", option_index=0)
+                        self.action_count += 1
+                    except Exception as e:
+                        self._log_action(f"  [red]claim_reward failed: {e}[/red]")
+                self._log_action("  [dim]auto: claim_reward[/dim]")
+                return  # Next tick will see the card reward screen or more claims
+
+            if screen_type == "card_reward":
+                pass  # Fall through to LLM decision below
+            else:
+                # No more rewards to claim — proceed
+                self._log_action("  [dim]auto: collect_rewards_and_proceed[/dim]")
+                if not self.dry_run:
                     try:
                         self._execute_with_retry("collect_rewards_and_proceed")
                         self.action_count += 1
                     except Exception as e:
                         self._log_action(f"  [red]Auto-action failed: {e}[/red]")
-                    self.logger.log_decision(
-                        game_state=gs, screen_type="auto", options=actions,
-                        choice={"action": "collect_rewards_and_proceed", "option_index": None},
-                        source="auto",
-                    )
-                    return
-                # else: fall through to LLM-based decision with card_reward screen
-            else:
-                self._log_action("  [dim]auto: collect_rewards_and_proceed[/dim]")
                 self.logger.log_decision(
                     game_state=gs, screen_type="auto", options=actions,
                     choice={"action": "collect_rewards_and_proceed", "option_index": None},
