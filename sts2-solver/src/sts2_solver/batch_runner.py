@@ -31,8 +31,7 @@ def load_config() -> dict:
     defaults = {
         "gen": 1,
         "character": DEFAULT_CHARACTER,
-        "model": "gpt-4o-mini",
-        "local": False,
+        "model": "qwen3:8b",
         "poll_interval": 1.0,
         "deploy_dashboard": True,
     }
@@ -66,12 +65,7 @@ def run_one_game(cfg: dict, game_num: int) -> dict | None:
     logs_dir = LOGS_ROOT / f"gen{gen}"
     logs_dir.mkdir(parents=True, exist_ok=True)
 
-    # Set environment for model selection
-    if cfg["local"]:
-        os.environ["STS2_ADVISOR_BASE_URL"] = "http://localhost:11434/v1"
-        os.environ.setdefault("STS2_ADVISOR_MODEL", "qwen3:8b")
-    else:
-        os.environ.pop("STS2_ADVISOR_BASE_URL", None)
+    # Set model from config
     if cfg.get("model"):
         os.environ["STS2_ADVISOR_MODEL"] = cfg["model"]
 

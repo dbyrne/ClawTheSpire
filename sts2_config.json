@@ -1,8 +1,7 @@
 {
   "gen": 5,
   "character": "Ironclad",
-  "model": "gpt-4o-mini",
-  "local": false,
+  "model": "qwen3:8b",
   "poll_interval": 1.0,
   "deploy_dashboard": true
 }

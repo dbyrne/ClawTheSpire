@@ -1,4 +1,4 @@
-"""Strategic advisor for non-combat decisions using OpenAI GPT-4o-mini."""
+"""Strategic advisor for non-combat decisions using a local LLM (Ollama)."""
 
 from __future__ import annotations
 
@@ -22,9 +22,9 @@ if TYPE_CHECKING:
     from .run_logger import RunLogger
 
 
-DEFAULT_MODEL = os.environ.get("STS2_ADVISOR_MODEL", "gpt-4o-mini")
+DEFAULT_MODEL = os.environ.get("STS2_ADVISOR_MODEL", "qwen3:8b")
 DEFAULT_MAX_TOKENS = int(os.environ.get("STS2_ADVISOR_MAX_TOKENS", "256"))
-DEFAULT_BASE_URL = os.environ.get("STS2_ADVISOR_BASE_URL", "")  # empty = OpenAI default
+DEFAULT_BASE_URL = os.environ.get("STS2_ADVISOR_BASE_URL", "http://localhost:11434/v1")
 
 
 @dataclass
@@ -35,7 +35,7 @@ class AdvisorDecision:
 
 
 class StrategicAdvisor:
-    """Makes non-combat strategic decisions by calling OpenAI API."""
+    """Makes non-combat strategic decisions by calling a local LLM."""
 
     def __init__(
         self,
@@ -55,16 +55,15 @@ class StrategicAdvisor:
     @property
     def is_local(self) -> bool:
         """True if using a local model (Ollama, vLLM, etc.)."""
-        return bool(self.base_url)
+        return True
 
     def _get_openai_client(self):
         if self._openai_client is None:
             from openai import OpenAI
-            kwargs = {}
-            if self.base_url:
-                kwargs["base_url"] = self.base_url
-                kwargs["api_key"] = "ollama"  # Ollama doesn't need a real key
-            self._openai_client = OpenAI(**kwargs)
+            self._openai_client = OpenAI(
+                base_url=self.base_url,
+                api_key="ollama",  # Local models don't need a real key
+            )
         return self._openai_client
 
     def advise(self, game_state: dict, execute: bool = True) -> str:
@@ -238,7 +237,10 @@ class StrategicAdvisor:
             "max_tokens": DEFAULT_MAX_TOKENS,
             "temperature": 0.3,
         }
-        # JSON mode: OpenAI and some Ollama models support it
+        # Disable Qwen3 thinking via Ollama's OpenAI-compat extension
+        if "qwen3" in self.model.lower():
+            kwargs["extra_body"] = {"think": False}
+        # JSON mode: some Ollama models support it
         try:
             kwargs["response_format"] = {"type": "json_object"}
             response = client.chat.completions.create(**kwargs)
@@ -267,6 +269,7 @@ class StrategicAdvisor:
             "model": self.model,
             "messages": messages,
             "stream": False,
+            "think": False,
             "options": {"temperature": 0.3, "num_predict": DEFAULT_MAX_TOKENS},
         }).encode()
         req = urllib.request.Request(url, data=payload, method="POST")

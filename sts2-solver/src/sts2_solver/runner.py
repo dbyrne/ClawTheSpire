@@ -227,6 +227,22 @@ class Runner:
             finally:
                 self._live = None
                 self.logger.close()
+                self._update_dashboard()
+
+    def _update_dashboard(self) -> None:
+        """Rebuild data.json and deploy to Vercel after a run."""
+        script = Path(__file__).resolve().parents[3] / "dashboard" / "update_data.py"
+        if not script.exists():
+            return
+        try:
+            import subprocess, sys
+            subprocess.run(
+                [sys.executable, str(script), "--deploy"],
+                timeout=60,
+                capture_output=True,
+            )
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Main tick
@@ -257,6 +273,10 @@ class Runner:
 
         if screen == "MODAL":
             self._handle_modal(actions)
+            return False
+
+        if screen == "CAPSTONE_SELECTION" and "choose_capstone_option" in actions:
+            self._handle_capstone_selection(actions)
             return False
 
         if not actions:
@@ -454,6 +474,16 @@ class Runner:
                     time.sleep(0.5)
                 except Exception:
                     pass
+
+    def _handle_capstone_selection(self, actions: list[str]) -> None:
+        """Handle capstone/relic pack selection screens (e.g. Scroll Boxes)."""
+        self._log_action("[dim]auto: choose_capstone_option 0[/dim]")
+        if not self.dry_run:
+            try:
+                self._execute_with_retry("choose_capstone_option", option_index=0)
+                time.sleep(1.0)
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # Combat
@@ -1444,7 +1474,7 @@ class Runner:
 
 
 def _load_env_from_mcp_json() -> None:
-    """Load env vars (like OPENAI_API_KEY) from .mcp.json if present."""
+    """Load env vars from .mcp.json if present."""
     candidate = Path(__file__).resolve().parents[3] / ".mcp.json"
     if not candidate.exists():
         candidate = Path.cwd() / ".mcp.json"
@@ -1481,19 +1511,11 @@ def main():
         help=f"Character to play (default: {DEFAULT_CHARACTER})",
     )
     parser.add_argument(
-        "--local", action="store_true",
-        help="Use local Ollama model instead of OpenAI API",
-    )
-    parser.add_argument(
         "--model", type=str, default=None,
-        help="Override advisor model (e.g. qwen3:8b, gpt-4o-mini)",
+        help="Override advisor model (e.g. qwen3:8b, gemma3:4b)",
     )
     args = parser.parse_args()
 
-    # Set env vars for local mode before Runner init
-    if args.local:
-        os.environ.setdefault("STS2_ADVISOR_BASE_URL", "http://localhost:11434/v1")
-        os.environ.setdefault("STS2_ADVISOR_MODEL", "qwen3:8b")
     if args.model:
         os.environ["STS2_ADVISOR_MODEL"] = args.model
 

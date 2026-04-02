@@ -121,6 +121,7 @@ def main():
             ["npx", "vercel", "--prod", "--yes"],
             cwd=str(dashboard_dir),
             check=True,
+            shell=True,
         )
         print("Deployed!")
 

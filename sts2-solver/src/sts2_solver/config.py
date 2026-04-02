@@ -15,10 +15,10 @@ EVALUATOR = {
     # Damage scoring
     "kill_bonus": 35.0,              # Base bonus for killing an enemy
     "buff_kill_bonus": 60.0,         # Extra bonus for killing Buff-intent enemies
-    "strength_kill_bonus_per": 5.0,  # Extra per point of enemy Strength on kill
+    "strength_kill_bonus_per": 8.0,  # Extra per point of enemy Strength on kill
     "damage_alive_weight": 1.5,      # Per-HP damage to living enemies
     "damage_dead_weight": 0.5,       # Per-HP damage on already-dead enemies
-    "kill_proximity_weight": 8.0,    # Bonus scaled by % HP removed
+    "kill_proximity_weight": 5.0,    # Bonus scaled by % HP removed
 
     # Block scoring
     "effective_block_weight": 2.5,   # Per-point of block vs incoming damage
@@ -27,19 +27,20 @@ EVALUATOR = {
 
     # HP-aware block scaling: block_weight *= 1 + (threshold - hp) * scale
     # when hp < threshold
-    "hp_block_threshold": 30,        # HP below which block is weighted extra
-    "hp_block_scale": 0.05,          # Scale factor per HP below threshold
+    "hp_block_threshold": 50,        # HP below which block is weighted extra
+    "hp_block_scale": 0.04,          # Scale factor per HP below threshold
 
     # Unblocked damage penalty
-    "unblocked_damage_penalty": 1.0, # Per-point of incoming damage not blocked
+    "unblocked_damage_penalty": 1.5, # Per-point of incoming damage not blocked
+    "lethal_damage_penalty": 500.0,  # Catastrophic penalty if unblocked damage kills
 
     # Self-damage
     "self_damage_weight": 0.8,       # Penalty per HP lost from own cards
 
     # Debuffs on enemies
-    "vulnerable_value": 3.0,         # Per stack of Vulnerable
+    "vulnerable_value": 1.5,         # Per stack of Vulnerable (1-turn duration)
     "weak_vs_attack_value": 2.5,     # Per stack of Weak when enemy attacking
-    "weak_vs_other_value": 1.5,      # Per stack of Weak otherwise
+    "weak_vs_other_value": 1.0,      # Per stack of Weak otherwise
 
     # Player buffs
     "strength_gained_value": 5.0,

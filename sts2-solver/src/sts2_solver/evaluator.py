@@ -87,6 +87,10 @@ def evaluate_turn(state: CombatState, initial_state: CombatState) -> float:
         # Unblocked damage penalty
         unblocked = max(0, total_incoming - state.player.block)
         score -= unblocked * EVALUATOR["unblocked_damage_penalty"]
+
+        # Lethal damage: catastrophic penalty if this play leaves us dead
+        if unblocked >= state.player.hp:
+            score -= EVALUATOR["lethal_damage_penalty"]
     else:
         # No attack incoming: block has less immediate value
         # Still worth something if enemies are alive (future turns)

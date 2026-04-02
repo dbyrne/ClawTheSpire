@@ -279,6 +279,62 @@
       "gen": "gen5",
       "model": "gpt-4o-mini",
       "run_id": "GELTZQFJXA"
+    },
+    {
+      "run_number": 41,
+      "floor": 11,
+      "gen": "gen5",
+      "model": "gpt-4o-mini",
+      "run_id": "QSL4LVJAGK"
+    },
+    {
+      "run_number": 42,
+      "floor": 13,
+      "gen": "gen5",
+      "model": "gpt-4o-mini",
+      "run_id": "AR2C9JC4E2"
+    },
+    {
+      "run_number": 43,
+      "floor": 6,
+      "gen": "gen5",
+      "model": "qwen3:8b",
+      "run_id": "SN1EUTC6TA"
+    },
+    {
+      "run_number": 44,
+      "floor": 11,
+      "gen": "gen5",
+      "model": "qwen3:8b",
+      "run_id": "BWGEV6BQHL"
+    },
+    {
+      "run_number": 45,
+      "floor": 11,
+      "gen": "gen5",
+      "model": "qwen3:8b",
+      "run_id": "1UR6LLW3LS"
+    },
+    {
+      "run_number": 46,
+      "floor": 17,
+      "gen": "gen5",
+      "model": "qwen3:8b",
+      "run_id": "LYA7S68KSV"
+    },
+    {
+      "run_number": 47,
+      "floor": 6,
+      "gen": "gen5",
+      "model": "qwen3:8b",
+      "run_id": "3B54F08LA2"
+    },
+    {
+      "run_number": 48,
+      "floor": 17,
+      "gen": "gen5",
+      "model": "qwen3:8b",
+      "run_id": "C7MCWYCFWM"
     }
   ],
   "gen_boundaries": {
@@ -286,6 +342,6 @@
     "gen2": 33,
     "gen3": 36,
     "gen4": 39,
-    "gen5": 40
+    "gen5": 48
   }
 }
