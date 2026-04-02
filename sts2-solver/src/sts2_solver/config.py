@@ -20,6 +20,15 @@ EVALUATOR = {
     "damage_dead_weight": 0.5,       # Per-HP damage on already-dead enemies
     "kill_proximity_weight": 5.0,    # Bonus scaled by % HP removed
 
+    # Enemy threat prioritization — multiplier on all damage scoring per enemy
+    # Base multiplier is 1.0; these ADD to it based on enemy properties
+    "threat_buff_intent": 0.6,       # Buff-intent enemies scale danger each turn
+    "threat_strength_per": 0.08,     # Per point of enemy Strength
+    "threat_attack_damage_per": 0.01, # Per point of incoming damage from this enemy
+    "threat_max_hp_per": 0.001,      # Per point of enemy max HP (tankier = more turns alive)
+    "threat_status_intent": 0.3,     # StatusCard intent enemies add junk to your deck
+    "threat_debuff_intent": 0.2,     # Debuff intent enemies weaken you
+
     # Block scoring
     "effective_block_weight": 2.5,   # Per-point of block vs incoming damage
     "wasted_block_penalty": 0.2,     # Per-point of over-block

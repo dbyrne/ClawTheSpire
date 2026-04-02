@@ -31,9 +31,27 @@ def evaluate_turn(state: CombatState, initial_state: CombatState) -> float:
     for i, enemy in enumerate(state.enemies):
         if i >= len(initial_state.enemies):
             break
-        initial_hp = initial_state.enemies[i].hp
+        initial_enemy = initial_state.enemies[i]
+        initial_hp = initial_enemy.hp
         current_hp = max(0, enemy.hp)
         damage_dealt = initial_hp - current_hp
+
+        # Threat multiplier: how dangerous is this enemy relative to others?
+        # Higher threat = more reward for damaging/killing it.
+        threat = 1.0
+        if initial_enemy.intent_type == "Buff":
+            threat += EVALUATOR["threat_buff_intent"]
+        elif initial_enemy.intent_type == "StatusCard":
+            threat += EVALUATOR["threat_status_intent"]
+        elif initial_enemy.intent_type == "Debuff":
+            threat += EVALUATOR["threat_debuff_intent"]
+        enemy_str = initial_enemy.powers.get("Strength", 0)
+        if enemy_str > 0:
+            threat += enemy_str * EVALUATOR["threat_strength_per"]
+        if initial_enemy.intent_type == "Attack" and initial_enemy.intent_damage:
+            per_hit = initial_enemy.intent_damage + enemy_str
+            threat += per_hit * initial_enemy.intent_hits * EVALUATOR["threat_attack_damage_per"]
+        threat += initial_enemy.max_hp * EVALUATOR["threat_max_hp_per"]
 
         if current_hp <= 0:
             # Kill bonus: killing an enemy is very valuable - removes future
@@ -44,19 +62,18 @@ def evaluate_turn(state: CombatState, initial_state: CombatState) -> float:
             if enemy.intent_type == "Buff":
                 kill_bonus += EVALUATOR["buff_kill_bonus"]
             # Enemies with Strength are increasingly dangerous
-            enemy_str = enemy.powers.get("Strength", 0)
             if enemy_str > 0:
                 kill_bonus += enemy_str * EVALUATOR["strength_kill_bonus_per"]
-            score += kill_bonus
+            score += kill_bonus * threat
             # Extra bonus for overkill efficiency is NOT given - wasted damage
             # on a dead enemy is slightly negative
             score += damage_dealt * EVALUATOR["damage_dead_weight"]
         else:
             # Partial damage: valuable but less than a kill
             # Weighted by how close to lethal (% HP removed)
-            score += damage_dealt * EVALUATOR["damage_alive_weight"]
+            score += damage_dealt * EVALUATOR["damage_alive_weight"] * threat
             kill_proximity = damage_dealt / initial_hp if initial_hp > 0 else 0
-            score += kill_proximity * EVALUATOR["kill_proximity_weight"]
+            score += kill_proximity * EVALUATOR["kill_proximity_weight"] * threat
 
     # -----------------------------------------------------------------------
     # 2. Block vs incoming damage
