@@ -260,39 +260,59 @@ class RunLogger:
     # ------------------------------------------------------------------
 
     def _start_run(self, game_state: dict, run_id: str) -> None:
-        """Open a new log file and emit the run_start snapshot."""
+        """Open a log file and emit the run_start snapshot.
+
+        If an existing log file for this run_id exists, resume appending
+        to it (with a run_resume event) instead of creating a new file.
+        """
         self.close()
         self._run_id = run_id
 
         self.logs_dir.mkdir(parents=True, exist_ok=True)
-        ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        path = self.logs_dir / f"run_{run_id}_{ts}.jsonl"
-        self._file = open(path, "a", encoding="utf-8")
 
-        run = game_state.get("run") or {}
-        deck = run.get("deck", [])
-        relics = run.get("relics", [])
-        potions = run.get("potions", [])
+        # Look for an existing log file for this run_id
+        existing = sorted(self.logs_dir.glob(f"run_{run_id}_*.jsonl"))
+        if existing:
+            path = existing[-1]  # Use the most recent one
+            self._file = open(path, "a", encoding="utf-8")
+            # Emit a resume marker instead of full run_start
+            run = game_state.get("run") or {}
+            self._emit({
+                "type": "run_resume",
+                "run_id": run_id,
+                "floor": run.get("floor"),
+                "hp": run.get("current_hp"),
+                "max_hp": run.get("max_hp"),
+            })
+        else:
+            ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+            path = self.logs_dir / f"run_{run_id}_{ts}.jsonl"
+            self._file = open(path, "a", encoding="utf-8")
 
-        event: dict[str, Any] = {
-            "type": "run_start",
-            "run_id": run_id,
-            "game_version": self.game_version,
-            "character": run.get("character_name") or run.get("character_id"),
-            "floor": run.get("floor"),
-            "hp": run.get("current_hp"),
-            "max_hp": run.get("max_hp"),
-            "gold": run.get("gold"),
-            "max_energy": run.get("max_energy"),
-            "deck": _summarize_deck_list(deck),
-            "relics": [r.get("name") or r.get("relic_id", "?") for r in relics],
-            "potions": [
-                p.get("name") if p.get("occupied") else None
-                for p in potions
-            ],
-            "map": game_state.get("map"),
-        }
-        self._emit(event)
+            run = game_state.get("run") or {}
+            deck = run.get("deck", [])
+            relics = run.get("relics", [])
+            potions = run.get("potions", [])
+
+            event: dict[str, Any] = {
+                "type": "run_start",
+                "run_id": run_id,
+                "game_version": self.game_version,
+                "character": run.get("character_name") or run.get("character_id"),
+                "floor": run.get("floor"),
+                "hp": run.get("current_hp"),
+                "max_hp": run.get("max_hp"),
+                "gold": run.get("gold"),
+                "max_energy": run.get("max_energy"),
+                "deck": _summarize_deck_list(deck),
+                "relics": [r.get("name") or r.get("relic_id", "?") for r in relics],
+                "potions": [
+                    p.get("name") if p.get("occupied") else None
+                    for p in potions
+                ],
+                "map": game_state.get("map"),
+            }
+            self._emit(event)
 
         self._prev_state = game_state
 
