@@ -238,7 +238,13 @@ class Runner:
 
         self.logger.ensure_run(self.game_state)
 
-        if "play_card" in actions:
+        screen = self.game_state.get("screen", "")
+        in_combat = (
+            "play_card" in actions
+            or ("end_turn" in actions and "COMBAT" in screen.upper())
+        )
+
+        if in_combat:
             self._handle_combat()
         else:
             self._handle_non_combat(actions)

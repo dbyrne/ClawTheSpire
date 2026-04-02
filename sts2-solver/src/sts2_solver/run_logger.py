@@ -284,6 +284,12 @@ class RunLogger:
                 "hp": run.get("current_hp"),
                 "max_hp": run.get("max_hp"),
             })
+            # If resuming mid-combat, restore combat tracking state
+            combat = game_state.get("combat") or {}
+            player = combat.get("player") or {}
+            if game_state.get("in_combat") or player.get("current_hp") is not None:
+                self._combat_start_hp = player.get("current_hp") or run.get("current_hp")
+                self._combat_turn = 0
         else:
             ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
             path = self.logs_dir / f"run_{run_id}_{ts}.jsonl"
