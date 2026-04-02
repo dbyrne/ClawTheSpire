@@ -188,6 +188,10 @@ class Runner:
         self.advisor = StrategicAdvisor(
             self.game_data, self.client, logger=self.logger
         )
+        self.logger.metadata = {
+            "advisor_model": self.advisor.model,
+            "advisor_local": self.advisor.is_local,
+        }
         try:
             health = self.client.get_health()
             self.logger.game_version = health.get("game_version")

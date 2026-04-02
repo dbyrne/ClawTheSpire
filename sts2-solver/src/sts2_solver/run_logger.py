@@ -28,6 +28,7 @@ class RunLogger:
     def __init__(self, logs_dir: Path | None = None):
         self.logs_dir = logs_dir or LOGS_DIR
         self.game_version: str | None = None
+        self.metadata: dict[str, Any] = {}  # Extra fields for run_start (model, etc.)
         self._file = None
         self._run_id: str | None = None
         self._prev_state: dict | None = None
@@ -310,6 +311,7 @@ class RunLogger:
                 "type": "run_start",
                 "run_id": run_id,
                 "game_version": self.game_version,
+                **self.metadata,
                 "character": run.get("character_name") or run.get("character_id"),
                 "floor": run.get("floor"),
                 "hp": run.get("current_hp"),
