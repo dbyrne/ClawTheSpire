@@ -37,7 +37,16 @@ def evaluate_turn(state: CombatState, initial_state: CombatState) -> float:
         if current_hp <= 0:
             # Kill bonus: killing an enemy is very valuable - removes future
             # damage and status card sources
-            score += 50.0
+            kill_bonus = 50.0
+            # Buff/support enemies are higher priority kills — they scale
+            # danger every turn they stay alive (e.g. Kin Priest giving Strength)
+            if enemy.intent_type == "Buff":
+                kill_bonus += 30.0
+            # Enemies with Strength are increasingly dangerous
+            enemy_str = enemy.powers.get("Strength", 0)
+            if enemy_str > 0:
+                kill_bonus += enemy_str * 5.0
+            score += kill_bonus
             # Extra bonus for overkill efficiency is NOT given - wasted damage
             # on a dead enemy is slightly negative
             score += damage_dealt * 0.5
