@@ -829,6 +829,10 @@ class Runner:
         # card reward — NEVER use it when an unhandled card choice exists.
         # Instead, claim the card reward item to open the selection screen,
         # then let the advisor choose or skip.
+        #
+        # IMPORTANT: collect_rewards_and_proceed also auto-claims skipped card
+        # rewards. After a skip, we must claim non-card rewards individually
+        # first, then proceed only when no card rewards remain claimable.
         if "collect_rewards_and_proceed" in actions and screen_type != "card_reward":
             reward = gs.get("reward") or {}
             if not reward:
@@ -855,10 +859,44 @@ class Runner:
                 return  # Let next tick re-check once reward data is populated
 
             # If we already handled the card choice this reward screen,
-            # don't try to open it again — just proceed.
+            # claim non-card rewards individually to avoid collect_rewards_and_proceed
+            # which auto-grabs the first card (even after skip_reward_cards).
             if self._card_reward_handled:
-                has_card_reward_item = False
-                has_card_choice = False
+                self._card_reward_handled = False
+                if "claim_reward" in actions:
+                    # Claim first non-card reward item
+                    for item in reward_items:
+                        if not self._is_card_reward_item(item) and item.get("claimable", True):
+                            idx = item.get("index", item.get("i"))
+                            if idx is not None:
+                                self._log_action(f"  [dim]auto: claim_reward({idx}) — non-card[/dim]")
+                                if not self.dry_run:
+                                    try:
+                                        self._execute_with_retry("claim_reward", option_index=idx)
+                                        self.action_count += 1
+                                    except Exception:
+                                        pass
+                                return
+                # No non-card rewards left, or no claim_reward action.
+                # Try proceed first (doesn't auto-claim), fall back to
+                # collect_rewards_and_proceed only if proceed isn't available.
+                if "proceed" in actions:
+                    self._log_action("  [dim]auto: proceed (post-skip)[/dim]")
+                    if not self.dry_run:
+                        try:
+                            self._execute_with_retry("proceed")
+                            self.action_count += 1
+                        except Exception:
+                            pass
+                elif "collect_rewards_and_proceed" in actions:
+                    self._log_action("  [dim]auto: collect_rewards_and_proceed (post-skip)[/dim]")
+                    if not self.dry_run:
+                        try:
+                            self._execute_with_retry("collect_rewards_and_proceed")
+                            self.action_count += 1
+                        except Exception:
+                            pass
+                return
 
             if has_card_choice or has_card_reward_item:
                 if "choose_reward_card" in actions or "skip_reward_cards" in actions:
@@ -885,8 +923,7 @@ class Runner:
                     # Not ready yet — return and let next tick handle it
                     return
             else:
-                # No card choice (or already handled) — safe to auto-proceed
-                self._card_reward_handled = False  # Reset for next reward
+                # No card choice pending — safe to auto-proceed
                 self._log_action("  [dim]auto: collect_rewards_and_proceed[/dim]")
                 if not self.dry_run:
                     try:
@@ -1016,19 +1053,6 @@ class Runner:
 
         # For card_reward: if card options are empty, skip this tick (data not ready)
         if screen_type == "card_reward":
-            # If we already handled this card reward (took or skipped),
-            # force proceed to leave the reward screen.
-            if self._card_reward_handled and "collect_rewards_and_proceed" in actions:
-                self._card_reward_handled = False
-                self._log_action("  [dim]auto: collect_rewards_and_proceed (after card choice)[/dim]")
-                if not self.dry_run:
-                    try:
-                        self._execute_with_retry("collect_rewards_and_proceed")
-                        self.action_count += 1
-                    except Exception as e:
-                        self._log_action(f"  [red]Failed: {e}[/red]")
-                return
-
             reward = gs.get("reward") or {}
             if not reward:
                 reward = (gs.get("agent_view") or {}).get("reward") or {}
