@@ -1012,6 +1012,19 @@ class Runner:
 
         # For card_reward: if card options are empty, skip this tick (data not ready)
         if screen_type == "card_reward":
+            # If we already handled this card reward (took or skipped),
+            # force proceed to leave the reward screen.
+            if self._card_reward_handled and "collect_rewards_and_proceed" in actions:
+                self._card_reward_handled = False
+                self._log_action("  [dim]auto: collect_rewards_and_proceed (after card choice)[/dim]")
+                if not self.dry_run:
+                    try:
+                        self._execute_with_retry("collect_rewards_and_proceed")
+                        self.action_count += 1
+                    except Exception as e:
+                        self._log_action(f"  [red]Failed: {e}[/red]")
+                return
+
             reward = gs.get("reward") or {}
             if not reward:
                 reward = (gs.get("agent_view") or {}).get("reward") or {}

@@ -113,13 +113,25 @@ class StrategicAdvisor:
                 f"Raw response: {raw_response}"
             )
 
-        # Coerce null option_index to 0 for actions that require an index
-        _INDEXED_ACTIONS = {
+        # Coerce null option_index to 0 for actions that require an index.
+        # Special case: choose_reward_card with null means "skip" — convert
+        # to skip_reward_cards if available instead of accidentally taking a card.
+        if decision.option_index is None and decision.action == "choose_reward_card":
+            if "skip_reward_cards" in actions:
+                decision = AdvisorDecision(
+                    action="skip_reward_cards", option_index=None,
+                    reasoning=decision.reasoning,
+                )
+            else:
+                decision = AdvisorDecision(
+                    action=decision.action, option_index=0,
+                    reasoning=decision.reasoning,
+                )
+        elif decision.option_index is None and decision.action in {
             "choose_map_node", "choose_event_option", "choose_rest_option",
-            "choose_reward_card", "choose_treasure_relic", "select_deck_card",
+            "choose_treasure_relic", "select_deck_card",
             "buy_card", "buy_relic", "buy_potion", "claim_reward",
-        }
-        if decision.option_index is None and decision.action in _INDEXED_ACTIONS:
+        }:
             decision = AdvisorDecision(
                 action=decision.action, option_index=0, reasoning=decision.reasoning,
             )
