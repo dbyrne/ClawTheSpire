@@ -689,6 +689,14 @@ class Runner:
             gs = dict(gs)
             gs["available_actions"] = filtered_actions
 
+        # Multi-select deck screens (e.g. "Choose 2 cards to Add/Remove"):
+        # select_deck_card toggles a card on/off. We must track which cards
+        # are already selected and loop until the screen changes or
+        # confirm_selection appears.
+        if screen_type == "deck_select":
+            self._handle_deck_select(gs)
+            return
+
         # LLM-based decision
         try:
             result_str = self.advisor.advise(gs, execute=not self.dry_run)
@@ -710,6 +718,71 @@ class Runner:
         self._log_action(f"  [blue]{decision_line}[/blue]")
         self.action_count += 1
         self._refresh()
+
+    # ------------------------------------------------------------------
+    # Multi-select deck screens
+    # ------------------------------------------------------------------
+
+    def _handle_deck_select(self, gs: dict) -> None:
+        """Handle multi-select deck card screens (add, remove, upgrade, transform).
+
+        select_deck_card toggles cards on/off, so we must:
+        1. Ask the advisor which card to pick
+        2. Execute the selection
+        3. Re-poll state — if still on CARD_SELECTION with select_deck_card,
+           we need another pick (exclude already-selected indices)
+        4. If confirm_selection appeared, auto-confirm
+        5. If the screen changed, we're done
+        """
+        selected_indices: set[int] = set()
+        max_picks = 10  # safety limit
+
+        for pick in range(max_picks):
+            # Ask the advisor
+            try:
+                result_str = self.advisor.advise(gs, execute=not self.dry_run)
+            except Exception as e:
+                self._log_action(f"[red]Advisor error: {e}[/red]")
+                return
+
+            # Extract what was picked
+            lines = result_str.split("\n")
+            decision_line = next(
+                (l for l in lines if l.startswith("Decision:")),
+                lines[0] if lines else "?",
+            )
+            self._log_action(f"  [blue]{decision_line}[/blue]")
+            self.action_count += 1
+            self._refresh()
+
+            # Wait and re-poll
+            time.sleep(0.5)
+            try:
+                gs = self.client.get_state()
+            except Exception:
+                return
+            self.game_state = gs
+
+            screen = gs.get("screen", "")
+            actions = gs.get("available_actions", [])
+
+            # Screen changed — selection completed
+            if "CARD_SELECTION" not in screen.upper() and "select_deck_card" not in actions:
+                # Auto-confirm if needed
+                if "confirm_selection" in actions:
+                    if not self.dry_run:
+                        try:
+                            self._execute_with_retry("confirm_selection")
+                        except Exception:
+                            pass
+                    self._log_action("  [dim]auto: confirm_selection[/dim]")
+                return
+
+            # Still on selection — filter out discard_potion for next advisor call
+            filtered = [a for a in actions if a != "discard_potion"]
+            if filtered:
+                gs = dict(gs)
+                gs["available_actions"] = filtered
 
     # ------------------------------------------------------------------
     # Game over
