@@ -14,7 +14,7 @@ CORE STRATEGY PRINCIPLES:
 - SKIP card rewards unless the card actively improves your deck archetype. Most cards are skips.
 - Front-load damage in Act 1. You need to kill enemies fast before scaling matters.
 - Scaling (Strength, multi-hit, powers) matters more in Act 2+.
-- HP is a resource. Spend it at events/elites when the payoff is worth it.
+- HP is a resource, but dying ends the run. Below 35% HP, ALWAYS path to rest/shop/event — never fight. Below 55%, avoid elites.
 - Track your deck archetype (strength-scaling, exhaust, block-heavy, etc.) and draft toward it.
 - Elite fights give better rewards but are risky. Don't path into elites below ~50% HP without potions.
 - At shops, ALWAYS prioritize card removal over buying cards. Remove Strikes first, then Defends once you have better block. Only buy cards/relics after removal.
@@ -154,7 +154,20 @@ def build_map_message(state: dict, game_data: GameDataDB) -> str:
     lines.append("")
     lines.append("AVAILABLE ACTIONS: choose_map_node (with option_index)")
     lines.append("")
-    lines.append("Which node should we travel to? Consider HP, deck readiness, and risk vs reward.")
+
+    run = state.get("run", {})
+    hp = run.get("current_hp", 0)
+    max_hp = run.get("max_hp", 1)
+    hp_pct = hp / max_hp if max_hp > 0 else 0
+
+    if hp_pct < 0.35:
+        lines.append(f"HP CRITICAL ({hp}/{max_hp} = {hp_pct:.0%}). MUST path to rest site, shop, or event. "
+                     "Do NOT fight monsters or elites — you will die.")
+    elif hp_pct < 0.55:
+        lines.append(f"HP LOW ({hp}/{max_hp} = {hp_pct:.0%}). Avoid elites. Prefer rest/event/shop. "
+                     "Only fight normal monsters if no safer option exists.")
+    else:
+        lines.append("Which node should we travel to? Consider HP, deck readiness, and risk vs reward.")
 
     return "\n".join(lines)
 

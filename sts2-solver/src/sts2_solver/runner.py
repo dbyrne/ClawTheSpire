@@ -544,7 +544,7 @@ class Runner:
         mcp_actions = actions_to_mcp_sequence(result.actions)
         exec_hand = list(original_hand)
 
-        for solver_action, mcp_action in zip(result.actions, mcp_actions):
+        for i, (solver_action, mcp_action) in enumerate(zip(result.actions, mcp_actions)):
             if solver_action.action_type == "end_turn":
                 label = "End Turn"
             elif solver_action.card_idx is not None and solver_action.card_idx < len(exec_hand):
@@ -558,6 +558,11 @@ class Runner:
             else:
                 label = f"card_idx={solver_action.card_idx}"
 
+            # Wait for game to be ready before sending each action
+            # (skip for the first action — game is already ready from solve)
+            if i > 0:
+                self._wait_for_ready()
+
             try:
                 self._execute_with_retry(
                     mcp_action["action"],
@@ -570,7 +575,6 @@ class Runner:
                 self._log_action(f"  [red]X {label}: {e}[/red]")
                 break
 
-            self._wait_for_ready()
             self._refresh()
 
         self.turn_count += 1
@@ -620,21 +624,44 @@ class Runner:
                     self._log_action(f"  [red]Failed to discard potion: {e}[/red]")
             return
 
-        # collect_rewards_and_proceed: auto only when no card reward pending
+        # collect_rewards_and_proceed: auto only when no card reward pending.
+        # The reward screen loads in stages — card choices may not be in the
+        # first state poll. Re-check after a delay to avoid skipping rewards.
         if "collect_rewards_and_proceed" in actions and screen_type != "card_reward":
-            self._log_action("  [dim]auto: collect_rewards_and_proceed[/dim]")
+            # Double-check: wait briefly and re-poll to see if card reward appears
             if not self.dry_run:
+                time.sleep(1.0)
                 try:
-                    self._execute_with_retry("collect_rewards_and_proceed")
-                    self.action_count += 1
+                    fresh = self.client.get_state()
+                    fresh_actions = fresh.get("available_actions", [])
+                    if "choose_reward_card" in fresh_actions:
+                        # Card reward appeared — handle it via advisor instead
+                        self.game_state = fresh
+                        gs = fresh
+                        actions = fresh_actions
+                        screen_type = "card_reward"
+                        # Fall through to LLM-based decision below
+                    else:
+                        self._log_action("  [dim]auto: collect_rewards_and_proceed[/dim]")
+                        self._execute_with_retry("collect_rewards_and_proceed")
+                        self.action_count += 1
+                        self.logger.log_decision(
+                            game_state=gs, screen_type="auto", options=actions,
+                            choice={"action": "collect_rewards_and_proceed", "option_index": None},
+                            source="auto",
+                        )
+                        return
                 except Exception as e:
                     self._log_action(f"  [red]Auto-action failed: {e}[/red]")
-            self.logger.log_decision(
-                game_state=gs, screen_type="auto", options=actions,
-                choice={"action": "collect_rewards_and_proceed", "option_index": None},
-                source="auto",
-            )
-            return
+                    return
+            else:
+                self._log_action("  [dim]auto: collect_rewards_and_proceed[/dim]")
+                self.logger.log_decision(
+                    game_state=gs, screen_type="auto", options=actions,
+                    choice={"action": "collect_rewards_and_proceed", "option_index": None},
+                    source="auto",
+                )
+                return
 
         # Auto-actions
         if screen_type == "auto":
