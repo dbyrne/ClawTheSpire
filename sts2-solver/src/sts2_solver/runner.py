@@ -847,6 +847,16 @@ class Runner:
         )
         self._refresh()
 
+        # Return to main menu so the next run can start
+        actions = gs.get("available_actions", [])
+        if "return_to_main_menu" in actions and not self.dry_run:
+            time.sleep(1.0)
+            try:
+                self._execute_with_retry("return_to_main_menu")
+                time.sleep(2.0)
+            except Exception:
+                pass
+
     # ------------------------------------------------------------------
     # Action execution with retry
     # ------------------------------------------------------------------
