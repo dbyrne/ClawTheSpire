@@ -731,6 +731,7 @@ class Runner:
         Do we need more picks?
         """
         max_picks = 10  # safety limit
+        consecutive_failures = 0
 
         for pick in range(max_picks):
             # Ask the advisor
@@ -739,6 +740,9 @@ class Runner:
             except Exception as e:
                 self._log_action(f"[red]Advisor error: {e}[/red]")
                 return
+
+            # Check if the advisor actually executed successfully
+            executed_ok = "-> OK" in result_str
 
             # Extract what was picked
             lines = result_str.split("\n")
@@ -749,6 +753,24 @@ class Runner:
             self._log_action(f"  [blue]{decision_line}[/blue]")
             self.action_count += 1
             self._refresh()
+
+            if not executed_ok:
+                consecutive_failures += 1
+                self._log_action(f"  [yellow]Advisor did not execute (attempt {consecutive_failures})[/yellow]")
+                if consecutive_failures >= 3:
+                    # Fall back: just pick the first card
+                    self._log_action("  [yellow]Falling back to first card[/yellow]")
+                    if not self.dry_run:
+                        try:
+                            self._execute_with_retry("select_deck_card", option_index=0)
+                        except Exception:
+                            pass
+                    # Continue to re-poll below
+                else:
+                    time.sleep(0.5)
+                    continue
+            else:
+                consecutive_failures = 0
 
             # Wait and re-poll
             time.sleep(0.5)
