@@ -276,7 +276,7 @@
     {
       "run_number": 40,
       "floor": 24,
-      "gen": "current",
+      "gen": "gen5",
       "model": "gpt-4o-mini",
       "run_id": "GELTZQFJXA"
     }
@@ -286,6 +286,6 @@
     "gen2": 33,
     "gen3": 36,
     "gen4": 39,
-    "current": 40
+    "gen5": 40
   }
 }

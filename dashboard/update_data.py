@@ -16,29 +16,17 @@ from pathlib import Path
 LOGS_ROOT = Path(__file__).resolve().parent.parent / "logs"
 DATA_OUT = Path(__file__).resolve().parent / "data.json"
 
-# Generation directories in order (logs/ itself is the "current" gen)
-GEN_DIRS = [
-    ("gen1", LOGS_ROOT / "gen1"),
-    ("gen2", LOGS_ROOT / "gen2"),
-    ("gen3", LOGS_ROOT / "gen3"),
-    ("gen4", LOGS_ROOT / "gen4"),
-    ("gen5", LOGS_ROOT / "gen5"),
-    ("gen6", LOGS_ROOT / "gen6"),
-    ("gen7", LOGS_ROOT / "gen7"),
-    ("gen8", LOGS_ROOT / "gen8"),
-]
-
-# Also scan logs/ root for current/unarchived runs
-CURRENT_GEN = "current"
-
-
 def scan_runs() -> list[dict]:
     """Scan all gen directories and logs/ root for completed runs."""
     runs = []
 
-    for gen_name, gen_dir in GEN_DIRS:
-        if not gen_dir.is_dir():
-            continue
+    # Discover gen directories dynamically
+    gen_dirs = sorted(
+        (d for d in LOGS_ROOT.iterdir() if d.is_dir() and d.name.startswith("gen")),
+        key=lambda d: int(d.name.replace("gen", "") or "0"),
+    )
+    for gen_dir in gen_dirs:
+        gen_name = gen_dir.name
         for fp in sorted(gen_dir.glob("run_*.jsonl")):
             if fp.name.startswith("run_TEST"):
                 continue
@@ -46,11 +34,11 @@ def scan_runs() -> list[dict]:
             if run:
                 runs.append(run)
 
-    # Scan logs/ root for current gen
+    # Also scan logs/ root for unarchived runs
     for fp in sorted(LOGS_ROOT.glob("run_*.jsonl")):
         if fp.name.startswith("run_TEST"):
             continue
-        run = _parse_run(fp, CURRENT_GEN)
+        run = _parse_run(fp, "current")
         if run:
             runs.append(run)
 

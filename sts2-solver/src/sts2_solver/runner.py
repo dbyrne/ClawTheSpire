@@ -54,6 +54,7 @@ class Runner:
         dry_run: bool = False,
         poll_interval: float = 1.0,
         character: str = DEFAULT_CHARACTER,
+        logs_dir: str | Path | None = None,
     ):
         self.step_mode = step_mode
         self.dry_run = dry_run
@@ -65,7 +66,7 @@ class Runner:
         self.card_db = None
         self.game_data = None
         self.advisor = None
-        self.logger = RunLogger()
+        self.logger = RunLogger(logs_dir=Path(logs_dir) if logs_dir else None)
 
         self.game_state: dict | None = None
         self.turn_count = 0
