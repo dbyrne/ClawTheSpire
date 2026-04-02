@@ -121,7 +121,7 @@ class StrategicAdvisor:
                 f"Reasoning: {decision.reasoning}"
             )
 
-        # Log the decision
+        # Log the decision (include user_prompt for training data)
         if self.logger:
             self.logger.log_decision(
                 game_state=game_state,
@@ -134,6 +134,7 @@ class StrategicAdvisor:
                 },
                 source="advisor",
                 latency_ms=latency_ms,
+                user_prompt=user_message,
             )
 
         return self._format_result(decision, screen_type, game_state, execute)

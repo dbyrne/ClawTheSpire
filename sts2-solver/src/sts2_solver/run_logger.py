@@ -77,8 +77,12 @@ class RunLogger:
         choice: dict,
         source: str,
         latency_ms: float | None = None,
+        user_prompt: str | None = None,
     ) -> None:
-        """Log a strategic or auto decision."""
+        """Log a strategic or auto decision.
+
+        If user_prompt is provided, it's included for training data extraction.
+        """
         self.ensure_run(game_state)
         self._emit_diffs(game_state)
 
@@ -91,6 +95,8 @@ class RunLogger:
         }
         if latency_ms is not None:
             event["latency_ms"] = round(latency_ms, 1)
+        if user_prompt is not None:
+            event["user_prompt"] = user_prompt
 
         self._emit(event)
 
