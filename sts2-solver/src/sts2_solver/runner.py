@@ -454,14 +454,46 @@ class Runner:
     # Combat
     # ------------------------------------------------------------------
 
+    # Potion categories for smart usage decisions
+    _POTION_CATS: dict[str, set[str]] = {
+        "heal":     {"heal", "blood", "fairy", "fruit", "regen"},
+        "block":    {"block", "ghost", "shield", "iron", "armor"},
+        "damage":   {"fire", "attack", "explosive", "damage", "poison",
+                     "lightning", "bomb", "swift"},
+        "buff":     {"strength", "flex", "dexterity", "energy", "speed",
+                     "power", "stance"},
+        "debuff":   {"vulnerable", "weak", "fear"},
+    }
+
+    def _classify_potion(self, name: str, desc: str) -> str | None:
+        """Return the category of a potion, or None if unrecognized."""
+        text = f"{name} {desc}".lower()
+        for cat, keywords in self._POTION_CATS.items():
+            if any(kw in text for kw in keywords):
+                return cat
+        return None
+
+    def _best_damage_target(self, enemies: list[dict]) -> int | None:
+        """Pick the alive enemy with the lowest HP (most likely to kill)."""
+        best_idx, best_hp = None, float("inf")
+        for e in enemies:
+            if e.get("current_hp", 0) <= 0:
+                continue
+            if e.get("current_hp", 0) < best_hp:
+                best_hp = e["current_hp"]
+                best_idx = e.get("index", 0)
+        return best_idx
+
     def _should_use_potion(self, gs: dict) -> tuple[int, int | None] | None:
         """Decide whether to use a potion this turn. Returns (slot, target) or None.
 
-        Simple heuristics:
-        - Use damage/attack potions if an enemy is close to lethal
-        - Use block/defense potions if incoming damage would kill us
-        - Use strength/buff potions on turn 1-2 for scaling
-        - Otherwise save them
+        Strategy:
+        - ALWAYS use offensive potions (damage, buff, debuff) during elite/boss fights
+        - Use block potions if incoming damage would kill us
+        - Use healing potions if HP < 40%
+        - Use buff/debuff potions on turn 1-2 of any multi-enemy or high-HP fight
+        - Use damage potions if an enemy is close to lethal
+        - In normal fights, save potions unless we'd die
         """
         if "use_potion" not in gs.get("available_actions", []):
             return None
@@ -475,6 +507,7 @@ class Runner:
         hp = player.get("current_hp", 0)
         max_hp = player.get("max_hp", 1)
         block = player.get("block", 0)
+        turn = gs.get("turn", 0)
 
         # Calculate total incoming damage
         total_incoming = 0
@@ -490,44 +523,89 @@ class Runner:
         would_die = unblocked >= hp
         hp_pct = hp / max_hp if max_hp > 0 else 1.0
 
-        # Find usable potions
+        alive_enemies = [e for e in enemies if e.get("current_hp", 0) > 0]
+        total_enemy_hp = sum(e.get("current_hp", 0) for e in alive_enemies)
+
+        # Detect elite/boss fights: high enemy HP or known boss names
+        is_hard_fight = total_enemy_hp > 100 or any(
+            e.get("max_hp", 0) > 80 for e in alive_enemies
+        )
+
+        # Collect usable potions by category
+        usable: list[tuple[int, str | None, bool]] = []  # (slot, cat, needs_target)
         for pot in potions:
             if not pot.get("occupied") or not pot.get("can_use"):
                 continue
             slot = pot.get("index", 0)
-            name = (pot.get("name") or "").lower()
-            desc = (pot.get("description") or "").lower()
+            name = (pot.get("name") or "")
+            desc = (pot.get("description") or "")
+            cat = self._classify_potion(name, desc)
             needs_target = pot.get("requires_target", False)
+            usable.append((slot, cat, needs_target))
 
-            # First alive enemy as default target
-            first_alive = None
-            for e in enemies:
-                if e.get("current_hp", 0) > 0:
-                    first_alive = e.get("index", 0)
-                    break
+        if not usable:
+            return None
 
-            target = first_alive if needs_target else None
+        first_alive = self._best_damage_target(enemies)
 
-            # Use healing potions if HP < 40%
-            if hp_pct < 0.4 and any(kw in name or kw in desc for kw in ("heal", "blood", "fairy", "fruit")):
-                return (slot, target)
+        def _target(needs_target: bool) -> int | None:
+            return first_alive if needs_target else None
 
-            # Use block potions if we'd die this turn
-            if would_die and any(kw in name or kw in desc for kw in ("block", "ghost", "shield")):
-                return (slot, target)
+        # --- Priority 1: Survival — use block/heal potions if we'd die ---
+        if would_die:
+            for slot, cat, needs_target in usable:
+                if cat == "block":
+                    return (slot, _target(needs_target))
+            for slot, cat, needs_target in usable:
+                if cat == "heal":
+                    return (slot, _target(needs_target))
+            # Offense as defense — kill them before they kill us
+            for slot, cat, needs_target in usable:
+                if cat == "damage":
+                    return (slot, _target(needs_target))
 
-            # Use damage potions if we'd die (offense as defense — kill them first)
-            if would_die and any(kw in name or kw in desc for kw in (
-                "fire", "attack", "explosive", "damage", "poison", "lightning",
-            )):
-                return (slot, target)
+        # --- Priority 2: Heal if HP is critical ---
+        if hp_pct < 0.35:
+            for slot, cat, needs_target in usable:
+                if cat == "heal":
+                    return (slot, _target(needs_target))
 
-            # Use strength/buff potions if HP is okay and it's early in combat
-            turn = gs.get("turn", 0)
-            if turn <= 2 and hp_pct > 0.5 and any(kw in name or kw in desc for kw in (
-                "strength", "flex", "dexterity", "energy", "speed",
-            )):
-                return (slot, target)
+        # --- Priority 3: Use offensive potions in hard fights ---
+        if is_hard_fight:
+            # Buff/debuff potions on early turns for max value
+            if turn <= 2:
+                for slot, cat, needs_target in usable:
+                    if cat in ("buff", "debuff"):
+                        return (slot, _target(needs_target))
+            # Damage potions any time during hard fights
+            for slot, cat, needs_target in usable:
+                if cat == "damage":
+                    return (slot, _target(needs_target))
+            # Buff potions are still good mid-fight
+            for slot, cat, needs_target in usable:
+                if cat == "buff":
+                    return (slot, _target(needs_target))
+            # Debuff potions too
+            for slot, cat, needs_target in usable:
+                if cat == "debuff":
+                    return (slot, _target(needs_target))
+
+        # --- Priority 4: Low HP, use buffs to end fights faster ---
+        if hp_pct < 0.5 and turn <= 2:
+            for slot, cat, needs_target in usable:
+                if cat in ("buff", "debuff"):
+                    return (slot, _target(needs_target))
+
+        # --- Priority 5: Damage potion if enemy is close to lethal ---
+        if first_alive is not None:
+            weakest_hp = min(
+                (e.get("current_hp", 999) for e in alive_enemies),
+                default=999,
+            )
+            if weakest_hp <= 20:
+                for slot, cat, needs_target in usable:
+                    if cat == "damage":
+                        return (slot, _target(needs_target))
 
         return None
 
@@ -549,9 +627,12 @@ class Runner:
         if turn == 1 or (isinstance(turn, int) and turn <= 1):
             self.logger.log_combat_start(gs)
 
-        # Check if we should use a potion before solving
-        potion_use = self._should_use_potion(gs)
-        if potion_use and not self.dry_run:
+        # Use potions before solving (may use multiple in one turn)
+        potions_used = 0
+        while potions_used < 3 and not self.dry_run:
+            potion_use = self._should_use_potion(gs)
+            if not potion_use:
+                break
             slot, target = potion_use
             pot_name = "potion"
             for p in (gs.get("run") or {}).get("potions", []):
@@ -563,6 +644,7 @@ class Runner:
                 self._execute_with_retry(
                     "use_potion", option_index=slot, target_index=target,
                 )
+                potions_used += 1
                 time.sleep(0.5)
                 # Re-fetch state after potion use
                 gs = self.client.get_state()
@@ -570,81 +652,78 @@ class Runner:
                 combat = gs.get("combat") or {}
                 player = combat.get("player") or {}
                 enemies = combat.get("enemies") or []
-                # If potion use changed available actions (e.g. no more play_card), bail
                 if "play_card" not in gs.get("available_actions", []):
                     return
             except Exception as e:
                 self._log_action(f"  [yellow]Potion use failed: {e}[/yellow]")
+                break
 
-        # Solve
-        try:
-            sim_state = state_from_mcp(gs, self.card_db)
-            original_hand = list(sim_state.player.hand)  # snapshot before solve
-            t0 = time.perf_counter()
-            result = solve_turn(sim_state, card_db=self.card_db)
-            solve_ms = (time.perf_counter() - t0) * 1000
-        except Exception as e:
-            self._log_action(f"[red]Solver error: {e}[/red]")
-            return
+        # Solve-one-play-re-solve loop: play one card at a time from fresh
+        # game state. This accounts for relic triggers, energy generation,
+        # card cost changes, and other effects the simulator doesn't model.
+        from .bridge import action_to_mcp
 
-        # Restore hand for format_solution (solve_turn may have mutated it)
-        sim_state.player.hand = original_hand
+        cards_played: list[str] = []
+        total_states = 0
+        total_solve_ms = 0.0
+        best_score = 0.0
+        max_cards = 12  # safety cap to prevent infinite loops
 
-        # Update solver panel
-        solution_str = format_solution(result, sim_state)
-        hand_str = ", ".join(c.name for c in original_hand)
-        self._solver_text = (
-            f"[bold]Turn {turn}[/bold] | "
-            f"HP {player.get('current_hp', '?')}/{player.get('max_hp', '?')} | "
-            f"Energy {player.get('energy', '?')}\n"
-            f"Hand: {hand_str}\n"
-            f"vs: {enemy_str}\n\n"
-            f"{solution_str}"
-        )
-        self._refresh()
+        while len(cards_played) < max_cards:
+            # Solve from current game state
+            try:
+                sim_state = state_from_mcp(gs, self.card_db)
+                hand = list(sim_state.player.hand)
+                t0 = time.perf_counter()
+                result = solve_turn(sim_state, card_db=self.card_db)
+                solve_ms = (time.perf_counter() - t0) * 1000
+                total_states += result.states_evaluated
+                total_solve_ms += solve_ms
+                best_score = result.score
+            except Exception as e:
+                self._log_action(f"[red]Solver error: {e}[/red]")
+                break
 
-        # Log
-        hand = list(sim_state.player.hand)
-        cards_played = []
-        for a in result.actions:
-            if a.card_idx is not None and a.card_idx < len(hand):
-                cards_played.append(hand[a.card_idx].name)
-                hand.pop(a.card_idx)
-        self.logger.log_combat_turn(
-            cards_played=cards_played,
-            score=result.score,
-            states_evaluated=result.states_evaluated,
-            solve_ms=solve_ms,
-        )
+            # First action from the solver's plan
+            if not result.actions:
+                break
+            first_action = result.actions[0]
 
-        if self.dry_run:
-            self._log_action(f"  [dim]\\[dry-run] Would play: {', '.join(cards_played)}[/dim]")
-            return
-
-        # Execute
-        from .bridge import actions_to_mcp_sequence
-        mcp_actions = actions_to_mcp_sequence(result.actions)
-        exec_hand = list(original_hand)
-
-        for i, (solver_action, mcp_action) in enumerate(zip(result.actions, mcp_actions)):
-            if solver_action.action_type == "end_turn":
-                label = "End Turn"
-            elif solver_action.card_idx is not None and solver_action.card_idx < len(exec_hand):
-                card = exec_hand[solver_action.card_idx]
-                target = (
-                    f" -> enemy {solver_action.target_idx}"
-                    if solver_action.target_idx is not None else ""
+            # If solver says end turn (or only action is end_turn), we're done
+            if first_action.action_type == "end_turn":
+                # Update panel with final state
+                sim_state.player.hand = hand
+                solution_str = format_solution(result, sim_state)
+                hand_str = ", ".join(c.name for c in hand)
+                self._solver_text = (
+                    f"[bold]Turn {turn}[/bold] | "
+                    f"HP {player.get('current_hp', '?')}/{player.get('max_hp', '?')} | "
+                    f"Energy {player.get('energy', '?')}\n"
+                    f"Hand: {hand_str}\n"
+                    f"vs: {enemy_str}\n\n"
+                    f"{solution_str}"
                 )
-                label = f"{card.name}{target}"
-                exec_hand.pop(solver_action.card_idx)
+                break
+
+            # Resolve card name for logging
+            if first_action.card_idx is not None and first_action.card_idx < len(hand):
+                card = hand[first_action.card_idx]
+                target_str = (
+                    f" -> enemy {first_action.target_idx}"
+                    if first_action.target_idx is not None else ""
+                )
+                label = f"{card.name}{target_str}"
+                cards_played.append(card.name)
             else:
-                label = f"card_idx={solver_action.card_idx}"
+                label = f"card_idx={first_action.card_idx}"
+                cards_played.append(label)
 
-            # Wait for game to be ready before sending each action
-            # (skip for the first action — game is already ready from solve)
-            if i > 0:
-                self._wait_for_ready()
+            if self.dry_run:
+                self._log_action(f"  [dim]\\[dry-run] Would play: {label}[/dim]")
+                break
 
+            # Execute the single card play
+            mcp_action = action_to_mcp(first_action)
             try:
                 self._execute_with_retry(
                     mcp_action["action"],
@@ -658,6 +737,42 @@ class Runner:
                 break
 
             self._refresh()
+
+            # Wait for game to process, then get fresh state
+            self._wait_for_ready()
+            try:
+                gs = self.client.get_state()
+                self.game_state = gs
+            except Exception:
+                break
+
+            # If we left combat (enemy died, screen changed), stop
+            actions = gs.get("available_actions", [])
+            if "play_card" not in actions:
+                break
+
+            # Update combat locals for next iteration
+            combat = gs.get("combat") or {}
+            player = combat.get("player") or {}
+            enemies = combat.get("enemies") or []
+
+        # End turn if we're still in combat
+        if not self.dry_run and "end_turn" in gs.get("available_actions", []):
+            self._wait_for_ready()
+            try:
+                self._execute_with_retry("end_turn")
+                self._log_action("  [green]>[/green] End Turn")
+                self.action_count += 1
+            except Exception as e:
+                self._log_action(f"  [red]X End Turn: {e}[/red]")
+
+        # Log the full turn
+        self.logger.log_combat_turn(
+            cards_played=cards_played,
+            score=best_score,
+            states_evaluated=total_states,
+            solve_ms=total_solve_ms,
+        )
 
         self.turn_count += 1
 
@@ -826,11 +941,48 @@ class Runner:
 
             sel = gs.get("selection") or {}
             prompt = strip_markup(sel.get("prompt") or "").lower()
-            # Decision keywords that need advisor input
-            is_decision = any(kw in prompt for kw in (
+
+            # "Confirm" screens (e.g. Armaments "Confirm Card to Upgrade"):
+            # A card was already selected — just re-select index 0 to confirm.
+            if "confirm" in prompt:
+                self._log_action(f"  [dim]auto: select_deck_card(0) — confirm[/dim]")
+                if not self.dry_run:
+                    try:
+                        self._execute_with_retry("select_deck_card", option_index=0)
+                    except Exception:
+                        pass
+                return
+
+            # Mid-combat card selections (Havoc "put on top of Draw Pile",
+            # "Choose a card to Exhaust", etc.): pick the first non-essential
+            # card quickly instead of calling the LLM.
+            _COMBAT_SELECT_KW = (
+                "draw pile", "exhaust", "discard pile", "put on top",
+            )
+            is_combat_select = any(kw in prompt for kw in _COMBAT_SELECT_KW)
+
+            # Decision keywords that need advisor input (non-combat only)
+            is_decision = not is_combat_select and any(kw in prompt for kw in (
                 "choose", "remove", "upgrade", "transform", "add", "select",
             ))
-            if is_decision:
+
+            if is_combat_select:
+                # Quick deterministic pick: avoid Bash, prefer Strikes/Defends
+                cards = sel.get("cards", [])
+                pick_idx = 0
+                for card in cards:
+                    name = (card.get("name") or "").lower()
+                    if "bash" not in name:
+                        pick_idx = card.get("index", card.get("i", 0))
+                        break
+                self._log_action(f"  [dim]auto: select_deck_card({pick_idx}) — combat select[/dim]")
+                if not self.dry_run:
+                    try:
+                        self._execute_with_retry("select_deck_card", option_index=pick_idx)
+                    except Exception:
+                        pass
+                return
+            elif is_decision:
                 self._handle_deck_select(gs)
             else:
                 # Informational overlay — auto-select first card to dismiss
