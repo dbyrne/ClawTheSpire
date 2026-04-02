@@ -136,13 +136,45 @@ class StrategicAdvisor:
                 action=decision.action, option_index=0, reasoning=decision.reasoning,
             )
 
-        # Validate the action is available
+        # Validate the action is available — try to fix common LLM mistakes
         if decision.action not in actions:
-            return (
-                f"LLM recommended action '{decision.action}' which is not available.\n"
-                f"Available: {', '.join(actions)}\n"
-                f"Reasoning: {decision.reasoning}"
-            )
+            # Fuzzy-match: LLM often returns a shortened or wrong action name
+            _ACTION_ALIASES = {
+                "proceed": "collect_rewards_and_proceed",
+                "skip": "skip_reward_cards",
+                "end_turn": "end_turn",
+                "close_shop": "close_shop_inventory",
+                "leave": "close_shop_inventory",
+            }
+            fixed = _ACTION_ALIASES.get(decision.action)
+            if fixed and fixed in actions:
+                decision = AdvisorDecision(
+                    action=fixed, option_index=decision.option_index,
+                    reasoning=decision.reasoning,
+                )
+            else:
+                # Log the failure for debugging
+                if self.logger:
+                    self.logger.log_decision(
+                        game_state=game_state,
+                        screen_type=screen_type,
+                        options=actions,
+                        choice={
+                            "action": decision.action,
+                            "option_index": decision.option_index,
+                            "reasoning": decision.reasoning,
+                            "error": "action_not_available",
+                            "raw_response": raw_response[:500],
+                        },
+                        source="advisor_error",
+                        latency_ms=latency_ms,
+                        user_prompt=user_message,
+                    )
+                return (
+                    f"LLM recommended action '{decision.action}' which is not available.\n"
+                    f"Available: {', '.join(actions)}\n"
+                    f"Reasoning: {decision.reasoning}"
+                )
 
         # Log the decision (include user_prompt for training data)
         if self.logger:
