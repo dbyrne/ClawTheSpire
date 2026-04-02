@@ -416,6 +416,10 @@ def detect_screen_type(available_actions: list[str]) -> str:
     """Detect screen type from available actions."""
     actions_set = set(available_actions)
 
+    # select_deck_card takes priority over choose_reward_card —
+    # some screens (e.g. mid-combat card effects) have both
+    if "select_deck_card" in actions_set:
+        return "deck_select"
     if "choose_reward_card" in actions_set:
         return "card_reward"
     if "choose_map_node" in actions_set:
@@ -428,8 +432,6 @@ def detect_screen_type(available_actions: list[str]) -> str:
         return "rest"
     if "choose_treasure_relic" in actions_set:
         return "boss_relic"
-    if "select_deck_card" in actions_set:
-        return "deck_select"
 
     # Check for auto-actions
     for action in available_actions:
