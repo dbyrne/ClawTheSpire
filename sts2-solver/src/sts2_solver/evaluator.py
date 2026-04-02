@@ -9,6 +9,7 @@ Higher scores are better.
 
 from __future__ import annotations
 
+from .config import EVALUATOR
 from .models import CombatState
 
 
@@ -37,25 +38,25 @@ def evaluate_turn(state: CombatState, initial_state: CombatState) -> float:
         if current_hp <= 0:
             # Kill bonus: killing an enemy is very valuable - removes future
             # damage and status card sources
-            kill_bonus = 50.0
-            # Buff/support enemies are higher priority kills — they scale
+            kill_bonus = EVALUATOR["kill_bonus"]
+            # Buff/support enemies are higher priority kills -- they scale
             # danger every turn they stay alive (e.g. Kin Priest giving Strength)
             if enemy.intent_type == "Buff":
-                kill_bonus += 30.0
+                kill_bonus += EVALUATOR["buff_kill_bonus"]
             # Enemies with Strength are increasingly dangerous
             enemy_str = enemy.powers.get("Strength", 0)
             if enemy_str > 0:
-                kill_bonus += enemy_str * 5.0
+                kill_bonus += enemy_str * EVALUATOR["strength_kill_bonus_per"]
             score += kill_bonus
             # Extra bonus for overkill efficiency is NOT given - wasted damage
             # on a dead enemy is slightly negative
-            score += damage_dealt * 0.5
+            score += damage_dealt * EVALUATOR["damage_dead_weight"]
         else:
             # Partial damage: valuable but less than a kill
             # Weighted by how close to lethal (% HP removed)
-            score += damage_dealt * 1.5
+            score += damage_dealt * EVALUATOR["damage_alive_weight"]
             kill_proximity = damage_dealt / initial_hp if initial_hp > 0 else 0
-            score += kill_proximity * 8.0
+            score += kill_proximity * EVALUATOR["kill_proximity_weight"]
 
     # -----------------------------------------------------------------------
     # 2. Block vs incoming damage
@@ -69,15 +70,28 @@ def evaluate_turn(state: CombatState, initial_state: CombatState) -> float:
     if total_incoming > 0:
         effective_block = min(state.player.block, total_incoming)
         wasted_block = state.player.block - effective_block
+
+        # HP-aware block scaling: block is worth more when HP is low
+        effective_block_weight = EVALUATOR["effective_block_weight"]
+        if state.player.hp < EVALUATOR["hp_block_threshold"]:
+            effective_block_weight *= (
+                1 + (EVALUATOR["hp_block_threshold"] - state.player.hp)
+                * EVALUATOR["hp_block_scale"]
+            )
+
         # Blocking incoming damage is valuable
-        score += effective_block * 1.5
+        score += effective_block * effective_block_weight
         # Over-blocking is slightly wasteful (but not terrible)
-        score -= wasted_block * 0.2
+        score -= wasted_block * EVALUATOR["wasted_block_penalty"]
+
+        # Unblocked damage penalty
+        unblocked = max(0, total_incoming - state.player.block)
+        score -= unblocked * EVALUATOR["unblocked_damage_penalty"]
     else:
         # No attack incoming: block has less immediate value
         # Still worth something if enemies are alive (future turns)
         if any(e.hp > 0 for e in state.enemies):
-            score += state.player.block * 0.1
+            score += state.player.block * EVALUATOR["idle_block_weight"]
         else:
             # Combat won, block is worthless
             pass
@@ -89,7 +103,7 @@ def evaluate_turn(state: CombatState, initial_state: CombatState) -> float:
     if hp_lost > 0:
         # Self-damage is a real cost, but less than taking enemy damage
         # (since it's a choice, presumably for good reason)
-        score -= hp_lost * 0.8
+        score -= hp_lost * EVALUATOR["self_damage_weight"]
 
     # -----------------------------------------------------------------------
     # 4. Debuffs on enemies (future value)
@@ -100,13 +114,13 @@ def evaluate_turn(state: CombatState, initial_state: CombatState) -> float:
         vuln = enemy.powers.get("Vulnerable", 0)
         weak = enemy.powers.get("Weak", 0)
         # Vulnerable: future attacks deal 50% more
-        score += vuln * 3.0
+        score += vuln * EVALUATOR["vulnerable_value"]
         # Weak: enemy deals 25% less damage
         if enemy.intent_type == "Attack" and enemy.intent_damage:
             # Weak is more valuable against hard-hitting enemies
-            score += weak * 2.5
+            score += weak * EVALUATOR["weak_vs_attack_value"]
         else:
-            score += weak * 1.5
+            score += weak * EVALUATOR["weak_vs_other_value"]
 
     # -----------------------------------------------------------------------
     # 5. Player buffs gained
@@ -114,21 +128,14 @@ def evaluate_turn(state: CombatState, initial_state: CombatState) -> float:
     str_gained = state.player.powers.get("Strength", 0) - initial_state.player.powers.get("Strength", 0)
     if str_gained > 0:
         # Strength is very valuable - multiplies all future attack damage
-        score += str_gained * 5.0
+        score += str_gained * EVALUATOR["strength_gained_value"]
 
     dex_gained = state.player.powers.get("Dexterity", 0) - initial_state.player.powers.get("Dexterity", 0)
     if dex_gained > 0:
-        score += dex_gained * 3.0
+        score += dex_gained * EVALUATOR["dexterity_gained_value"]
 
     # Permanent powers (Demon Form, Barricade, etc.) are very valuable
-    for power_name, value_per in [
-        ("Demon Form", 8.0),
-        ("Barricade", 6.0),
-        ("Feel No Pain", 4.0),
-        ("Dark Embrace", 4.0),
-        ("Metallicize", 5.0),
-        ("Corruption", 5.0),
-    ]:
+    for power_name, value_per in EVALUATOR["power_values"].items():
         gained = (state.player.powers.get(power_name, 0)
                   - initial_state.player.powers.get(power_name, 0))
         if gained > 0:
@@ -140,6 +147,6 @@ def evaluate_turn(state: CombatState, initial_state: CombatState) -> float:
     unspent = state.player.energy
     if unspent > 0 and any(e.hp > 0 for e in state.enemies):
         # Unspent energy means we could have done more
-        score -= unspent * 0.5
+        score -= unspent * EVALUATOR["unspent_energy_penalty"]
 
     return score

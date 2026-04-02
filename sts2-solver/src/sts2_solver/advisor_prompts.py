@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from .config import format_tier_list
 from .game_data import GameDataDB, strip_markup
 
 
@@ -10,30 +11,30 @@ You are an expert Slay the Spire 2 strategic advisor. You make non-combat decisi
 for an AI player. You receive the current game state and must choose the best action.
 
 CORE STRATEGY PRINCIPLES:
-- Deck quality over deck size. A lean 12-15 card deck draws key cards more often.
-- SKIP card rewards unless the card actively improves your deck archetype. Most cards are skips.
+- Deck quality over deck size. A lean 12-15 card deck draws key cards more often. Every card you add DILUTES your best cards.
+- Card rewards: ONLY pick cards that are EXCEPTIONAL for your archetype. If none are great, pick the least harmful option. Do NOT add mediocre cards.
+- After 12 cards, only add a card if it's a build-defining upgrade (Strength scaling, key powers, strong AOE). Filler cards LOSE runs.
 - Front-load damage in Act 1. You need to kill enemies fast before scaling matters.
 - Scaling (Strength, multi-hit, powers) matters more in Act 2+.
 - HP is a resource, but dying ends the run. Below 35% HP, ALWAYS path to rest/shop/event — never fight. Below 55%, avoid elites.
-- Track your deck archetype (strength-scaling, exhaust, block-heavy, etc.) and draft toward it.
+- Track your deck archetype (strength-scaling, exhaust, block-heavy, etc.) and draft toward it. Reject off-archetype cards.
 - Elite fights give better rewards but are risky. Don't path into elites below ~50% HP without potions.
-- At shops, ALWAYS prioritize card removal over buying cards. Remove Strikes first, then Defends once you have better block. Only buy cards/relics after removal.
+- SHOP IS CRITICAL: Path to shops whenever possible. At shops, ALWAYS remove a card first (Strikes, then Defends). Card removal is the most powerful thing you can buy.
 - NEVER remove or transform Bash — it's your only source of Vulnerable (50% more damage).
 - Rest vs. Upgrade: upgrade if HP > 60%, rest if HP < 40%, judgment call in between. BUT always rest before a boss fight if HP < 70%.
 - Boss relics: evaluate against your specific deck composition, not in isolation.
 - Potions are powerful — buy them when cheap, use them to survive elites.
 
+IRONCLAD CARD TIERS (for card reward decisions):
+__TIER_LIST__
+
 RESPONSE FORMAT:
 Respond with exactly this JSON structure:
-{
-  "action": "<action_name from the available actions list>",
-  "option_index": <integer index or null if the action takes no index>,
-  "reasoning": "<1-2 sentence explanation>"
-}
+{"action": "<action_name from the available actions list>", "option_index": "<integer index or null if the action takes no index>", "reasoning": "<1-2 sentence explanation>"}
 
 IMPORTANT: The action MUST be one of the available actions listed. The option_index \
-MUST be a valid index from the options shown. If skipping is best, use the skip action.\
-"""
+MUST be a valid index from the options shown.\
+""".replace("__TIER_LIST__", format_tier_list())
 
 
 def summarize_deck(deck: list[dict]) -> str:
@@ -83,9 +84,9 @@ def build_card_reward_message(state: dict, game_data: GameDataDB) -> str:
     """Build prompt for card reward decisions."""
     lines = [f"RUN: {summarize_run(state)}", f"DECK: {summarize_deck(_get_deck(state))}", ""]
 
-    # Extract reward card options from the state
+    # Extract reward card options — different locations depending on API format
     reward = state.get("reward") or state.get("selection") or {}
-    cards = reward.get("cards", [])
+    cards = reward.get("cards", []) or reward.get("card_options", [])
 
     # Also check agent_view for card info
     if not cards:
@@ -96,19 +97,43 @@ def build_card_reward_message(state: dict, game_data: GameDataDB) -> str:
     lines.append("CARD REWARD OPTIONS:")
     for i, card in enumerate(cards):
         card_id = card.get("card_id") or card.get("id", "")
+        name = card.get("name", card_id)
+        # Use game_data description if available, else build from raw data
         desc = game_data.card_description(card_id)
+        if desc == card_id and card.get("resolved_rules_text"):
+            desc = f"{name}: {card['resolved_rules_text']}"
         lines.append(f"  option_index={i}: {desc}")
 
-    lines.append(f"  (or use 'skip_reward_cards' to skip)")
     lines.append("")
-    lines.append("AVAILABLE ACTIONS: choose_reward_card (with option_index), skip_reward_cards")
+    lines.append("AVAILABLE ACTIONS: choose_reward_card (with option_index)")
     lines.append("")
 
-    deck_size = len(_get_deck(state))
-    if deck_size >= 15:
-        lines.append(f"Deck has {deck_size} cards — SKIP unless a card is exceptional for your archetype. Lean decks win runs.")
+    # Detect deck archetype
+    deck = _get_deck(state)
+    deck_names = {card.get("name", card.get("card_id", "")) for card in deck}
+    strength_cards = deck_names & {"Inflame", "Demon Form", "Spot Weakness", "Limit Break"}
+    exhaust_cards = deck_names & {"Feel No Pain", "Corruption", "Dark Embrace"}
+    block_cards = deck_names & {"Barricade", "Body Slam", "Metallicize"}
+    archetype_counts = [
+        (len(strength_cards), "Strength scaling", strength_cards),
+        (len(exhaust_cards), "Exhaust synergy", exhaust_cards),
+        (len(block_cards), "Block/defense", block_cards),
+    ]
+    archetype_counts.sort(key=lambda x: x[0], reverse=True)
+    if archetype_counts[0][0] > 0:
+        best = archetype_counts[0]
+        lines.append(f"Deck archetype: {best[1]} (has {', '.join(sorted(best[2]))})")
     else:
-        lines.append("Which card should we pick, or should we skip? Consider deck synergy and archetype. Skip mediocre cards.")
+        lines.append("Deck archetype: No clear archetype yet — pick strong standalone cards.")
+    lines.append("")
+
+    deck_size = len(deck)
+    if deck_size >= 15:
+        lines.append(f"DECK HAS {deck_size} CARDS. Pick the card that helps you WIN — scaling powers (Inflame, Demon Form, Barricade), key draw, or strong AOE. Avoid filler attacks/skills that just bloat the deck.")
+    elif deck_size >= 12:
+        lines.append(f"Deck has {deck_size} cards. Pick ONLY if a card is genuinely excellent for your archetype — scaling, draw, or a key synergy piece.")
+    else:
+        lines.append("Pick the card that best builds toward your archetype. Prioritize: Strength scaling, powers, draw, Vulnerable synergy.")
 
     return "\n".join(lines)
 
@@ -160,6 +185,8 @@ def build_map_message(state: dict, game_data: GameDataDB) -> str:
     max_hp = run.get("max_hp", 1)
     hp_pct = hp / max_hp if max_hp > 0 else 0
 
+    deck_size = len(_get_deck(state))
+
     if hp_pct < 0.35:
         lines.append(f"HP CRITICAL ({hp}/{max_hp} = {hp_pct:.0%}). MUST path to rest site, shop, or event. "
                      "Do NOT fight monsters or elites — you will die.")
@@ -168,6 +195,26 @@ def build_map_message(state: dict, game_data: GameDataDB) -> str:
                      "Only fight normal monsters if no safer option exists.")
     else:
         lines.append("Which node should we travel to? Consider HP, deck readiness, and risk vs reward.")
+
+    # Encourage elites when HP is high
+    has_elite = any(
+        "elite" in str(node.get("node_type", node.get("type", ""))).lower()
+        for node in nodes
+    )
+    if hp_pct > 0.75 and has_elite:
+        lines.append("You have high HP — consider taking the ELITE for better rewards (relics, rare cards). "
+                     "Avoiding all elites leads to a weak deck at the boss.")
+
+    # Remind about shop priority for card removal
+    has_shop = any(
+        "shop" in str(node.get("node_type", node.get("type", ""))).lower()
+        or "merchant" in str(node.get("node_type", node.get("type", ""))).lower()
+        for node in nodes
+    )
+    if has_shop and deck_size > 10:
+        gold = run.get("gold", 0)
+        lines.append(f"SHOP AVAILABLE: Deck has {deck_size} cards and you have {gold}g. "
+                     "Visiting the shop to REMOVE a card is almost always correct — it's the best way to improve deck quality.")
 
     return "\n".join(lines)
 
@@ -230,6 +277,13 @@ def build_event_message(state: dict, game_data: GameDataDB) -> str:
     lines.append("")
     lines.append("AVAILABLE ACTIONS: choose_event_option (with option_index)")
     lines.append("")
+
+    # Neow starting bonus guidance
+    event_name_lower = event_name.lower() if event_name else ""
+    if "neow" in event_name_lower:
+        lines.append("This is Neow's starting bonus. Card removal and relic options are almost always better than 'Proceed'.")
+        lines.append("")
+
     lines.append("Which option is best given our current run state?")
 
     return "\n".join(lines)
@@ -244,33 +298,57 @@ def build_shop_message(state: dict, game_data: GameDataDB) -> str:
         agent_view = state.get("agent_view", {})
         shop = agent_view.get("shop") or {}
 
+    run = state.get("run") or {}
+    gold = run.get("gold", 0)
+
+    lines.append(f"GOLD: {gold}")
+    lines.append("")
     lines.append("SHOP INVENTORY:")
+    any_affordable = False
     for section in ("cards", "relics", "potions"):
         items = shop.get(section, [])
         if items:
             lines.append(f"  {section.upper()}:")
             for i, item in enumerate(items):
                 name = item.get("name", item.get("id", "?"))
-                price = item.get("price", item.get("cost", "?"))
+                price = item.get("price", item.get("cost", 0))
                 desc = ""
                 item_id = item.get("id") or item.get("card_id") or item.get("relic_id", "")
                 if section == "cards" and item_id:
                     desc = f" — {game_data.card_description(item_id)}"
                 elif section == "relics" and item_id:
                     desc = f" — {game_data.relic_description(item_id)}"
-                lines.append(f"    option_index={i}: {name} ({price}g){desc}")
+                affordable = " [CAN AFFORD]" if isinstance(price, int) and price <= gold else " [TOO EXPENSIVE]"
+                if isinstance(price, int) and price <= gold:
+                    any_affordable = True
+                lines.append(f"    option_index={i}: {name} ({price}g){affordable}{desc}")
 
     can_remove = shop.get("can_remove_card", False)
     remove_cost = shop.get("remove_cost", "?")
     if can_remove:
         lines.append(f"  CARD REMOVAL: {remove_cost}g")
+        any_affordable = True
 
+    # Build list of actually available actions
+    available = state.get("available_actions", [])
+    shop_actions = [a for a in available if a in (
+        "buy_card", "buy_relic", "buy_potion", "remove_card_at_shop", "close_shop_inventory",
+    )]
     lines.append("")
-    lines.append("AVAILABLE ACTIONS: buy_card, buy_relic, buy_potion (with option_index), remove_card_at_shop, close_shop_inventory")
+    lines.append(f"AVAILABLE ACTIONS: {', '.join(shop_actions)}")
     lines.append("")
-    lines.append("PRIORITY ORDER: 1) Remove a card (Strikes first, then Defends) if available and affordable. "
-                 "2) Buy a key relic if it fits your archetype. 3) Buy a potion if cheap. "
-                 "4) Buy a card ONLY if it's a strong archetype fit. 5) Leave if nothing is worth the gold.")
+
+    if not any_affordable:
+        lines.append(f"Nothing is affordable with {gold}g. Use close_shop_inventory to leave.")
+    elif "remove_card_at_shop" in available:
+        lines.append("PRIORITY ORDER: 1) REMOVE A CARD (Strikes first, then Defends) — this is the most valuable thing in the shop! "
+                     "2) Buy a key relic if it fits your archetype. 3) Buy a potion if cheap. "
+                     "4) Buy a card ONLY if it's a strong archetype fit. 5) Leave (close_shop_inventory) if nothing else is worth the gold.")
+    else:
+        lines.append("Card removal already done or unavailable. "
+                     "Buy ONLY items marked [CAN AFFORD]. "
+                     "Buy a potion if cheap. Buy a strong archetype card if affordable. "
+                     "Otherwise leave (close_shop_inventory).")
 
     return "\n".join(lines)
 
@@ -304,10 +382,16 @@ def build_rest_message(state: dict, game_data: GameDataDB) -> str:
 
     # Boss floors are typically 17, 34, 52
     pre_boss = floor in (15, 16, 33, 34, 51, 52)
-    if pre_boss:
-        lines.append(f"HP is at {hp_pct:.0%}. BOSS FIGHT IS NEXT — rest/heal if HP < 70%. Only upgrade if HP > 80%.")
+    if pre_boss and hp_pct < 0.70:
+        lines.append(f"HP is at {hp_pct:.0%}. Boss fight next — REST to heal. You need HP for the boss.")
+    elif hp_pct > 0.80:
+        lines.append(f"HP is at {hp_pct:.0%}. HP is nearly full — you MUST upgrade a card. Resting wastes this campfire.")
+    elif hp_pct >= 0.60:
+        lines.append(f"HP is at {hp_pct:.0%}. HP is decent. Prefer upgrade unless a boss fight is imminent.")
+    elif hp_pct < 0.40:
+        lines.append(f"HP is at {hp_pct:.0%}. HP is critical. REST to heal.")
     else:
-        lines.append(f"HP is at {hp_pct:.0%}. Upgrade if >60%, rest if <40%, judgment call in between.")
+        lines.append(f"HP is at {hp_pct:.0%}. Judgment call — consider deck needs vs. survival.")
 
     return "\n".join(lines)
 
@@ -416,12 +500,13 @@ def detect_screen_type(available_actions: list[str]) -> str:
     """Detect screen type from available actions."""
     actions_set = set(available_actions)
 
-    # select_deck_card takes priority over choose_reward_card —
-    # some screens (e.g. mid-combat card effects) have both
-    if "select_deck_card" in actions_set:
-        return "deck_select"
+    # choose_reward_card takes priority over select_deck_card —
+    # the card reward selection screen has both, but the primary
+    # action is choose_reward_card (select_deck_card is secondary).
     if "choose_reward_card" in actions_set:
         return "card_reward"
+    if "select_deck_card" in actions_set:
+        return "deck_select"
     if "choose_map_node" in actions_set:
         return "map"
     if "choose_event_option" in actions_set:

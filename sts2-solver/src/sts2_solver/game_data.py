@@ -40,7 +40,7 @@ class GameDataDB:
         name = card.get("name", card_id)
         cost = card.get("cost", "?")
         ctype = card.get("type", "")
-        desc = strip_markup(card.get("description", ""))
+        desc = strip_markup(card.get("description", "")).replace("\n", " ")
         rarity = card.get("rarity", "")
         return f"{name} ({ctype}, {rarity}, {cost} energy): {desc}"
 

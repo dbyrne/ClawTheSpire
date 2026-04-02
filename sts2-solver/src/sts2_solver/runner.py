@@ -69,6 +69,13 @@ class Runner:
         self.game_state: dict | None = None
         self.turn_count = 0
         self.action_count = 0
+        self._card_reward_handled = False  # Reset when leaving reward screen
+        self._deck_select_stuck = False  # Track stuck deck_select screens
+        self._stuck_since: float | None = None  # Timestamp when we got stuck
+        self._shop_visited = False  # Prevent re-opening shop after closing
+        self._last_floor: int | None = None  # Track floor for shop reset
+        self._last_screen_key: tuple[str, str] | None = None  # (screen, screen_type)
+        self._screen_repeat_count: int = 0  # Same-screen repeat counter
 
         # TUI state
         self._status_text = "[dim]Starting...[/dim]"
@@ -153,6 +160,19 @@ class Runner:
         if self._live:
             self._update_status()
             self._live.update(self._build_layout())
+
+    @staticmethod
+    def _is_card_reward_item(item: dict) -> bool:
+        """Check if a reward item is a card reward (works with both raw and agent_view)."""
+        # Raw state: reward_type = "Card"
+        rtype = str(item.get("reward_type", "")).lower()
+        if rtype == "card":
+            return True
+        # Agent view: line = "card: Add a card..."
+        line = str(item.get("line", "")).lower()
+        if line.startswith("card"):
+            return True
+        return False
 
     # ------------------------------------------------------------------
     # Init & main loop
@@ -239,10 +259,65 @@ class Runner:
         self.logger.ensure_run(self.game_state)
 
         screen = self.game_state.get("screen", "")
+
+        # Reset card reward tracking when we leave the reward screen
+        if screen not in ("REWARD", "CARD_SELECTION"):
+            self._card_reward_handled = False
+
+        # Reset shop visit flag when the floor changes (not when screen changes)
+        run = self.game_state.get("run") or {}
+        current_floor = run.get("floor")
+        if current_floor is not None and current_floor != self._last_floor:
+            self._shop_visited = False
+            self._last_floor = current_floor
+
+        # Reset deck_select stuck flag when we leave the card selection screen
+        if screen != "CARD_SELECTION":
+            self._deck_select_stuck = False
+            self._stuck_since = None
+
+        # If stuck on a screen for too long, force end the run
+        if self._deck_select_stuck and self._stuck_since:
+            stuck_duration = time.monotonic() - self._stuck_since
+            if stuck_duration > 60:
+                self._log_action("[red]Stuck for >60s on deck select — forcing run end[/red]")
+                self.logger.log_run_end(self.game_state, "stuck")
+                return True  # Signal run is finished
+
         in_combat = (
             "play_card" in actions
             or ("end_turn" in actions and "COMBAT" in screen.upper())
         )
+
+        # Track same-screen repeats to detect stuck loops
+        screen_type = detect_screen_type(actions) if not in_combat else "combat"
+        screen_key = (screen, screen_type)
+        if screen_key == self._last_screen_key:
+            self._screen_repeat_count += 1
+        else:
+            self._last_screen_key = screen_key
+            self._screen_repeat_count = 0
+
+        # If stuck on the same screen for too many ticks, force a default action
+        if self._screen_repeat_count > 5 and not in_combat:
+            self._log_action(
+                f"[yellow]Stuck on {screen}/{screen_type} for {self._screen_repeat_count} ticks — forcing default[/yellow]"
+            )
+            self._screen_repeat_count = 0  # Reset to avoid infinite force loops
+            if not self.dry_run:
+                try:
+                    if screen_type == "map" and "choose_map_node" in actions:
+                        self._execute_with_retry("choose_map_node", option_index=0)
+                    elif screen_type == "shop" and "close_shop_inventory" in actions:
+                        self._execute_with_retry("close_shop_inventory")
+                        self._shop_visited = True
+                    else:
+                        # First available action with option_index=0
+                        self._execute_with_retry(actions[0], option_index=0)
+                    self.action_count += 1
+                except Exception as e:
+                    self._log_action(f"  [red]Forced action failed: {e}[/red]")
+            return False
 
         if in_combat:
             self._handle_combat()
@@ -630,27 +705,68 @@ class Runner:
                     self._log_action(f"  [red]Failed to discard potion: {e}[/red]")
             return
 
-        # Reward screen: collect_rewards_and_proceed skips everything.
-        # If there's a pending card choice, we must NOT auto-proceed —
-        # wait for choose_reward_card to appear so the advisor can pick.
+        # Reward screen: collect_rewards_and_proceed auto-picks the first
+        # card reward — NEVER use it when an unhandled card choice exists.
+        # Instead, claim the card reward item to open the selection screen,
+        # then let the advisor choose or skip.
         if "collect_rewards_and_proceed" in actions and screen_type != "card_reward":
-            # Check if card reward is pending
             reward = gs.get("reward") or {}
+            if not reward:
+                reward = (gs.get("agent_view") or {}).get("reward") or {}
+
             has_card_choice = (
                 reward.get("pending_card_choice")
                 or "choose_reward_card" in actions
                 or "skip_reward_cards" in actions
             )
-            if has_card_choice:
-                # Card choice pending — wait for it to appear in actions
+
+            # Check reward items for card-type rewards.
+            # Raw state: reward_type="Card"; agent_view: line="card: ...".
+            reward_items = reward.get("rewards") or []
+            has_card_reward_item = any(
+                self._is_card_reward_item(item)
+                for item in reward_items
+                if item.get("claimable", True)
+            )
+
+            # If reward data is empty but we just arrived at the reward screen,
+            # wait for the data to populate before auto-proceeding.
+            if not reward_items and not has_card_choice and "claim_reward" in actions:
+                return  # Let next tick re-check once reward data is populated
+
+            # If we already handled the card choice this reward screen,
+            # don't try to open it again — just proceed.
+            if self._card_reward_handled:
+                has_card_reward_item = False
+                has_card_choice = False
+
+            if has_card_choice or has_card_reward_item:
                 if "choose_reward_card" in actions or "skip_reward_cards" in actions:
+                    # Card selection screen is open — let advisor handle it
                     screen_type = "card_reward"
                     # Fall through to LLM decision below
+                elif has_card_reward_item and "claim_reward" in actions:
+                    # Open the card selection screen by claiming the card reward
+                    card_reward_idx = None
+                    for item in reward_items:
+                        if self._is_card_reward_item(item) and item.get("claimable", True):
+                            card_reward_idx = item.get("index", item.get("i"))
+                            break
+                    if card_reward_idx is not None:
+                        self._log_action(f"  [cyan]Opening card reward (index {card_reward_idx})...[/cyan]")
+                        if not self.dry_run:
+                            try:
+                                self._execute_with_retry("claim_reward", option_index=card_reward_idx)
+                                time.sleep(1.0)  # Wait for card data to populate
+                            except Exception as e:
+                                self._log_action(f"  [red]Failed to open card reward: {e}[/red]")
+                    return
                 else:
                     # Not ready yet — return and let next tick handle it
                     return
             else:
-                # No card choice — safe to auto-proceed
+                # No card choice (or already handled) — safe to auto-proceed
+                self._card_reward_handled = False  # Reset for next reward
                 self._log_action("  [dim]auto: collect_rewards_and_proceed[/dim]")
                 if not self.dry_run:
                     try:
@@ -665,9 +781,16 @@ class Runner:
                 )
                 return
 
-        # Auto-actions
+        # Auto-actions — but prioritize shop opening over proceed
         if screen_type == "auto":
-            for action in actions:
+            # If open_shop_inventory is available AND we haven't visited yet,
+            # open the shop first (otherwise proceed would skip it entirely).
+            # After visiting, _shop_visited is set so we proceed instead.
+            if "open_shop_inventory" in actions and not self._shop_visited:
+                action_order = ["open_shop_inventory"] + [a for a in actions if a != "open_shop_inventory"]
+            else:
+                action_order = actions
+            for action in action_order:
                 if action in AUTO_ACTIONS:
                     self._log_action(f"  [dim]auto: {action}[/dim]")
                     if not self.dry_run:
@@ -695,6 +818,11 @@ class Runner:
         # select_deck_card: check if this is a real decision or an
         # informational overlay (e.g. Havoc showing "Draw 3 cards")
         if screen_type == "deck_select":
+            # If we already tried and failed on this screen, skip it
+            if self._deck_select_stuck:
+                self._log_action("  [dim]Skipping stuck deck_select screen[/dim]")
+                return
+
             sel = gs.get("selection") or {}
             prompt = (sel.get("prompt") or "").lower()
             # Decision keywords that need advisor input
@@ -713,12 +841,95 @@ class Runner:
                         pass
             return
 
+        # For map screens with a single node, skip the LLM and just pick it
+        if screen_type == "map" and "choose_map_node" in actions:
+            map_data = gs.get("map") or {}
+            nodes = map_data.get("available_nodes") or map_data.get("nodes") or []
+            if not nodes:
+                agent_view = gs.get("agent_view", {})
+                map_view = agent_view.get("map") or {}
+                nodes = map_view.get("available_nodes") or map_view.get("nodes") or []
+            if len(nodes) == 1:
+                self._log_action("  [dim]auto: choose_map_node(0) — single node[/dim]")
+                if not self.dry_run:
+                    try:
+                        self._execute_with_retry("choose_map_node", option_index=0)
+                        self.action_count += 1
+                    except Exception as e:
+                        self._log_action(f"  [red]Failed: {e}[/red]")
+                return
+
+        # For card_reward: if card options are empty, skip this tick (data not ready)
+        if screen_type == "card_reward":
+            reward = gs.get("reward") or {}
+            if not reward:
+                reward = (gs.get("agent_view") or {}).get("reward") or {}
+            card_options = reward.get("card_choices") or reward.get("cards") or []
+            sel = gs.get("selection") or {}
+            sel_cards = sel.get("cards") or []
+            if not card_options and not sel_cards:
+                self._log_action("  [dim]Card reward data not ready — waiting[/dim]")
+                return
+
         # LLM-based decision
         try:
             result_str = self.advisor.advise(gs, execute=not self.dry_run)
         except Exception as e:
             self._log_action(f"[red]Advisor error: {e}[/red]")
             return
+
+        # If card_reward advisor mentions empty/no options, skip and retry next tick
+        if screen_type == "card_reward" and any(
+            phrase in result_str.lower()
+            for phrase in ("no card", "empty", "0 cards", "no options")
+        ):
+            self._log_action("  [dim]Card reward empty — retrying next tick[/dim]")
+            return
+
+        # If the advisor recommended an invalid/failed action, fall back to a safe default
+        if "not available" in result_str or "FAILED" in result_str:
+            self._log_action(f"  [yellow]Invalid action — falling back[/yellow]")
+            # For map: force choose_map_node(0)
+            if screen_type == "map" and "choose_map_node" in actions:
+                if not self.dry_run:
+                    try:
+                        self._execute_with_retry("choose_map_node", option_index=0)
+                    except Exception:
+                        pass
+                self._log_action("  [dim]auto: choose_map_node(0) (fallback)[/dim]")
+                self.action_count += 1
+                return
+            # For shops: close and leave
+            if screen_type == "shop" and "close_shop_inventory" in actions:
+                if not self.dry_run:
+                    try:
+                        self._execute_with_retry("close_shop_inventory")
+                    except Exception:
+                        pass
+                self._shop_visited = True
+                self._log_action("  [dim]auto: close_shop_inventory (fallback)[/dim]")
+                self.action_count += 1
+                return
+            # For other screens: try proceed/confirm
+            for fallback in ("proceed", "confirm_modal", "dismiss_modal"):
+                if fallback in actions:
+                    if not self.dry_run:
+                        try:
+                            self._execute_with_retry(fallback)
+                        except Exception:
+                            pass
+                    self._log_action(f"  [dim]auto: {fallback} (fallback)[/dim]")
+                    self.action_count += 1
+                    return
+            return  # Nothing we can do, let next tick try
+
+        # Mark card reward as handled so we don't re-open it
+        if screen_type == "card_reward":
+            self._card_reward_handled = True
+
+        # Track shop visits to prevent re-opening after closing
+        if screen_type == "shop" and "close_shop_inventory" in result_str and "-> OK" in result_str:
+            self._shop_visited = True
 
         # Update advisor panel
         self._advisor_text = (
@@ -742,62 +953,130 @@ class Runner:
     def _handle_deck_select(self, gs: dict) -> None:
         """Handle deck card selection screens (add, remove, upgrade, transform).
 
-        select_deck_card toggles cards on/off. We track selected_count
-        to know when our pick actually stuck. For multi-select (e.g.
-        "Choose 2 to Remove"), we loop until the screen changes.
+        For single-select (upgrade, transform): use the advisor.
+        For multi-select (e.g. "Choose 2 to Remove"): pick deterministically
+        using Strikes first, then Defends, never Bash — since the advisor
+        would give the same answer every call and multi-select toggling is
+        unreliable via the API.
         """
-        max_attempts = 20  # safety limit
-        prev_selected = (gs.get("selection") or {}).get("selected_count", 0)
-        selected_indices: list[int] = []
+        sel = gs.get("selection") or {}
+        prompt_text = (sel.get("prompt") or "").lower()
+        cards = sel.get("cards", [])
+
+        # Detect multi-select from prompt (e.g. "Choose 2 cards to Remove")
+        import re
+        multi_match = re.search(r"choose\s+(\d+)", prompt_text)
+        is_multi = multi_match is not None and int(multi_match.group(1)) > 1
+
+        if is_multi:
+            self._handle_multi_deck_select(gs, cards, prompt_text)
+        else:
+            self._handle_single_deck_select(gs)
+
+    def _handle_single_deck_select(self, gs: dict) -> None:
+        """Single-select deck screen — use advisor."""
+        # Filter discard_potion from actions
+        filtered_actions = [a for a in gs.get("available_actions", []) if a != "discard_potion"]
+        if filtered_actions:
+            gs = dict(gs)
+            gs["available_actions"] = filtered_actions
+
+        try:
+            result_str = self.advisor.advise(gs, execute=not self.dry_run)
+        except Exception as e:
+            self._log_action(f"[red]Advisor error: {e}[/red]")
+            return
+
+        lines = result_str.split("\n")
+        decision_line = next(
+            (l for l in lines if l.startswith("Decision:")),
+            lines[0] if lines else "?",
+        )
+        self._log_action(f"  [blue]{decision_line}[/blue]")
+        self.action_count += 1
+        self._refresh()
+
+        # Wait for screen to change or confirm
+        time.sleep(0.5)
+        try:
+            gs = self.client.get_state()
+        except Exception:
+            return
+        self.game_state = gs
+        if "confirm_selection" in gs.get("available_actions", []):
+            if not self.dry_run:
+                try:
+                    self._execute_with_retry("confirm_selection")
+                except Exception:
+                    pass
+            self._log_action("  [dim]auto: confirm_selection[/dim]")
+
+    def _handle_multi_deck_select(self, gs: dict, cards: list, prompt_text: str) -> None:
+        """Multi-select deck screen — pick deterministically.
+
+        For remove: Strikes first, then Defends, never Bash.
+        For other multi-selects: pick sequentially from index 0.
+        """
+        import re
+        multi_match = re.search(r"choose\s+(\d+)", prompt_text)
+        num_to_pick = int(multi_match.group(1)) if multi_match else 2
+
+        is_remove = "remove" in prompt_text
+        is_upgrade = "upgrade" in prompt_text
+
+        # Build priority order for indices
+        if is_remove:
+            # Remove Strikes first, then Defends, then others, NEVER Bash
+            priority = []
+            for card in cards:
+                name = (card.get("name") or "").lower()
+                idx = card.get("index", 0)
+                if "bash" in name:
+                    continue  # Never remove Bash
+                if "strike" in name:
+                    priority.insert(0, idx)  # Strikes first
+                elif "defend" in name:
+                    priority.append(idx)  # Defends after Strikes
+                else:
+                    priority.append(idx)  # Others last
+            self._log_action(f"  [cyan]Multi-remove: picking {num_to_pick} from priority {priority[:num_to_pick]}[/cyan]")
+        else:
+            # For upgrade/other: just pick sequentially
+            priority = [card.get("index", i) for i, card in enumerate(cards)]
+
+        picked = 0
+        max_attempts = num_to_pick * 3  # Safety limit
 
         for attempt in range(max_attempts):
-            # Ask the advisor
-            try:
-                result_str = self.advisor.advise(gs, execute=not self.dry_run)
-            except Exception as e:
-                self._log_action(f"[red]Advisor error: {e}[/red]")
-                return
+            if picked >= num_to_pick:
+                break
+            if attempt >= len(priority):
+                break
 
-            executed_ok = "-> OK" in result_str
-
-            lines = result_str.split("\n")
-            decision_line = next(
-                (l for l in lines if l.startswith("Decision:")),
-                lines[0] if lines else "?",
+            idx = priority[attempt] if attempt < len(priority) else attempt
+            card_name = next(
+                (c.get("name", "?") for c in cards if c.get("index") == idx),
+                f"index {idx}",
             )
-            self._log_action(f"  [blue]{decision_line}[/blue]")
-            self.action_count += 1
-            self._refresh()
+            self._log_action(f"  [cyan]Selecting {card_name} (index {idx})[/cyan]")
 
-            if not executed_ok:
-                # Advisor failed — fall back to picking first non-selected card
-                sel = gs.get("selection") or {}
-                cards = sel.get("cards", [])
-                fallback_idx = 0
-                for card in cards:
-                    cidx = card.get("index", card.get("i", 0))
-                    if cidx not in selected_indices:
-                        fallback_idx = cidx
-                        break
-                self._log_action(f"  [yellow]Fallback: selecting index {fallback_idx}[/yellow]")
-                if not self.dry_run:
-                    try:
-                        self._execute_with_retry("select_deck_card", option_index=fallback_idx)
-                    except Exception:
-                        pass
+            if not self.dry_run:
+                try:
+                    self._execute_with_retry("select_deck_card", option_index=idx)
+                except Exception as e:
+                    self._log_action(f"  [yellow]Select failed: {e}[/yellow]")
+                    continue
 
-            # Re-poll
-            time.sleep(0.5)
+            time.sleep(1.0)  # Wait for the game to process
+
             try:
                 gs = self.client.get_state()
             except Exception:
                 return
             self.game_state = gs
-
-            screen = gs.get("screen", "")
             actions = gs.get("available_actions", [])
 
-            # confirm_selection available — auto-confirm and done
+            # Check if confirm appeared or screen changed
             if "confirm_selection" in actions:
                 if not self.dry_run:
                     try:
@@ -806,27 +1085,21 @@ class Runner:
                         pass
                 self._log_action("  [dim]auto: confirm_selection[/dim]")
                 return
-
-            # Screen changed — done
             if "select_deck_card" not in actions:
-                return
+                return  # Screen changed, done
 
-            # Check if selection count changed
+            # Check selected count
             sel = gs.get("selection") or {}
-            curr_selected = sel.get("selected_count", 0)
-            if curr_selected > prev_selected:
-                # Pick stuck — track it to avoid re-selecting
-                # (We don't know exactly which idx, but track the advisor's pick)
-                prev_selected = curr_selected
-            elif curr_selected < prev_selected:
-                # We toggled something off — that's bad, try again
-                prev_selected = curr_selected
+            curr = sel.get("selected_count", 0)
+            if curr > picked:
+                picked = curr
 
-            # Filter for next iteration
-            filtered = [a for a in actions if a != "discard_potion"]
-            if filtered:
-                gs = dict(gs)
-                gs["available_actions"] = filtered
+        # If we exhausted attempts without the screen changing,
+        # mark as stuck so the main loop can time out
+        if picked < num_to_pick:
+            self._log_action(f"  [yellow]Multi-select stuck (picked {picked}/{num_to_pick})[/yellow]")
+            self._deck_select_stuck = True
+            self._stuck_since = time.monotonic()
 
     # ------------------------------------------------------------------
     # Game over

@@ -181,7 +181,7 @@ class TestPromptBuilders:
         msg = build_card_reward_message(state, game_data)
         assert "Strike" in msg
         assert "option_index=0" in msg
-        assert "skip_reward_cards" in msg
+        assert "choose_reward_card" in msg
 
     def test_event_includes_options(self, game_data):
         state = _base_state(
