@@ -225,6 +225,11 @@ def end_turn(state: CombatState) -> None:
     if "CLOAK_CLASP" in state.relics:
         state.player.block += len(state.player.hand)
 
+    # Infection cards: deal 3 damage per Infection in hand at end of turn
+    for card in state.player.hand:
+        if card.name == "Infection" or card.id == "INFECTION":
+            state.player.hp -= 3
+
     # Discard hand (except Retain)
     remaining = []
     for card in state.player.hand:
