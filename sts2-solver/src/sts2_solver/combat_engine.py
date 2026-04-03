@@ -58,6 +58,9 @@ def effective_cost(state: CombatState, card: Card) -> int:
     # X-cost cards spend all remaining energy
     if card.is_x_cost:
         return state.player.energy
+    # Tangled: Attacks cost 1 more energy
+    if card.card_type == CardType.ATTACK and state.player.powers.get("Tangled", 0) > 0:
+        cost += 1
     return cost
 
 
@@ -370,7 +373,7 @@ def _tick_end_of_turn_powers(state: CombatState) -> None:
     player end turn → enemy acts → enemy debuffs expire → poison ticks.
     """
     # Player debuffs
-    for debuff in ("Vulnerable", "Weak", "Frail"):
+    for debuff in ("Vulnerable", "Weak", "Frail", "Tangled"):
         if debuff in state.player.powers:
             state.player.powers[debuff] -= 1
             if state.player.powers[debuff] <= 0:

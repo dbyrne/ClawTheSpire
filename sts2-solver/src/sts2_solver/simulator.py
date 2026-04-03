@@ -146,9 +146,9 @@ ENEMY_MOVE_TABLES: dict[str, list[dict]] = {
         {"type": "Attack", "damage": 4, "hits": 3},          # Claw x3
     ],
     "VINE_SHAMBLER": [
-        {"type": "Attack", "damage": 8, "hits": 1, "player_weak": 1},  # Grasping Vines
-        {"type": "Attack", "damage": 6, "hits": 2},                     # Swipe x2
-        {"type": "Attack", "damage": 16, "hits": 1},                    # Chomp
+        {"type": "Attack", "damage": 6, "hits": 2},                               # Swipe x2
+        {"type": "Attack", "damage": 8, "hits": 1, "player_tangled": 2},          # Grasping Vines (2 turns)
+        {"type": "Attack", "damage": 16, "hits": 1},                              # Chomp
     ],
     "SLITHERING_STRANGLER": [
         {"type": "Debuff", "player_constrict": 3},                     # Constrict
@@ -861,6 +861,11 @@ def _resolve_sim_intents(state: CombatState, ais: list[EnemyAI]) -> None:
             state.player.powers["Constrict"] = (
                 state.player.powers.get("Constrict", 0)
                 + intent["player_constrict"]
+            )
+        if intent.get("player_tangled"):
+            state.player.powers["Tangled"] = (
+                state.player.powers.get("Tangled", 0)
+                + intent["player_tangled"]
             )
 
         ai._pending_intent = None
