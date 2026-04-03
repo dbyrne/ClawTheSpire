@@ -180,23 +180,35 @@ def evaluate_turn(state: CombatState, initial_state: CombatState) -> float:
             score += weak * EVALUATOR["weak_vs_other_value"]
 
     # -----------------------------------------------------------------------
-    # 5. Player buffs gained
+    # 5. Player buffs gained — scaled by remaining enemy HP
     # -----------------------------------------------------------------------
+    # The solver is single-turn: it can't see that Inflame (+2 Str) makes
+    # every future attack deal +2 damage for the rest of combat. To
+    # compensate, we scale power/buff values by how long the fight will
+    # last — more remaining enemy HP = more future turns = more value
+    # from scaling powers.
+    total_enemy_hp = sum(max(0, e.hp) for e in state.enemies)
+    # Estimate remaining turns based on enemy HP vs our damage per turn
+    # (rough: ~15 damage/turn baseline for Ironclad with 3 energy)
+    est_remaining_turns = max(1, total_enemy_hp / 15.0)
+    # Scaling multiplier: powers are worth more in long fights
+    # Capped to avoid extreme values. 1.0 at 1 turn, ~3.0 at 5+ turns.
+    fight_length_mult = min(3.0, 1.0 + (est_remaining_turns - 1) * 0.4)
+
     str_gained = state.player.powers.get("Strength", 0) - initial_state.player.powers.get("Strength", 0)
     if str_gained > 0:
-        # Strength is very valuable - multiplies all future attack damage
-        score += str_gained * EVALUATOR["strength_gained_value"]
+        score += str_gained * EVALUATOR["strength_gained_value"] * fight_length_mult
 
     dex_gained = state.player.powers.get("Dexterity", 0) - initial_state.player.powers.get("Dexterity", 0)
     if dex_gained > 0:
-        score += dex_gained * EVALUATOR["dexterity_gained_value"]
+        score += dex_gained * EVALUATOR["dexterity_gained_value"] * fight_length_mult
 
     # Permanent powers (Demon Form, Barricade, etc.) are very valuable
     for power_name, value_per in EVALUATOR["power_values"].items():
         gained = (state.player.powers.get(power_name, 0)
                   - initial_state.player.powers.get(power_name, 0))
         if gained > 0:
-            score += gained * value_per
+            score += gained * value_per * fight_length_mult
 
     # -----------------------------------------------------------------------
     # 6. Energy efficiency (slight penalty for unspent energy)
