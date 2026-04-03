@@ -128,9 +128,20 @@ class RunLogger:
         score: float,
         states_evaluated: int,
         solve_ms: float,
+        game_state: dict | None = None,
     ) -> None:
-        """Log a single combat turn's solver output."""
+        """Log a single combat turn's solver output.
+
+        If game_state is provided, a ``combat_snapshot`` event is emitted
+        first, capturing the full pre-action combat state for simulator
+        validation and AlphaZero training data generation.
+        """
         self._combat_turn += 1
+
+        # Emit snapshot BEFORE the turn event (pre-action state)
+        if game_state is not None:
+            self._emit_combat_snapshot(game_state, self._combat_turn)
+
         self._emit({
             "type": "combat_turn",
             "turn": self._combat_turn,
@@ -138,6 +149,77 @@ class RunLogger:
             "score": round(score, 1),
             "states_evaluated": states_evaluated,
             "solve_ms": round(solve_ms, 1),
+        })
+
+    def _emit_combat_snapshot(self, game_state: dict, turn: int) -> None:
+        """Emit a full combat state snapshot for replay validation.
+
+        Captures everything needed to reconstruct the CombatState at the
+        start of the player's action phase: hand, draw pile, discard pile,
+        player stats, and all enemy states including intents.
+        """
+        combat = game_state.get("combat") or {}
+        player = combat.get("player") or {}
+        hand_raw = combat.get("hand") or []
+        enemies_raw = combat.get("enemies") or []
+        run = game_state.get("run") or {}
+
+        # Snapshot the hand (card names + upgrade status + cost)
+        hand = []
+        for c in hand_raw:
+            entry: dict[str, Any] = {
+                "name": c.get("name") or c.get("card_id", "?"),
+                "card_id": c.get("card_id", ""),
+                "cost": c.get("cost"),
+                "upgraded": bool(c.get("upgraded")),
+            }
+            hand.append(entry)
+
+        # Snapshot enemies (HP, block, powers, intents)
+        enemies = []
+        for e in enemies_raw:
+            if not e.get("is_alive", True):
+                continue
+            intents = e.get("intents") or []
+            intent = intents[0] if intents else {}
+            entry = {
+                "name": e.get("name", "?"),
+                "id": e.get("id") or e.get("enemy_id", ""),
+                "hp": e.get("current_hp", 0),
+                "max_hp": e.get("max_hp", 0),
+                "block": e.get("block", 0),
+                "powers": [
+                    {"name": p.get("name", ""), "amount": p.get("amount", 0)}
+                    for p in (e.get("powers") or [])
+                    if p.get("amount", 0) != 0
+                ],
+                "intent_type": intent.get("type"),
+                "intent_damage": intent.get("damage"),
+                "intent_hits": intent.get("hits", 1),
+                "intent_block": intent.get("block"),
+            }
+            enemies.append(entry)
+
+        self._emit({
+            "type": "combat_snapshot",
+            "turn": turn,
+            "player": {
+                "hp": player.get("current_hp"),
+                "max_hp": player.get("max_hp"),
+                "block": player.get("block", 0),
+                "energy": player.get("energy"),
+                "powers": [
+                    {"name": p.get("name", ""), "amount": p.get("amount", 0)}
+                    for p in (player.get("powers") or [])
+                    if p.get("amount", 0) != 0
+                ],
+            },
+            "hand": hand,
+            "enemies": enemies,
+            "draw_pile_size": len(combat.get("draw_pile") or []),
+            "discard_pile_size": len(combat.get("discard_pile") or []),
+            "exhaust_pile_size": len(combat.get("exhaust_pile") or []),
+            "relics": [r.get("name") or r.get("relic_id", "?") for r in run.get("relics", [])],
         })
 
     def log_combat_end(self, game_state: dict, outcome: str) -> None:
@@ -253,12 +335,27 @@ class RunLogger:
                         "previous": prev_pot,
                     })
 
-        # Map — log once when first available
-        if not self._prev_state.get("map") and game_state.get("map"):
-            self._emit({
-                "type": "map_revealed",
-                "map": game_state["map"],
-            })
+        # Map — log on first reveal and on every navigation change
+        curr_map = game_state.get("map")
+        prev_map = self._prev_state.get("map")
+        if curr_map:
+            if not prev_map:
+                # First time map is available
+                self._emit({
+                    "type": "map_revealed",
+                    "map": curr_map,
+                })
+            else:
+                # Check if position changed (player traveled to a new node)
+                prev_node = prev_map.get("current_node") if prev_map else None
+                curr_node = curr_map.get("current_node")
+                if prev_node != curr_node:
+                    self._emit({
+                        "type": "map_updated",
+                        "current_node": curr_node,
+                        "available_nodes": curr_map.get("available_nodes"),
+                        "map": curr_map,
+                    })
 
         self._prev_state = game_state
 

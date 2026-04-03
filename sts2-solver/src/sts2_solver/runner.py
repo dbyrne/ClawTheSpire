@@ -857,12 +857,13 @@ class Runner:
             except Exception as e:
                 self._log_action(f"  [red]X End Turn: {e}[/red]")
 
-        # Log the full turn
+        # Log the full turn (pass game_state for combat snapshot)
         self.logger.log_combat_turn(
             cards_played=cards_played,
             score=best_score,
             states_evaluated=total_states,
             solve_ms=total_solve_ms,
+            game_state=gs,
         )
 
         self.turn_count += 1

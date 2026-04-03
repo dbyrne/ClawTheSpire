@@ -150,6 +150,7 @@ def solve_combat(raw_state: str | None = None, execute: bool = True) -> str:
         score=result.score,
         states_evaluated=result.states_evaluated,
         solve_ms=solve_ms,
+        game_state=game_state,
     )
 
     # Format the solution header
