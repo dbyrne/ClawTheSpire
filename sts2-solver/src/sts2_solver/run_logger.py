@@ -180,7 +180,7 @@ class RunLogger:
             entry: dict[str, Any] = {
                 "name": c.get("name") or c.get("card_id", "?"),
                 "card_id": c.get("card_id", ""),
-                "cost": c.get("cost"),
+                "cost": c.get("energy_cost", c.get("cost")),
                 "upgraded": bool(c.get("upgraded")),
                 "playable": c.get("playable", av_card.get("playable")),
                 "targets": list(c.get("valid_target_indices") or av_card.get("targets") or []),
@@ -366,8 +366,9 @@ class RunLogger:
                     })
 
         # Map — log on first reveal and on every navigation change
-        curr_map = game_state.get("map")
-        prev_map = self._prev_state.get("map")
+        # Map data may be at top-level "map" or under "agent_view.map"
+        curr_map = game_state.get("map") or (game_state.get("agent_view") or {}).get("map")
+        prev_map = self._prev_state.get("map") or (self._prev_state.get("agent_view") or {}).get("map")
         if curr_map:
             if not prev_map:
                 # First time map is available
