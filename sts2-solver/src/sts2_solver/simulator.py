@@ -126,10 +126,12 @@ ENEMY_MOVE_TABLES: dict[str, list[dict]] = {
         {"type": "Attack", "damage": 11, "hits": 1},                          # Smash
     ],
     "FOGMOG": [
-        {"type": "Buff", "self_strength": 2, "self_block": 6},  # Illusion (buff+block)
-        {"type": "Attack", "damage": 8, "hits": 1},             # Swipe
-        {"type": "Attack", "damage": 8, "hits": 1},             # Swipe Random
-        {"type": "Attack", "damage": 14, "hits": 1},            # Headbutt
+        {"type": "Buff"},                                                   # Illusory Spores (summons Eye)
+        {"type": "Attack", "damage": 8, "hits": 1, "self_strength": 1},   # Thwack (dmg + gain 1 STR)
+        {"type": "Attack", "damage": 14, "hits": 1},                      # Headbutt
+    ],
+    "EYE_WITH_TEETH": [
+        {"type": "StatusCard"},                                            # Distract (adds 3 Dazed)
     ],
     "CUBEX_CONSTRUCT": [
         {"type": "Buff", "self_strength": 2},                # Charge Up
