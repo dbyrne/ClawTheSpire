@@ -47,6 +47,9 @@ from .game_client import GameClient
 from .game_data import load_game_data
 from .run_logger import RunLogger
 from .solver import solve_turn, format_solution
+from .alphazero.encoding import build_vocabs_from_card_db, EncoderConfig
+from .alphazero.network import STS2Network
+from .alphazero.mcts import MCTS as AlphaZeroMCTS
 
 
 DEFAULT_CHARACTER = "Ironclad"
@@ -79,6 +82,11 @@ class Runner:
         self.game_state: dict | None = None
         self.turn_count = 0
         self.action_count = 0
+
+        # AlphaZero MCTS (initialized lazily after card_db is loaded)
+        self._mcts: AlphaZeroMCTS | None = None
+        self._mcts_vocabs = None
+        self._mcts_config = None
         self._card_reward_handled = False  # Reset when leaving reward screen
         self._deck_select_stuck = False  # Track stuck deck_select screens
         self._stuck_since: float | None = None  # Timestamp when we got stuck
@@ -197,6 +205,27 @@ class Runner:
         self.game_data = load_game_data()
         self.advisor = StrategicAdvisor(
             self.game_data, self.client, logger=self.logger
+        )
+
+        # Initialize AlphaZero MCTS
+        self.console.print("[dim]Initializing AlphaZero MCTS...[/dim]")
+        self._mcts_vocabs = build_vocabs_from_card_db(self.card_db)
+        self._mcts_config = EncoderConfig()
+        import torch
+        network = STS2Network(self._mcts_vocabs, self._mcts_config)
+        # Load latest checkpoint if available
+        from pathlib import Path as _Path
+        ckpt_dir = _Path(__file__).resolve().parents[3] / "alphazero_checkpoints"
+        ckpts = sorted(ckpt_dir.glob("gen_*.pt")) if ckpt_dir.exists() else []
+        if ckpts:
+            ckpt = torch.load(ckpts[-1], map_location="cpu", weights_only=True)
+            network.load_state_dict(ckpt["model_state"])
+            self.console.print(f"[dim]Loaded checkpoint: {ckpts[-1].name}[/dim]")
+        else:
+            self.console.print("[dim]No checkpoint found — using random network[/dim]")
+        self._mcts = AlphaZeroMCTS(
+            network, self._mcts_vocabs, self._mcts_config,
+            card_db=self.card_db, device="cpu",
         )
         self.logger.metadata = {
             "advisor_model": self.advisor.model,
@@ -729,59 +758,27 @@ class Runner:
         max_cards = 12  # safety cap to prevent infinite loops
 
         while len(cards_played) < max_cards:
-            # Solve from current game state
+            # Build combat state and run MCTS
             try:
                 sim_state = state_from_mcp(gs, self.card_db,
                                           move_indices=self._combat_move_indices)
                 hand = list(sim_state.player.hand)
                 t0 = time.perf_counter()
-                from .config import detect_character
-                result = solve_turn(sim_state, card_db=self.card_db,
-                                    character=detect_character(gs))
+                first_action, policy = self._mcts.search(
+                    sim_state, num_simulations=200, temperature=0,
+                )
                 solve_ms = (time.perf_counter() - t0) * 1000
-                total_states += result.states_evaluated
+                total_states += 200
                 total_solve_ms += solve_ms
-                best_score = result.score
+                best_score = max(policy) if policy else 0
             except Exception as e:
-                self._log_action(f"[red]Solver error: {e}[/red]")
+                self._log_action(f"[red]MCTS error: {e}[/red]")
+                import traceback
+                traceback.print_exc()
                 break
 
-            # First action from the solver's plan
-            if not result.actions:
-                break
-            first_action = result.actions[0]
-
-            # Draw-first reordering: if the solver plans to play a draw
-            # card later in the sequence, play it first instead. Since we
-            # re-solve after each card, playing draw cards first gives us
-            # real information about what we drew, letting the next solve
-            # make a better decision than the blind simulation could.
-            if (first_action.action_type == "play_card"
-                    and first_action.card_idx is not None
-                    and first_action.card_idx < len(hand)):
-                first_card = hand[first_action.card_idx]
-                first_draws = getattr(first_card, "cards_draw", 0) or 0
-                if first_draws == 0:
-                    # First action isn't a draw — check if a later one is
-                    for later in result.actions[1:]:
-                        if later.action_type != "play_card":
-                            continue
-                        if later.card_idx is None or later.card_idx >= len(hand):
-                            continue
-                        later_card = hand[later.card_idx]
-                        if (getattr(later_card, "cards_draw", 0) or 0) > 0:
-                            self._log_action(
-                                f"  [cyan]↑ Draw-first: {later_card.name} "
-                                f"before {first_card.name}[/cyan]"
-                            )
-                            first_action = later
-                            break
-
-            # If solver says end turn (or only action is end_turn), we're done
+            # If MCTS says end turn, we're done
             if first_action.action_type == "end_turn":
-                # Update panel with final state
-                sim_state.player.hand = hand
-                solution_str = format_solution(result, sim_state)
                 hand_str = ", ".join(c.name for c in hand)
                 self._solver_text = (
                     f"[bold]Turn {turn}[/bold] | "
@@ -789,7 +786,7 @@ class Runner:
                     f"Energy {player.get('energy', '?')}\n"
                     f"Hand: {hand_str}\n"
                     f"vs: {enemy_str}\n\n"
-                    f"{solution_str}"
+                    f"MCTS: end turn ({solve_ms:.0f}ms)"
                 )
                 break
 
