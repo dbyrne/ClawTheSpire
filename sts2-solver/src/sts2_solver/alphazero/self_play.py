@@ -390,6 +390,14 @@ def train_worker(
     save_path = Path(save_dir) if save_dir else Path(__file__).resolve().parents[4] / "alphazero_checkpoints"
     save_path.mkdir(parents=True, exist_ok=True)
 
+    # Load latest checkpoint if available (warm start)
+    import torch as _torch
+    ckpts = sorted(save_path.glob("gen_*.pt"))
+    if ckpts:
+        ckpt = _torch.load(ckpts[-1], map_location="cpu", weights_only=True)
+        network.load_state_dict(ckpt["model_state"], strict=False)
+        print(f"Warm start from {ckpts[-1].name}", flush=True)
+
     progress_path = Path(progress_file) if progress_file else _default_progress_path()
 
     rng = random.Random(42)

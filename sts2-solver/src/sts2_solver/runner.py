@@ -219,7 +219,7 @@ class Runner:
         ckpts = sorted(ckpt_dir.glob("gen_*.pt")) if ckpt_dir.exists() else []
         if ckpts:
             ckpt = torch.load(ckpts[-1], map_location="cpu", weights_only=True)
-            network.load_state_dict(ckpt["model_state"])
+            network.load_state_dict(ckpt["model_state"], strict=False)
             self.console.print(f"[dim]Loaded checkpoint: {ckpts[-1].name}[/dim]")
         else:
             self.console.print("[dim]No checkpoint found — using random network[/dim]")
