@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .config import format_tier_list
+from .config import format_relic_guide, format_tier_list
 from .game_data import GameDataDB, strip_markup
 
 
@@ -22,11 +22,14 @@ CORE STRATEGY PRINCIPLES:
 - SHOP IS CRITICAL: Path to shops whenever possible. At shops, ALWAYS remove a card first (Strikes, then Defends). Card removal is the most powerful thing you can buy.
 - NEVER remove or transform Bash — it's your only source of Vulnerable (50% more damage).
 - Rest vs. Upgrade: upgrade if HP > 60%, rest if HP < 40%, judgment call in between. BUT always rest before a boss fight if HP < 70%.
-- Boss relics: evaluate against your specific deck composition, not in isolation.
+- Boss relics: evaluate against your specific deck composition, not in isolation. See relic guide below.
 - Potions are powerful — buy them when cheap, use them to survive elites.
 
 IRONCLAD CARD TIERS (for card reward decisions):
 __TIER_LIST__
+
+IRONCLAD RELIC GUIDE (for relic picks — boss relics, events, shops):
+__RELIC_GUIDE__
 
 RESPONSE FORMAT:
 Respond with exactly this JSON structure:
@@ -34,7 +37,7 @@ Respond with exactly this JSON structure:
 
 IMPORTANT: The action MUST be one of the available actions listed. The option_index \
 MUST be a valid index from the options shown.\
-""".replace("__TIER_LIST__", format_tier_list())
+""".replace("__TIER_LIST__", format_tier_list()).replace("__RELIC_GUIDE__", format_relic_guide())
 
 
 def summarize_deck(deck: list[dict]) -> str:
@@ -390,6 +393,9 @@ def build_shop_message(state: dict, game_data: GameDataDB) -> str:
 
     lines.append("")
     lines.append(f"CARD TIER LIST (only buy S or A tier):\n{tier_info}")
+    lines.append("")
+    from .config import format_relic_guide
+    lines.append(f"RELIC GUIDE (match to your archetype):\n{format_relic_guide()}")
 
     return "\n".join(lines)
 
@@ -453,9 +459,12 @@ def build_boss_relic_message(state: dict, game_data: GameDataDB) -> str:
         lines.append(f"  option_index={i}: {desc}")
 
     lines.append("")
+    lines.append("RELIC GUIDE:")
+    lines.append(format_relic_guide())
+    lines.append("")
     lines.append("AVAILABLE ACTIONS: choose_treasure_relic (with option_index)")
     lines.append("")
-    lines.append("Which relic best fits our current deck and strategy?")
+    lines.append("Which relic best fits our current deck and strategy? Use the relic guide above — match to your archetype.")
 
     return "\n".join(lines)
 

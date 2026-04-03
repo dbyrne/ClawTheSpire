@@ -122,6 +122,92 @@ def format_tier_list() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Relic guide — Ironclad
+# Helps advisor evaluate relic picks (boss relics, events, shops).
+# Based on Mobalytics Ironclad guide + gameplay analysis.
+# ---------------------------------------------------------------------------
+
+RELIC_GUIDE = {
+    "top_picks": {
+        "note": "Universally strong — take in almost any deck",
+        "relics": [
+            "Charon's Ashes",     # AoE damage on exhaust — insane with Corruption
+            "Tungsten Rod",       # Reduces ALL HP loss by 1 — stacks with everything
+            "Paper Krane",        # Weak reduces damage to 60% instead of 75%
+            "Ice Cream",          # Unspent energy carries over — enables big turns
+            "Mummified Hand",     # Free energy on power play — snowball engine
+            "Chemical X",         # +2 to all X-cost cards (Whirlwind!)
+            "Demon Tongue",       # Heal on HP-spend cards — amazing with Offering/Bloodletting
+            "Tough Bandages",     # Block on discard — great with exhaust & Burning Pact
+        ],
+    },
+    "strength_scaling": {
+        "note": "Strong in Strength decks (Demon Form, Inflame, Spot Weakness)",
+        "relics": [
+            "Brimstone",          # +2 Str to you AND enemies — risk/reward, favors Str decks
+            "Ruined Helmet",      # Usually +2 Str — not build-defining but solid
+            "Sword of Jade",      # Free 3 Str — always good
+            "Vajra",              # +1 Str at combat start
+            "Anchor",             # 10 Block turn 1 — buys time to set up Demon Form
+            "Horn Cleat",         # 14 Block turn 1 — same idea, even better
+            "Permafrost",         # Retain 1 card turn 1 — helps keep key setup cards
+        ],
+    },
+    "block_build": {
+        "note": "Strong in Block decks (Barricade, Juggernaut, Body Slam)",
+        "relics": [
+            "Cloak Clasp",        # Block on empty hand — triggers Juggernaut
+            "Fresnel Lens",       # Boosts Block gained from cards
+            "Vambrace",           # Works like Unmovable — persistent Block
+            "Sai",                # Simple Block generation on attacks
+            "Parrying Shield",    # Extra damage from Block surplus
+            "Pael's Legion",      # Block that adds up, especially with Barricade
+            "Bronze Scales",      # Thorns — good if you can tank hits
+            "Self-Forming Clay",  # Block when losing HP — decent safety net
+        ],
+    },
+    "exhaust_engine": {
+        "note": "Strong in Exhaust decks (Corruption, Feel No Pain, Dark Embrace)",
+        "relics": [
+            "Charon's Ashes",     # AoE damage per exhaust — top-tier
+            "Forgotten Soul",     # Smaller-scale exhaust synergy
+            "Burning Sticks",     # Smaller-scale Dead Branch effect
+            "Joss Paper",         # Extra draw on exhaust
+            "Tough Bandages",     # Block on discard/exhaust
+        ],
+    },
+    "hp_spend": {
+        "note": "Strong with HP-spending cards (Offering, Bloodletting, Hemokinesis)",
+        "relics": [
+            "Demon Tongue",       # Heal when spending HP — top-tier here
+            "Centennial Puzzle",  # Draw on HP loss — often triggers turn 1
+            "Self-Forming Clay",  # Block when losing HP
+            "Red Skull",          # +3 Str when below 50% HP
+        ],
+    },
+    "avoid": {
+        "note": "Relics with downsides that usually aren't worth it",
+        "relics": [
+            "Philosopher's Stone", # +1 Str to ALL enemies — too dangerous
+            "Ectoplasm",          # Can't gain gold — cripples shop pathing
+            "Velvet Choker",      # 6-card play limit — ruins exhaust/Corruption
+            "Sozu",               # Can't gain potions — potions save runs
+        ],
+    },
+}
+
+
+def format_relic_guide() -> str:
+    """Format the relic guide as a compact string for prompts."""
+    lines = []
+    for category, info in RELIC_GUIDE.items():
+        label = category.replace("_", " ").upper()
+        relic_names = [r.split("  ")[0] for r in info["relics"]]  # strip comments
+        lines.append(f"{label} ({info['note']}): {', '.join(relic_names)}")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # Strategy parameters — advisor behavior
 # ---------------------------------------------------------------------------
 
