@@ -121,8 +121,8 @@ ENEMY_MOVE_TABLES: dict[str, list[dict]] = {
 
     # --- Normal encounters ---
     "FLYCONID": [
-        {"type": "Attack", "damage": 8, "hits": 1, "player_vulnerable": 1},  # Vuln Spores + dmg
-        {"type": "Attack", "damage": 8, "hits": 1, "player_frail": 1},       # Frail Spores + dmg
+        {"type": "Debuff", "player_vulnerable": 2},                             # Weakening Spores (no dmg)
+        {"type": "Attack", "damage": 8, "hits": 1, "player_frail": 2},       # Frail Spores + dmg
         {"type": "Attack", "damage": 11, "hits": 1},                          # Smash
     ],
     "FOGMOG": [
