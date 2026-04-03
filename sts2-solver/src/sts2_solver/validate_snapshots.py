@@ -51,18 +51,24 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 def _find_card(name: str, cost: int | None, upgraded: bool, card_db: CardDB) -> Card | None:
-    """Look up a Card from the database by name."""
-    # Try direct name match across all cards
+    """Look up a Card from the database by name and upgrade status."""
+    base_name = name.rstrip("+")
+
+    # First pass: exact match on name + upgraded flag
     for card in card_db.all_cards():
-        if card.name == name and card.upgraded == upgraded:
+        if card.name == base_name and card.upgraded == upgraded:
             return card
-        # Handle upgrade suffix mismatch
-        if card.name == name.rstrip("+") and upgraded:
+
+    # Second pass: match name only (ignore upgrade flag)
+    for card in card_db.all_cards():
+        if card.name == base_name and not card.upgraded:
             return card
-    # Try without upgrade flag
+
+    # Third pass: match by name substring (handles renamed cards)
     for card in card_db.all_cards():
         if card.name == name:
             return card
+
     return None
 
 

@@ -563,6 +563,20 @@ def _finisher(card: Card, card_db: CardDB | None) -> CardEffect:
     return effect
 
 
+@register("PRECISE_CUT")
+def _precise_cut(card: Card, card_db: CardDB | None) -> CardEffect:
+    """Deal 15 damage. Deals 2 less damage for each other card in hand."""
+    calc_base = 13 if not card.upgraded else 16
+    penalty_per = 2
+
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        if target_idx is not None:
+            other_cards = len(state.player.hand)  # card already removed from hand
+            total = max(0, calc_base - penalty_per * other_cards)
+            deal_damage(state, target_idx, total)
+    return effect
+
+
 @register("FAN_OF_KNIVES")
 def _fan_of_knives(card: Card, card_db: CardDB | None) -> CardEffect:
     """Deal 4(7) damage to ALL enemies. Draw 1."""
