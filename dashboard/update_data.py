@@ -98,6 +98,7 @@ def build_data(runs: list[dict]) -> dict:
                 "gen": r["gen"],
                 "model": r["model"],
                 "run_id": r["run_id"],
+                "character": r.get("character", "The Ironclad"),
             }
             for r in runs
         ],

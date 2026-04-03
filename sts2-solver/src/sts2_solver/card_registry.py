@@ -2,7 +2,7 @@
 
 Cards whose effects are fully described by their JSON fields (damage, block,
 powers_applied, etc.) are handled by effects.generate_card_effect(). This module
-handles the ~24 Ironclad cards that need custom logic.
+handles custom cards for Ironclad and Silent that need bespoke logic.
 
 Usage:
     effect = get_effect(card, card_db)
@@ -17,6 +17,8 @@ from typing import TYPE_CHECKING, Callable
 from .constants import CardType, TargetType
 from .effects import (
     CardEffect,
+    apply_power_to_enemy,
+    apply_power_to_all_enemies,
     apply_power_to_player,
     calculate_attack_damage,
     deal_damage,
@@ -350,4 +352,223 @@ def _unmovable(card: Card, card_db: CardDB | None) -> CardEffect:
     """First block gain from card each turn is doubled."""
     def effect(state: CombatState, target_idx: int | None = None) -> None:
         apply_power_to_player(state, "Unmovable", 1)
+    return effect
+
+
+# ---------------------------------------------------------------------------
+# Custom Silent card implementations
+# ---------------------------------------------------------------------------
+
+def _make_shiv() -> Card:
+    """Create a Shiv token card."""
+    return Card(
+        id="SHIV",
+        name="Shiv",
+        cost=0,
+        card_type=CardType.ATTACK,
+        target=TargetType.ANY_ENEMY,
+        damage=4,
+        keywords=frozenset({"Exhaust"}),
+    )
+
+
+@register("SHIV")
+def _shiv(card: Card, card_db: CardDB | None) -> CardEffect:
+    """Deal 4 damage + Accuracy bonus."""
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        if target_idx is not None:
+            accuracy = state.player.powers.get("Accuracy", 0)
+            deal_damage(state, target_idx, 4 + accuracy)
+    return effect
+
+
+@register("ACROBATICS")
+def _acrobatics(card: Card, card_db: CardDB | None) -> CardEffect:
+    """Draw 3(4) cards, discard 1."""
+    draw_count = 3 if not card.upgraded else 4
+
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        draw_cards(state, draw_count)
+        # Discard the worst card (lowest value heuristic: highest-cost non-power)
+        if state.player.hand:
+            # Simple: discard last drawn card (solver will explore orderings)
+            worst = len(state.player.hand) - 1
+            discarded = state.player.hand.pop(worst)
+            state.player.discard_pile.append(discarded)
+    return effect
+
+
+@register("BLADE_DANCE")
+def _blade_dance(card: Card, card_db: CardDB | None) -> CardEffect:
+    """Add 3(4) Shivs to your hand. Exhaust."""
+    count = 3 if not card.upgraded else 4
+
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        for _ in range(count):
+            add_card_to_hand(state, _make_shiv())
+    return effect
+
+
+@register("CLOAK_AND_DAGGER")
+def _cloak_and_dagger(card: Card, card_db: CardDB | None) -> CardEffect:
+    """Gain 6 Block. Add 1(2) Shiv to your hand."""
+    block_val = 6 if not card.upgraded else 8
+    shiv_count = 1 if not card.upgraded else 2
+
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        gain_block(state, block_val)
+        for _ in range(shiv_count):
+            add_card_to_hand(state, _make_shiv())
+    return effect
+
+
+@register("LEADING_STRIKE")
+def _leading_strike(card: Card, card_db: CardDB | None) -> CardEffect:
+    """Deal 6(8) damage. Add 1 Shiv to your hand."""
+    dmg = 6 if not card.upgraded else 8
+
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        if target_idx is not None:
+            deal_damage(state, target_idx, dmg)
+        add_card_to_hand(state, _make_shiv())
+    return effect
+
+
+@register("DAGGER_THROW")
+def _dagger_throw(card: Card, card_db: CardDB | None) -> CardEffect:
+    """Deal 9(12) damage. Draw 1. Discard 1."""
+    dmg = 9 if not card.upgraded else 12
+
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        if target_idx is not None:
+            deal_damage(state, target_idx, dmg)
+        draw_cards(state, 1)
+        if state.player.hand:
+            discarded = state.player.hand.pop(-1)
+            state.player.discard_pile.append(discarded)
+    return effect
+
+
+@register("CATALYST")
+def _catalyst(card: Card, card_db: CardDB | None) -> CardEffect:
+    """Double(triple) a target enemy's Poison. Exhaust."""
+    multiplier = 2 if not card.upgraded else 3
+
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        if target_idx is not None:
+            enemy = state.enemies[target_idx]
+            poison = enemy.powers.get("Poison", 0)
+            if poison > 0:
+                enemy.powers["Poison"] = poison * multiplier
+    return effect
+
+
+@register("CALCULATED_GAMBLE")
+def _calculated_gamble(card: Card, card_db: CardDB | None) -> CardEffect:
+    """Discard your hand. Draw that many cards. Exhaust (not if upgraded)."""
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        hand_size = len(state.player.hand)
+        # Discard entire hand
+        state.player.discard_pile.extend(state.player.hand)
+        state.player.hand.clear()
+        # Draw same number
+        draw_cards(state, hand_size)
+    return effect
+
+
+@register("BURST")
+def _burst(card: Card, card_db: CardDB | None) -> CardEffect:
+    """Next 1(2) Skill(s) played this turn are played twice."""
+    count = 1 if not card.upgraded else 2
+
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        # Track as a power — the combat engine would need to handle double-play
+        # For now, approximate as energy gain (playing a skill twice ~= 1 free energy)
+        apply_power_to_player(state, "Burst", count)
+    return effect
+
+
+@register("ACCURACY")
+def _accuracy(card: Card, card_db: CardDB | None) -> CardEffect:
+    """Shivs deal 4(6) additional damage."""
+    bonus = 4 if not card.upgraded else 6
+
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        apply_power_to_player(state, "Accuracy", bonus)
+    return effect
+
+
+@register("INFINITE_BLADES")
+def _infinite_blades(card: Card, card_db: CardDB | None) -> CardEffect:
+    """At the start of your turn, add a Shiv to your hand."""
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        apply_power_to_player(state, "Infinite Blades", 1)
+    return effect
+
+
+@register("NOXIOUS_FUMES")
+def _noxious_fumes(card: Card, card_db: CardDB | None) -> CardEffect:
+    """At the start of your turn, apply 2(3) Poison to ALL enemies."""
+    amount = 2 if not card.upgraded else 3
+
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        apply_power_to_player(state, "Noxious Fumes", amount)
+    return effect
+
+
+@register("TOOLS_OF_THE_TRADE")
+def _tools_of_the_trade(card: Card, card_db: CardDB | None) -> CardEffect:
+    """At the start of your turn, draw 1 card and discard 1 card."""
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        apply_power_to_player(state, "Tools of the Trade", 1)
+    return effect
+
+
+@register("DEADLY_POISON")
+def _deadly_poison(card: Card, card_db: CardDB | None) -> CardEffect:
+    """Apply 5(7) Poison."""
+    amount = 5 if not card.upgraded else 7
+
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        if target_idx is not None:
+            apply_power_to_enemy(state, target_idx, "Poison", amount)
+    return effect
+
+
+@register("POISONED_STAB")
+def _poisoned_stab(card: Card, card_db: CardDB | None) -> CardEffect:
+    """Deal 6(8) damage. Apply 3(4) Poison."""
+    dmg = 6 if not card.upgraded else 8
+    poison = 3 if not card.upgraded else 4
+
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        if target_idx is not None:
+            deal_damage(state, target_idx, dmg)
+            apply_power_to_enemy(state, target_idx, "Poison", poison)
+    return effect
+
+
+@register("FINISHER")
+def _finisher(card: Card, card_db: CardDB | None) -> CardEffect:
+    """Deal 6(8) damage for each Attack played this turn."""
+    dmg_per = 6 if not card.upgraded else 8
+
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        if target_idx is not None:
+            # attacks_played_this_turn includes this card
+            attacks = max(0, state.attacks_played_this_turn - 1)
+            total = dmg_per * attacks
+            if total > 0:
+                deal_damage(state, target_idx, total)
+    return effect
+
+
+@register("FAN_OF_KNIVES")
+def _fan_of_knives(card: Card, card_db: CardDB | None) -> CardEffect:
+    """Deal 4(7) damage to ALL enemies. Draw 1."""
+    dmg = 4 if not card.upgraded else 7
+
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        deal_damage_all(state, dmg)
+        draw_cards(state, 1)
     return effect

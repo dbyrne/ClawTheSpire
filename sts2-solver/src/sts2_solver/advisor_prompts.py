@@ -2,42 +2,67 @@
 
 from __future__ import annotations
 
-from .config import format_relic_guide, format_tier_list
+from .config import (
+    CHARACTER_CONFIG, format_relic_guide, format_tier_list, detect_character,
+)
 from .game_data import GameDataDB, strip_markup
 
 
-SYSTEM_PROMPT = """\
+# ---------------------------------------------------------------------------
+# Character-specific strategy blocks inserted into the system prompt
+# ---------------------------------------------------------------------------
+
+_CHARACTER_STRATEGY: dict[str, str] = {
+    "ironclad": """\
+- Track your deck archetype (strength-scaling, exhaust, block-heavy) and draft toward it. Reject off-archetype cards.
+- Scaling (Strength, multi-hit, powers) matters more in Act 2+.
+- NEVER remove or transform Bash — it's your only source of Vulnerable (50% more damage).
+- The "holy trinity" (Corruption + Dark Embrace + Feel No Pain) is the strongest late-game engine.""",
+    "silent": """\
+- Silent has three archetypes: Shiv (volume damage), Poison (exponential scaling), and Sly (discard cycling).
+- Shivs scale with Accuracy (doubles Shiv damage). Stack multiple Accuracies when possible.
+- Poison scales exponentially — survive the first few turns, then it snowballs. Beware of Artifact blocking Poison.
+- Sly cards play for free when discarded from hand. Keep the deck THIN for cycling.
+- NEVER remove or transform Survivor — it enables Sly discards and provides Block.
+- Ring of the Snake gives +2 draw on turn 1 — leverage the extra cards.""",
+}
+
+
+def build_system_prompt(character: str = "ironclad") -> str:
+    """Build the system prompt for a specific character."""
+    cfg = CHARACTER_CONFIG.get(character, CHARACTER_CONFIG["ironclad"])
+    char_label = character.upper()
+    char_strategy = _CHARACTER_STRATEGY.get(character, _CHARACTER_STRATEGY["ironclad"])
+
+    return f"""\
 You are an expert Slay the Spire 2 strategic advisor. You make non-combat decisions \
 for an AI player. You receive the current game state and must choose the best action.
 
 CORE STRATEGY PRINCIPLES:
 - Deck quality over deck size. A lean 12-15 card deck draws key cards more often. Every card you add DILUTES your best cards.
 - Card rewards: ONLY pick cards that are EXCEPTIONAL for your archetype. If none are great, pick the least harmful option. Do NOT add mediocre cards.
-- After 12 cards, only add a card if it's a build-defining upgrade (Strength scaling, key powers, strong AOE). Filler cards LOSE runs.
+- After 12 cards, only add a card if it's a build-defining upgrade (scaling powers, key synergy pieces, strong AOE). Filler cards LOSE runs.
 - Front-load damage in Act 1. You need to kill enemies fast before scaling matters.
-- Scaling (Strength, multi-hit, powers) matters more in Act 2+.
 - HP is a resource, but dying ends the run. Below 35% HP, ALWAYS path to rest/shop/event — never fight. Below 55%, avoid elites.
-- Track your deck archetype (strength-scaling, exhaust, block-heavy, etc.) and draft toward it. Reject off-archetype cards.
+{char_strategy}
 - Elite fights give better rewards but are risky. Don't path into elites below ~50% HP without potions.
 - SHOP IS CRITICAL: Path to shops whenever possible. At shops, ALWAYS remove a card first (Strikes, then Defends). Card removal is the most powerful thing you can buy.
-- NEVER remove or transform Bash — it's your only source of Vulnerable (50% more damage).
 - Rest vs. Upgrade: upgrade if HP > 60%, rest if HP < 40%, judgment call in between. BUT always rest before a boss fight if HP < 70%.
 - Boss relics: evaluate against your specific deck composition, not in isolation. See relic guide below.
 - Potions are powerful — SAVE them for boss fights. Only use potions in non-boss fights if you would literally die otherwise.
 
-IRONCLAD CARD TIERS (for card reward decisions):
-__TIER_LIST__
+{char_label} CARD TIERS (for card reward decisions):
+{format_tier_list(character)}
 
-IRONCLAD RELIC GUIDE (for relic picks — boss relics, events, shops):
-__RELIC_GUIDE__
+{char_label} RELIC GUIDE (for relic picks — boss relics, events, shops):
+{format_relic_guide(character)}
 
 RESPONSE FORMAT:
 Respond with exactly this JSON structure:
-{"action": "<action_name from the available actions list>", "option_index": "<integer index or null if the action takes no index>", "reasoning": "<1-2 sentence explanation>"}
+{{"action": "<action_name from the available actions list>", "option_index": "<integer index or null if the action takes no index>", "reasoning": "<1-2 sentence explanation>"}}
 
 IMPORTANT: The action MUST be one of the available actions listed. The option_index \
-MUST be a valid index from the options shown.\
-""".replace("__TIER_LIST__", format_tier_list()).replace("__RELIC_GUIDE__", format_relic_guide())
+MUST be a valid index from the options shown."""
 
 
 def summarize_deck(deck: list[dict]) -> str:
@@ -124,17 +149,33 @@ def build_card_reward_message(state: dict, game_data: GameDataDB) -> str:
     lines.append("AVAILABLE ACTIONS: choose_reward_card (with option_index), OR skip_reward_cards to take nothing")
     lines.append("")
 
-    # Detect deck archetype
+    # Detect deck archetype (character-aware)
+    character = detect_character(state)
     deck = _get_deck(state)
     deck_names = {card.get("name", card.get("card_id", "")) for card in deck}
-    strength_cards = deck_names & {"Inflame", "Demon Form", "Spot Weakness", "Limit Break"}
-    exhaust_cards = deck_names & {"Feel No Pain", "Corruption", "Dark Embrace"}
-    block_cards = deck_names & {"Barricade", "Body Slam", "Metallicize"}
-    archetype_counts = [
-        (len(strength_cards), "Strength scaling", strength_cards),
-        (len(exhaust_cards), "Exhaust synergy", exhaust_cards),
-        (len(block_cards), "Block/defense", block_cards),
-    ]
+
+    if character == "silent":
+        shiv_cards = deck_names & {"Accuracy", "Infinite Blades", "Blade Dance", "Cloak and Dagger",
+                                    "Leading Strike", "Knife Trap", "Finisher"}
+        poison_cards = deck_names & {"Noxious Fumes", "Deadly Poison", "Poisoned Stab",
+                                      "Catalyst", "Accelerant", "Envenom", "Bubble Bubble"}
+        sly_cards = deck_names & {"Tactician", "Reflex", "Calculated Gamble", "Master Planner",
+                                   "Untouchable", "Flick-Flack", "Speedster", "Abrasive"}
+        archetype_counts = [
+            (len(shiv_cards), "Shiv", shiv_cards),
+            (len(poison_cards), "Poison", poison_cards),
+            (len(sly_cards), "Sly/discard", sly_cards),
+        ]
+    else:  # ironclad
+        strength_cards = deck_names & {"Inflame", "Demon Form", "Spot Weakness", "Limit Break"}
+        exhaust_cards = deck_names & {"Feel No Pain", "Corruption", "Dark Embrace"}
+        block_cards = deck_names & {"Barricade", "Body Slam", "Metallicize"}
+        archetype_counts = [
+            (len(strength_cards), "Strength scaling", strength_cards),
+            (len(exhaust_cards), "Exhaust synergy", exhaust_cards),
+            (len(block_cards), "Block/defense", block_cards),
+        ]
+
     archetype_counts.sort(key=lambda x: x[0], reverse=True)
     if archetype_counts[0][0] > 0:
         best = archetype_counts[0]
@@ -146,29 +187,33 @@ def build_card_reward_message(state: dict, game_data: GameDataDB) -> str:
     deck_size = len(deck)
     if deck_size >= 15:
         lines.append(f"DECK HAS {deck_size} CARDS — TOO BLOATED. You should SKIP unless a card is build-defining "
-                     "(scaling powers like Demon Form, Barricade, or key draw). Every mediocre card you add dilutes your best cards.")
+                     "(scaling powers or key synergy pieces). Every mediocre card you add dilutes your best cards.")
     elif deck_size >= 12:
         lines.append(f"Deck has {deck_size} cards — getting large. SKIP unless a card is genuinely excellent for your archetype. "
                      "A lean deck draws key cards more often.")
     else:
-        lines.append("Pick the card that best builds toward your archetype. Prioritize: Strength scaling, powers, draw, Vulnerable synergy. "
+        lines.append("Pick the card that best builds toward your archetype. "
                      "If none of the options fit your archetype or are high-quality, SKIP with skip_reward_cards.")
 
-    # Nudge toward defense if deck has none
-    _DEFENSE_CARDS = {"Shrug It Off", "Impervious", "Flame Barrier", "True Grit",
-                      "Power Through", "Metallicize", "Feel No Pain", "Ghostly Armor"}
+    # Nudge toward defense if deck has none (character-aware)
+    if character == "silent":
+        _DEFENSE_CARDS = {"Untouchable", "Cloak and Dagger", "Leg Sweep", "Dodge and Roll",
+                          "Deflect", "Afterimage", "Calculated Gamble"}
+    else:
+        _DEFENSE_CARDS = {"Shrug It Off", "Impervious", "Flame Barrier", "True Grit",
+                          "Power Through", "Metallicize", "Feel No Pain", "Ghostly Armor"}
     if not (deck_names & _DEFENSE_CARDS):
         run = state.get("run") or {}
         floor = run.get("floor", 0)
         if floor >= 4:
             lines.append("")
-            lines.append("WARNING: Your deck has ZERO dedicated block cards. You need at least 1-2 "
-                         "(Shrug It Off, Impervious, Flame Barrier, Feel No Pain) to survive elites and bosses. "
+            defense_examples = ", ".join(sorted(list(_DEFENSE_CARDS)[:4]))
+            lines.append(f"WARNING: Your deck has ZERO dedicated block cards. You need at least 1-2 "
+                         f"({defense_examples}) to survive elites and bosses. "
                          "Prioritize a block card if one is offered.")
 
-    from .config import format_tier_list
     lines.append("")
-    lines.append(f"CARD TIER LIST (SKIP cards not listed here):\n{format_tier_list()}")
+    lines.append(f"CARD TIER LIST (SKIP cards not listed here):\n{format_tier_list(character)}")
 
     return "\n".join(lines)
 
@@ -377,8 +422,8 @@ def build_shop_message(state: dict, game_data: GameDataDB) -> str:
     lines.append("")
 
     # Add tier list so the LLM knows what's actually worth buying
-    from .config import format_tier_list
-    tier_info = format_tier_list()
+    character = detect_character(state)
+    tier_info = format_tier_list(character)
 
     if not any_affordable:
         lines.append(f"Nothing is affordable with {gold}g. Use close_shop_inventory to leave.")
@@ -406,8 +451,7 @@ def build_shop_message(state: dict, game_data: GameDataDB) -> str:
     lines.append("When buying cards, consider synergy with your current relics (e.g. strength relics → multi-hit attacks, "
                  "exhaust relics → exhaust cards, block relics → Body Slam).")
     lines.append("")
-    from .config import format_relic_guide
-    lines.append(f"RELIC GUIDE (match to your archetype):\n{format_relic_guide()}")
+    lines.append(f"RELIC GUIDE (match to your archetype):\n{format_relic_guide(character)}")
 
     return "\n".join(lines)
 
@@ -470,9 +514,10 @@ def build_boss_relic_message(state: dict, game_data: GameDataDB) -> str:
         desc = game_data.relic_description(relic_id)
         lines.append(f"  option_index={i}: {desc}")
 
+    character = detect_character(state)
     lines.append("")
     lines.append("RELIC GUIDE:")
-    lines.append(format_relic_guide())
+    lines.append(format_relic_guide(character))
     lines.append("")
     lines.append("AVAILABLE ACTIONS: choose_treasure_relic (with option_index)")
     lines.append("")
@@ -508,6 +553,11 @@ def build_deck_select_message(state: dict, game_data: GameDataDB) -> str:
     lines.append("AVAILABLE ACTIONS: select_deck_card (with option_index)")
     lines.append("")
 
+    character = detect_character(state)
+    cfg = CHARACTER_CONFIG.get(character, CHARACTER_CONFIG["ironclad"])
+    key_card = cfg["key_card"]
+    key_reason = cfg["key_card_reason"]
+
     prompt_lower = prompt_text.lower()
     if "remove" in prompt_lower:
         lines.append("Which card should we REMOVE? Remove Strikes first, then Defends. "
@@ -516,11 +566,11 @@ def build_deck_select_message(state: dict, game_data: GameDataDB) -> str:
         lines.append("Which card should we UPGRADE? Prioritize key scaling cards, "
                      "high-impact attacks, or cards you play every combat.")
     elif "transform" in prompt_lower:
-        lines.append("Which card should we TRANSFORM? Transform weak cards (Strikes, Defends). "
-                     "NEVER transform Bash — it's your only source of Vulnerable.")
+        lines.append(f"Which card should we TRANSFORM? Transform weak cards (Strikes, Defends). "
+                     f"NEVER transform {key_card} — {key_reason}.")
     else:
-        lines.append("Which card should we select? Consider how it fits our deck strategy. "
-                     "NEVER select Bash for removal or transform — it applies Vulnerable.")
+        lines.append(f"Which card should we select? Consider how it fits our deck strategy. "
+                     f"NEVER select {key_card} for removal or transform — {key_reason}.")
 
     return "\n".join(lines)
 

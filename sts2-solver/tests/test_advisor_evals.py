@@ -18,7 +18,7 @@ import pytest
 from unittest.mock import MagicMock
 
 from sts2_solver.advisor import AdvisorDecision, StrategicAdvisor
-from sts2_solver.advisor_prompts import SYSTEM_PROMPT
+from sts2_solver.advisor_prompts import build_system_prompt
 
 
 # ---------------------------------------------------------------------------
@@ -513,7 +513,7 @@ def build_finetuning_dataset() -> list[dict]:
         dataset.append({
             "id": case["id"],
             "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": build_system_prompt()},
                 {"role": "user", "content": case["prompt"]},
                 {"role": "assistant", "content": json.dumps(expected_response)},
             ],

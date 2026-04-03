@@ -11,10 +11,11 @@ from typing import TYPE_CHECKING
 
 from .advisor_prompts import (
     AUTO_ACTIONS,
-    SYSTEM_PROMPT,
+    build_system_prompt,
     build_user_message,
     detect_screen_type,
 )
+from .config import detect_character
 from .game_client import GameClient
 from .game_data import GameDataDB
 
@@ -99,7 +100,9 @@ class StrategicAdvisor:
 
         t0 = time.perf_counter()
         try:
-            raw_response = self._call_llm(SYSTEM_PROMPT, user_message)
+            character = detect_character(game_state)
+            system_prompt = build_system_prompt(character)
+            raw_response = self._call_llm(system_prompt, user_message)
         except Exception as e:
             return f"Error calling LLM: {e}\n{traceback.format_exc()}"
         latency_ms = (time.perf_counter() - t0) * 1000

@@ -9,11 +9,11 @@ Higher scores are better.
 
 from __future__ import annotations
 
-from .config import EVALUATOR
+from .config import EVALUATOR, POWER_VALUES
 from .models import CombatState
 
 
-def evaluate_turn(state: CombatState, initial_state: CombatState) -> float:
+def evaluate_turn(state: CombatState, initial_state: CombatState, character: str = "ironclad") -> float:
     """Score a post-play state relative to the state at turn start.
 
     Args:
@@ -203,12 +203,26 @@ def evaluate_turn(state: CombatState, initial_state: CombatState) -> float:
     if dex_gained > 0:
         score += dex_gained * EVALUATOR["dexterity_gained_value"] * fight_length_mult
 
-    # Permanent powers (Demon Form, Barricade, etc.) are very valuable
-    for power_name, value_per in EVALUATOR["power_values"].items():
+    # Permanent powers — per-character values
+    char_powers = POWER_VALUES.get(character, POWER_VALUES.get("ironclad", {}))
+    for power_name, value_per in char_powers.items():
         gained = (state.player.powers.get(power_name, 0)
                   - initial_state.player.powers.get(power_name, 0))
         if gained > 0:
             score += gained * value_per * fight_length_mult
+
+    # Poison on enemies — value future damage from stacks applied this turn
+    poison_weight = EVALUATOR.get("poison_value_per_stack", 0)
+    if poison_weight > 0:
+        for i, enemy in enumerate(state.enemies):
+            if not enemy.is_alive:
+                continue
+            cur_poison = enemy.powers.get("Poison", 0)
+            prev_poison = (initial_state.enemies[i].powers.get("Poison", 0)
+                           if i < len(initial_state.enemies) else 0)
+            added = cur_poison - prev_poison
+            if added > 0:
+                score += added * poison_weight * fight_length_mult
 
     # -----------------------------------------------------------------------
     # 6. Energy efficiency (slight penalty for unspent energy)

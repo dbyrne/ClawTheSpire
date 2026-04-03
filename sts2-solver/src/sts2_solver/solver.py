@@ -47,6 +47,7 @@ def solve_turn(
     card_db: CardDB | None = None,
     max_depth: int = 10,
     time_limit_ms: float = 5000.0,
+    character: str = "ironclad",
 ) -> SolverResult:
     """Find the best sequence of card plays for the current turn.
 
@@ -82,7 +83,7 @@ def solve_turn(
 
         # Evaluate current state (as if we end turn here)
         states_evaluated += 1
-        score = evaluate_turn(current, initial_state)
+        score = evaluate_turn(current, initial_state, character)
         if score > best_score:
             best_score = score
             best_actions = list(actions_so_far) + [END_TURN]

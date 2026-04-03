@@ -345,7 +345,7 @@ def _tick_end_of_turn_powers(state: CombatState) -> None:
             if state.player.powers[debuff] <= 0:
                 del state.player.powers[debuff]
 
-    # Enemy debuffs
+    # Enemy debuffs and poison
     for enemy in state.enemies:
         if not enemy.is_alive:
             continue
@@ -354,6 +354,16 @@ def _tick_end_of_turn_powers(state: CombatState) -> None:
                 enemy.powers[debuff] -= 1
                 if enemy.powers[debuff] <= 0:
                     del enemy.powers[debuff]
+        # Poison: deal damage equal to stacks, then decrement by 1
+        poison = enemy.powers.get("Poison", 0)
+        if poison > 0:
+            enemy.hp -= poison
+            enemy.powers["Poison"] = poison - 1
+            if enemy.powers["Poison"] <= 0:
+                del enemy.powers["Poison"]
+            if enemy.hp <= 0:
+                enemy.hp = 0
+                enemy.is_alive = False
 
 
 # ---------------------------------------------------------------------------

@@ -133,7 +133,8 @@ def solve_combat(raw_state: str | None = None, execute: bool = True) -> str:
     # Solve
     import time as _time
     _t0 = _time.perf_counter()
-    result = solve_turn(state, card_db=card_db)
+    from .config import detect_character
+    result = solve_turn(state, card_db=card_db, character=detect_character(game_state))
     solve_ms = (_time.perf_counter() - _t0) * 1000
     mcp_actions = actions_to_mcp_sequence(result.actions)
 

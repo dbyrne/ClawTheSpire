@@ -8,12 +8,12 @@ from __future__ import annotations
 
 
 # ---------------------------------------------------------------------------
-# Evaluator weights — combat state scoring
+# Evaluator weights — combat state scoring (character-agnostic)
 # ---------------------------------------------------------------------------
 
 EVALUATOR = {
     # Damage scoring — sim experiments show kill_bonus is the #1 lever.
-    # Higher values make the solver focus-fire wounded enemies and prioritize
+    # Higher values make the solver focus-fire wounded enemies and prioritise
     # removing attackers from the board over partial damage spread.
     "kill_bonus": 50.0,              # Base bonus for killing an enemy (was 35)
     "buff_kill_bonus": 85.0,         # Extra bonus for killing Buff-intent enemies (was 60)
@@ -22,7 +22,7 @@ EVALUATOR = {
     "damage_dead_weight": 0.2,       # Per-HP damage on already-dead enemies (was 0.5)
     "kill_proximity_weight": 10.0,   # Bonus scaled by % HP removed (was 5)
 
-    # Enemy threat prioritization — multiplier on all damage scoring per enemy
+    # Enemy threat prioritisation — multiplier on all damage scoring per enemy
     # Base multiplier is 1.0; these ADD to it based on enemy properties
     "threat_buff_intent": 0.6,       # Buff-intent enemies scale danger each turn
     "threat_strength_per": 0.08,     # Per point of enemy Strength
@@ -61,15 +61,10 @@ EVALUATOR = {
     "strength_gained_value": 15.0,   # (was 5.0)
     "dexterity_gained_value": 5.0,   # (was 3.0)
 
-    # Permanent powers
-    "power_values": {
-        "Demon Form": 10.0,         # (was 8.0)
-        "Barricade": 8.0,           # (was 6.0)
-        "Feel No Pain": 8.0,        # (was 4.0) — key exhaust synergy
-        "Dark Embrace": 8.0,        # (was 4.0) — key exhaust synergy
-        "Metallicize": 5.0,
-        "Corruption": 8.0,          # (was 5.0) — exhaust holy trinity
-    },
+    # Poison scoring (Silent) — Poison on an enemy deals N damage then
+    # decrements each turn, so N stacks = N + (N-1) + ... + 1 = N*(N+1)/2
+    # future damage.  We discount by a weight to balance vs immediate damage.
+    "poison_value_per_stack": 1.5,   # Multiplied by stack count
 
     # Energy efficiency — unspent energy is almost always wrong
     "unspent_energy_penalty": 12.0,  # (was 10.0)
@@ -77,43 +72,99 @@ EVALUATOR = {
 
 
 # ---------------------------------------------------------------------------
-# Card tier list — Ironclad
-# Used in advisor prompts to guide card reward decisions
+# Per-character power values for the evaluator
 # ---------------------------------------------------------------------------
 
-# Card tier list — based on Mobalytics Ironclad guide + sim experiments.
-#
-# Sim findings: AoE (Thunderclap, Whirlwind) and multi-hit (Twin Strike,
-# Thrash) are more valuable than single-target burst. Offering is the best
-# card in the game. The "holy trinity" (Corruption + Dark Embrace +
-# Feel No Pain) enables the strongest late-game engine.
-CARD_TIERS = {
-    "S": [
-        "Offering", "Demon Form", "Corruption", "Impervious",
-        "Whirlwind", "Inflame", "Feel No Pain", "Dark Embrace",
-    ],
-    "A": [
-        "Thunderclap", "Twin Strike", "Battle Trance", "Shrug It Off",
-        "Burning Pact", "Flame Barrier", "Spot Weakness", "Thrash",
-        "Pommel Strike", "True Grit", "Barricade", "Rupture",
-        "Hemokinesis", "Brand", "Feed", "Pact's End",
-    ],
-    "B": [
-        "Uppercut", "Headbutt", "Iron Wave", "Body Slam",
-        "Breakthrough", "Armaments", "Carnage", "Bludgeon",
-        "Bloodletting", "Metallicize", "Inferno", "Juggernaut",
-    ],
-    "avoid": [
-        "Anger", "Setup Strike", "Clash", "Flex",
-        "Warcry", "Wild Strike", "Reckless Charge",
-    ],
+POWER_VALUES: dict[str, dict[str, float]] = {
+    "ironclad": {
+        "Demon Form": 10.0,         # (was 8.0)
+        "Barricade": 8.0,           # (was 6.0)
+        "Feel No Pain": 8.0,        # (was 4.0) — key exhaust synergy
+        "Dark Embrace": 8.0,        # (was 4.0) — key exhaust synergy
+        "Metallicize": 5.0,
+        "Corruption": 8.0,          # (was 5.0) — exhaust holy trinity
+    },
+    "silent": {
+        "Accuracy": 10.0,           # Doubles Shiv damage — core scaling
+        "Infinite Blades": 9.0,     # Guaranteed Shiv each turn
+        "Noxious Fumes": 8.0,       # AoE poison every turn — strong scaling
+        "Tools of the Trade": 8.0,  # Draw + discard each turn — engine
+        "Serpent Form": 7.0,        # Strong damage output
+        "Accelerant": 7.0,          # Poison multiplier
+        "Afterimage": 5.0,          # Block on card play
+        "Abrasive": 5.0,            # Block + Thorns from Sly
+        "Master Planner": 6.0,      # Makes skills Sly
+        "Envenom": 4.0,             # Poison on attack damage
+    },
 }
 
 
-def format_tier_list() -> str:
+# ---------------------------------------------------------------------------
+# Card tier lists — per character
+# Used in advisor prompts to guide card reward decisions
+# ---------------------------------------------------------------------------
+
+CARD_TIERS: dict[str, dict[str, list[str]]] = {
+    "ironclad": {
+        # Based on Mobalytics Ironclad guide + sim experiments.
+        # AoE (Thunderclap, Whirlwind) and multi-hit (Twin Strike, Thrash) are
+        # more valuable than single-target burst. Offering is the best card in
+        # the game. The "holy trinity" (Corruption + Dark Embrace + Feel No Pain)
+        # enables the strongest late-game engine.
+        "S": [
+            "Offering", "Demon Form", "Corruption", "Impervious",
+            "Whirlwind", "Inflame", "Feel No Pain", "Dark Embrace",
+        ],
+        "A": [
+            "Thunderclap", "Twin Strike", "Battle Trance", "Shrug It Off",
+            "Burning Pact", "Flame Barrier", "Spot Weakness", "Thrash",
+            "Pommel Strike", "True Grit", "Barricade", "Rupture",
+            "Hemokinesis", "Brand", "Feed", "Pact's End",
+        ],
+        "B": [
+            "Uppercut", "Headbutt", "Iron Wave", "Body Slam",
+            "Breakthrough", "Armaments", "Carnage", "Bludgeon",
+            "Bloodletting", "Metallicize", "Inferno", "Juggernaut",
+        ],
+        "avoid": [
+            "Anger", "Setup Strike", "Clash", "Flex",
+            "Warcry", "Wild Strike", "Reckless Charge",
+        ],
+    },
+    "silent": {
+        # Based on Mobalytics Silent guide.
+        # Shiv, Poison, and Sly (discard) are the three archetypes.
+        # Accuracy is the #1 scaling card. Knife Trap is the best finisher.
+        # Thin decks are critical for Sly cycling strategies.
+        "S": [
+            "Accuracy", "Infinite Blades", "Tools of the Trade",
+            "Master Planner", "Knife Trap",
+        ],
+        "A": [
+            "Leading Strike", "Cloak and Dagger", "Blade Dance",
+            "Poisoned Stab", "Deadly Poison", "Acrobatics",
+            "Untouchable", "Flick-Flack", "Noxious Fumes",
+            "Accelerant", "Calculated Gamble", "Tactician",
+            "Burst", "Serpent Form",
+        ],
+        "B": [
+            "Dagger Throw", "Ricochet", "Prepared", "Reflex",
+            "Speedster", "Abrasive", "Haze", "Outbreak",
+            "Bubble Bubble", "Mirage", "Fan of Knives",
+            "Hidden Daggers", "Finisher", "Afterimage",
+        ],
+        "avoid": [
+            "Bane", "Slice",
+        ],
+    },
+}
+
+
+def format_tier_list(character: str = "ironclad") -> str:
     """Format the tier list as a compact string for prompts."""
+    tiers = CARD_TIERS.get(character, CARD_TIERS["ironclad"])
     lines = []
-    for tier, cards in CARD_TIERS.items():
+    for tier, cards in tiers.items():
         if tier == "avoid":
             lines.append(f"AVOID: {', '.join(cards)}")
         else:
@@ -122,85 +173,140 @@ def format_tier_list() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Relic guide — Ironclad
+# Relic guides — per character
 # Helps advisor evaluate relic picks (boss relics, events, shops).
-# Based on Mobalytics Ironclad guide + gameplay analysis.
 # ---------------------------------------------------------------------------
 
-RELIC_GUIDE = {
-    "top_picks": {
-        "note": "Universally strong — take in almost any deck",
-        "relics": [
-            "Charon's Ashes",     # AoE damage on exhaust — insane with Corruption
-            "Tungsten Rod",       # Reduces ALL HP loss by 1 — stacks with everything
-            "Paper Krane",        # Weak reduces damage to 60% instead of 75%
-            "Ice Cream",          # Unspent energy carries over — enables big turns
-            "Mummified Hand",     # Free energy on power play — snowball engine
-            "Chemical X",         # +2 to all X-cost cards (Whirlwind!)
-            "Demon Tongue",       # Heal on HP-spend cards — amazing with Offering/Bloodletting
-            "Tough Bandages",     # Block on discard — great with exhaust & Burning Pact
-        ],
+RELIC_GUIDE: dict[str, dict[str, dict]] = {
+    "ironclad": {
+        # Based on Mobalytics Ironclad guide + gameplay analysis.
+        "top_picks": {
+            "note": "Universally strong — take in almost any deck",
+            "relics": [
+                "Charon's Ashes",     # AoE damage on exhaust — insane with Corruption
+                "Tungsten Rod",       # Reduces ALL HP loss by 1 — stacks with everything
+                "Paper Krane",        # Weak reduces damage to 60% instead of 75%
+                "Ice Cream",          # Unspent energy carries over — enables big turns
+                "Mummified Hand",     # Free energy on power play — snowball engine
+                "Chemical X",         # +2 to all X-cost cards (Whirlwind!)
+                "Demon Tongue",       # Heal on HP-spend cards — amazing with Offering/Bloodletting
+                "Tough Bandages",     # Block on discard — great with exhaust & Burning Pact
+            ],
+        },
+        "strength_scaling": {
+            "note": "Strong in Strength decks (Demon Form, Inflame, Spot Weakness)",
+            "relics": [
+                "Brimstone",          # +2 Str to you AND enemies — risk/reward, favors Str decks
+                "Ruined Helmet",      # Usually +2 Str — not build-defining but solid
+                "Sword of Jade",      # Free 3 Str — always good
+                "Vajra",              # +1 Str at combat start
+                "Anchor",             # 10 Block turn 1 — buys time to set up Demon Form
+                "Horn Cleat",         # 14 Block turn 1 — same idea, even better
+                "Permafrost",         # Retain 1 card turn 1 — helps keep key setup cards
+            ],
+        },
+        "block_build": {
+            "note": "Strong in Block decks (Barricade, Juggernaut, Body Slam)",
+            "relics": [
+                "Cloak Clasp",        # Block on empty hand — triggers Juggernaut
+                "Fresnel Lens",       # Boosts Block gained from cards
+                "Vambrace",           # Works like Unmovable — persistent Block
+                "Sai",                # Simple Block generation on attacks
+                "Parrying Shield",    # Extra damage from Block surplus
+                "Pael's Legion",      # Block that adds up, especially with Barricade
+                "Bronze Scales",      # Thorns — good if you can tank hits
+                "Self-Forming Clay",  # Block when losing HP — decent safety net
+            ],
+        },
+        "exhaust_engine": {
+            "note": "Strong in Exhaust decks (Corruption, Feel No Pain, Dark Embrace)",
+            "relics": [
+                "Charon's Ashes",     # AoE damage per exhaust — top-tier
+                "Forgotten Soul",     # Smaller-scale exhaust synergy
+                "Burning Sticks",     # Smaller-scale Dead Branch effect
+                "Joss Paper",         # Extra draw on exhaust
+                "Tough Bandages",     # Block on discard/exhaust
+            ],
+        },
+        "hp_spend": {
+            "note": "Strong with HP-spending cards (Offering, Bloodletting, Hemokinesis)",
+            "relics": [
+                "Demon Tongue",       # Heal when spending HP — top-tier here
+                "Centennial Puzzle",  # Draw on HP loss — often triggers turn 1
+                "Self-Forming Clay",  # Block when losing HP
+                "Red Skull",          # +3 Str when below 50% HP
+            ],
+        },
+        "avoid": {
+            "note": "Relics with downsides that usually aren't worth it",
+            "relics": [
+                "Philosopher's Stone", # +1 Str to ALL enemies — too dangerous
+                "Ectoplasm",          # Can't gain gold — cripples shop pathing
+                "Velvet Choker",      # 6-card play limit — ruins exhaust/Corruption
+                "Sozu",               # Can't gain potions — potions save runs
+            ],
+        },
     },
-    "strength_scaling": {
-        "note": "Strong in Strength decks (Demon Form, Inflame, Spot Weakness)",
-        "relics": [
-            "Brimstone",          # +2 Str to you AND enemies — risk/reward, favors Str decks
-            "Ruined Helmet",      # Usually +2 Str — not build-defining but solid
-            "Sword of Jade",      # Free 3 Str — always good
-            "Vajra",              # +1 Str at combat start
-            "Anchor",             # 10 Block turn 1 — buys time to set up Demon Form
-            "Horn Cleat",         # 14 Block turn 1 — same idea, even better
-            "Permafrost",         # Retain 1 card turn 1 — helps keep key setup cards
-        ],
-    },
-    "block_build": {
-        "note": "Strong in Block decks (Barricade, Juggernaut, Body Slam)",
-        "relics": [
-            "Cloak Clasp",        # Block on empty hand — triggers Juggernaut
-            "Fresnel Lens",       # Boosts Block gained from cards
-            "Vambrace",           # Works like Unmovable — persistent Block
-            "Sai",                # Simple Block generation on attacks
-            "Parrying Shield",    # Extra damage from Block surplus
-            "Pael's Legion",      # Block that adds up, especially with Barricade
-            "Bronze Scales",      # Thorns — good if you can tank hits
-            "Self-Forming Clay",  # Block when losing HP — decent safety net
-        ],
-    },
-    "exhaust_engine": {
-        "note": "Strong in Exhaust decks (Corruption, Feel No Pain, Dark Embrace)",
-        "relics": [
-            "Charon's Ashes",     # AoE damage per exhaust — top-tier
-            "Forgotten Soul",     # Smaller-scale exhaust synergy
-            "Burning Sticks",     # Smaller-scale Dead Branch effect
-            "Joss Paper",         # Extra draw on exhaust
-            "Tough Bandages",     # Block on discard/exhaust
-        ],
-    },
-    "hp_spend": {
-        "note": "Strong with HP-spending cards (Offering, Bloodletting, Hemokinesis)",
-        "relics": [
-            "Demon Tongue",       # Heal when spending HP — top-tier here
-            "Centennial Puzzle",  # Draw on HP loss — often triggers turn 1
-            "Self-Forming Clay",  # Block when losing HP
-            "Red Skull",          # +3 Str when below 50% HP
-        ],
-    },
-    "avoid": {
-        "note": "Relics with downsides that usually aren't worth it",
-        "relics": [
-            "Philosopher's Stone", # +1 Str to ALL enemies — too dangerous
-            "Ectoplasm",          # Can't gain gold — cripples shop pathing
-            "Velvet Choker",      # 6-card play limit — ruins exhaust/Corruption
-            "Sozu",               # Can't gain potions — potions save runs
-        ],
+    "silent": {
+        # Based on Mobalytics Silent guide.
+        "top_picks": {
+            "note": "Universally strong — take in almost any Silent deck",
+            "relics": [
+                "Paper Krane",        # Weak reduces damage to 60% — Silent applies Weak easily
+                "Ice Cream",          # Unspent energy carries over — enables big Shiv/combo turns
+                "Mummified Hand",     # Free energy on power play — Accuracy/Infinite Blades
+                "Tungsten Rod",       # Reduces ALL HP loss by 1
+            ],
+        },
+        "shiv_synergy": {
+            "note": "Strong in Shiv decks (Accuracy, Infinite Blades, Blade Dance)",
+            "relics": [
+                "Shuriken",           # Gain Strength from playing Attacks — Shivs trigger this
+                "Kunai",              # Gain Dexterity from playing Attacks — Shivs trigger this
+                "Ornamental Fan",     # Gain Block from playing Attacks — Shivs trigger this
+                "Nunchaku",           # Gain energy from playing Attacks
+                "Ninja Scroll",       # Start combat with 3 Shivs
+                "Kusarigama",         # Works with Shiv spam
+                "Joss Paper",         # Extra draw on exhaust — Shivs exhaust
+            ],
+        },
+        "poison_synergy": {
+            "note": "Strong in Poison decks (Noxious Fumes, Deadly Poison, Catalyst)",
+            "relics": [
+                "Snecko Skull",       # Extra Poison on application
+                "Twisted Funnel",     # Apply Poison at combat start
+                "Unsettling Lamp",    # Doubles first Poison hit
+                "Anchor",             # 10 Block turn 1 — survive while Poison ramps
+                "Horn Cleat",         # 14 Block turn 1 — survive while Poison ramps
+                "Captain's Wheel",    # Defensive coverage for slow starts
+            ],
+        },
+        "sly_synergy": {
+            "note": "Strong in Sly/discard decks (Tactician, Reflex, Calculated Gamble)",
+            "relics": [
+                "Tingsha",            # Damage on discard — great with high discard volume
+                "Tough Bandages",     # Block on discard — strong cycling defense
+                "The Abacus",         # Extra Block generation on shuffle
+            ],
+        },
+        "avoid": {
+            "note": "Relics with downsides that hurt Silent",
+            "relics": [
+                "Velvet Choker",      # 6-card play limit — ruins Shiv spam and Sly cycling
+                "Philosopher's Stone", # +1 Str to ALL enemies — Silent has low HP
+                "Ectoplasm",          # Can't gain gold — cripples shop pathing
+                "Sozu",               # Can't gain potions — potions save runs
+            ],
+        },
     },
 }
 
 
-def format_relic_guide() -> str:
+def format_relic_guide(character: str = "ironclad") -> str:
     """Format the relic guide as a compact string for prompts."""
+    guide = RELIC_GUIDE.get(character, RELIC_GUIDE["ironclad"])
     lines = []
-    for category, info in RELIC_GUIDE.items():
+    for category, info in guide.items():
         label = category.replace("_", " ").upper()
         relic_names = [r.split("  ")[0] for r in info["relics"]]  # strip comments
         lines.append(f"{label} ({info['note']}): {', '.join(relic_names)}")
@@ -208,7 +314,25 @@ def format_relic_guide() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Strategy parameters — advisor behavior
+# Per-character config — key cards, removal priorities, etc.
+# ---------------------------------------------------------------------------
+
+CHARACTER_CONFIG: dict[str, dict] = {
+    "ironclad": {
+        "key_card": "Bash",
+        "key_card_reason": "it's your only source of Vulnerable (50% more damage)",
+        "removal_priority": ["Strike", "Defend"],
+    },
+    "silent": {
+        "key_card": "Survivor",
+        "key_card_reason": "it enables Sly discards and provides Block",
+        "removal_priority": ["Strike", "Defend"],
+    },
+}
+
+
+# ---------------------------------------------------------------------------
+# Strategy parameters — advisor behavior (character-agnostic)
 # ---------------------------------------------------------------------------
 
 STRATEGY = {
@@ -233,3 +357,14 @@ STRATEGY = {
     # Boss floors (for pre-boss logic)
     "boss_floors": {15, 16, 33, 34, 51, 52},
 }
+
+
+def detect_character(state: dict) -> str:
+    """Extract character key from game state. Defaults to 'ironclad'."""
+    run = state.get("run") or {}
+    name = (run.get("character_name") or run.get("character_id") or "").lower()
+    if "silent" in name:
+        return "silent"
+    if "ironclad" in name:
+        return "ironclad"
+    return "ironclad"

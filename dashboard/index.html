@@ -12,24 +12,22 @@
     .container { max-width: 1200px; margin: 0 auto; padding: 24px; }
     h1 { font-size: 1.4em; margin-bottom: 4px; color: #f0f6fc; }
     .subtitle { font-size: 0.85em; color: #8b949e; margin-bottom: 20px; }
-    .chart-wrap { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 20px; overflow-x: auto; }
+    h2 { font-size: 1.15em; color: #f0f6fc; margin-top: 32px; margin-bottom: 8px; }
+    .chart-wrap { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 20px; overflow-x: auto; margin-bottom: 16px; }
     .chart-inner { min-width: 800px; height: 500px; }
-    .stats { display: flex; gap: 24px; margin-top: 16px; flex-wrap: wrap; }
+    .stats { display: flex; gap: 24px; margin-top: 8px; margin-bottom: 12px; flex-wrap: wrap; }
     .stat { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 12px 20px; }
     .stat-value { font-size: 1.6em; font-weight: 700; color: #58a6ff; }
     .stat-label { font-size: 0.8em; color: #8b949e; }
+    .char-section { margin-bottom: 24px; }
+    .empty-msg { color: #8b949e; font-style: italic; padding: 24px; text-align: center; }
   </style>
 </head>
 <body>
   <div class="container">
     <h1>STS2 Bot Progress</h1>
-    <p class="subtitle">Ironclad run results across generations of improvements</p>
-    <div class="stats" id="stats"></div>
-    <div class="chart-wrap">
-      <div class="chart-inner">
-        <canvas id="chart"></canvas>
-      </div>
-    </div>
+    <p class="subtitle">Run results across generations of improvements</p>
+    <div id="sections"></div>
   </div>
 
   <script>
@@ -51,27 +49,93 @@
       current: '#79c0ff',
     };
 
+    const CHAR_META = {
+      'The Ironclad': { key: 'ironclad', label: 'Ironclad', accent: '#f47067' },
+      'The Silent':   { key: 'silent',   label: 'Silent',   accent: '#3fb950' },
+    };
+
     fetch('data.json')
       .then(r => r.json())
       .then(data => render(data));
 
+    function normalizeChar(c) {
+      if (!c || c === '?') return 'The Ironclad';
+      return c;
+    }
+
     function render({ runs, gen_boundaries }) {
-      // Stats
-      const floors = runs.map(r => r.floor);
-      const best = Math.max(...floors);
-      const avg = (floors.reduce((a, b) => a + b, 0) / floors.length).toFixed(1);
-      const recent10 = floors.slice(-10);
-      const recentAvg = (recent10.reduce((a, b) => a + b, 0) / recent10.length).toFixed(1);
+      // Group runs by character
+      const byChar = {};
+      runs.forEach(r => {
+        const ch = normalizeChar(r.character);
+        if (!byChar[ch]) byChar[ch] = [];
+        byChar[ch].push(r);
+      });
 
-      document.getElementById('stats').innerHTML = `
-        <div class="stat"><div class="stat-value">${runs.length}</div><div class="stat-label">Total Runs</div></div>
-        <div class="stat"><div class="stat-value">${best}</div><div class="stat-label">Best Floor</div></div>
-        <div class="stat"><div class="stat-value">${avg}</div><div class="stat-label">Avg Floor</div></div>
-        <div class="stat"><div class="stat-value">${recentAvg}</div><div class="stat-label">Last 10 Avg</div></div>
-      `;
+      // Render Ironclad first, then others alphabetically
+      const charOrder = Object.keys(byChar).sort((a, b) => {
+        if (a === 'The Ironclad') return -1;
+        if (b === 'The Ironclad') return 1;
+        return a.localeCompare(b);
+      });
 
+      const container = document.getElementById('sections');
+      container.innerHTML = '';
+
+      charOrder.forEach((charName, ci) => {
+        const charRuns = byChar[charName];
+        const meta = CHAR_META[charName] || { key: 'unknown', label: charName, accent: '#58a6ff' };
+
+        // Re-number runs within this character (1-indexed)
+        charRuns.forEach((r, i) => r._idx = i);
+
+        const section = document.createElement('div');
+        section.className = 'char-section';
+
+        // Header
+        const h2 = document.createElement('h2');
+        h2.textContent = meta.label;
+        h2.style.color = meta.accent;
+        section.appendChild(h2);
+
+        // Stats
+        const statsDiv = document.createElement('div');
+        statsDiv.className = 'stats';
+        const floors = charRuns.map(r => r.floor);
+        const best = Math.max(...floors);
+        const avg = (floors.reduce((a, b) => a + b, 0) / floors.length).toFixed(1);
+        const recent10 = floors.slice(-10);
+        const recentAvg = (recent10.reduce((a, b) => a + b, 0) / recent10.length).toFixed(1);
+        statsDiv.innerHTML = `
+          <div class="stat"><div class="stat-value">${charRuns.length}</div><div class="stat-label">Total Runs</div></div>
+          <div class="stat"><div class="stat-value">${best}</div><div class="stat-label">Best Floor</div></div>
+          <div class="stat"><div class="stat-value">${avg}</div><div class="stat-label">Avg Floor</div></div>
+          <div class="stat"><div class="stat-value">${recentAvg}</div><div class="stat-label">Last 10 Avg</div></div>
+        `;
+        section.appendChild(statsDiv);
+
+        // Chart
+        const wrap = document.createElement('div');
+        wrap.className = 'chart-wrap';
+        const inner = document.createElement('div');
+        inner.className = 'chart-inner';
+        inner.style.minWidth = Math.max(800, charRuns.length * 20) + 'px';
+        const canvas = document.createElement('canvas');
+        inner.appendChild(canvas);
+        wrap.appendChild(inner);
+        section.appendChild(wrap);
+        container.appendChild(section);
+
+        renderChart(canvas, charRuns, meta);
+      });
+    }
+
+    function renderChart(canvas, runs, meta) {
       // Annotations: act lines + gen boundaries
       const annotations = {};
+
+      const floors = runs.map(r => r.floor);
+      const best = Math.max(...floors);
 
       ACT_FLOORS.forEach((act, i) => {
         annotations[`act${i}`] = {
@@ -92,14 +156,14 @@
         };
       });
 
-      // Find the first array index for each gen
+      // Gen boundaries
       const genFirstIdx = {};
       runs.forEach((r, idx) => {
         if (!(r.gen in genFirstIdx)) genFirstIdx[r.gen] = idx;
       });
       const genNames = Object.keys(genFirstIdx).sort();
       genNames.forEach((gen, i) => {
-        if (i === 0) return; // no line before the first gen
+        if (i === 0) return;
         const idx = genFirstIdx[gen];
         const genColor = GEN_COLORS[gen] || '#8b949e';
         annotations[`gen${i}`] = {
@@ -126,11 +190,7 @@
         return window.reduce((a, b) => a + b.floor, 0) / window.length;
       });
 
-      // Scale chart width: at least 800px, or 20px per run
-      const chartInner = document.querySelector('.chart-inner');
-      chartInner.style.minWidth = Math.max(800, runs.length * 20) + 'px';
-
-      new Chart(document.getElementById('chart'), {
+      new Chart(canvas, {
         type: 'bar',
         data: {
           labels: runs.map(r => r.run_number),
@@ -148,7 +208,7 @@
               label: '5-Run Avg',
               data: movingAvg,
               type: 'line',
-              borderColor: '#f0883e',
+              borderColor: meta.accent,
               borderWidth: 2,
               pointRadius: 0,
               tension: 0.3,

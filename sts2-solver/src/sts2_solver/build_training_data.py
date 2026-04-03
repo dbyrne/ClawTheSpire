@@ -16,7 +16,7 @@ import json
 import os
 from pathlib import Path
 
-from .advisor_prompts import SYSTEM_PROMPT
+from .advisor_prompts import build_system_prompt
 
 
 LOGS_DIR = Path(os.environ.get(
@@ -100,7 +100,7 @@ def build_training_example(decision: dict) -> dict | None:
 
     return {
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": build_system_prompt()},
             {"role": "user", "content": user_content},
             {"role": "assistant", "content": json.dumps(response)},
         ],
@@ -150,7 +150,7 @@ def build_dataset_v2(log_path: Path) -> list[dict]:
 
         examples.append({
             "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": build_system_prompt()},
                 {"role": "user", "content": f"[screen: {e.get('screen_type', '?')}]"},
                 {"role": "assistant", "content": response},
             ],

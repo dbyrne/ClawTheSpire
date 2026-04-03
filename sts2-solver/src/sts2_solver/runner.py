@@ -697,7 +697,9 @@ class Runner:
                 sim_state = state_from_mcp(gs, self.card_db)
                 hand = list(sim_state.player.hand)
                 t0 = time.perf_counter()
-                result = solve_turn(sim_state, card_db=self.card_db)
+                from .config import detect_character
+                result = solve_turn(sim_state, card_db=self.card_db,
+                                    character=detect_character(gs))
                 solve_ms = (time.perf_counter() - t0) * 1000
                 total_states += result.states_evaluated
                 total_solve_ms += solve_ms
@@ -1039,12 +1041,15 @@ class Runner:
             ))
 
             if is_combat_select:
-                # Quick deterministic pick: avoid Bash, prefer Strikes/Defends
+                # Quick deterministic pick: avoid key card, prefer Strikes/Defends
+                from .config import CHARACTER_CONFIG, detect_character
+                _char = detect_character(gs)
+                _key = CHARACTER_CONFIG.get(_char, {}).get("key_card", "Bash").lower()
                 cards = sel.get("cards", [])
                 pick_idx = 0
                 for card in cards:
                     name = (card.get("name") or "").lower()
-                    if "bash" not in name:
+                    if _key not in name:
                         pick_idx = card.get("index", card.get("i", 0))
                         break
                 self._log_action(f"  [dim]auto: select_deck_card({pick_idx}) — combat select[/dim]")
@@ -1081,6 +1086,17 @@ class Runner:
                     except Exception as e:
                         self._log_action(f"  [red]Failed: {e}[/red]")
                 return
+
+        # For card_reward: skip if already handled (avoid re-presenting to advisor)
+        if screen_type == "card_reward" and self._card_reward_handled:
+            if "skip_reward_cards" in actions:
+                self._log_action("  [dim]auto: skip_reward_cards (already handled)[/dim]")
+                if not self.dry_run:
+                    try:
+                        self._execute_with_retry("skip_reward_cards")
+                    except Exception:
+                        pass
+            return
 
         # For card_reward: if card options are empty, skip this tick (data not ready)
         if screen_type == "card_reward":
@@ -1211,7 +1227,7 @@ class Runner:
 
         For single-select (upgrade, transform): use the advisor.
         For multi-select (e.g. "Choose 2 to Remove"): pick deterministically
-        using Strikes first, then Defends, never Bash — since the advisor
+        using Strikes first, then Defends, never key card — since the advisor
         would give the same answer every call and multi-select toggling is
         unreliable via the API.
         """
@@ -1270,7 +1286,7 @@ class Runner:
     def _handle_multi_deck_select(self, gs: dict, cards: list, prompt_text: str) -> None:
         """Multi-select deck screen — pick deterministically.
 
-        For remove: Strikes first, then Defends, never Bash.
+        For remove: Strikes first, then Defends, never key card.
         For other multi-selects: pick sequentially from index 0.
         """
         import re
@@ -1282,13 +1298,16 @@ class Runner:
 
         # Build priority order for indices
         if is_remove:
-            # Remove Strikes first, then Defends, then others, NEVER Bash
+            # Remove Strikes first, then Defends, then others, NEVER key card
+            from .config import CHARACTER_CONFIG, detect_character
+            _char = detect_character(gs)
+            _key = CHARACTER_CONFIG.get(_char, {}).get("key_card", "Bash").lower()
             priority = []
             for card in cards:
                 name = (card.get("name") or "").lower()
                 idx = card.get("index", 0)
-                if "bash" in name:
-                    continue  # Never remove Bash
+                if _key in name:
+                    continue  # Never remove key card
                 if "strike" in name:
                     priority.insert(0, idx)  # Strikes first
                 elif "defend" in name:
