@@ -356,6 +356,20 @@
       "gen": "gen5",
       "model": "qwen3:8b",
       "run_id": "WU8WG1QZR1"
+    },
+    {
+      "run_number": 52,
+      "floor": 17,
+      "gen": "gen6",
+      "model": "qwen3:8b",
+      "run_id": "Q40GH7AGS2"
+    },
+    {
+      "run_number": 53,
+      "floor": 17,
+      "gen": "gen6",
+      "model": "qwen3:8b",
+      "run_id": "LYFL16XPLW"
     }
   ],
   "gen_boundaries": {
@@ -363,6 +377,7 @@
     "gen2": 33,
     "gen3": 36,
     "gen4": 39,
-    "gen5": 51
+    "gen5": 51,
+    "gen6": 53
   }
 }
