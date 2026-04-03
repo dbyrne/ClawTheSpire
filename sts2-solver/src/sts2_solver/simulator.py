@@ -106,10 +106,10 @@ ENEMY_MOVE_TABLES: dict[str, list[dict]] = {
     "NIBBIT": [
         {"type": "Attack", "damage": 12, "hits": 1},       # Butt
         {"type": "Attack", "damage": 6, "hits": 2},         # Slice x2
-        {"type": "Buff", "self_strength": 2},                # Hiss
+        {"type": "Buff", "self_strength": 2, "self_block": 5},  # Hiss
     ],
     "SHRINKER_BEETLE": [
-        {"type": "Debuff", "player_weak": 1},                # Shrinker
+        {"type": "Debuff", "player_weak": 1, "self_block": 2},  # Shrinker
         {"type": "Attack", "damage": 7, "hits": 1},          # Chomp
         {"type": "Attack", "damage": 13, "hits": 1},         # Stomp
     ],

@@ -174,10 +174,38 @@ def state_from_snapshot(
 # Turn simulation
 # ---------------------------------------------------------------------------
 
+def _infer_target(
+    current_snap: CombatSnapshot,
+    next_snap: CombatSnapshot,
+) -> int | None:
+    """Infer which enemy was targeted by comparing HP drops between snapshots.
+
+    Returns the index of the enemy with the largest HP drop, which is
+    most likely the target of targeted attacks.
+    """
+    best_idx = 0
+    best_drop = 0
+
+    for i, curr_enemy in enumerate(current_snap.enemies):
+        curr_hp = curr_enemy.get("hp", 0)
+        # Find matching enemy in next snapshot
+        for next_enemy in next_snap.enemies:
+            if next_enemy.get("name") == curr_enemy.get("name"):
+                next_hp = next_enemy.get("hp", 0)
+                drop = curr_hp - next_hp
+                if drop > best_drop:
+                    best_drop = drop
+                    best_idx = i
+                break
+
+    return best_idx if best_drop > 0 else None
+
+
 def simulate_turn(
     state: CombatState,
     cards_played: list[str],
     card_db: CardDB,
+    forced_target: int | None = None,
 ) -> CombatState:
     """Play logged cards, end turn, resolve enemy intents. Returns new state.
 
@@ -204,7 +232,10 @@ def simulate_turn(
 
         card = s.player.hand[match_idx]
         targets = valid_targets(s, card)
-        target = targets[0] if targets else None
+        if forced_target is not None and forced_target in targets:
+            target = forced_target
+        else:
+            target = targets[0] if targets else None
 
         play_card(s, match_idx, target, card_db)
 
@@ -217,6 +248,63 @@ def simulate_turn(
     tick_enemy_powers(s)
 
     return s
+
+
+def _apply_move_table_effects(state: CombatState) -> None:
+    """Apply enemy move table effects (block, buffs, debuffs) not covered
+    by resolve_enemy_intents. Matches enemy intent_type to known move tables
+    to fill in effects the API doesn't expose (e.g., block on Buff intents).
+    """
+    from .simulator import ENEMY_MOVE_TABLES
+
+    for enemy in state.enemies:
+        if not enemy.is_alive or not enemy.intent_type:
+            continue
+
+        table = ENEMY_MOVE_TABLES.get(enemy.id)
+        if not table:
+            continue
+
+        # Find the matching move in the table by intent type and damage
+        matched = None
+        for move in table:
+            if move["type"] == enemy.intent_type:
+                if enemy.intent_type == "Attack":
+                    if move.get("damage") == enemy.intent_damage:
+                        matched = move
+                        break
+                else:
+                    matched = move
+                    break
+
+        if not matched:
+            continue
+
+        # Apply extra effects not handled by resolve_enemy_intents
+        if matched.get("self_block"):
+            enemy.block += matched["self_block"]
+        if matched.get("self_strength"):
+            enemy.powers["Strength"] = (
+                enemy.powers.get("Strength", 0) + matched["self_strength"]
+            )
+        if matched.get("all_strength"):
+            for e in state.enemies:
+                if e.is_alive:
+                    e.powers["Strength"] = (
+                        e.powers.get("Strength", 0) + matched["all_strength"]
+                    )
+        if matched.get("player_weak"):
+            state.player.powers["Weak"] = (
+                state.player.powers.get("Weak", 0) + matched["player_weak"]
+            )
+        if matched.get("player_frail"):
+            state.player.powers["Frail"] = (
+                state.player.powers.get("Frail", 0) + matched["player_frail"]
+            )
+        if matched.get("player_vulnerable"):
+            state.player.powers["Vulnerable"] = (
+                state.player.powers.get("Vulnerable", 0) + matched["player_vulnerable"]
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -329,7 +417,11 @@ def compare_states(
                         snap_enemy.get("hp"), sim_enemy.hp,
                         delta=sim_enemy.hp - snap_enemy.get("hp", 0),
                     ))
-                if sim_enemy.block != snap_enemy.get("block", 0):
+                # Enemy block comparison — skip when next intent is Buff/Defend
+                # since the game pre-applies block from the upcoming intent
+                next_intent = snap_enemy.get("intent_type")
+                block_from_next_intent = next_intent in ("Buff", "Defend")
+                if sim_enemy.block != snap_enemy.get("block", 0) and not block_from_next_intent:
                     mismatches.append(FieldMismatch(
                         f"enemy_{snap_idx}_block ({sim_enemy.name})",
                         snap_enemy.get("block", 0), sim_enemy.block,
@@ -406,10 +498,23 @@ def validate_run(run: RunReplay, card_db: CardDB) -> list[TurnValidation]:
                 ))
                 continue
 
-            # Reconstruct state and simulate
+            # Reconstruct state and simulate.
+            # For multi-enemy fights, try targeting the enemy with the
+            # largest HP drop in the next snapshot (most damage taken).
             try:
                 state = state_from_snapshot(snap, card_db, floor=combat.floor)
-                simulated = simulate_turn(state, turn.cards_played, card_db)
+
+                # Determine best target for targeted cards
+                alive = [i for i, e in enumerate(state.enemies) if e.is_alive]
+                if len(alive) > 1 and next_snap:
+                    # Infer target: the enemy with the largest HP drop
+                    best_target = _infer_target(snap, next_snap)
+                    simulated = simulate_turn(
+                        state, turn.cards_played, card_db,
+                        forced_target=best_target,
+                    )
+                else:
+                    simulated = simulate_turn(state, turn.cards_played, card_db)
             except Exception as e:
                 log.warning(
                     "Simulation error combat %d turn %d: %s",
