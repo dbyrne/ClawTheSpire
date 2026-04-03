@@ -1,5 +1,5 @@
 {
-  "gen": 5,
+  "gen": 6,
   "character": "Ironclad",
   "model": "qwen3:14b",
   "poll_interval": 1.0,

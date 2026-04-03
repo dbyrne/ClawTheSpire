@@ -869,8 +869,12 @@ class Runner:
             if not reward:
                 reward = (gs.get("agent_view") or {}).get("reward") or {}
 
+            # Also check agent_view reward for pending_card_choice
+            agent_reward = (gs.get("agent_view") or {}).get("reward") or {}
+
             has_card_choice = (
                 reward.get("pending_card_choice")
+                or agent_reward.get("pending_card_choice")
                 or "choose_reward_card" in actions
                 or "skip_reward_cards" in actions
             )
@@ -878,6 +882,8 @@ class Runner:
             # Check reward items for card-type rewards.
             # Raw state: reward_type="Card"; agent_view: line="card: ...".
             reward_items = reward.get("rewards") or []
+            if not reward_items:
+                reward_items = agent_reward.get("rewards") or []
             has_card_reward_item = any(
                 self._is_card_reward_item(item)
                 for item in reward_items
@@ -888,6 +894,13 @@ class Runner:
             # wait for the data to populate before auto-proceeding.
             if not reward_items and not has_card_choice and "claim_reward" in actions:
                 return  # Let next tick re-check once reward data is populated
+
+            # Debug: log reward detection state
+            if "claim_reward" in actions:
+                self._log_action(
+                    f"  [dim]reward check: items={len(reward_items)} "
+                    f"card_choice={has_card_choice} card_item={has_card_reward_item}[/dim]"
+                )
 
             # If we already handled the card choice this reward screen,
             # claim non-card rewards individually to avoid collect_rewards_and_proceed

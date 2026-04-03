@@ -335,6 +335,27 @@
       "gen": "gen5",
       "model": "qwen3:8b",
       "run_id": "C7MCWYCFWM"
+    },
+    {
+      "run_number": 49,
+      "floor": 17,
+      "gen": "gen5",
+      "model": "qwen3:8b",
+      "run_id": "6EMQCZAJAZ"
+    },
+    {
+      "run_number": 50,
+      "floor": 6,
+      "gen": "gen5",
+      "model": "qwen3:8b",
+      "run_id": "XVAK9N9R48"
+    },
+    {
+      "run_number": 51,
+      "floor": 17,
+      "gen": "gen5",
+      "model": "qwen3:8b",
+      "run_id": "WU8WG1QZR1"
     }
   ],
   "gen_boundaries": {
@@ -342,6 +363,6 @@
     "gen2": 33,
     "gen3": 36,
     "gen4": 39,
-    "gen5": 48
+    "gen5": 51
   }
 }
