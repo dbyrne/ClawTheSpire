@@ -363,38 +363,42 @@ def train_worker(
     total_games = 0
     recent_games: list[dict] = []
 
-    print(f"AlphaZero training: {num_generations} generations, {games_per_generation} games/gen, {mcts_simulations} sims", flush=True)
+    from .full_run import play_full_run
+
+    print(f"AlphaZero training (full runs): {num_generations} generations, {games_per_generation} runs/gen, {mcts_simulations} sims", flush=True)
     print(f"Checkpoints: {save_path}", flush=True)
     print(f"Progress: {progress_path}", flush=True)
 
     for gen in range(1, num_generations + 1):
         gen_t0 = time.time()
 
-        # --- Self-play ---
+        # --- Self-play: full Act 1 runs ---
         gen_wins = 0
         for game_num in range(games_per_generation):
             game_temp = max(0.1, temperature * (1.0 - gen / num_generations * 0.5))
 
-            samples, outcome, turns, enc_id = play_one_game(
+            result = play_full_run(
                 mcts, card_db, vocabs, config,
+                character="SILENT",
                 mcts_simulations=mcts_simulations,
                 temperature=game_temp,
                 rng=rng,
             )
 
-            for sample in samples:
+            for sample in result.samples:
                 replay_buffer.add(sample)
 
             total_games += 1
-            if outcome == "win":
+            if result.outcome == "win":
                 gen_wins += 1
                 total_wins += 1
 
             recent_games.append({
                 "num": total_games,
-                "encounter": enc_id,
-                "outcome": outcome,
-                "turns": turns,
+                "encounter": f"Act1 ({result.combats_won}/{result.combats_fought})",
+                "outcome": result.outcome,
+                "turns": result.floor_reached,
+                "hp": result.final_hp,
             })
             if len(recent_games) > 50:
                 recent_games = recent_games[-50:]
