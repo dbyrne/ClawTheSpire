@@ -232,9 +232,9 @@ class RunLogger:
             },
             "hand": hand,
             "enemies": enemies,
-            "draw_pile_size": len(combat.get("draw_pile") or []),
-            "discard_pile_size": len(combat.get("discard_pile") or []),
-            "exhaust_pile_size": len(combat.get("exhaust_pile") or []),
+            "draw_pile_size": _pile_size(game_state, "draw"),
+            "discard_pile_size": _pile_size(game_state, "discard"),
+            "exhaust_pile_size": _pile_size(game_state, "exhaust"),
             "relics": [r.get("name") or r.get("relic_id", "?") for r in run.get("relics", [])],
         })
 
@@ -455,6 +455,28 @@ class RunLogger:
 # ------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------
+
+
+def _pile_size(game_state: dict, pile: str) -> int:
+    """Get card pile size from agent_view or combat dict.
+
+    The C# mod exposes piles under agent_view.piles.{draw,discard,exhaust}
+    as card stack arrays. Falls back to combat.{pile}_pile if available.
+    """
+    # Try agent_view.piles first (has the actual pile contents)
+    agent_view = game_state.get("agent_view") or {}
+    piles = agent_view.get("piles") or {}
+    pile_data = piles.get(pile)
+    if pile_data:
+        # Each entry in the pile is a card stack {count, ...}
+        if isinstance(pile_data, list):
+            return sum(entry.get("count", 1) for entry in pile_data)
+        return 0
+
+    # Fallback: combat dict might have {pile}_pile as a list
+    combat = game_state.get("combat") or {}
+    fallback = combat.get(f"{pile}_pile") or []
+    return len(fallback)
 
 
 def _deck_counts(deck: list[dict]) -> dict[str, int]:
