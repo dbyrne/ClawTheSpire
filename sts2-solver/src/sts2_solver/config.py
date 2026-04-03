@@ -42,7 +42,7 @@ EVALUATOR = {
     # Block scoring — sim shows block matters more when HP is low.
     # survive_scale archetype: heavy block when threatened, less when safe.
     "effective_block_weight": 2.0,   # Per-point of block vs incoming damage (was 3.0)
-    "wasted_block_penalty": 0.2,     # Per-point of over-block
+    "wasted_block_penalty": 1.5,     # Per-point of over-block (was 0.2)
     "idle_block_weight": 0.1,        # Block value when no attack incoming
 
     # HP-aware block scaling: block_weight *= 1 + (threshold - hp) * scale
