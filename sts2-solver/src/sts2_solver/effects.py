@@ -100,6 +100,14 @@ def deal_damage(state: CombatState, target_idx: int, base_damage: int, hits: int
             else:
                 enemy.block -= per_hit
                 per_hit = 0
+        # Slippery: caps damage to 1 per hit while stacks remain
+        slippery = enemy.powers.get("Slippery", 0)
+        if slippery > 0 and per_hit > 0:
+            per_hit = 1
+            enemy.powers["Slippery"] = slippery - 1
+            if enemy.powers["Slippery"] <= 0:
+                del enemy.powers["Slippery"]
+
         enemy.hp -= per_hit
 
     # Check for death triggers
