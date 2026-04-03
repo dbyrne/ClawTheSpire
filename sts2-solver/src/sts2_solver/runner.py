@@ -32,6 +32,14 @@ from rich.text import Text
 
 from .advisor import StrategicAdvisor
 from .advisor_prompts import AUTO_ACTIONS, detect_screen_type
+from .deterministic_advisor import (
+    decide_boss_relic,
+    decide_card_reward,
+    decide_deck_select,
+    decide_map,
+    decide_rest,
+    decide_shop,
+)
 from .game_data import strip_markup
 from .bridge import state_from_mcp
 from .data_loader import load_cards
@@ -713,6 +721,32 @@ class Runner:
                 break
             first_action = result.actions[0]
 
+            # Draw-first reordering: if the solver plans to play a draw
+            # card later in the sequence, play it first instead. Since we
+            # re-solve after each card, playing draw cards first gives us
+            # real information about what we drew, letting the next solve
+            # make a better decision than the blind simulation could.
+            if (first_action.action_type == "play_card"
+                    and first_action.card_idx is not None
+                    and first_action.card_idx < len(hand)):
+                first_card = hand[first_action.card_idx]
+                first_draws = getattr(first_card, "cards_draw", 0) or 0
+                if first_draws == 0:
+                    # First action isn't a draw — check if a later one is
+                    for later in result.actions[1:]:
+                        if later.action_type != "play_card":
+                            continue
+                        if later.card_idx is None or later.card_idx >= len(hand):
+                            continue
+                        later_card = hand[later.card_idx]
+                        if (getattr(later_card, "cards_draw", 0) or 0) > 0:
+                            self._log_action(
+                                f"  [cyan]↑ Draw-first: {later_card.name} "
+                                f"before {first_card.name}[/cyan]"
+                            )
+                            first_action = later
+                            break
+
             # If solver says end turn (or only action is end_turn), we're done
             if first_action.action_type == "end_turn":
                 # Update panel with final state
@@ -1004,6 +1038,21 @@ class Runner:
             gs = dict(gs)
             gs["available_actions"] = filtered_actions
 
+        # Deck card select overlay on top of card reward screen:
+        # The game can show a deck_card_select preview (e.g. card effect text)
+        # while choose_reward_card is also available. If we don't dismiss the
+        # overlay first, the card_reward handler gets stuck in a loop.
+        if screen_type == "card_reward" and "select_deck_card" in actions:
+            sel = gs.get("selection") or {}
+            if sel.get("kind") == "deck_card_select":
+                self._log_action("  [dim]auto: select_deck_card(0) — dismiss card preview overlay[/dim]")
+                if not self.dry_run:
+                    try:
+                        self._execute_with_retry("select_deck_card", option_index=0)
+                    except Exception:
+                        pass
+                return
+
         # Multi-select deck screens (e.g. "Choose 2 cards to Add/Remove"):
         # select_deck_card: check if this is a real decision or an
         # informational overlay (e.g. Havoc showing "Draw 3 cards")
@@ -1152,30 +1201,36 @@ class Runner:
                         self._log_action(f"  [red]Failed: {e}[/red]")
                 return
 
-        # LLM-based decision
+        # Deterministic decisions for all screen types except events
+        # deck_select is handled earlier in the flow (multi-select, combat, etc.)
+        _DETERMINISTIC_HANDLERS = {
+            "rest": lambda: decide_rest(gs),
+            "card_reward": lambda: decide_card_reward(gs, self.game_data),
+            "map": lambda: decide_map(gs),
+            "shop": lambda: decide_shop(gs, self.game_data),
+            "boss_relic": lambda: decide_boss_relic(gs, self.game_data),
+        }
+
+        handler = _DETERMINISTIC_HANDLERS.get(screen_type)
+        if handler:
+            decision = handler()
+            self._execute_deterministic(
+                gs, decision, screen_type, actions, run,
+            )
+            return
+
+        # Events + generic: LLM-based decision (only remaining LLM usage)
         try:
             result_str = self.advisor.advise(gs, execute=not self.dry_run)
         except Exception as e:
             self._log_action(f"[red]Advisor error: {e}[/red]")
             return
 
-        # If card_reward advisor mentions empty/no options, skip and retry next tick
-        if screen_type == "card_reward" and any(
-            phrase in result_str.lower()
-            for phrase in ("no card", "empty", "0 cards", "no options")
-        ):
-            self._log_action("  [dim]Card reward empty — retrying next tick[/dim]")
-            return
-
         # If the advisor recommended an invalid/failed action, fall back to a safe default
         if "not available" in result_str or "FAILED" in result_str:
             self._log_action(f"  [yellow]Invalid action — falling back[/yellow]")
-            # Ordered list of fallback actions to try
             _FALLBACKS = [
-                ("choose_map_node", 0),
                 ("choose_event_option", 0),
-                ("choose_rest_option", 0),
-                ("close_shop_inventory", None),
                 ("proceed", None),
                 ("confirm_modal", None),
                 ("dismiss_modal", None),
@@ -1188,20 +1243,10 @@ class Runner:
                         self._execute_with_retry(fb_action, option_index=fb_idx)
                     except Exception:
                         pass
-                if fb_action == "close_shop_inventory":
-                    self._shop_visited = True
                 self._log_action(f"  [dim]auto: {fb_action}({fb_idx}) (fallback)[/dim]")
                 self.action_count += 1
                 return
-            return  # Nothing we can do, let next tick try
-
-        # Mark card reward as handled so we don't re-open it
-        if screen_type == "card_reward":
-            self._card_reward_handled = True
-
-        # Track shop visits to prevent re-opening after closing
-        if screen_type == "shop" and "close_shop_inventory" in result_str and "-> OK" in result_str:
-            self._shop_visited = True
+            return
 
         # Update advisor panel
         self._advisor_text = (
@@ -1211,10 +1256,94 @@ class Runner:
             f"{result_str}"
         )
 
-        # Extract the decision line for the log
         lines = result_str.split("\n")
         decision_line = next((l for l in lines if l.startswith("Decision:")), lines[0] if lines else "?")
         self._log_action(f"  [blue]{decision_line}[/blue]")
+        self.action_count += 1
+        self._refresh()
+
+    # ------------------------------------------------------------------
+    # Deterministic decision execution
+    # ------------------------------------------------------------------
+
+    def _execute_deterministic(
+        self,
+        gs: dict,
+        decision,  # deterministic_advisor.Decision
+        screen_type: str,
+        actions: list[str],
+        run: dict,
+    ) -> None:
+        """Execute a deterministic advisor decision."""
+        from .deterministic_advisor import Decision
+
+        # Validate action is available
+        if decision.action not in actions:
+            self._log_action(
+                f"  [yellow]Deterministic action '{decision.action}' not available, "
+                f"falling back[/yellow]"
+            )
+            # Fallback by screen type
+            _FALLBACKS = {
+                "rest": ("choose_rest_option", 0),
+                "card_reward": ("skip_reward_cards", None),
+                "map": ("choose_map_node", 0),
+                "shop": ("close_shop_inventory", None),
+                "boss_relic": ("choose_treasure_relic", 0),
+                "deck_select": ("select_deck_card", 0),
+            }
+            fb = _FALLBACKS.get(screen_type)
+            if fb and fb[0] in actions:
+                decision = Decision(fb[0], fb[1], "fallback")
+            else:
+                return
+
+        # Log the decision
+        self._log_action(
+            f"  [blue]Decision: {decision.action}"
+            f"{f' ({decision.option_index})' if decision.option_index is not None else ''}"
+            f" — {decision.reasoning}[/blue]"
+        )
+
+        if self.logger:
+            self.logger.log_decision(
+                game_state=gs,
+                screen_type=screen_type,
+                options=actions,
+                choice={
+                    "action": decision.action,
+                    "option_index": decision.option_index,
+                    "reasoning": decision.reasoning,
+                },
+                source="deterministic",
+            )
+
+        # Execute
+        if not self.dry_run:
+            try:
+                self._execute_with_retry(
+                    decision.action, option_index=decision.option_index,
+                )
+            except Exception as e:
+                self._log_action(f"  [red]Execution failed: {e}[/red]")
+                return
+
+        # Post-execution bookkeeping
+        if screen_type == "card_reward":
+            self._card_reward_handled = True
+        if screen_type == "shop" and decision.action == "close_shop_inventory":
+            self._shop_visited = True
+
+        # Update advisor panel
+        self._advisor_text = (
+            f"[bold]{screen_type.upper()}[/bold] | "
+            f"Floor {run.get('floor', '?')} | "
+            f"HP {run.get('current_hp', '?')}/{run.get('max_hp', '?')}\n\n"
+            f"[green]\\[deterministic][/green] {decision.action}"
+            f"{f' (idx={decision.option_index})' if decision.option_index is not None else ''}\n"
+            f"{decision.reasoning}"
+        )
+
         self.action_count += 1
         self._refresh()
 
@@ -1246,27 +1375,11 @@ class Runner:
             self._handle_single_deck_select(gs)
 
     def _handle_single_deck_select(self, gs: dict) -> None:
-        """Single-select deck screen — use advisor."""
-        # Filter discard_potion from actions
-        filtered_actions = [a for a in gs.get("available_actions", []) if a != "discard_potion"]
-        if filtered_actions:
-            gs = dict(gs)
-            gs["available_actions"] = filtered_actions
-
-        try:
-            result_str = self.advisor.advise(gs, execute=not self.dry_run)
-        except Exception as e:
-            self._log_action(f"[red]Advisor error: {e}[/red]")
-            return
-
-        lines = result_str.split("\n")
-        decision_line = next(
-            (l for l in lines if l.startswith("Decision:")),
-            lines[0] if lines else "?",
-        )
-        self._log_action(f"  [blue]{decision_line}[/blue]")
-        self.action_count += 1
-        self._refresh()
+        """Single-select deck screen — use deterministic advisor."""
+        decision = decide_deck_select(gs)
+        actions = gs.get("available_actions", [])
+        run = gs.get("run") or {}
+        self._execute_deterministic(gs, decision, "deck_select", actions, run)
 
         # Wait for screen to change or confirm
         time.sleep(0.5)

@@ -1,4 +1,9 @@
-"""Strategic advisor for non-combat decisions using a local LLM (Ollama)."""
+"""Strategic advisor for event decisions using a local LLM (Ollama).
+
+Only used for events and generic/unknown screens. All other non-combat
+decisions (rest, card reward, map, shop, boss relic, deck select) are
+handled deterministically by deterministic_advisor.py.
+"""
 
 from __future__ import annotations
 
@@ -10,7 +15,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from .advisor_prompts import (
-    AUTO_ACTIONS,
     build_system_prompt,
     build_user_message,
     detect_screen_type,
@@ -36,7 +40,8 @@ class AdvisorDecision:
 
 
 class StrategicAdvisor:
-    """Makes non-combat strategic decisions by calling a local LLM."""
+    """Makes event decisions by calling a local LLM.  All other non-combat
+    decisions are handled deterministically — see deterministic_advisor.py."""
 
     def __init__(
         self,
@@ -68,7 +73,11 @@ class StrategicAdvisor:
         return self._openai_client
 
     def advise(self, game_state: dict, execute: bool = True) -> str:
-        """Get strategic advice for a non-combat screen.
+        """Get LLM advice for events and generic screens.
+
+        All other screen types (rest, card_reward, map, shop, boss_relic,
+        deck_select) are handled by deterministic_advisor.py — this method
+        should only be called for events and unknown/generic screens.
 
         Args:
             game_state: Full game state dict from the game API.
@@ -81,19 +90,10 @@ class StrategicAdvisor:
         if not actions:
             return "No available actions."
 
-        # Check if this is a combat screen
-        screen = game_state.get("screen", "")
-        if "COMBAT" in screen.upper() and "play_card" in actions:
-            return "This is a combat screen — use solve_combat instead."
-
         screen_type = detect_screen_type(actions)
 
         if self.logger:
             self.logger.ensure_run(game_state)
-
-        # Handle auto-actions (no LLM needed)
-        if screen_type == "auto":
-            return self._handle_auto(game_state, actions, execute)
 
         # Build prompt and call LLM
         screen_type, user_message = build_user_message(game_state, self.game_data)
@@ -115,24 +115,9 @@ class StrategicAdvisor:
                 f"Raw response: {raw_response}"
             )
 
-        # Coerce null option_index to 0 for actions that require an index.
-        # Special case: choose_reward_card with null means "skip" — convert
-        # to skip_reward_cards if available instead of accidentally taking a card.
-        if decision.option_index is None and decision.action == "choose_reward_card":
-            if "skip_reward_cards" in actions:
-                decision = AdvisorDecision(
-                    action="skip_reward_cards", option_index=None,
-                    reasoning=decision.reasoning,
-                )
-            else:
-                decision = AdvisorDecision(
-                    action=decision.action, option_index=0,
-                    reasoning=decision.reasoning,
-                )
-        elif decision.option_index is None and decision.action in {
-            "choose_map_node", "choose_event_option", "choose_rest_option",
-            "choose_treasure_relic", "select_deck_card",
-            "buy_card", "buy_relic", "buy_potion", "claim_reward",
+        # Coerce null option_index to 0 for actions that require an index
+        if decision.option_index is None and decision.action in {
+            "choose_event_option",
         }:
             decision = AdvisorDecision(
                 action=decision.action, option_index=0, reasoning=decision.reasoning,
@@ -140,13 +125,9 @@ class StrategicAdvisor:
 
         # Validate the action is available — try to fix common LLM mistakes
         if decision.action not in actions:
-            # Fuzzy-match: LLM often returns a shortened or wrong action name
+            # Fuzzy-match: LLM sometimes returns a shortened action name
             _ACTION_ALIASES = {
                 "proceed": "collect_rewards_and_proceed",
-                "skip": "skip_reward_cards",
-                "end_turn": "end_turn",
-                "close_shop": "close_shop_inventory",
-                "leave": "close_shop_inventory",
             }
             fixed = _ACTION_ALIASES.get(decision.action)
             if fixed and fixed in actions:
@@ -195,28 +176,6 @@ class StrategicAdvisor:
             )
 
         return self._format_result(decision, screen_type, game_state, execute)
-
-    def _handle_auto(self, game_state: dict, actions: list[str], execute: bool) -> str:
-        """Handle screens that don't need LLM advice."""
-        # Pick the first auto-action available
-        for action in actions:
-            if action in AUTO_ACTIONS:
-                decision = AdvisorDecision(
-                    action=action,
-                    option_index=None,
-                    reasoning="Automatic action (no decision needed)",
-                )
-                if self.logger:
-                    self.logger.log_decision(
-                        game_state=game_state,
-                        screen_type="auto",
-                        options=actions,
-                        choice={"action": action, "option_index": None},
-                        source="auto",
-                    )
-                return self._format_result(decision, "auto", game_state, execute)
-
-        return "No auto-action found."
 
     def _call_llm(self, system: str, user: str) -> str:
         """Call LLM API and return the response text."""
