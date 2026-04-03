@@ -24,11 +24,14 @@ CardEffect = Callable[[CombatState, int | None], None]
 def calculate_attack_damage(base: int, state: CombatState, target: EnemyState) -> int:
     """Calculate per-hit damage for an attack card."""
     player = state.player
-    raw = base + player.powers.get("Strength", 0) + player.powers.get("Shrink", 0)
+    raw = base + player.powers.get("Strength", 0)
     if raw < 0:
         raw = 0
     if player.powers.get("Weak", 0) > 0:
         raw = math.floor(raw * 0.75)
+    # Shrink: 30% damage reduction per stack (like Weak but on player output)
+    if player.powers.get("Shrink", 0) < 0:
+        raw = math.floor(raw * 0.7)
     if target.powers.get("Vulnerable", 0) > 0:
         raw = math.floor(raw * 1.5)
     # Double Damage: player deals double damage (e.g. from Twig Slime buff)
