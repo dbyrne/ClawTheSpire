@@ -372,13 +372,16 @@ def build_shop_message(state: dict, game_data: GameDataDB) -> str:
         lines.append(f"Nothing is affordable with {gold}g. Use close_shop_inventory to leave.")
     elif "remove_card_at_shop" in available:
         lines.append("PRIORITY ORDER: 1) REMOVE A CARD (Strikes first, then Defends) — this is the most valuable thing in the shop! "
-                     "2) Buy a key relic if it fits your archetype. 3) Buy a potion if cheap. "
-                     "4) Buy a card ONLY if it is S-tier or A-tier below. 5) Leave (close_shop_inventory) if nothing else is worth the gold.")
+                     "2) Buy a key relic if it fits your archetype. "
+                     "3) Buy a card ONLY if it is S-tier or A-tier below. "
+                     "4) Leave (close_shop_inventory) — save gold for future card removal and relics.")
     else:
         lines.append("Card removal already done or unavailable. "
-                     "Buy a potion if cheap. Buy a card ONLY if it is S-tier or A-tier below. "
+                     "Buy a relic ONLY if it directly fits your archetype. "
+                     "Buy a card ONLY if it is S-tier or A-tier below. "
+                     "Do NOT buy potions — save gold for card removal and relics at future shops. "
                      "Do NOT buy B-tier or unlisted cards — they bloat the deck. "
-                     "Otherwise leave (close_shop_inventory).")
+                     "Otherwise leave (close_shop_inventory) and save your gold.")
 
     deck_size = len(_get_deck(state))
     if deck_size >= 14:
