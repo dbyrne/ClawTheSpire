@@ -141,12 +141,15 @@ def solve_combat(raw_state: str | None = None, execute: bool = True) -> str:
     # Log solver turn — simulate hand mutations to resolve card names
     cards_played = []
     log_hand = list(state.player.hand)
+    targets_chosen: list[int | None] = []
     for a in result.actions:
         if a.card_idx is not None and a.card_idx < len(log_hand):
             cards_played.append(log_hand[a.card_idx].name)
+            targets_chosen.append(a.target_idx)
             log_hand.pop(a.card_idx)
     logger.log_combat_turn(
         cards_played=cards_played,
+        targets_chosen=targets_chosen,
         score=result.score,
         states_evaluated=result.states_evaluated,
         solve_ms=solve_ms,

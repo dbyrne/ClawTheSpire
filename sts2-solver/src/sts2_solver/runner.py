@@ -722,6 +722,7 @@ class Runner:
         from .bridge import action_to_mcp
 
         cards_played: list[str] = []
+        targets_chosen: list[int | None] = []
         total_states = 0
         total_solve_ms = 0.0
         best_score = 0.0
@@ -792,7 +793,7 @@ class Runner:
                 )
                 break
 
-            # Resolve card name for logging
+            # Resolve card name and target for logging
             if first_action.card_idx is not None and first_action.card_idx < len(hand):
                 card = hand[first_action.card_idx]
                 target_str = (
@@ -801,9 +802,11 @@ class Runner:
                 )
                 label = f"{card.name}{target_str}"
                 cards_played.append(card.name)
+                targets_chosen.append(first_action.target_idx)
             else:
                 label = f"card_idx={first_action.card_idx}"
                 cards_played.append(label)
+                targets_chosen.append(None)
 
             if self.dry_run:
                 self._log_action(f"  [dim]\\[dry-run] Would play: {label}[/dim]")
@@ -886,6 +889,7 @@ class Runner:
         # Log the full turn (pass pre-play state for combat snapshot)
         self.logger.log_combat_turn(
             cards_played=cards_played,
+            targets_chosen=targets_chosen,
             score=best_score,
             states_evaluated=total_states,
             solve_ms=total_solve_ms,

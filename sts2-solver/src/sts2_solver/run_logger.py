@@ -138,12 +138,16 @@ class RunLogger:
         states_evaluated: int,
         solve_ms: float,
         game_state: dict | None = None,
+        targets_chosen: list[int | None] | None = None,
     ) -> None:
         """Log a single combat turn's solver output.
 
         If game_state is provided, a ``combat_snapshot`` event is emitted
         first, capturing the full pre-action combat state for simulator
         validation and AlphaZero training data generation.
+
+        targets_chosen is a parallel list to cards_played: for each card,
+        the enemy index it targeted (None for untargeted cards).
         """
         self._combat_turn += 1
 
@@ -151,14 +155,18 @@ class RunLogger:
         if game_state is not None:
             self._emit_combat_snapshot(game_state, self._combat_turn)
 
-        self._emit({
+        event: dict[str, Any] = {
             "type": "combat_turn",
             "turn": self._combat_turn,
             "cards_played": cards_played,
             "score": round(score, 1),
             "states_evaluated": states_evaluated,
             "solve_ms": round(solve_ms, 1),
-        })
+        }
+        if targets_chosen is not None:
+            event["targets_chosen"] = targets_chosen
+
+        self._emit(event)
 
     def _emit_combat_snapshot(self, game_state: dict, turn: int) -> None:
         """Emit a full combat state snapshot for replay validation.

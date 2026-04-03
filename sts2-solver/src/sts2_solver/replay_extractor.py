@@ -53,6 +53,7 @@ class CombatTurn:
     states_evaluated: int
     solve_ms: float
     ts: str = ""
+    targets_chosen: list[int | None] = field(default_factory=list)  # Per-card target indices
     snapshot: CombatSnapshot | None = None  # Present if enhanced logging enabled
 
 
@@ -215,6 +216,7 @@ def extract_run(path: Path) -> RunReplay | None:
                 states_evaluated=event.get("states_evaluated", 0),
                 solve_ms=event.get("solve_ms", 0.0),
                 ts=event.get("ts", ""),
+                targets_chosen=list(event.get("targets_chosen", [])),
                 snapshot=pending_snapshot,
             ))
             pending_snapshot = None

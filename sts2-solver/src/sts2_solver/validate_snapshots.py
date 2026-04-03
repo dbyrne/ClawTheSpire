@@ -216,17 +216,19 @@ def simulate_turn(
     state: CombatState,
     cards_played: list[str],
     card_db: CardDB,
+    targets_chosen: list[int | None] | None = None,
     forced_target: int | None = None,
 ) -> CombatState:
     """Play logged cards, end turn, resolve enemy intents. Returns new state.
 
     Matches card names to hand positions and plays them in order.
-    After all cards are played, ends the turn and resolves enemy actions.
+    If targets_chosen is provided, uses exact per-card targets from the log.
+    Otherwise falls back to forced_target or first valid target.
     """
     from copy import deepcopy
     s = deepcopy(state)
 
-    for card_name in cards_played:
+    for card_idx_in_seq, card_name in enumerate(cards_played):
         # Find card in hand by name
         match_idx = None
         normalized = card_name.rstrip("+")
@@ -243,7 +245,16 @@ def simulate_turn(
 
         card = s.player.hand[match_idx]
         targets = valid_targets(s, card)
-        if forced_target is not None and forced_target in targets:
+
+        # Use logged target if available, then forced_target, then first valid
+        logged_target = (
+            targets_chosen[card_idx_in_seq]
+            if targets_chosen and card_idx_in_seq < len(targets_chosen)
+            else None
+        )
+        if logged_target is not None and logged_target in targets:
+            target = logged_target
+        elif forced_target is not None and forced_target in targets:
             target = forced_target
         else:
             target = targets[0] if targets else None
@@ -515,10 +526,15 @@ def validate_run(run: RunReplay, card_db: CardDB) -> list[TurnValidation]:
             try:
                 state = state_from_snapshot(snap, card_db, floor=combat.floor)
 
-                # Determine best target for targeted cards
+                # Use logged targets if available, otherwise infer
+                logged_targets = turn.targets_chosen if turn.targets_chosen else None
                 alive = [i for i, e in enumerate(state.enemies) if e.is_alive]
-                if len(alive) > 1 and next_snap:
-                    # Infer target: the enemy with the largest HP drop
+                if logged_targets:
+                    simulated = simulate_turn(
+                        state, turn.cards_played, card_db,
+                        targets_chosen=logged_targets,
+                    )
+                elif len(alive) > 1 and next_snap:
                     best_target = _infer_target(snap, next_snap)
                     simulated = simulate_turn(
                         state, turn.cards_played, card_db,
