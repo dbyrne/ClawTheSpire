@@ -48,7 +48,7 @@ def calculate_block_gain(base: int, state: CombatState) -> int:
 # ---------------------------------------------------------------------------
 
 def deal_damage(state: CombatState, target_idx: int, base_damage: int, hits: int = 1) -> None:
-    """Deal damage to a single enemy, accounting for Strength/Weak/Vulnerable and block."""
+    """Deal damage to a single enemy, accounting for Strength/Weak/Vulnerable/Slow and block."""
     enemy = state.enemies[target_idx]
     if not enemy.is_alive:
         return
@@ -56,6 +56,12 @@ def deal_damage(state: CombatState, target_idx: int, base_damage: int, hits: int
         if not enemy.is_alive:
             break
         per_hit = calculate_attack_damage(base_damage, state, enemy)
+        # Slow: enemy takes 10% more damage per card played this turn
+        # cards_played_this_turn is already incremented before effects run,
+        # so subtract 1 to get 0% on first card, 10% on second, etc.
+        if enemy.powers.get("Slow", 0) > 0 and per_hit > 0:
+            slow_mult = 1.0 + 0.1 * max(0, state.cards_played_this_turn - 1)
+            per_hit = math.floor(per_hit * slow_mult)
         if enemy.block > 0:
             if per_hit >= enemy.block:
                 per_hit -= enemy.block
