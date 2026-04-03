@@ -83,17 +83,23 @@ def evaluate_turn(state: CombatState, initial_state: CombatState) -> float:
     import math as _math
     total_incoming = 0
     player_vulnerable = state.player.powers.get("Vulnerable", 0) > 0
+    # Paper Krane: Weak = 40% reduction instead of 25%
+    weak_multiplier = 0.60 if "PAPER_KRANE" in state.relics else 0.75
+
     for enemy in state.enemies:
         if enemy.hp > 0 and enemy.intent_type == "Attack" and enemy.intent_damage is not None:
             per_hit = enemy.intent_damage + enemy.powers.get("Strength", 0)
             if per_hit < 0:
                 per_hit = 0
-            # Weak on enemy reduces their damage by 25%
+            # Weak on enemy reduces their damage
             if enemy.powers.get("Weak", 0) > 0:
-                per_hit = _math.floor(per_hit * 0.75)
+                per_hit = _math.floor(per_hit * weak_multiplier)
             # Vulnerable on player increases damage taken by 50%
             if player_vulnerable:
                 per_hit = _math.floor(per_hit * 1.5)
+            # Tungsten Rod: lose 1 less HP per hit
+            if "TUNGSTEN_ROD" in state.relics and per_hit > 0:
+                per_hit = max(0, per_hit - 1)
             total_incoming += per_hit * enemy.intent_hits
 
     if total_incoming > 0:
@@ -197,38 +203,127 @@ def evaluate_turn(state: CombatState, initial_state: CombatState) -> float:
     # -----------------------------------------------------------------------
     unspent = state.player.energy
     if unspent > 0 and any(e.hp > 0 for e in state.enemies):
-        # Unspent energy means we could have done more
-        score -= unspent * EVALUATOR["unspent_energy_penalty"]
+        # Ice Cream: energy conserves — unspent energy is fine
+        if "ICE_CREAM" not in state.relics:
+            score -= unspent * EVALUATOR["unspent_energy_penalty"]
 
     # -----------------------------------------------------------------------
     # 7. Relic-aware scoring adjustments
     # -----------------------------------------------------------------------
     relics = state.relics
+    enemies_alive = sum(1 for e in state.enemies if e.is_alive)
 
-    # Gremlin Horn: gain 1 energy + draw 1 on enemy kill — kills are worth more
+    # --- Kill bonuses ---
+    kills_this_turn = 0
+    for i, enemy in enumerate(state.enemies):
+        if i < len(initial_state.enemies) and initial_state.enemies[i].hp > 0 and enemy.hp <= 0:
+            kills_this_turn += 1
+
+    # Gremlin Horn: gain 1 energy + draw 1 on enemy kill
     if "GREMLIN_HORN" in relics:
-        for i, enemy in enumerate(state.enemies):
-            if i < len(initial_state.enemies) and initial_state.enemies[i].hp > 0 and enemy.hp <= 0:
-                score += 8.0  # Extra energy + draw is very valuable
+        score += kills_this_turn * 8.0
 
-    # Charon's Ashes: deal 3 to ALL on exhaust — exhaust cards gain AoE value
-    if "CHARONS_ASHES" in relics:
-        exhaust_gained = (len(state.player.exhaust_pile)
-                          - len(initial_state.player.exhaust_pile))
-        if exhaust_gained > 0:
-            alive_enemies = sum(1 for e in state.enemies if e.is_alive)
-            score += exhaust_gained * alive_enemies * 1.5
+    # --- Exhaust bonuses ---
+    exhaust_gained = (len(state.player.exhaust_pile)
+                      - len(initial_state.player.exhaust_pile))
+    if exhaust_gained > 0:
+        # Charon's Ashes: deal 3 to ALL on exhaust
+        if "CHARONS_ASHES" in relics:
+            score += exhaust_gained * enemies_alive * 1.5
+        # Forgotten Soul: deal 1 to random enemy on exhaust
+        if "FORGOTTEN_SOUL" in relics:
+            score += exhaust_gained * 0.5
+        # Joss Paper: every 5 exhausts, draw 1
+        if "JOSS_PAPER" in relics:
+            score += exhaust_gained * 0.8
 
-    # Ornamental Fan / Shuriken / Kunai: 3 attacks triggers bonus
-    # Make the evaluator aware that playing a 3rd attack has hidden value
-    if any(r in relics for r in ("ORNAMENTAL_FAN", "SHURIKEN", "KUNAI")):
-        if state.attacks_played_this_turn >= 3 and initial_state.attacks_played_this_turn < 3:
-            score += 5.0  # Triggered the relic bonus
+    # --- Attack count triggers ---
+    attacks_crossed_3 = (state.attacks_played_this_turn >= 3
+                         and initial_state.attacks_played_this_turn < 3)
+    if attacks_crossed_3:
+        # Ornamental Fan: gain 4 Block
+        if "ORNAMENTAL_FAN" in relics:
+            score += 4.0
+        # Shuriken: gain 1 Strength
+        if "SHURIKEN" in relics:
+            score += 8.0
+        # Kunai: gain 1 Dexterity
+        if "KUNAI" in relics:
+            score += 4.0
+        # Kusarigama: deal 6 random damage
+        if "KUSARIGAMA" in relics:
+            score += 3.0
 
-    # Beating Remnant: can't lose more than 20 HP/turn — less scared of big hits
-    if "BEATING_REMNANT" in relics:
-        # Reduce lethal panic when we know damage is capped
-        if total_incoming > 20:
-            score += (total_incoming - 20) * 0.5  # Partial offset of unblocked penalty
+    # --- Skill count triggers ---
+    skills_played = (state.cards_played_this_turn - state.attacks_played_this_turn)
+    initial_skills = (initial_state.cards_played_this_turn - initial_state.attacks_played_this_turn)
+    if skills_played >= 3 and initial_skills < 3:
+        # Letter Opener: deal 5 to ALL enemies
+        if "LETTER_OPENER" in relics:
+            score += enemies_alive * 2.5
+
+    # --- Per-card-play triggers (scored as bonuses on attacks/powers) ---
+    # Daughter of the Wind: gain 1 Block per Attack
+    if "DAUGHTER_OF_THE_WIND" in relics:
+        attacks_delta = state.attacks_played_this_turn - initial_state.attacks_played_this_turn
+        score += attacks_delta * 1.0
+
+    # Intimidating Helmet: gain 4 Block on 2+ cost card play
+    # (can't count exactly, but more cards played = more chances)
+
+    # --- Power play triggers ---
+    # These matter when the solver considers playing a Power card.
+    # Since we can't easily count power plays, we boost power values instead.
+    if "LOST_WISP" in relics:
+        # Powers deal 8 AoE — increase power value
+        for power_name in EVALUATOR["power_values"]:
+            gained = (state.player.powers.get(power_name, 0)
+                      - initial_state.player.powers.get(power_name, 0))
+            if gained > 0:
+                score += enemies_alive * 4.0  # 8 damage to each alive enemy
+                break  # Only count once per power played
+
+    if "GAME_PIECE" in relics:
+        # Powers draw 1 — increase power value
+        for power_name in EVALUATOR["power_values"]:
+            gained = (state.player.powers.get(power_name, 0)
+                      - initial_state.player.powers.get(power_name, 0))
+            if gained > 0:
+                score += 3.0  # Draw 1 is valuable
+                break
+
+    # --- Strength modifiers ---
+    # Ruined Helmet: first Strength gain doubled
+    if "RUINED_HELMET" in relics:
+        str_gained = (state.player.powers.get("Strength", 0)
+                      - initial_state.player.powers.get("Strength", 0))
+        if str_gained > 0 and initial_state.player.powers.get("Strength", 0) == 0:
+            score += str_gained * EVALUATOR["strength_gained_value"]  # Double value
+
+    # --- Block persistence ---
+    # Sturdy Clamp: 10 Block persists — block has more future value
+    if "STURDY_CLAMP" in relics:
+        persistent_block = min(state.player.block, 10)
+        score += persistent_block * 0.3
+
+    # Parrying Shield: end with 10+ Block = deal 6 damage to random enemy
+    if "PARRYING_SHIELD" in relics and state.player.block >= 10:
+        score += 3.0
+
+    # --- Damage cap / safety ---
+    # Beating Remnant: can't lose more than 20 HP/turn
+    if "BEATING_REMNANT" in relics and total_incoming > 20:
+        score += (total_incoming - 20) * 0.5
+
+    # Lizard Tail: heal to 50% on death (one-time) — less scared of lethal
+    if "LIZARD_TAIL" in relics:
+        # Reduce the lethal penalty since we have a safety net
+        if total_incoming > 0:
+            unblocked = max(0, total_incoming - state.player.block)
+            if unblocked >= state.player.hp:
+                score += EVALUATOR["lethal_damage_penalty"] * 0.4  # Offset 40%
+
+    # The Boot: min 5 unblocked damage — multi-hit low damage is better
+    # (handled implicitly by combat engine damage calc)
 
     return score
