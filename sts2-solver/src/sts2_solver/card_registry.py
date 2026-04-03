@@ -609,6 +609,21 @@ def _escape_plan(card: Card, card_db: CardDB | None) -> CardEffect:
     return effect
 
 
+@register("BOUNCING_FLASK")
+def _bouncing_flask(card: Card, card_db: CardDB | None) -> CardEffect:
+    """Apply 3(4) Poison to a random enemy 3 times."""
+    poison = 3 if not card.upgraded else 4
+    hits = 3
+
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        alive = [i for i, e in enumerate(state.enemies) if e.is_alive]
+        if alive:
+            for _ in range(hits):
+                t = alive[0]  # Deterministic for solver
+                apply_power_to_enemy(state, t, "Poison", poison)
+    return effect
+
+
 @register("BUBBLE_BUBBLE")
 def _bubble_bubble(card: Card, card_db: CardDB | None) -> CardEffect:
     """If enemy has Poison, apply 9(12) Poison."""
