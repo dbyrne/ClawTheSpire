@@ -53,6 +53,31 @@ def calculate_block_gain(base: int, state: CombatState) -> int:
 # Effect primitives — mutate state in place
 # ---------------------------------------------------------------------------
 
+def _on_enemy_death(state: CombatState, enemy_idx: int, from_poison: bool = False) -> None:
+    """Handle enemy death triggers.
+
+    Called when an enemy's HP drops to 0 or below. Handles:
+    - Infested: spawn Wrigglers (Phrog Parasite)
+    - Minion: (no special handling needed, just stops acting)
+    """
+    enemy = state.enemies[enemy_idx]
+    infested = enemy.powers.get("Infested", 0)
+    if infested > 0:
+        # Spawn Wrigglers
+        for i in range(infested):
+            # HP varies 17-21 in game data; use 19 as average
+            wriggler = EnemyState(
+                id="WRIGGLER",
+                name="Wriggler",
+                hp=19,
+                max_hp=19,
+                intent_type=None if from_poison else "Attack",
+                intent_damage=None if from_poison else 6,
+                intent_hits=1,
+            )
+            state.enemies.append(wriggler)
+
+
 def deal_damage(state: CombatState, target_idx: int, base_damage: int, hits: int = 1) -> None:
     """Deal damage to a single enemy, accounting for Strength/Weak/Vulnerable/Slow and block."""
     enemy = state.enemies[target_idx]
@@ -76,6 +101,10 @@ def deal_damage(state: CombatState, target_idx: int, base_damage: int, hits: int
                 enemy.block -= per_hit
                 per_hit = 0
         enemy.hp -= per_hit
+
+    # Check for death triggers
+    if not enemy.is_alive:
+        _on_enemy_death(state, target_idx)
 
 
 def deal_damage_all(state: CombatState, base_damage: int, hits: int = 1) -> None:

@@ -384,12 +384,18 @@ def tick_enemy_powers(state: CombatState) -> None:
         # Poison: deal damage equal to stacks, then decrement by 1
         poison = enemy.powers.get("Poison", 0)
         if poison > 0:
+            was_alive = enemy.is_alive
             enemy.hp -= poison
             enemy.powers["Poison"] = poison - 1
             if enemy.powers["Poison"] <= 0:
                 del enemy.powers["Poison"]
             if enemy.hp <= 0:
                 enemy.hp = 0
+                if was_alive:
+                    # Death from poison: triggers with from_poison=True
+                    from .effects import _on_enemy_death
+                    enemy_idx = state.enemies.index(enemy)
+                    _on_enemy_death(state, enemy_idx, from_poison=True)
 
 
 # ---------------------------------------------------------------------------
