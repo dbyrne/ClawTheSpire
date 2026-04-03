@@ -288,6 +288,10 @@ class Runner:
             self._handle_capstone_selection(actions)
             return False
 
+        if screen == "BUNDLE_SELECTION" and "choose_bundle" in actions:
+            self._handle_bundle_selection()
+            return False
+
         if not actions:
             return False
 
@@ -485,11 +489,22 @@ class Runner:
                     pass
 
     def _handle_capstone_selection(self, actions: list[str]) -> None:
-        """Handle capstone/relic pack selection screens (e.g. Scroll Boxes)."""
+        """Handle capstone/relic pack selection screens."""
         self._log_action("[dim]auto: choose_capstone_option 0[/dim]")
         if not self.dry_run:
             try:
                 self._execute_with_retry("choose_capstone_option", option_index=0)
+                time.sleep(1.0)
+            except Exception:
+                pass
+
+    def _handle_bundle_selection(self) -> None:
+        """Handle card pack/bundle selection screens (e.g. Neow's Scroll Boxes)."""
+        # Pick the first bundle — could be improved with card tier analysis
+        self._log_action("[dim]auto: choose_bundle 0[/dim]")
+        if not self.dry_run:
+            try:
+                self._execute_with_retry("choose_bundle", option_index=0)
                 time.sleep(1.0)
             except Exception:
                 pass
