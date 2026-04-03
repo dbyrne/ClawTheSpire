@@ -78,10 +78,22 @@ def evaluate_turn(state: CombatState, initial_state: CombatState) -> float:
     # -----------------------------------------------------------------------
     # 2. Block vs incoming damage
     # -----------------------------------------------------------------------
+    # Calculate actual incoming damage accounting for enemy Weak and
+    # player Vulnerable — these make a big difference in practice.
+    import math as _math
     total_incoming = 0
+    player_vulnerable = state.player.powers.get("Vulnerable", 0) > 0
     for enemy in state.enemies:
         if enemy.hp > 0 and enemy.intent_type == "Attack" and enemy.intent_damage is not None:
             per_hit = enemy.intent_damage + enemy.powers.get("Strength", 0)
+            if per_hit < 0:
+                per_hit = 0
+            # Weak on enemy reduces their damage by 25%
+            if enemy.powers.get("Weak", 0) > 0:
+                per_hit = _math.floor(per_hit * 0.75)
+            # Vulnerable on player increases damage taken by 50%
+            if player_vulnerable:
+                per_hit = _math.floor(per_hit * 1.5)
             total_incoming += per_hit * enemy.intent_hits
 
     if total_incoming > 0:
@@ -95,6 +107,9 @@ def evaluate_turn(state: CombatState, initial_state: CombatState) -> float:
                 1 + (EVALUATOR["hp_block_threshold"] - state.player.hp)
                 * EVALUATOR["hp_block_scale"]
             )
+        # Vulnerable on player makes block even more valuable
+        if player_vulnerable:
+            effective_block_weight *= 1.3
 
         # Blocking incoming damage is valuable
         score += effective_block * effective_block_weight
@@ -116,6 +131,14 @@ def evaluate_turn(state: CombatState, initial_state: CombatState) -> float:
         else:
             # Combat won, block is worthless
             pass
+
+    # Player debuff penalty: being debuffed is bad (future turn cost)
+    player_frail = state.player.powers.get("Frail", 0)
+    player_weak = state.player.powers.get("Weak", 0)
+    if player_frail > 0 and any(e.hp > 0 for e in state.enemies):
+        score -= player_frail * 2.0  # Frail reduces block by 25%
+    if player_weak > 0 and any(e.hp > 0 for e in state.enemies):
+        score -= player_weak * 1.5   # Weak reduces damage by 25%
 
     # -----------------------------------------------------------------------
     # 3. HP preservation (self-damage costs like Blood Wall)
