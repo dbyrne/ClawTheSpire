@@ -281,7 +281,17 @@ def simulate_turn(
                         break
 
         if match_idx is None:
-            log.debug("Could not find playable '%s' in hand", card_name)
+            # Card not in hand — likely drawn mid-turn in a different order
+            # than our sim. Force it from draw pile to match the real game.
+            for j, pile_card in enumerate(s.player.draw_pile):
+                if pile_card.name == normalized or (want_upgraded and pile_card.name == normalized and pile_card.upgraded):
+                    s.player.draw_pile.pop(j)
+                    s.player.hand.append(pile_card)
+                    match_idx = len(s.player.hand) - 1
+                    break
+
+        if match_idx is None:
+            log.debug("Could not find '%s' in hand or draw pile", card_name)
             continue
 
         card = s.player.hand[match_idx]
