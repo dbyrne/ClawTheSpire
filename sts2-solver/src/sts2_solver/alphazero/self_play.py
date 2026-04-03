@@ -302,34 +302,44 @@ def train_batch(
         p_loss = -torch.sum(target_policy[:len(log_probs)] * log_probs)
 
         loss = v_loss + p_loss
+        if torch.isnan(loss):
+            continue
         value_losses.append(v_loss.item())
         policy_losses.append(p_loss.item())
 
         optimizer.zero_grad()
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(network.parameters(), 1.0)
         optimizer.step()
 
     # Train deck evaluation head on deck change samples
     for sample in (deck_samples or []):
-        state_tensors = {k: v.to(device) for k, v in sample.state_tensors.items()}
-        hidden = network.encode_state(**state_tensors)
+        try:
+            state_tensors = {k: v.to(device) for k, v in sample.state_tensors.items()}
+            hidden = network.encode_state(**state_tensors)
 
-        card_ids = torch.tensor([sample.candidate_card_ids], dtype=torch.long, device=device)
-        scores = network.evaluate_deck_change(hidden, card_ids)  # (1, num_candidates)
+            # Clamp card IDs to valid range
+            max_id = network.card_embed.num_embeddings - 1
+            clamped_ids = [min(c, max_id) for c in sample.candidate_card_ids]
+            card_ids = torch.tensor([clamped_ids], dtype=torch.long, device=device)
+            scores = network.evaluate_deck_change(hidden, card_ids)  # (1, num_candidates)
 
-        # Target: the chosen card should score highest, value = run outcome
-        target = torch.tensor([[sample.value]], dtype=torch.float32, device=device)
-        if sample.chosen_idx >= 0 and sample.chosen_idx < len(sample.candidate_card_ids):
-            chosen_score = scores[0, sample.chosen_idx].unsqueeze(0).unsqueeze(0)
-        else:
-            # Skipped — current deck value should be higher than all candidates
-            chosen_score = network.value_head(hidden)
-        d_loss = F.mse_loss(chosen_score, target)
-        deck_losses.append(d_loss.item())
+            # Target: the chosen card should score highest, value = run outcome
+            target = torch.tensor([[sample.value]], dtype=torch.float32, device=device)
+            if sample.chosen_idx >= 0 and sample.chosen_idx < len(sample.candidate_card_ids):
+                chosen_score = scores[0, sample.chosen_idx].unsqueeze(0).unsqueeze(0)
+            else:
+                chosen_score = network.value_head(hidden)
+            d_loss = F.mse_loss(chosen_score, target)
 
-        optimizer.zero_grad()
-        d_loss.backward()
-        optimizer.step()
+            if not torch.isnan(d_loss):
+                deck_losses.append(d_loss.item())
+                optimizer.zero_grad()
+                d_loss.backward()
+                torch.nn.utils.clip_grad_norm_(network.parameters(), 1.0)
+                optimizer.step()
+        except Exception:
+            continue
 
     avg_v = sum(value_losses) / max(1, len(value_losses))
     avg_p = sum(policy_losses) / max(1, len(policy_losses))
