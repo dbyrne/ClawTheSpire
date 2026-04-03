@@ -77,6 +77,15 @@ class TrainingSample:
     num_actions: int
 
 
+@dataclass
+class DeckChangeSample:
+    """Training sample for deck modification decisions (card reward/remove)."""
+    state_tensors: dict[str, torch.Tensor]  # Deck state BEFORE the change
+    candidate_card_ids: list[int]  # Vocab indices for offered cards
+    chosen_idx: int  # Which card was picked (or -1 for skip)
+    value: float  # Run outcome value (assigned after run ends)
+
+
 class ReplayBuffer:
     """Fixed-size buffer of training samples."""
 
@@ -263,12 +272,14 @@ def train_batch(
     network: STS2Network,
     optimizer: torch.optim.Optimizer,
     samples: list[TrainingSample],
+    deck_samples: list | None = None,
     device: str = "cpu",
-) -> tuple[float, float, float]:
-    """Train on a batch. Returns (total_loss, value_loss, policy_loss)."""
+) -> tuple[float, float, float, float]:
+    """Train on a batch. Returns (total_loss, value_loss, policy_loss, deck_loss)."""
     network.train()
     value_losses = []
     policy_losses = []
+    deck_losses = []
 
     for sample in samples:
         state_tensors = {k: v.to(device) for k, v in sample.state_tensors.items()}
@@ -298,9 +309,32 @@ def train_batch(
         loss.backward()
         optimizer.step()
 
+    # Train deck evaluation head on deck change samples
+    for sample in (deck_samples or []):
+        state_tensors = {k: v.to(device) for k, v in sample.state_tensors.items()}
+        hidden = network.encode_state(**state_tensors)
+
+        card_ids = torch.tensor([sample.candidate_card_ids], dtype=torch.long, device=device)
+        scores = network.evaluate_deck_change(hidden, card_ids)  # (1, num_candidates)
+
+        # Target: the chosen card should score highest, value = run outcome
+        target = torch.tensor([[sample.value]], dtype=torch.float32, device=device)
+        if sample.chosen_idx >= 0 and sample.chosen_idx < len(sample.candidate_card_ids):
+            chosen_score = scores[0, sample.chosen_idx].unsqueeze(0).unsqueeze(0)
+        else:
+            # Skipped — current deck value should be higher than all candidates
+            chosen_score = network.value_head(hidden)
+        d_loss = F.mse_loss(chosen_score, target)
+        deck_losses.append(d_loss.item())
+
+        optimizer.zero_grad()
+        d_loss.backward()
+        optimizer.step()
+
     avg_v = sum(value_losses) / max(1, len(value_losses))
     avg_p = sum(policy_losses) / max(1, len(policy_losses))
-    return avg_v + avg_p, avg_v, avg_p
+    avg_d = sum(deck_losses) / max(1, len(deck_losses))
+    return avg_v + avg_p + avg_d, avg_v, avg_p, avg_d
 
 
 # ---------------------------------------------------------------------------
@@ -350,6 +384,7 @@ def train_worker(
     network = STS2Network(vocabs, config)
     optimizer = Adam(network.parameters(), lr=lr)
     replay_buffer = ReplayBuffer(capacity=50_000)
+    deck_buffer = ReplayBuffer(capacity=10_000)
     mcts = MCTS(network, vocabs, config, card_db=card_db, device="cpu")
 
     save_path = Path(save_dir) if save_dir else Path(__file__).resolve().parents[4] / "alphazero_checkpoints"
@@ -387,6 +422,8 @@ def train_worker(
 
             for sample in result.samples:
                 replay_buffer.add(sample)
+            for ds in result.deck_samples:
+                deck_buffer.add(ds)
 
             total_games += 1
             if result.outcome == "win":
@@ -404,12 +441,13 @@ def train_worker(
                 recent_games = recent_games[-50:]
 
         # --- Training ---
-        v_loss = p_loss = total_loss = 0.0
+        v_loss = p_loss = d_loss = total_loss = 0.0
         if len(replay_buffer) >= batch_size:
             for epoch in range(train_epochs):
                 batch = replay_buffer.sample(batch_size)
-                total_loss, v_loss, p_loss = train_batch(
-                    network, optimizer, batch, device="cpu",
+                deck_batch = deck_buffer.sample(min(32, len(deck_buffer))) if len(deck_buffer) > 0 else []
+                total_loss, v_loss, p_loss, d_loss = train_batch(
+                    network, optimizer, batch, deck_samples=deck_batch, device="cpu",
                 )
 
         gen_elapsed = time.time() - gen_t0
@@ -442,7 +480,7 @@ def train_worker(
         win_pct = total_wins / max(1, total_games) * 100
         print(
             f"Gen {gen:4d} | games={total_games} win={win_pct:.0f}% | "
-            f"loss={total_loss:.3f} (v={v_loss:.3f} p={p_loss:.3f}) | "
+            f"loss={total_loss:.3f} (v={v_loss:.3f} p={p_loss:.3f} d={d_loss:.3f}) | "
             f"{gen_elapsed:.1f}s",
             flush=True,
         )

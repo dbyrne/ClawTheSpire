@@ -59,7 +59,7 @@ from ..simulator import (
 from .encoding import EncoderConfig, Vocabs
 from .mcts import MCTS
 from .network import STS2Network
-from .self_play import TrainingSample
+from .self_play import TrainingSample, DeckChangeSample
 from .state_tensor import encode_state, encode_actions
 
 
@@ -170,6 +170,78 @@ def mcts_combat(
 
 
 # ---------------------------------------------------------------------------
+# Network-based card reward selection
+# ---------------------------------------------------------------------------
+
+def _network_pick_card(
+    offered: list[Card],
+    deck: list[Card],
+    hp: int,
+    max_hp: int,
+    floor: int,
+    mcts: MCTS,
+    vocabs: Vocabs,
+    config: EncoderConfig,
+    card_db: CardDB,
+) -> tuple[Card | None, DeckChangeSample | None]:
+    """Use the network's deck evaluation head to pick a card reward.
+
+    Evaluates each offered card by scoring how much it improves the deck.
+    Skips if no card improves the current deck value.
+
+    Returns (picked_card_or_None, training_sample_or_None).
+    """
+    if not offered:
+        return None, None
+
+    network = mcts.network
+
+    # Build a minimal combat state to encode the deck context
+    # (no enemies, just deck/HP/relics for the trunk to evaluate)
+    player = PlayerState(
+        hp=hp, max_hp=max_hp, energy=3, max_energy=3,
+        hand=[], draw_pile=list(deck),
+    )
+    dummy_state = CombatState(player=player, enemies=[], turn=0, floor=floor)
+
+    try:
+        import torch
+        state_tensors = encode_state(dummy_state, vocabs, config)
+        state_tensors = {k: v.to(mcts.device) for k, v in state_tensors.items()}
+
+        with torch.no_grad():
+            hidden = network.encode_state(**state_tensors)
+
+            # Get vocab indices for offered cards
+            candidate_ids = []
+            for card in offered:
+                base_id = card.id.rstrip("+")
+                candidate_ids.append(vocabs.cards.get(base_id))
+
+            best_idx, scores = network.pick_card_reward(
+                hidden, candidate_ids, skip_allowed=True,
+            )
+
+        # Build training sample
+        sample = DeckChangeSample(
+            state_tensors={k: v.cpu() for k, v in state_tensors.items()},
+            candidate_card_ids=candidate_ids,
+            chosen_idx=best_idx if best_idx is not None else -1,
+            value=0.0,  # Filled after run ends
+        )
+
+        if best_idx is not None and best_idx < len(offered):
+            return offered[best_idx], sample
+        return None, sample
+
+    except Exception:
+        # Fallback to deterministic pick
+        from ..simulator import _pick_card_reward
+        pick = _pick_card_reward(offered, deck)
+        return pick, None
+
+
+# ---------------------------------------------------------------------------
 # Full Act 1 run with MCTS combat
 # ---------------------------------------------------------------------------
 
@@ -183,6 +255,7 @@ class FullRunResult:
     combats_fought: int
     deck_size: int
     samples: list[TrainingSample]
+    deck_samples: list  # DeckChangeSample list
     combat_log: list[dict]
 
 
@@ -239,6 +312,7 @@ def play_full_run(
 
     # Run state
     all_samples: list[TrainingSample] = []
+    deck_change_samples: list = []
     combat_samples_by_floor: dict[int, list[TrainingSample]] = {}
     combat_log: list[dict] = []
     combats_won = 0
@@ -279,13 +353,13 @@ def play_full_run(
             if outcome == "lose":
                 # Assign values: run died here
                 _assign_run_values(combat_samples_by_floor, floor_reached,
-                                   len(room_sequence), 0, max_hp)
+                                   len(room_sequence), 0, max_hp, deck_change_samples)
                 return FullRunResult(
                     outcome="lose", floor_reached=floor_reached,
                     final_hp=0, max_hp=max_hp,
                     combats_won=combats_won, combats_fought=combats_fought,
                     deck_size=len(deck), samples=all_samples,
-                    combat_log=combat_log,
+                    deck_samples=deck_change_samples, combat_log=combat_log,
                 )
 
             combats_won += 1
@@ -301,19 +375,24 @@ def play_full_run(
 
             if room_type != "boss":
                 offered = _offer_card_rewards(pools, deck)
-                pick = _pick_card_reward(offered, deck)
+                pick, deck_sample = _network_pick_card(
+                    offered, deck, hp, max_hp, floor_num,
+                    mcts, vocabs, config, card_db,
+                )
                 if pick:
                     deck.append(pick)
+                if deck_sample:
+                    deck_change_samples.append(deck_sample)
 
             if room_type == "boss":
                 _assign_run_values(combat_samples_by_floor, floor_reached,
-                                   len(room_sequence), hp, max_hp)
+                                   len(room_sequence), hp, max_hp, deck_change_samples)
                 return FullRunResult(
                     outcome="win", floor_reached=floor_reached,
                     final_hp=hp, max_hp=max_hp,
                     combats_won=combats_won, combats_fought=combats_fought,
                     deck_size=len(deck), samples=all_samples,
-                    combat_log=combat_log,
+                    deck_samples=deck_change_samples, combat_log=combat_log,
                 )
 
         elif room_type == "rest":
@@ -355,13 +434,13 @@ def play_full_run(
 
     # Completed all floors without boss (shouldn't happen normally)
     _assign_run_values(combat_samples_by_floor, floor_reached,
-                       len(room_sequence), hp, max_hp)
+                       len(room_sequence), hp, max_hp, deck_change_samples)
     return FullRunResult(
         outcome="lose", floor_reached=floor_reached,
         final_hp=hp, max_hp=max_hp,
         combats_won=combats_won, combats_fought=combats_fought,
         deck_size=len(deck), samples=all_samples,
-        combat_log=combat_log,
+        deck_samples=deck_change_samples, combat_log=combat_log,
     )
 
 
@@ -371,24 +450,13 @@ def _assign_run_values(
     total_floors: int,
     final_hp: int,
     max_hp: int,
+    deck_change_samples: list | None = None,
 ) -> None:
-    """Assign training values to all combat samples based on run outcome.
+    """Assign training values to all samples based on run outcome.
 
-    Samples from later combats get values closer to the actual outcome.
-    Samples from early combats are discounted — the outcome was far away
-    and many other decisions intervened.
-
-    Value formula:
-        base = floor_reached / total_floors  (0 to 1, how far we got)
-        hp_bonus = final_hp / max_hp * 0.3   (surviving with HP matters)
-        raw = base + hp_bonus - 0.5           (center around 0)
-        value = raw * discount^(floors_remaining)
-
-    This means:
-        - Dying on floor 2: value ≈ -0.4 (bad)
-        - Dying on floor 10: value ≈ -0.1 (got far, close to neutral)
-        - Winning with full HP: value ≈ +0.8 (great)
-        - Winning with 1 HP: value ≈ +0.5 (won but barely)
+    Combat samples from later combats get values closer to the actual outcome.
+    Deck change samples all get the run-level value (the card pick's impact
+    is measured by how the whole run went).
     """
     base = floor_reached / max(1, total_floors)
     hp_bonus = final_hp / max(1, max_hp) * 0.3
@@ -403,3 +471,8 @@ def _assign_run_values(
         floor_value = run_value * (discount ** i)
         for sample in combat_samples_by_floor[floor]:
             sample.value = floor_value
+
+    # Deck change samples get the full run value
+    if deck_change_samples:
+        for sample in deck_change_samples:
+            sample.value = run_value
