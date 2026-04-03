@@ -211,21 +211,40 @@ def evaluate_turn(state: CombatState, initial_state: CombatState, character: str
         if gained > 0:
             score += gained * value_per * fight_length_mult
 
-    # Poison on enemies — value future damage from stacks applied this turn
-    poison_weight = EVALUATOR.get("poison_value_per_stack", 0)
-    if poison_weight > 0:
+    # Poison on enemies — score the actual future damage from stacks added.
+    # Poison deals N + (N-1) + ... + 1 = N*(N+1)/2 total (triangle sum).
+    # Adding stacks to an enemy with existing poison compounds: the marginal
+    # future damage from adding 5 to an enemy at 0 is 15, but adding 5 to
+    # an enemy at 5 is 40.  This makes the solver correctly prioritize
+    # poison stacking over flat immediate damage (e.g. Deadly Poison > Strike).
+    poison_discount = EVALUATOR.get("poison_future_discount", 0)
+    if poison_discount > 0:
         for i, enemy in enumerate(state.enemies):
             if not enemy.is_alive:
                 continue
             cur_poison = enemy.powers.get("Poison", 0)
             prev_poison = (initial_state.enemies[i].powers.get("Poison", 0)
                            if i < len(initial_state.enemies) else 0)
-            added = cur_poison - prev_poison
-            if added > 0:
-                score += added * poison_weight * fight_length_mult
+            if cur_poison > prev_poison:
+                # Marginal future damage from newly added stacks
+                cur_triangle = cur_poison * (cur_poison + 1) / 2
+                prev_triangle = prev_poison * (prev_poison + 1) / 2
+                marginal_damage = cur_triangle - prev_triangle
+                score += marginal_damage * poison_discount
 
     # -----------------------------------------------------------------------
-    # 6. Energy efficiency (slight penalty for unspent energy)
+    # 6. Card draw value — the solver can't populate draw piles from game
+    #    state, so simulated draws hit empty piles. Compensate by scoring
+    #    a bonus for cards drawn this turn. The runner plays draw cards
+    #    first and re-solves with the real hand, but the solver still needs
+    #    to value draw to include draw cards in its plan at all.
+    # -----------------------------------------------------------------------
+    draws = state.cards_drawn_this_turn - initial_state.cards_drawn_this_turn
+    if draws > 0 and any(e.hp > 0 for e in state.enemies):
+        score += draws * EVALUATOR["card_draw_value"]
+
+    # -----------------------------------------------------------------------
+    # 7. Energy efficiency (slight penalty for unspent energy)
     # -----------------------------------------------------------------------
     unspent = state.player.energy
     if unspent > 0 and any(e.hp > 0 for e in state.enemies):
@@ -234,7 +253,7 @@ def evaluate_turn(state: CombatState, initial_state: CombatState, character: str
             score -= unspent * EVALUATOR["unspent_energy_penalty"]
 
     # -----------------------------------------------------------------------
-    # 7. Relic-aware scoring adjustments
+    # 8. Relic-aware scoring adjustments
     # -----------------------------------------------------------------------
     relics = state.relics
     enemies_alive = sum(1 for e in state.enemies if e.is_alive)

@@ -61,13 +61,25 @@ EVALUATOR = {
     "strength_gained_value": 15.0,   # (was 5.0)
     "dexterity_gained_value": 5.0,   # (was 3.0)
 
-    # Poison scoring (Silent) — Poison on an enemy deals N damage then
-    # decrements each turn, so N stacks = N + (N-1) + ... + 1 = N*(N+1)/2
-    # future damage.  We discount by a weight to balance vs immediate damage.
-    "poison_value_per_stack": 1.5,   # Multiplied by stack count
+    # Poison scoring (Silent) — Poison on an enemy deals N + (N-1) + ... + 1
+    # = N*(N+1)/2 total future damage.  The evaluator computes the marginal
+    # triangle-sum damage from newly added stacks (capturing compounding),
+    # then multiplies by this discount.  At 1.0, Deadly Poison (5 stacks =
+    # 15 marginal dmg) ties Strike (6 dmg × 2.5 = 15) on a clean target,
+    # but correctly dominates when stacking (5->10 = 40 pts).  Strike still
+    # wins when it can kill (kill_bonus) or vs high-threat enemies (threat
+    # multiplier on damage but not poison).
+    "poison_future_discount": 1.0,   # Multiplied by marginal triangle-sum damage
 
     # Energy efficiency — unspent energy is almost always wrong
     "unspent_energy_penalty": 12.0,  # (was 10.0)
+
+    # Card draw — solver can't simulate real draws (empty draw pile),
+    # so we add a heuristic value per card drawn. This ensures draw
+    # cards like Acrobatics, Backflip, Dagger Throw are included in
+    # the plan. The runner then plays them first and re-solves with
+    # the real drawn cards.
+    "card_draw_value": 7.0,          # Per card drawn — roughly "average card value"
 }
 
 
@@ -89,11 +101,13 @@ POWER_VALUES: dict[str, dict[str, float]] = {
         "Infinite Blades": 9.0,     # Guaranteed Shiv each turn
         "Noxious Fumes": 8.0,       # AoE poison every turn — strong scaling
         "Tools of the Trade": 8.0,  # Draw + discard each turn — engine
+        "Footwork": 8.0,            # Dexterity scaling — core block power
+        "Well-Laid Plans": 7.0,     # Retain best card — critical consistency
         "Serpent Form": 7.0,        # Strong damage output
         "Accelerant": 7.0,          # Poison multiplier
+        "Master Planner": 6.0,      # Makes skills Sly
         "Afterimage": 5.0,          # Block on card play
         "Abrasive": 5.0,            # Block + Thorns from Sly
-        "Master Planner": 6.0,      # Makes skills Sly
         "Envenom": 4.0,             # Poison on attack damage
     },
 }
@@ -132,26 +146,34 @@ CARD_TIERS: dict[str, dict[str, list[str]]] = {
         ],
     },
     "silent": {
-        # Based on Mobalytics Silent guide.
-        # Shiv, Poison, and Sly (discard) are the three archetypes.
-        # Accuracy is the #1 scaling card. Knife Trap is the best finisher.
-        # Thin decks are critical for Sly cycling strategies.
+        # Based on Mobalytics Silent guide + 33-run analysis (gen6).
+        # Key findings: bot ignores Dash/Backstab/Well-Laid Plans/Leg Sweep/Footwork
+        # which are exactly the block scaling and front-loaded damage cards needed
+        # to survive Act 1. Archetype commitment is critical — mixed builds die early.
         "S": [
             "Accuracy", "Infinite Blades", "Tools of the Trade",
             "Master Planner", "Knife Trap",
+            "Footwork",                   # Dexterity scaling — core block card
+            "Well-Laid Plans",            # Retain best card — critical for consistency
+            "Dash",                       # 10 damage + 10 block — best Act 1 card
         ],
         "A": [
+            "Backstab",                   # 11 free damage turn 1 — huge Act 1 tempo
+            "Leg Sweep",                  # 12 damage + 12 block + Weak — top defensive card
             "Leading Strike", "Cloak and Dagger", "Blade Dance",
             "Poisoned Stab", "Deadly Poison", "Acrobatics",
             "Untouchable", "Flick-Flack", "Noxious Fumes",
             "Accelerant", "Calculated Gamble", "Tactician",
             "Burst", "Serpent Form",
+            "Dodge and Roll",             # Block now + next turn — good defense
+            "Deflect",                    # Free block — never bad
         ],
         "B": [
             "Dagger Throw", "Ricochet", "Prepared", "Reflex",
             "Speedster", "Abrasive", "Haze", "Outbreak",
             "Bubble Bubble", "Mirage", "Fan of Knives",
             "Hidden Daggers", "Finisher", "Afterimage",
+            "Catalyst",                   # Only good with heavy Poison commitment
         ],
         "avoid": [
             "Bane", "Slice",
@@ -326,7 +348,8 @@ CHARACTER_CONFIG: dict[str, dict] = {
     "silent": {
         "key_card": "Survivor",
         "key_card_reason": "it enables Sly discards and provides Block",
-        "removal_priority": ["Strike", "Defend"],
+        "protect_cards": ["Survivor", "Neutralize"],  # Never remove/transform these
+        "removal_priority": ["Strike", "Defend"],     # Strikes first — they dilute draws
     },
 }
 
