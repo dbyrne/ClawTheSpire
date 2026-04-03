@@ -32,6 +32,7 @@ from .combat_engine import (
     play_card,
     resolve_enemy_intents,
     start_turn,
+    tick_enemy_powers,
 )
 from .config import EVALUATOR, CARD_TIERS, STRATEGY
 from .constants import CardType, TargetType
@@ -723,6 +724,8 @@ def simulate_combat(
         resolve_enemy_intents(state)
         # Apply buff/debuff effects from the move tables
         _resolve_sim_intents(state, enemy_ais)
+        # Tick enemy debuffs/poison AFTER intents resolve
+        tick_enemy_powers(state)
 
         result = is_combat_over(state)
         if result:

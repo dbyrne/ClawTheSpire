@@ -22,6 +22,7 @@ from .combat_engine import (
     play_card,
     resolve_enemy_intents,
     start_turn,
+    tick_enemy_powers,
 )
 from .data_loader import CardDB
 from .models import CombatState
@@ -58,6 +59,7 @@ def step(state: CombatState, action: Action, card_db: CardDB | None = None) -> S
     if action.action_type == "end_turn":
         end_turn(new_state)
         resolve_enemy_intents(new_state)
+        tick_enemy_powers(new_state)
         outcome = is_combat_over(new_state)
         if outcome:
             return StepResult(new_state, done=True, outcome=outcome, turn_ended=True)
@@ -91,6 +93,7 @@ def step_sequence(
         if action.action_type == "end_turn":
             end_turn(current)
             resolve_enemy_intents(current)
+            tick_enemy_powers(current)
             outcome = is_combat_over(current)
             if outcome:
                 return StepResult(current, done=True, outcome=outcome, turn_ended=True)

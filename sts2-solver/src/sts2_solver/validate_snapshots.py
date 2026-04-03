@@ -1,0 +1,530 @@
+"""Turn-by-turn simulator validation using combat snapshots.
+
+Reconstructs CombatState from each snapshot, plays the logged cards
+through the combat engine, simulates end-of-turn + enemy phase, and
+compares the resulting state against the next turn's snapshot.
+
+This catches:
+- Card effect bugs (wrong damage, block, power application)
+- Turn lifecycle bugs (block not clearing, powers not ticking)
+- Enemy action bugs (wrong damage calculation, intent resolution)
+- Missing mechanics (unmodeled restrictions, relic triggers)
+
+Usage:
+    python -m sts2_solver.validate_snapshots [logs_dir]
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import sys
+from collections import Counter
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from .combat_engine import (
+    can_play_card,
+    end_turn,
+    is_combat_over,
+    play_card,
+    resolve_enemy_intents,
+    start_turn,
+    tick_enemy_powers,
+    valid_targets,
+)
+from .constants import CardType, TargetType
+from .data_loader import CardDB, load_cards
+from .models import Card, CombatState, EnemyState, PlayerState
+from .replay_extractor import (
+    CombatSnapshot,
+    CombatTurn,
+    RunReplay,
+    extract_all_runs,
+)
+
+log = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Snapshot → CombatState reconstruction
+# ---------------------------------------------------------------------------
+
+def _find_card(name: str, cost: int | None, upgraded: bool, card_db: CardDB) -> Card | None:
+    """Look up a Card from the database by name."""
+    # Try direct name match across all cards
+    for card in card_db.all_cards():
+        if card.name == name and card.upgraded == upgraded:
+            return card
+        # Handle upgrade suffix mismatch
+        if card.name == name.rstrip("+") and upgraded:
+            return card
+    # Try without upgrade flag
+    for card in card_db.all_cards():
+        if card.name == name:
+            return card
+    return None
+
+
+def _make_fallback_card(name: str, cost: int | None, upgraded: bool) -> Card:
+    """Create a minimal Card when not found in the database."""
+    # Guess card type from common patterns
+    card_type = CardType.SKILL
+    target = TargetType.SELF
+    damage = None
+    block = None
+
+    lower = name.lower()
+    if "strike" in lower or "bash" in lower or "stab" in lower:
+        card_type = CardType.ATTACK
+        target = TargetType.ANY_ENEMY
+        damage = 6
+    elif "defend" in lower or "block" in lower:
+        block = 5
+
+    return Card(
+        id=name.upper().replace(" ", "_"),
+        name=name,
+        cost=cost if cost is not None else 1,
+        card_type=card_type,
+        target=target,
+        upgraded=upgraded,
+        damage=damage,
+        block=block,
+    )
+
+
+def state_from_snapshot(
+    snapshot: CombatSnapshot,
+    card_db: CardDB,
+    floor: int = 0,
+) -> CombatState:
+    """Reconstruct a CombatState from a combat snapshot."""
+    # Build hand
+    hand: list[Card] = []
+    for c in snapshot.hand:
+        name = c.get("name", "?")
+        upgraded = bool(c.get("upgraded", False))
+        cost = c.get("cost")
+        card = _find_card(name, cost, upgraded, card_db)
+        if card is None:
+            card = _make_fallback_card(name, cost, upgraded)
+            log.debug("Card not in DB, using fallback: %s", name)
+        # Override cost from snapshot if available (runtime cost may differ)
+        if cost is not None and cost != card.cost:
+            card = Card(
+                id=card.id, name=card.name, cost=cost,
+                card_type=card.card_type, target=card.target,
+                upgraded=card.upgraded, damage=card.damage,
+                block=card.block, hit_count=card.hit_count,
+                powers_applied=card.powers_applied,
+                cards_draw=card.cards_draw, energy_gain=card.energy_gain,
+                hp_loss=card.hp_loss, keywords=card.keywords,
+                tags=card.tags, spawns_cards=card.spawns_cards,
+                is_x_cost=card.is_x_cost,
+            )
+        hand.append(card)
+
+    # Build player
+    player = PlayerState(
+        hp=snapshot.player_hp,
+        max_hp=snapshot.player_max_hp,
+        block=snapshot.player_block,
+        energy=snapshot.player_energy,
+        max_energy=snapshot.player_energy,  # Best guess — snapshot doesn't track max separately
+        powers=dict(snapshot.player_powers),
+        hand=hand,
+    )
+
+    # Build enemies
+    enemies: list[EnemyState] = []
+    for e in snapshot.enemies:
+        powers = {}
+        for p in (e.get("powers") or []):
+            if isinstance(p, dict):
+                powers[p["name"]] = p["amount"]
+        enemies.append(EnemyState(
+            id=e.get("id", ""),
+            name=e.get("name", "?"),
+            hp=e.get("hp", 0),
+            max_hp=e.get("max_hp", 0),
+            block=e.get("block", 0),
+            powers=powers,
+            intent_type=e.get("intent_type"),
+            intent_damage=e.get("intent_damage"),
+            intent_hits=e.get("intent_hits", 1),
+            intent_block=e.get("intent_block"),
+        ))
+
+    # Build relic set
+    relic_ids = frozenset(
+        r.upper().replace(" ", "_") for r in snapshot.relics
+    ) if snapshot.relics else frozenset()
+
+    return CombatState(
+        player=player,
+        enemies=enemies,
+        turn=snapshot.turn,
+        relics=relic_ids,
+        floor=floor,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Turn simulation
+# ---------------------------------------------------------------------------
+
+def simulate_turn(
+    state: CombatState,
+    cards_played: list[str],
+    card_db: CardDB,
+) -> CombatState:
+    """Play logged cards, end turn, resolve enemy intents. Returns new state.
+
+    Matches card names to hand positions and plays them in order.
+    After all cards are played, ends the turn and resolves enemy actions.
+    """
+    from copy import deepcopy
+    s = deepcopy(state)
+
+    for card_name in cards_played:
+        # Find card in hand by name
+        match_idx = None
+        normalized = card_name.rstrip("+")
+
+        for i, hand_card in enumerate(s.player.hand):
+            if hand_card.name == card_name or hand_card.name == normalized:
+                if can_play_card(s, i):
+                    match_idx = i
+                    break
+
+        if match_idx is None:
+            log.debug("Could not find playable '%s' in hand", card_name)
+            continue
+
+        card = s.player.hand[match_idx]
+        targets = valid_targets(s, card)
+        target = targets[0] if targets else None
+
+        play_card(s, match_idx, target, card_db)
+
+        if is_combat_over(s):
+            return s
+
+    # End turn + enemy phase
+    end_turn(s)
+    resolve_enemy_intents(s)
+    tick_enemy_powers(s)
+
+    return s
+
+
+# ---------------------------------------------------------------------------
+# Comparison
+# ---------------------------------------------------------------------------
+
+@dataclass
+class FieldMismatch:
+    field: str
+    expected: object
+    actual: object
+    delta: float | None = None  # For numeric fields
+
+    def __repr__(self) -> str:
+        if self.delta is not None:
+            return f"{self.field}: expected={self.expected} actual={self.actual} (off by {self.delta:+g})"
+        return f"{self.field}: expected={self.expected} actual={self.actual}"
+
+
+@dataclass
+class TurnValidation:
+    """Result of validating one turn transition."""
+    combat_idx: int
+    turn: int
+    cards_played: list[str]
+    mismatches: list[FieldMismatch]
+    combat_ended: bool = False  # Combat ended during this turn
+    skipped: bool = False  # Turn was skipped (no next snapshot)
+    skip_reason: str = ""
+
+    @property
+    def passed(self) -> bool:
+        return not self.mismatches and not self.skipped
+
+
+@dataclass
+class SnapshotValidationReport:
+    """Aggregate results across all validated turns."""
+    results: list[TurnValidation]
+
+    @property
+    def total(self) -> int:
+        return len(self.results)
+
+    @property
+    def validated(self) -> int:
+        return sum(1 for r in self.results if not r.skipped)
+
+    @property
+    def passed(self) -> int:
+        return sum(1 for r in self.results if r.passed)
+
+    @property
+    def failed(self) -> int:
+        return sum(1 for r in self.results if not r.passed and not r.skipped)
+
+    @property
+    def pass_rate(self) -> float:
+        return self.passed / max(1, self.validated)
+
+    def mismatch_summary(self) -> dict[str, int]:
+        counter: Counter[str] = Counter()
+        for r in self.results:
+            for m in r.mismatches:
+                counter[m.field] += 1
+        return dict(counter.most_common())
+
+    def worst_mismatches(self, n: int = 10) -> list[FieldMismatch]:
+        """Largest numeric deltas across all turns."""
+        all_mm = [m for r in self.results for m in r.mismatches if m.delta is not None]
+        return sorted(all_mm, key=lambda m: abs(m.delta or 0), reverse=True)[:n]
+
+
+def compare_states(
+    simulated: CombatState,
+    next_snapshot: CombatSnapshot,
+) -> list[FieldMismatch]:
+    """Compare simulator output against next turn's snapshot."""
+    mismatches: list[FieldMismatch] = []
+
+    # After simulate_turn, the state has gone through end_turn + enemy phase.
+    # The next snapshot is at the START of the next player turn (post-draw).
+    # We can compare: player HP, enemy HP, enemy block, player powers.
+    # We CANNOT compare: player block (cleared at turn start), player energy
+    # (reset), hand (redrawn), pile sizes (reshuffled).
+
+    sim_player = simulated.player
+    snap = next_snapshot
+
+    # Player HP (most important — validates damage calculations)
+    if sim_player.hp != snap.player_hp:
+        mismatches.append(FieldMismatch(
+            "player_hp", snap.player_hp, sim_player.hp,
+            delta=sim_player.hp - snap.player_hp,
+        ))
+
+    # Enemy HP comparison (validates our damage output)
+    # Match enemies by index — snapshot enemies are alive only
+    snap_enemies = {i: e for i, e in enumerate(snap.enemies)}
+    sim_alive = [(i, e) for i, e in enumerate(simulated.enemies) if e.is_alive]
+
+    for snap_idx, snap_enemy in snap_enemies.items():
+        if snap_idx < len(sim_alive):
+            sim_idx, sim_enemy = sim_alive[snap_idx]
+            # Match by name to handle index shifts from deaths
+            if sim_enemy.name == snap_enemy.get("name"):
+                if sim_enemy.hp != snap_enemy.get("hp", 0):
+                    mismatches.append(FieldMismatch(
+                        f"enemy_{snap_idx}_hp ({sim_enemy.name})",
+                        snap_enemy.get("hp"), sim_enemy.hp,
+                        delta=sim_enemy.hp - snap_enemy.get("hp", 0),
+                    ))
+                if sim_enemy.block != snap_enemy.get("block", 0):
+                    mismatches.append(FieldMismatch(
+                        f"enemy_{snap_idx}_block ({sim_enemy.name})",
+                        snap_enemy.get("block", 0), sim_enemy.block,
+                        delta=sim_enemy.block - snap_enemy.get("block", 0),
+                    ))
+            else:
+                # Name mismatch — enemy died or new one spawned
+                mismatches.append(FieldMismatch(
+                    f"enemy_{snap_idx}_name",
+                    snap_enemy.get("name"), sim_enemy.name,
+                ))
+
+    # Enemy count — did we kill enemies the game didn't, or vice versa?
+    if len(sim_alive) != len(snap_enemies):
+        mismatches.append(FieldMismatch(
+            "enemy_count", len(snap_enemies), len(sim_alive),
+        ))
+
+    return mismatches
+
+
+# ---------------------------------------------------------------------------
+# Main validation pipeline
+# ---------------------------------------------------------------------------
+
+def validate_run(run: RunReplay, card_db: CardDB) -> list[TurnValidation]:
+    """Validate all turn transitions in a run."""
+    results: list[TurnValidation] = []
+
+    for combat_idx, combat in enumerate(run.combats):
+        # Find consecutive turns that both have snapshots
+        snapshot_turns = [t for t in combat.turns if t.snapshot is not None]
+
+        for i in range(len(snapshot_turns)):
+            turn = snapshot_turns[i]
+            snap = turn.snapshot
+
+            # Skip mid-turn Survivor splits (energy < max on non-T1)
+            if snap.turn > 1 and snap.player_energy < 3 and snap.player_block > 0:
+                results.append(TurnValidation(
+                    combat_idx=combat_idx,
+                    turn=snap.turn,
+                    cards_played=turn.cards_played,
+                    mismatches=[],
+                    skipped=True,
+                    skip_reason="mid-turn split (Survivor)",
+                ))
+                continue
+
+            # Need a next snapshot to compare against
+            if i + 1 >= len(snapshot_turns):
+                results.append(TurnValidation(
+                    combat_idx=combat_idx,
+                    turn=snap.turn,
+                    cards_played=turn.cards_played,
+                    mismatches=[],
+                    skipped=True,
+                    skip_reason="last turn in combat (no next snapshot)",
+                ))
+                continue
+
+            next_turn = snapshot_turns[i + 1]
+            next_snap = next_turn.snapshot
+
+            # Also skip if the next snapshot is a mid-turn split
+            if next_snap.turn > 1 and next_snap.player_energy < 3 and next_snap.player_block > 0:
+                results.append(TurnValidation(
+                    combat_idx=combat_idx,
+                    turn=snap.turn,
+                    cards_played=turn.cards_played,
+                    mismatches=[],
+                    skipped=True,
+                    skip_reason="next snapshot is mid-turn split",
+                ))
+                continue
+
+            # Reconstruct state and simulate
+            try:
+                state = state_from_snapshot(snap, card_db, floor=combat.floor)
+                simulated = simulate_turn(state, turn.cards_played, card_db)
+            except Exception as e:
+                log.warning(
+                    "Simulation error combat %d turn %d: %s",
+                    combat_idx, snap.turn, e,
+                )
+                results.append(TurnValidation(
+                    combat_idx=combat_idx,
+                    turn=snap.turn,
+                    cards_played=turn.cards_played,
+                    mismatches=[FieldMismatch("simulation_error", None, str(e))],
+                ))
+                continue
+
+            # Check if combat ended during simulation
+            if is_combat_over(simulated):
+                results.append(TurnValidation(
+                    combat_idx=combat_idx,
+                    turn=snap.turn,
+                    cards_played=turn.cards_played,
+                    mismatches=[],
+                    combat_ended=True,
+                ))
+                continue
+
+            # Compare against next snapshot
+            mismatches = compare_states(simulated, next_snap)
+            results.append(TurnValidation(
+                combat_idx=combat_idx,
+                turn=snap.turn,
+                cards_played=turn.cards_played,
+                mismatches=mismatches,
+            ))
+
+    return results
+
+
+def validate_all(logs_dir: Path, card_db: CardDB) -> SnapshotValidationReport:
+    """Run snapshot validation across all runs."""
+    runs = extract_all_runs(logs_dir)
+    all_results: list[TurnValidation] = []
+
+    for run in runs:
+        # Only validate runs that have snapshot data
+        has_snapshots = any(
+            t.snapshot is not None
+            for c in run.combats
+            for t in c.turns
+        )
+        if not has_snapshots:
+            continue
+
+        results = validate_run(run, card_db)
+        all_results.extend(results)
+
+    return SnapshotValidationReport(results=all_results)
+
+
+def print_report(report: SnapshotValidationReport) -> None:
+    """Print a human-readable validation report."""
+    print(f"\n{'='*60}")
+    print(f"  SNAPSHOT VALIDATION REPORT")
+    print(f"{'='*60}")
+    print(f"  Total turns:    {report.total}")
+    print(f"  Validated:      {report.validated}")
+    print(f"  Passed:         {report.passed}")
+    print(f"  Failed:         {report.failed}")
+    print(f"  Skipped:        {report.total - report.validated}")
+    if report.validated > 0:
+        print(f"  Pass rate:      {report.pass_rate:.1%}")
+
+    skipped = [r for r in report.results if r.skipped]
+    if skipped:
+        reasons = Counter(r.skip_reason for r in skipped)
+        print(f"\n  Skip reasons:")
+        for reason, count in reasons.most_common():
+            print(f"    {reason}: {count}")
+
+    if report.failed > 0:
+        print(f"\n  Mismatches by field:")
+        for field_name, count in report.mismatch_summary().items():
+            print(f"    {field_name}: {count}")
+
+        print(f"\n  Worst mismatches (largest delta):")
+        for m in report.worst_mismatches(10):
+            print(f"    {m}")
+
+        # Show first few failed turns in detail
+        failed = [r for r in report.results if not r.passed and not r.skipped]
+        print(f"\n  First failed turns:")
+        for r in failed[:5]:
+            print(f"    Combat {r.combat_idx} T{r.turn}: played {r.cards_played}")
+            for m in r.mismatches:
+                print(f"      {m}")
+
+    print(f"{'='*60}\n")
+
+
+def main(logs_dir: Path | None = None) -> SnapshotValidationReport:
+    """Run full snapshot validation pipeline."""
+    if logs_dir is None:
+        logs_dir = Path(__file__).resolve().parents[3] / "logs" / "gen9"
+
+    log.info("Loading card database...")
+    card_db = load_cards()
+    log.info("Loaded %d cards", len(card_db))
+
+    log.info("Loading replays from %s", logs_dir)
+    report = validate_all(logs_dir, card_db)
+    print_report(report)
+
+    return report
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    dir_arg = Path(sys.argv[1]) if len(sys.argv) > 1 else None
+    report = main(dir_arg)
+    sys.exit(0 if report.failed == 0 else 1)

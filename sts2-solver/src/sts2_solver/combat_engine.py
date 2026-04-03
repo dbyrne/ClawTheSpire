@@ -337,7 +337,12 @@ def _tick_start_of_turn_powers(state: CombatState) -> None:
 
 
 def _tick_end_of_turn_powers(state: CombatState) -> None:
-    """Tick down duration-based powers at end of turn."""
+    """Tick down player duration-based powers at end of turn.
+
+    Enemy debuffs and poison are ticked AFTER enemy intents resolve,
+    via tick_enemy_powers(). This matches the real game order:
+    player end turn → enemy acts → enemy debuffs expire → poison ticks.
+    """
     # Player debuffs
     for debuff in ("Vulnerable", "Weak", "Frail"):
         if debuff in state.player.powers:
@@ -345,7 +350,13 @@ def _tick_end_of_turn_powers(state: CombatState) -> None:
             if state.player.powers[debuff] <= 0:
                 del state.player.powers[debuff]
 
-    # Enemy debuffs and poison
+
+def tick_enemy_powers(state: CombatState) -> None:
+    """Tick enemy debuffs and poison. Call AFTER resolve_enemy_intents().
+
+    Order matters: Weak/Vulnerable must be active during enemy attacks,
+    then expire afterward. Poison deals damage after enemies act.
+    """
     for enemy in state.enemies:
         if not enemy.is_alive:
             continue
@@ -363,7 +374,6 @@ def _tick_end_of_turn_powers(state: CombatState) -> None:
                 del enemy.powers["Poison"]
             if enemy.hp <= 0:
                 enemy.hp = 0
-                enemy.is_alive = False
 
 
 # ---------------------------------------------------------------------------
