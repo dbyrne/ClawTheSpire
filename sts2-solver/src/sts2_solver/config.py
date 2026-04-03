@@ -26,7 +26,7 @@ EVALUATOR = {
     "kill_bonus": 50.0,              # Base bonus for killing an enemy (was 35)
     "buff_kill_bonus": 85.0,         # Extra bonus for killing Buff-intent enemies (was 60)
     "strength_kill_bonus_per": 10.0, # Extra per point of enemy Strength on kill (was 8)
-    "damage_alive_weight": 2.5,      # Per-HP damage to living enemies (was 1.5)
+    "damage_alive_weight": 3.0,      # Per-HP damage to living enemies (was 2.5)
     "damage_dead_weight": 0.2,       # Per-HP damage on already-dead enemies (was 0.5)
     "kill_proximity_weight": 10.0,   # Bonus scaled by % HP removed (was 5)
 
@@ -41,7 +41,7 @@ EVALUATOR = {
 
     # Block scoring — sim shows block matters more when HP is low.
     # survive_scale archetype: heavy block when threatened, less when safe.
-    "effective_block_weight": 3.0,   # Per-point of block vs incoming damage (was 2.5)
+    "effective_block_weight": 2.0,   # Per-point of block vs incoming damage (was 3.0)
     "wasted_block_penalty": 0.2,     # Per-point of over-block
     "idle_block_weight": 0.1,        # Block value when no attack incoming
 
