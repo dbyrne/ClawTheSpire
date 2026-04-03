@@ -40,6 +40,12 @@ def can_play_card(state: CombatState, card_idx: int) -> bool:
     if card.target in (TargetType.ANY_ENEMY, TargetType.RANDOM_ENEMY):
         if not any(e.is_alive for e in state.enemies):
             return False
+    # Ringing: can only play 1 card this turn
+    if state.player.powers.get("Ringing", 0) > 0 and state.cards_played_this_turn >= 1:
+        return False
+    # Velvet Choker: can only play 6 cards per turn
+    if state.player.powers.get("Velvet Choker", 0) > 0 and state.cards_played_this_turn >= 6:
+        return False
     return True
 
 
