@@ -656,6 +656,14 @@ class Runner:
         )
 
         if turn == 1 or (isinstance(turn, int) and turn <= 1):
+            # Wait briefly for enemy intents to be revealed by the game
+            time.sleep(0.5)
+            gs = self.client.get_state()
+            self.game_state = gs
+            combat = gs.get("combat") or {}
+            player = combat.get("player") or {}
+            enemies = combat.get("enemies") or []
+
             self.logger.log_combat_start(gs)
             self._combat_move_indices = {}
 
