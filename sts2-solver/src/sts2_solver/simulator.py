@@ -156,8 +156,7 @@ ENEMY_MOVE_TABLES: dict[str, list[dict]] = {
         {"type": "Attack", "damage": 12, "hits": 1},                  # Lash
     ],
     "SNAPPING_JAXFRUIT": [
-        {"type": "Attack", "damage": 3, "hits": 3},          # Energy Orb x3
-        {"type": "Attack", "damage": 3, "hits": 3},          # repeated
+        {"type": "Attack", "damage": 3, "hits": 1, "self_strength": 2},  # Energy Orb (dmg + gain 2 STR)
     ],
     "INKLET": [
         {"type": "Attack", "damage": 3, "hits": 1},          # Jab
