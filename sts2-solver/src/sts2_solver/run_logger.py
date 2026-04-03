@@ -36,6 +36,7 @@ class RunLogger:
         self._combat_start_hp: int | None = None
         self._combat_enemies: list[dict] | None = None
         self._combat_turn: int = 0
+        self._last_map_node: dict | None = None  # Track map position across screens
 
     def __del__(self) -> None:
         self.close()
@@ -98,6 +99,14 @@ class RunLogger:
             event["latency_ms"] = round(latency_ms, 1)
         if user_prompt is not None:
             event["user_prompt"] = user_prompt
+
+        # Include map state on map decisions so we capture the position
+        # and available nodes at each navigation choice
+        if screen_type == "map":
+            map_data = game_state.get("map") or (game_state.get("agent_view") or {}).get("map")
+            if map_data:
+                event["map_node"] = map_data.get("current_node")
+                event["available_nodes"] = map_data.get("available_nodes")
 
         self._emit(event)
 
@@ -365,28 +374,26 @@ class RunLogger:
                         "previous": prev_pot,
                     })
 
-        # Map — log on first reveal and on every navigation change
-        # Map data may be at top-level "map" or under "agent_view.map"
+        # Map — log on first reveal and on every navigation change.
+        # Use a persistent tracker since map data disappears from game_state
+        # on non-map screens (combat, rewards, etc.)
         curr_map = game_state.get("map") or (game_state.get("agent_view") or {}).get("map")
-        prev_map = self._prev_state.get("map") or (self._prev_state.get("agent_view") or {}).get("map")
         if curr_map:
-            if not prev_map:
+            curr_node = curr_map.get("current_node")
+            if self._last_map_node is None:
                 # First time map is available
                 self._emit({
                     "type": "map_revealed",
                     "map": curr_map,
                 })
-            else:
-                # Check if position changed (player traveled to a new node)
-                prev_node = prev_map.get("current_node") if prev_map else None
-                curr_node = curr_map.get("current_node")
-                if prev_node != curr_node:
-                    self._emit({
-                        "type": "map_updated",
-                        "current_node": curr_node,
-                        "available_nodes": curr_map.get("available_nodes"),
-                        "map": curr_map,
-                    })
+            elif curr_node != self._last_map_node:
+                self._emit({
+                    "type": "map_updated",
+                    "current_node": curr_node,
+                    "available_nodes": curr_map.get("available_nodes"),
+                    "map": curr_map,
+                })
+            self._last_map_node = curr_node
 
         self._prev_state = game_state
 
