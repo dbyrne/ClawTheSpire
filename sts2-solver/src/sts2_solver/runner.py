@@ -800,8 +800,9 @@ class Runner:
                     f" -> enemy {first_action.target_idx}"
                     if first_action.target_idx is not None else ""
                 )
-                label = f"{card.name}{target_str}"
-                cards_played.append(card.name)
+                logged_name = f"{card.name}+" if card.upgraded else card.name
+                label = f"{logged_name}{target_str}"
+                cards_played.append(logged_name)
                 targets_chosen.append(first_action.target_idx)
             else:
                 label = f"card_idx={first_action.card_idx}"

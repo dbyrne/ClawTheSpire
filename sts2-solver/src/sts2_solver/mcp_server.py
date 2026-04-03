@@ -144,7 +144,8 @@ def solve_combat(raw_state: str | None = None, execute: bool = True) -> str:
     targets_chosen: list[int | None] = []
     for a in result.actions:
         if a.card_idx is not None and a.card_idx < len(log_hand):
-            cards_played.append(log_hand[a.card_idx].name)
+            card = log_hand[a.card_idx]
+            cards_played.append(f"{card.name}+" if card.upgraded else card.name)
             targets_chosen.append(a.target_idx)
             log_hand.pop(a.card_idx)
     logger.log_combat_turn(

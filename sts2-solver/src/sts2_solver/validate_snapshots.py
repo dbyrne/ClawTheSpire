@@ -260,15 +260,25 @@ def simulate_turn(
     s = deepcopy(state)
 
     for card_idx_in_seq, card_name in enumerate(cards_played):
-        # Find card in hand by name
+        # Find card in hand by name, preferring upgrade match
         match_idx = None
         normalized = card_name.rstrip("+")
+        want_upgraded = card_name.endswith("+")
 
+        # First pass: exact upgrade match
         for i, hand_card in enumerate(s.player.hand):
-            if hand_card.name == card_name or hand_card.name == normalized:
+            if hand_card.name == normalized and hand_card.upgraded == want_upgraded:
                 if can_play_card(s, i):
                     match_idx = i
                     break
+
+        # Second pass: any name match
+        if match_idx is None:
+            for i, hand_card in enumerate(s.player.hand):
+                if hand_card.name == normalized or hand_card.name == card_name:
+                    if can_play_card(s, i):
+                        match_idx = i
+                        break
 
         if match_idx is None:
             log.debug("Could not find playable '%s' in hand", card_name)
