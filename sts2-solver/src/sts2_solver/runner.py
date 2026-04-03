@@ -522,13 +522,10 @@ class Runner:
     def _should_use_potion(self, gs: dict) -> tuple[int, int | None] | None:
         """Decide whether to use a potion this turn. Returns (slot, target) or None.
 
-        Strategy:
-        - ALWAYS use offensive potions (damage, buff, debuff) during elite/boss fights
-        - Use block potions if incoming damage would kill us
-        - Use healing potions if HP < 40%
-        - Use buff/debuff potions on turn 1-2 of any multi-enemy or high-HP fight
-        - Use damage potions if an enemy is close to lethal
-        - In normal fights, save potions unless we'd die
+        Strategy — save potions for boss fights:
+        - Survival (any fight): use block/heal if we'd die, heal if HP < 35%
+        - Non-boss fights: save all potions after survival checks
+        - Boss fights: use potions aggressively (buff/debuff early, damage any time)
         """
         if "use_potion" not in gs.get("available_actions", []):
             return None
@@ -561,10 +558,14 @@ class Runner:
         alive_enemies = [e for e in enemies if e.get("current_hp", 0) > 0]
         total_enemy_hp = sum(e.get("current_hp", 0) for e in alive_enemies)
 
-        # Detect elite/boss fights: high enemy HP or known boss names
-        is_hard_fight = total_enemy_hp > 100 or any(
-            e.get("max_hp", 0) > 80 for e in alive_enemies
-        )
+        # Detect boss fights via floor number (most reliable)
+        from .config import STRATEGY
+        floor = run.get("floor", 0)
+        is_boss = floor in STRATEGY.get("boss_floors", set())
+
+        # Fallback: very high enemy HP likely means boss
+        if not is_boss and any(e.get("max_hp", 0) > 120 for e in alive_enemies):
+            is_boss = True
 
         # Collect usable potions by category
         usable: list[tuple[int, str | None, bool]] = []  # (slot, cat, needs_target)
@@ -605,42 +606,28 @@ class Runner:
                 if cat == "heal":
                     return (slot, _target(needs_target))
 
-        # --- Priority 3: Use offensive potions in hard fights ---
-        if is_hard_fight:
-            # Buff/debuff potions on early turns for max value
-            if turn <= 2:
-                for slot, cat, needs_target in usable:
-                    if cat in ("buff", "debuff"):
-                        return (slot, _target(needs_target))
-            # Damage potions any time during hard fights
-            for slot, cat, needs_target in usable:
-                if cat == "damage":
-                    return (slot, _target(needs_target))
-            # Buff potions are still good mid-fight
-            for slot, cat, needs_target in usable:
-                if cat == "buff":
-                    return (slot, _target(needs_target))
-            # Debuff potions too
-            for slot, cat, needs_target in usable:
-                if cat == "debuff":
-                    return (slot, _target(needs_target))
+        # --- Non-boss fights: save potions for the boss ---
+        if not is_boss:
+            return None
 
-        # --- Priority 4: Low HP, use buffs to end fights faster ---
-        if hp_pct < 0.5 and turn <= 2:
+        # --- Boss fight: use potions aggressively ---
+        # Buff/debuff potions on early turns for max value
+        if turn <= 2:
             for slot, cat, needs_target in usable:
                 if cat in ("buff", "debuff"):
                     return (slot, _target(needs_target))
-
-        # --- Priority 5: Damage potion if enemy is close to lethal ---
-        if first_alive is not None:
-            weakest_hp = min(
-                (e.get("current_hp", 999) for e in alive_enemies),
-                default=999,
-            )
-            if weakest_hp <= 20:
-                for slot, cat, needs_target in usable:
-                    if cat == "damage":
-                        return (slot, _target(needs_target))
+        # Damage potions any time during boss fights
+        for slot, cat, needs_target in usable:
+            if cat == "damage":
+                return (slot, _target(needs_target))
+        # Buff potions are still good mid-fight
+        for slot, cat, needs_target in usable:
+            if cat == "buff":
+                return (slot, _target(needs_target))
+        # Debuff potions too
+        for slot, cat, needs_target in usable:
+            if cat == "debuff":
+                return (slot, _target(needs_target))
 
         return None
 

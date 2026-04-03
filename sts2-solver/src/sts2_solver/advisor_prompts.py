@@ -23,7 +23,7 @@ CORE STRATEGY PRINCIPLES:
 - NEVER remove or transform Bash — it's your only source of Vulnerable (50% more damage).
 - Rest vs. Upgrade: upgrade if HP > 60%, rest if HP < 40%, judgment call in between. BUT always rest before a boss fight if HP < 70%.
 - Boss relics: evaluate against your specific deck composition, not in isolation. See relic guide below.
-- Potions are powerful — buy them when cheap, use them to survive elites.
+- Potions are powerful — SAVE them for boss fights. Only use potions in non-boss fights if you would literally die otherwise.
 
 IRONCLAD CARD TIERS (for card reward decisions):
 __TIER_LIST__
@@ -110,6 +110,15 @@ def build_card_reward_message(state: dict, game_data: GameDataDB) -> str:
         if desc == card_id and card.get("resolved_rules_text"):
             desc = f"{name}: {card['resolved_rules_text']}"
         lines.append(f"  option_index={i}: {desc}")
+
+    # Surface relics so the LLM can evaluate card-relic synergies
+    relics = (state.get("run") or {}).get("relics", [])
+    relic_names = [r.get("name", r.get("relic_id", "?")) for r in relics]
+    if relic_names:
+        lines.append("")
+        lines.append(f"RELICS: {', '.join(relic_names)}")
+        lines.append("Consider relic–card synergies (e.g. strength relics → multi-hit attacks, "
+                     "exhaust relics → exhaust cards, block relics → Body Slam, etc.).")
 
     lines.append("")
     lines.append("AVAILABLE ACTIONS: choose_reward_card (with option_index), OR skip_reward_cards to take nothing")
@@ -393,6 +402,9 @@ def build_shop_message(state: dict, game_data: GameDataDB) -> str:
 
     lines.append("")
     lines.append(f"CARD TIER LIST (only buy S or A tier):\n{tier_info}")
+    lines.append("")
+    lines.append("When buying cards, consider synergy with your current relics (e.g. strength relics → multi-hit attacks, "
+                 "exhaust relics → exhaust cards, block relics → Body Slam).")
     lines.append("")
     from .config import format_relic_guide
     lines.append(f"RELIC GUIDE (match to your archetype):\n{format_relic_guide()}")
