@@ -35,12 +35,13 @@ class CombatSnapshot:
     player_block: int
     player_energy: int
     player_powers: dict[str, int]
-    hand: list[dict]  # [{name, card_id, cost, upgraded}, ...]
+    hand: list[dict]  # [{name, card_id, cost, upgraded, playable, targets, unplayable_reason}, ...]
     enemies: list[dict]  # [{name, id, hp, max_hp, block, powers, intent_*}, ...]
     draw_pile_size: int
     discard_pile_size: int
     exhaust_pile_size: int
     relics: list[str]
+    available_actions: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -202,6 +203,7 @@ def extract_run(path: Path) -> RunReplay | None:
                 discard_pile_size=event.get("discard_pile_size", 0),
                 exhaust_pile_size=event.get("exhaust_pile_size", 0),
                 relics=list(event.get("relics") or []),
+                available_actions=list(event.get("available_actions") or []),
             )
 
         # Combat turns

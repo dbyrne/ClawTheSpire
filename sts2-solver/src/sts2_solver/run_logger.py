@@ -164,14 +164,27 @@ class RunLogger:
         enemies_raw = combat.get("enemies") or []
         run = game_state.get("run") or {}
 
-        # Snapshot the hand (card names + upgrade status + cost)
+        # Snapshot the hand (card names + upgrade status + cost + playability)
+        # Merge playability info from agent_view.combat.hand if available
+        av_combat = (game_state.get("agent_view") or {}).get("combat") or {}
+        av_hand = av_combat.get("hand") or []
+        # Build index → agent_view card mapping
+        av_hand_by_idx: dict[int, dict] = {}
+        for avc in av_hand:
+            if isinstance(avc, dict) and "i" in avc:
+                av_hand_by_idx[avc["i"]] = avc
+
         hand = []
-        for c in hand_raw:
+        for idx, c in enumerate(hand_raw):
+            av_card = av_hand_by_idx.get(c.get("index", idx), {})
             entry: dict[str, Any] = {
                 "name": c.get("name") or c.get("card_id", "?"),
                 "card_id": c.get("card_id", ""),
                 "cost": c.get("cost"),
                 "upgraded": bool(c.get("upgraded")),
+                "playable": c.get("playable", av_card.get("playable")),
+                "targets": list(c.get("valid_target_indices") or av_card.get("targets") or []),
+                "unplayable_reason": c.get("unplayable_reason") or av_card.get("why"),
             }
             hand.append(entry)
 
@@ -236,6 +249,7 @@ class RunLogger:
             "discard_pile_size": _pile_size(game_state, "discard"),
             "exhaust_pile_size": _pile_size(game_state, "exhaust"),
             "relics": [r.get("name") or r.get("relic_id", "?") for r in run.get("relics", [])],
+            "available_actions": list(game_state.get("available_actions") or []),
         })
 
     def log_combat_end(self, game_state: dict, outcome: str) -> None:
