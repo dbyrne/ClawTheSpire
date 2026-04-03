@@ -50,10 +50,19 @@ def state_from_mcp(raw: dict, card_db: CardDB) -> CombatState:
     # Build enemies
     enemies = [_enemy_from_runtime(e) for e in enemies_raw]
 
+    # Extract relic IDs for evaluator awareness
+    run = raw.get("run") or {}
+    relics_raw = run.get("relics") or raw.get("relics") or []
+    relic_ids = frozenset(
+        r.get("relic_id", r.get("id", "")) if isinstance(r, dict) else str(r)
+        for r in relics_raw
+    )
+
     return CombatState(
         player=player,
         enemies=enemies,
         turn=raw.get("turn", 1),
+        relics=relic_ids,
     )
 
 

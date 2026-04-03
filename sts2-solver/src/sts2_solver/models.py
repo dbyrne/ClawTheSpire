@@ -95,3 +95,4 @@ class CombatState:
     cards_played_this_turn: int = 0
     attacks_played_this_turn: int = 0
     last_x_cost: int = 0  # Energy spent on the most recent X-cost card
+    relics: frozenset[str] = field(default_factory=frozenset)  # Relic IDs held

@@ -152,13 +152,20 @@ def evaluate_turn(state: CombatState, initial_state: CombatState) -> float:
     # -----------------------------------------------------------------------
     # 4. Debuffs on enemies (future value)
     # -----------------------------------------------------------------------
+    # Paper Phrog: Vulnerable = 75% more damage instead of 50%
+    has_paper_phrog = "PAPER_PHROG" in state.relics
+    vuln_multiplier = 1.75 if has_paper_phrog else 1.5
+
     for enemy in state.enemies:
         if enemy.hp <= 0:
             continue
         vuln = enemy.powers.get("Vulnerable", 0)
         weak = enemy.powers.get("Weak", 0)
-        # Vulnerable: future attacks deal 50% more
-        score += vuln * EVALUATOR["vulnerable_value"]
+        # Vulnerable: future attacks deal 50% more (75% with Paper Phrog)
+        vuln_value = EVALUATOR["vulnerable_value"]
+        if has_paper_phrog:
+            vuln_value *= 1.5  # Paper Phrog makes Vuln 50% more valuable
+        score += vuln * vuln_value
         # Weak: enemy deals 25% less damage
         if enemy.intent_type == "Attack" and enemy.intent_damage:
             # Weak is more valuable against hard-hitting enemies
@@ -192,5 +199,36 @@ def evaluate_turn(state: CombatState, initial_state: CombatState) -> float:
     if unspent > 0 and any(e.hp > 0 for e in state.enemies):
         # Unspent energy means we could have done more
         score -= unspent * EVALUATOR["unspent_energy_penalty"]
+
+    # -----------------------------------------------------------------------
+    # 7. Relic-aware scoring adjustments
+    # -----------------------------------------------------------------------
+    relics = state.relics
+
+    # Gremlin Horn: gain 1 energy + draw 1 on enemy kill — kills are worth more
+    if "GREMLIN_HORN" in relics:
+        for i, enemy in enumerate(state.enemies):
+            if i < len(initial_state.enemies) and initial_state.enemies[i].hp > 0 and enemy.hp <= 0:
+                score += 8.0  # Extra energy + draw is very valuable
+
+    # Charon's Ashes: deal 3 to ALL on exhaust — exhaust cards gain AoE value
+    if "CHARONS_ASHES" in relics:
+        exhaust_gained = (len(state.player.exhaust_pile)
+                          - len(initial_state.player.exhaust_pile))
+        if exhaust_gained > 0:
+            alive_enemies = sum(1 for e in state.enemies if e.is_alive)
+            score += exhaust_gained * alive_enemies * 1.5
+
+    # Ornamental Fan / Shuriken / Kunai: 3 attacks triggers bonus
+    # Make the evaluator aware that playing a 3rd attack has hidden value
+    if any(r in relics for r in ("ORNAMENTAL_FAN", "SHURIKEN", "KUNAI")):
+        if state.attacks_played_this_turn >= 3 and initial_state.attacks_played_this_turn < 3:
+            score += 5.0  # Triggered the relic bonus
+
+    # Beating Remnant: can't lose more than 20 HP/turn — less scared of big hits
+    if "BEATING_REMNANT" in relics:
+        # Reduce lethal panic when we know damage is capped
+        if total_incoming > 20:
+            score += (total_incoming - 20) * 0.5  # Partial offset of unblocked penalty
 
     return score
