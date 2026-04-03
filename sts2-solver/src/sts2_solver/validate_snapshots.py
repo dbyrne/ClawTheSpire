@@ -104,8 +104,14 @@ def state_from_snapshot(
     snapshot: CombatSnapshot,
     card_db: CardDB,
     floor: int = 0,
+    deck: list[str] | None = None,
 ) -> CombatState:
-    """Reconstruct a CombatState from a combat snapshot."""
+    """Reconstruct a CombatState from a combat snapshot.
+
+    If deck is provided (card names from the run), populates the draw pile
+    with deck cards not in the hand. This enables mid-turn draw effects
+    (Expertise, Shadow Step, Slimed, etc.) to find cards.
+    """
     # Build hand
     hand: list[Card] = []
     for c in snapshot.hand:
@@ -141,6 +147,25 @@ def state_from_snapshot(
         powers=dict(snapshot.player_powers),
         hand=hand,
     )
+
+    # Populate draw pile from deck if available
+    if deck:
+        hand_names = [c.get("name", "") for c in snapshot.hand]
+        # Count cards in hand by name to subtract from deck
+        from collections import Counter
+        hand_counts = Counter(hand_names)
+        deck_counts = Counter(d.rstrip("+") for d in deck)
+        # Remaining cards go to draw pile (rough approximation)
+        for card_name, count in deck_counts.items():
+            remaining = count - hand_counts.get(card_name, 0)
+            for _ in range(max(0, remaining)):
+                is_upgraded = any(d.endswith("+") and d.rstrip("+") == card_name for d in deck)
+                card = _find_card(card_name, None, is_upgraded, card_db)
+                if card is None:
+                    card = _find_card(card_name, None, False, card_db)
+                if card is None:
+                    card = _make_fallback_card(card_name, 1, False)
+                player.draw_pile.append(card)
 
     # Build enemies
     enemies: list[EnemyState] = []
@@ -555,7 +580,7 @@ def validate_run(run: RunReplay, card_db: CardDB) -> list[TurnValidation]:
             # For multi-enemy fights, try targeting the enemy with the
             # largest HP drop in the next snapshot (most damage taken).
             try:
-                state = state_from_snapshot(snap, card_db, floor=combat.floor)
+                state = state_from_snapshot(snap, card_db, floor=combat.floor, deck=combat.deck)
 
                 # Use logged targets if available, otherwise infer
                 logged_targets = turn.targets_chosen if turn.targets_chosen else None
