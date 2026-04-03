@@ -7,6 +7,14 @@ so they can be tweaked between runs without editing logic code.
 from __future__ import annotations
 
 
+# Enemies that respawn or split on death (e.g. medium slimes → 2 small slimes).
+# Killing these doesn't remove threats, so kill_bonus should be suppressed.
+RESPAWNING_ENEMIES: frozenset[str] = frozenset({
+    "EYE_WITH_TEETH",
+    "LEAF_SLIME_M",
+    "TWIG_SLIME_M",
+})
+
 # ---------------------------------------------------------------------------
 # Evaluator weights — combat state scoring (character-agnostic)
 # ---------------------------------------------------------------------------

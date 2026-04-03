@@ -475,9 +475,393 @@
     {
       "run_number": 60,
       "floor": 8,
-      "gen": "current",
+      "gen": "gen6",
       "model": "qwen3:8b",
       "run_id": "Q90D6TAVQJ",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 61,
+      "floor": 12,
+      "gen": "gen6",
+      "model": "qwen3:8b",
+      "run_id": "CR2VBYZ5TG",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 62,
+      "floor": 12,
+      "gen": "gen6",
+      "model": "qwen3:8b",
+      "run_id": "AP70W2PRM6",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 63,
+      "floor": 17,
+      "gen": "gen6",
+      "model": "qwen3:8b",
+      "run_id": "8QH5ZZ64G9",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 64,
+      "floor": 12,
+      "gen": "gen6",
+      "model": "qwen3:8b",
+      "run_id": "JGWYPQEG12",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 65,
+      "floor": 7,
+      "gen": "gen6",
+      "model": "qwen3:8b",
+      "run_id": "AQW2NLHNRX",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 66,
+      "floor": 17,
+      "gen": "gen6",
+      "model": "qwen3:8b",
+      "run_id": "HXNYCBHPPZ",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 67,
+      "floor": 17,
+      "gen": "gen6",
+      "model": "qwen3:8b",
+      "run_id": "YHCSUPBS9Q",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 68,
+      "floor": 17,
+      "gen": "gen6",
+      "model": "qwen3:8b",
+      "run_id": "HZFF66EG0R",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 69,
+      "floor": 17,
+      "gen": "gen6",
+      "model": "qwen3:8b",
+      "run_id": "D8PH2FBMN9",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 70,
+      "floor": 7,
+      "gen": "gen6",
+      "model": "qwen3:8b",
+      "run_id": "4KHPP8VGQ9",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 71,
+      "floor": 15,
+      "gen": "gen6",
+      "model": "qwen3:8b",
+      "run_id": "5CEJLY0HQX",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 72,
+      "floor": 15,
+      "gen": "gen6",
+      "model": "qwen3:8b",
+      "run_id": "B70DCG3RQM",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 73,
+      "floor": 15,
+      "gen": "gen6",
+      "model": "qwen3:8b",
+      "run_id": "DTQTHWQL8F",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 74,
+      "floor": 7,
+      "gen": "gen6",
+      "model": "qwen3:8b",
+      "run_id": "RM0HSQ5ZU6",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 75,
+      "floor": 14,
+      "gen": "gen6",
+      "model": "qwen3:8b",
+      "run_id": "GHS0R56EAQ",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 76,
+      "floor": 11,
+      "gen": "gen6",
+      "model": "qwen3:8b",
+      "run_id": "CF4XQVFB46",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 77,
+      "floor": 7,
+      "gen": "gen6",
+      "model": "qwen3:8b",
+      "run_id": "WKJ1KGNSRA",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 78,
+      "floor": 7,
+      "gen": "gen6",
+      "model": "qwen3:8b",
+      "run_id": "6HVE06M6NH",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 79,
+      "floor": 17,
+      "gen": "gen6",
+      "model": "qwen3:8b",
+      "run_id": "NBT4REH9GW",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 80,
+      "floor": 6,
+      "gen": "gen6",
+      "model": "qwen3:8b",
+      "run_id": "0CAHXN3YLN",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 81,
+      "floor": 8,
+      "gen": "gen6",
+      "model": "qwen3:8b",
+      "run_id": "2DVBCDR0E6",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 82,
+      "floor": 6,
+      "gen": "gen6",
+      "model": "qwen3:8b",
+      "run_id": "FY2ABQH924",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 83,
+      "floor": 7,
+      "gen": "gen6",
+      "model": "qwen3:8b",
+      "run_id": "JFCAPKH3WD",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 84,
+      "floor": 8,
+      "gen": "gen6",
+      "model": "qwen3:8b",
+      "run_id": "URWS31MRV8",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 85,
+      "floor": 14,
+      "gen": "gen6",
+      "model": "qwen3:8b",
+      "run_id": "NXL3YQPWKM",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 86,
+      "floor": 9,
+      "gen": "gen6",
+      "model": "qwen3:8b",
+      "run_id": "QFRBNU45T2",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 87,
+      "floor": 9,
+      "gen": "gen6",
+      "model": "qwen3:8b",
+      "run_id": "MMX1VYHVG2",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 88,
+      "floor": 5,
+      "gen": "gen6",
+      "model": "qwen3:8b",
+      "run_id": "4SYPAQPCEM",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 89,
+      "floor": 7,
+      "gen": "gen6",
+      "model": "qwen3:8b",
+      "run_id": "YN690YRW4J",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 90,
+      "floor": 6,
+      "gen": "gen6",
+      "model": "qwen3:8b",
+      "run_id": "D8K04ZAFBQ",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 91,
+      "floor": 6,
+      "gen": "gen6",
+      "model": "qwen3:8b",
+      "run_id": "6A90S9DA66",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 92,
+      "floor": 22,
+      "gen": "gen6",
+      "model": "qwen3:8b",
+      "run_id": "1DRY85SWNC",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 93,
+      "floor": 7,
+      "gen": "gen7",
+      "model": "qwen3:8b",
+      "run_id": "W3J2BMZHXG",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 94,
+      "floor": 17,
+      "gen": "gen7",
+      "model": "qwen3:8b",
+      "run_id": "2N7RD7GWFR",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 95,
+      "floor": 9,
+      "gen": "gen7",
+      "model": "qwen3:8b",
+      "run_id": "NX9SCLBFGE",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 96,
+      "floor": 15,
+      "gen": "gen7",
+      "model": "qwen3:8b",
+      "run_id": "EFNQSED8Z8",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 97,
+      "floor": 8,
+      "gen": "gen7",
+      "model": "qwen3:8b",
+      "run_id": "A0JGRG7XS1",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 98,
+      "floor": 8,
+      "gen": "gen7",
+      "model": "qwen3:8b",
+      "run_id": "LVMY79K89J",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 99,
+      "floor": 6,
+      "gen": "gen7",
+      "model": "qwen3:8b",
+      "run_id": "1GRBDS6V92",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 100,
+      "floor": 6,
+      "gen": "gen7",
+      "model": "qwen3:8b",
+      "run_id": "Z9UAYL78EP",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 101,
+      "floor": 14,
+      "gen": "gen7",
+      "model": "qwen3:8b",
+      "run_id": "K85SF7Q3AM",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 102,
+      "floor": 7,
+      "gen": "gen7",
+      "model": "qwen3:8b",
+      "run_id": "NP2KB7YF0Y",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 103,
+      "floor": 9,
+      "gen": "gen7",
+      "model": "qwen3:8b",
+      "run_id": "YWDV56JC8M",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 104,
+      "floor": 11,
+      "gen": "gen7",
+      "model": "qwen3:8b",
+      "run_id": "PGW7VLTKN6",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 105,
+      "floor": 8,
+      "gen": "gen7",
+      "model": "qwen3:8b",
+      "run_id": "TZBY09ZUE5",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 106,
+      "floor": 8,
+      "gen": "gen7",
+      "model": "qwen3:8b",
+      "run_id": "QCPCHGXUN8",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 107,
+      "floor": 23,
+      "gen": "gen8",
+      "model": "qwen3:8b",
+      "run_id": "Q6FEXAK531",
+      "character": "The Silent"
+    },
+    {
+      "run_number": 108,
+      "floor": 5,
+      "gen": "gen8",
+      "model": "qwen3:8b",
+      "run_id": "B6HP2HBFHD",
       "character": "The Silent"
     }
   ],
@@ -487,7 +871,8 @@
     "gen3": 36,
     "gen4": 39,
     "gen5": 51,
-    "gen6": 59,
-    "current": 60
+    "gen6": 92,
+    "gen7": 106,
+    "gen8": 108
   }
 }

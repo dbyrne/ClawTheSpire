@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import math as _math_top
 
-from .config import EVALUATOR, POWER_VALUES
+from .config import EVALUATOR, POWER_VALUES, RESPAWNING_ENEMIES
 from .models import CombatState
 
 
@@ -115,34 +115,45 @@ def evaluate_turn(state: CombatState, initial_state: CombatState, character: str
                 threat += pred_dmg * pred_hits * EVALUATOR["threat_attack_damage_per"] * 0.5
 
         if current_hp <= 0:
-            # Kill bonus: killing an enemy is very valuable - removes future
-            # damage and status card sources
-            kill_bonus = EVALUATOR["kill_bonus"]
-            # Buff/support enemies are higher priority kills -- they scale
-            # danger every turn they stay alive (e.g. Kin Priest giving Strength)
-            if enemy.intent_type == "Buff":
-                kill_bonus += EVALUATOR["buff_kill_bonus"]
-            # Enemies with Strength are increasingly dangerous
-            if enemy_str > 0:
-                kill_bonus += enemy_str * EVALUATOR["strength_kill_bonus_per"]
-            # Predicted next moves make kills more urgent
-            for pred in initial_enemy.predicted_intents:
-                if pred.get("type") == "Buff":
-                    pred_str = pred.get("self_strength", 0) + pred.get("all_strength", 0)
-                    if pred_str > 0:
-                        kill_bonus += pred_str * EVALUATOR["strength_kill_bonus_per"] * 0.5
-                elif pred.get("type") == "Attack":
-                    pred_dmg = pred.get("damage", 0) * pred.get("hits", 1)
-                    if pred_dmg >= 20:
-                        kill_bonus += 10.0  # Prevent a big incoming hit
-            score += kill_bonus * threat
-            # Extra bonus for overkill efficiency is NOT given - wasted damage
-            # on a dead enemy is slightly negative
-            score += damage_dealt * EVALUATOR["damage_dead_weight"]
+            # Respawning enemies (e.g. medium slimes that split) — killing
+            # them doesn't remove threats, so suppress kill bonus and treat
+            # the damage more like partial damage on a living target.
+            if initial_enemy.id in RESPAWNING_ENEMIES:
+                kill_bonus = 0.0
+                score += damage_dealt * EVALUATOR["damage_alive_weight"] * 0.5 * threat
+            else:
+                # Kill bonus: killing an enemy is very valuable - removes future
+                # damage and status card sources
+                kill_bonus = EVALUATOR["kill_bonus"]
+                # Buff/support enemies are higher priority kills -- they scale
+                # danger every turn they stay alive (e.g. Kin Priest giving Strength)
+                if enemy.intent_type == "Buff":
+                    kill_bonus += EVALUATOR["buff_kill_bonus"]
+                # Enemies with Strength are increasingly dangerous
+                if enemy_str > 0:
+                    kill_bonus += enemy_str * EVALUATOR["strength_kill_bonus_per"]
+                # Predicted next moves make kills more urgent
+                for pred in initial_enemy.predicted_intents:
+                    if pred.get("type") == "Buff":
+                        pred_str = pred.get("self_strength", 0) + pred.get("all_strength", 0)
+                        if pred_str > 0:
+                            kill_bonus += pred_str * EVALUATOR["strength_kill_bonus_per"] * 0.5
+                    elif pred.get("type") == "Attack":
+                        pred_dmg = pred.get("damage", 0) * pred.get("hits", 1)
+                        if pred_dmg >= 20:
+                            kill_bonus += 10.0  # Prevent a big incoming hit
+                score += kill_bonus * threat
+                # Extra bonus for overkill efficiency is NOT given - wasted damage
+                # on a dead enemy is slightly negative
+                score += damage_dealt * EVALUATOR["damage_dead_weight"]
         else:
             # Partial damage: valuable but less than a kill
             # Weighted by how close to lethal (% HP removed)
-            score += damage_dealt * EVALUATOR["damage_alive_weight"] * threat
+            damage_weight = EVALUATOR["damage_alive_weight"]
+            # Respawning enemies: reduce damage weight since they'll split
+            if initial_enemy.id in RESPAWNING_ENEMIES:
+                damage_weight *= 0.5
+            score += damage_dealt * damage_weight * threat
             kill_proximity = damage_dealt / initial_hp if initial_hp > 0 else 0
             score += kill_proximity * EVALUATOR["kill_proximity_weight"] * threat
 

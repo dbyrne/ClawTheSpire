@@ -109,6 +109,7 @@ def draw_cards(state: CombatState, count: int) -> None:
     Hellraiser: when a Strike is drawn and Hellraiser power is active,
     the Strike is immediately played against the first alive enemy and discarded.
     """
+    state.cards_drawn_this_turn += count  # Track for evaluator scoring
     for _ in range(count):
         if not state.player.draw_pile and state.player.discard_pile:
             # Shuffle discard into draw

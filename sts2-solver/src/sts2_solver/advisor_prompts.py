@@ -20,11 +20,16 @@ _CHARACTER_STRATEGY: dict[str, str] = {
 - The "holy trinity" (Corruption + Dark Embrace + Feel No Pain) is the strongest late-game engine.""",
     "silent": """\
 - Silent has three archetypes: Shiv (volume damage), Poison (exponential scaling), and Sly (discard cycling).
+- COMMIT to ONE archetype by floor 5-6. Mixed Shiv+Poison decks are the #1 cause of death. Pick the archetype your first 2-3 card picks support and REJECT all off-archetype cards after that.
 - Shivs scale with Accuracy (doubles Shiv damage). Stack multiple Accuracies when possible.
 - Poison scales exponentially — survive the first few turns, then it snowballs. Beware of Artifact blocking Poison.
 - Sly cards play for free when discarded from hand. Keep the deck THIN for cycling.
+- BLOCK CARDS ARE CRITICAL: Silent has low HP (70). Cards like Dash, Leg Sweep, Footwork, Dodge and Roll, and Cloak and Dagger keep you alive. Without block scaling, you die to Act 1 elites (Byrdonis, Phrog Parasite).
+- Backstab is FREE 11 damage on turn 1 — always pick it early, it wins Act 1 fights.
+- Well-Laid Plans lets you retain your best card each turn — one of Silent's best cards.
 - NEVER remove or transform Survivor — it enables Sly discards and provides Block.
-- Ring of the Snake gives +2 draw on turn 1 — leverage the extra cards.""",
+- Ring of the Snake gives +2 draw on turn 1 — leverage the extra cards.
+- SPEND YOUR GOLD: Visit shops to remove Strikes, buy key relics, and buy S/A-tier cards. Dying with 150+ gold is a wasted resource.""",
 }
 
 
@@ -177,11 +182,28 @@ def build_card_reward_message(state: dict, game_data: GameDataDB) -> str:
         ]
 
     archetype_counts.sort(key=lambda x: x[0], reverse=True)
+    run = state.get("run") or {}
+    floor = run.get("floor", 0)
+
     if archetype_counts[0][0] > 0:
         best = archetype_counts[0]
         lines.append(f"Deck archetype: {best[1]} (has {', '.join(sorted(best[2]))})")
+        # After floor 5, enforce commitment for Silent
+        if character == "silent" and floor >= 5:
+            off_archetypes = [name for count, name, _ in archetype_counts[1:] if count > 0]
+            if off_archetypes:
+                lines.append(f"ARCHETYPE LOCKED: You are committed to {best[1]}. "
+                             f"Do NOT pick cards from other archetypes ({', '.join(off_archetypes)}). "
+                             "Mixed builds are the #1 cause of Silent deaths.")
+            else:
+                lines.append(f"ARCHETYPE LOCKED: Stay focused on {best[1]}. "
+                             "Only pick cards that directly support this archetype or provide block.")
     else:
-        lines.append("Deck archetype: No clear archetype yet — pick strong standalone cards.")
+        if character == "silent":
+            lines.append("Deck archetype: No archetype yet — pick a STRONG Shiv or Poison card to start building. "
+                         "Dash, Backstab, Leg Sweep, and Footwork are always good regardless of archetype.")
+        else:
+            lines.append("Deck archetype: No clear archetype yet — pick strong standalone cards.")
     lines.append("")
 
     deck_size = len(deck)
@@ -198,7 +220,8 @@ def build_card_reward_message(state: dict, game_data: GameDataDB) -> str:
     # Nudge toward defense if deck has none (character-aware)
     if character == "silent":
         _DEFENSE_CARDS = {"Untouchable", "Cloak and Dagger", "Leg Sweep", "Dodge and Roll",
-                          "Deflect", "Afterimage", "Calculated Gamble"}
+                          "Deflect", "Afterimage", "Calculated Gamble", "Dash", "Footwork",
+                          "Well-Laid Plans", "Haze"}
     else:
         _DEFENSE_CARDS = {"Shrug It Off", "Impervious", "Flame Barrier", "True Grit",
                           "Power Through", "Metallicize", "Feel No Pain", "Ghostly Armor"}
@@ -290,6 +313,25 @@ def build_map_message(state: dict, game_data: GameDataDB) -> str:
         lines.append(f"SHOP AVAILABLE: Deck has {deck_size} cards and you have {gold}g. "
                      "Visiting the shop to REMOVE a card is almost always correct — it's the best way to improve deck quality.")
 
+    # Push shop visits when sitting on too much gold
+    gold = run.get("gold", 0)
+    if has_shop and gold >= 150:
+        lines.append(f"HIGH GOLD WARNING: You have {gold}g. Dying with unspent gold wastes resources. "
+                     "STRONGLY prefer the SHOP to remove cards and buy key relics/cards.")
+    elif not has_shop and gold >= 200:
+        lines.append(f"You have {gold}g — path toward shops in future nodes to spend it on card removal and relics.")
+
+    # Silent-specific: push rest when HP is below 50%
+    character = detect_character(state)
+    if character == "silent" and hp_pct < 0.50:
+        has_rest = any(
+            "rest" in str(node.get("node_type", node.get("type", ""))).lower()
+            for node in nodes
+        )
+        if has_rest:
+            lines.append(f"SILENT HP WARNING ({hp}/{max_hp} = {hp_pct:.0%}): Silent has only 70 max HP. "
+                         "REST to heal — you cannot afford chip damage with this low a health pool.")
+
     return "\n".join(lines)
 
 
@@ -353,7 +395,12 @@ def build_event_message(state: dict, game_data: GameDataDB) -> str:
     # Neow starting bonus guidance
     event_name_lower = event_name.lower() if event_name else ""
     if "neow" in event_name_lower:
+        character = detect_character(state)
         lines.append("This is Neow's starting bonus. Card removal and relic options are almost always better than 'Proceed'.")
+        if character == "silent":
+            lines.append("SILENT PRIORITY: Card removal (Precise Scissors) is the BEST Neow option — removing a Strike "
+                         "immediately improves deck consistency. Relic options are second best. "
+                         "Avoid Large Capsule (random card bloats deck) and Lost Coffer (gold is less useful early).")
         lines.append("")
 
     # HP-based risk guidance
@@ -482,14 +529,22 @@ def build_rest_message(state: dict, game_data: GameDataDB) -> str:
 
     # Boss floors are typically 17, 34, 52
     pre_boss = floor in (15, 16, 33, 34, 51, 52)
+    character = detect_character(state)
+
+    # Silent has lower max HP (70) — use more aggressive rest thresholds
+    rest_threshold = 0.50 if character == "silent" else 0.40
+    upgrade_threshold = 0.70 if character == "silent" else 0.60
+
     if pre_boss and hp_pct < 0.70:
         lines.append(f"HP is at {hp_pct:.0%}. Boss fight next — REST to heal. You need HP for the boss.")
     elif hp_pct > 0.80:
         lines.append(f"HP is at {hp_pct:.0%}. HP is nearly full — you MUST upgrade a card. Resting wastes this campfire.")
-    elif hp_pct >= 0.60:
+    elif hp_pct >= upgrade_threshold:
         lines.append(f"HP is at {hp_pct:.0%}. HP is decent. Prefer upgrade unless a boss fight is imminent.")
-    elif hp_pct < 0.40:
+    elif hp_pct < rest_threshold:
         lines.append(f"HP is at {hp_pct:.0%}. HP is critical. REST to heal.")
+        if character == "silent":
+            lines.append("Silent has only 70 max HP — every point matters. Do NOT upgrade when you're this low.")
     else:
         lines.append(f"HP is at {hp_pct:.0%}. Judgment call — consider deck needs vs. survival.")
 
@@ -558,19 +613,23 @@ def build_deck_select_message(state: dict, game_data: GameDataDB) -> str:
     key_card = cfg["key_card"]
     key_reason = cfg["key_card_reason"]
 
+    protect_cards = cfg.get("protect_cards", [key_card])
+    protect_str = ", ".join(protect_cards)
+
     prompt_lower = prompt_text.lower()
     if "remove" in prompt_lower:
         lines.append("Which card should we REMOVE? Remove Strikes first, then Defends. "
                      "Removing weak cards makes your deck more consistent.")
+        lines.append(f"NEVER remove: {protect_str}.")
     elif "upgrade" in prompt_lower:
         lines.append("Which card should we UPGRADE? Prioritize key scaling cards, "
                      "high-impact attacks, or cards you play every combat.")
     elif "transform" in prompt_lower:
         lines.append(f"Which card should we TRANSFORM? Transform weak cards (Strikes, Defends). "
-                     f"NEVER transform {key_card} — {key_reason}.")
+                     f"NEVER transform {protect_str} — {key_reason}.")
     else:
         lines.append(f"Which card should we select? Consider how it fits our deck strategy. "
-                     f"NEVER select {key_card} for removal or transform — {key_reason}.")
+                     f"NEVER select {protect_str} for removal or transform — {key_reason}.")
 
     return "\n".join(lines)
 
