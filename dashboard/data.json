@@ -471,6 +471,14 @@
       "model": "qwen3:8b",
       "run_id": "AFPWGAMJAX",
       "character": "The Ironclad"
+    },
+    {
+      "run_number": 60,
+      "floor": 8,
+      "gen": "current",
+      "model": "qwen3:8b",
+      "run_id": "Q90D6TAVQJ",
+      "character": "The Silent"
     }
   ],
   "gen_boundaries": {
@@ -479,6 +487,7 @@
     "gen3": 36,
     "gen4": 39,
     "gen5": 51,
-    "gen6": 59
+    "gen6": 59,
+    "current": 60
   }
 }

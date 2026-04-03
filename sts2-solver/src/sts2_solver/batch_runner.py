@@ -4,9 +4,14 @@ Reads sts2_config.json before every game so code and config changes
 are absorbed without restarting. Logs go to logs/gen{N}/ automatically.
 Updates the dashboard after each completed run.
 
+Supports multiple characters via config:
+    "character": "Ironclad"              — single character
+    "characters": ["Ironclad", "Silent"] — rotate between characters
+
 Usage:
     python -m sts2_solver.batch_runner
-    python -m sts2_solver.batch_runner --once   # single game, then exit
+    python -m sts2_solver.batch_runner --once       # single game, then exit
+    python -m sts2_solver.batch_runner --character Silent  # override config
 """
 
 from __future__ import annotations
@@ -69,7 +74,8 @@ def run_one_game(cfg: dict, game_num: int) -> dict | None:
     if cfg.get("model"):
         os.environ["STS2_ADVISOR_MODEL"] = cfg["model"]
 
-    print(f"--- Game {game_num} (gen{gen}, {cfg['model']}) ---")
+    character = cfg["character"]
+    print(f"--- Game {game_num} (gen{gen}, {character}, {cfg['model']}) ---")
     t0 = time.time()
     try:
         runner = Runner(
@@ -99,9 +105,12 @@ def run_one_game(cfg: dict, game_num: int) -> dict | None:
     last_log = log_files[-1]
     outcome = "unknown"
     floor = "?"
+    log_character = character
     with open(last_log, encoding="utf-8") as f:
         for line in f:
             event = json.loads(line.strip())
+            if event.get("type") == "run_start" and event.get("character"):
+                log_character = event["character"]
             if event.get("type") == "run_end":
                 outcome = event.get("outcome", "unknown")
                 floor = event.get("floor", "?")
@@ -109,6 +118,7 @@ def run_one_game(cfg: dict, game_num: int) -> dict | None:
     result = {
         "game": game_num,
         "gen": gen,
+        "character": log_character,
         "outcome": outcome,
         "floor": floor,
         "time": elapsed,
@@ -123,6 +133,8 @@ def main():
 
     parser = argparse.ArgumentParser(description="STS2 Continuous Runner")
     parser.add_argument("--once", action="store_true", help="Play one game then exit")
+    parser.add_argument("--character", type=str, default=None,
+                        help="Override character (e.g. Ironclad, Silent)")
     args = parser.parse_args()
 
     print("=== STS2 Continuous Runner ===")
@@ -132,11 +144,20 @@ def main():
 
     game_num = 0
     results = []
+    char_index = 0
 
     while True:
         # Reload config each game
         cfg = load_config()
         game_num += 1
+
+        # Resolve character: CLI flag > characters list > character field
+        if args.character:
+            cfg["character"] = args.character
+        elif cfg.get("characters"):
+            char_list = cfg["characters"]
+            cfg["character"] = char_list[char_index % len(char_list)]
+            char_index += 1
 
         result = run_one_game(cfg, game_num)
         if result:
@@ -156,12 +177,17 @@ def main():
 
     # Summary
     if results:
-        floors = [r["floor"] for r in results if isinstance(r["floor"], int)]
-        avg_floor = sum(floors) / len(floors) if floors else 0
         total_time = sum(r["time"] for r in results)
-        print(f"\n=== Summary ({len(results)} games) ===")
-        print(f"Avg floor: {avg_floor:.1f}")
-        print(f"Total time: {total_time:.0f}s ({total_time / 60:.1f}min)")
+        print(f"\n=== Summary ({len(results)} games, {total_time:.0f}s / {total_time / 60:.1f}min) ===")
+
+        # Group by character
+        chars = sorted(set(r.get("character", "?") for r in results))
+        for char in chars:
+            char_results = [r for r in results if r.get("character", "?") == char]
+            floors = [r["floor"] for r in char_results if isinstance(r["floor"], int)]
+            wins = sum(1 for r in char_results if r["outcome"] == "victory")
+            avg_floor = sum(floors) / len(floors) if floors else 0
+            print(f"  {char}: {len(char_results)} games, {wins} wins, avg floor {avg_floor:.1f}")
 
 
 if __name__ == "__main__":

@@ -5,3 +5,5 @@ __pycache__/
 *.pyc
 .pytest_cache/
 *.egg-info/
+sim_results*.csv
+game_log.md
