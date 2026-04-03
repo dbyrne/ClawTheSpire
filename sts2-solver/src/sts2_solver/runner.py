@@ -690,6 +690,9 @@ class Runner:
                 self._log_action(f"  [yellow]Potion use failed: {e}[/yellow]")
                 break
 
+        # Snapshot the pre-play state for combat logging (after potions, before cards)
+        turn_start_gs = gs
+
         # Solve-one-play-re-solve loop: play one card at a time from fresh
         # game state. This accounts for relic triggers, energy generation,
         # card cost changes, and other effects the simulator doesn't model.
@@ -857,13 +860,13 @@ class Runner:
             except Exception as e:
                 self._log_action(f"  [red]X End Turn: {e}[/red]")
 
-        # Log the full turn (pass game_state for combat snapshot)
+        # Log the full turn (pass pre-play state for combat snapshot)
         self.logger.log_combat_turn(
             cards_played=cards_played,
             score=best_score,
             states_evaluated=total_states,
             solve_ms=total_solve_ms,
-            game_state=gs,
+            game_state=turn_start_gs,
         )
 
         self.turn_count += 1

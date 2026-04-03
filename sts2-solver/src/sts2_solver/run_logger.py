@@ -181,7 +181,23 @@ class RunLogger:
             if not e.get("is_alive", True):
                 continue
             intents = e.get("intents") or []
-            intent = intents[0] if intents else {}
+            # Parse intents the same way bridge.py does
+            intent_type = None
+            intent_damage = None
+            intent_hits = 1
+            intent_block = None
+            for intent in intents:
+                it = intent.get("intent_type", "")
+                if it == "Attack":
+                    intent_type = "Attack"
+                    intent_damage = intent.get("damage")
+                    intent_hits = intent.get("hits", 1)
+                elif it == "Defend":
+                    intent_type = intent_type or "Defend"
+                    intent_block = intent.get("block")
+                elif it in ("Buff", "Debuff", "StatusCard"):
+                    intent_type = intent_type or it
+
             entry = {
                 "name": e.get("name", "?"),
                 "id": e.get("id") or e.get("enemy_id", ""),
@@ -193,10 +209,10 @@ class RunLogger:
                     for p in (e.get("powers") or [])
                     if p.get("amount", 0) != 0
                 ],
-                "intent_type": intent.get("type"),
-                "intent_damage": intent.get("damage"),
-                "intent_hits": intent.get("hits", 1),
-                "intent_block": intent.get("block"),
+                "intent_type": intent_type,
+                "intent_damage": intent_damage,
+                "intent_hits": intent_hits,
+                "intent_block": intent_block,
             }
             enemies.append(entry)
 
