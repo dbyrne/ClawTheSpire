@@ -563,6 +563,17 @@ def _finisher(card: Card, card_db: CardDB | None) -> CardEffect:
     return effect
 
 
+@register("UP_MY_SLEEVE")
+def _up_my_sleeve(card: Card, card_db: CardDB | None) -> CardEffect:
+    """Add 3(4) Shivs to your hand."""
+    count = 3 if not card.upgraded else 4
+
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        for _ in range(count):
+            add_card_to_hand(state, _make_shiv())
+    return effect
+
+
 @register("PRECISE_CUT")
 def _precise_cut(card: Card, card_db: CardDB | None) -> CardEffect:
     """Deal 15 damage. Deals 2 less damage for each other card in hand."""
