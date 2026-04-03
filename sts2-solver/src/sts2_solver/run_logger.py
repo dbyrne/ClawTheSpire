@@ -460,18 +460,31 @@ class RunLogger:
 def _pile_size(game_state: dict, pile: str) -> int:
     """Get card pile size from agent_view or combat dict.
 
-    The C# mod exposes piles under agent_view.piles.{draw,discard,exhaust}
-    as card stack arrays. Falls back to combat.{pile}_pile if available.
+    The C# mod exposes piles under agent_view.{run,combat}.piles.{draw,discard,exhaust}
+    as grouped card stack arrays. Each entry has a ``line`` field like
+    "2x Strike (1) — Deal 6 damage." We parse the count prefix.
     """
-    # Try agent_view.piles first (has the actual pile contents)
-    agent_view = game_state.get("agent_view") or {}
-    piles = agent_view.get("piles") or {}
-    pile_data = piles.get(pile)
-    if pile_data:
-        # Each entry in the pile is a card stack {count, ...}
-        if isinstance(pile_data, list):
-            return sum(entry.get("count", 1) for entry in pile_data)
-        return 0
+    import re
+
+    av = game_state.get("agent_view") or {}
+    # agent_view.combat has draw/discard/exhaust directly
+    # agent_view.run has them under .piles
+    candidates = [
+        (av.get("combat") or {}).get(pile),
+        ((av.get("run") or {}).get("piles") or {}).get(pile),
+    ]
+    for pile_data in candidates:
+        if pile_data and isinstance(pile_data, list):
+            total = 0
+            for entry in pile_data:
+                if isinstance(entry, dict):
+                    line = entry.get("line", "")
+                    # Parse "2x Card Name" → count 2, or "Card Name" → count 1
+                    m = re.match(r"(\d+)x\s", line)
+                    total += int(m.group(1)) if m else 1
+                else:
+                    total += 1
+            return total
 
     # Fallback: combat dict might have {pile}_pile as a list
     combat = game_state.get("combat") or {}
