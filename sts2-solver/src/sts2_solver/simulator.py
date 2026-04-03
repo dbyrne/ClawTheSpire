@@ -149,10 +149,9 @@ ENEMY_MOVE_TABLES: dict[str, list[dict]] = {
         {"type": "Attack", "damage": 16, "hits": 1},                    # Chomp
     ],
     "SLITHERING_STRANGLER": [
-        {"type": "Defend", "self_block": 6},                                 # Coil
-        {"type": "Debuff", "player_weak": 1, "player_vulnerable": 1},  # Constrict
-        {"type": "Attack", "damage": 7, "hits": 2},                     # Thwack x2
-        {"type": "Attack", "damage": 12, "hits": 1},                    # Lash
+        {"type": "Debuff", "player_constrict": 3},                     # Constrict
+        {"type": "Attack", "damage": 7, "hits": 1, "self_block": 5},  # Thwack (dmg + block)
+        {"type": "Attack", "damage": 12, "hits": 1},                  # Lash
     ],
     "SNAPPING_JAXFRUIT": [
         {"type": "Attack", "damage": 3, "hits": 3},          # Energy Orb x3
@@ -854,6 +853,12 @@ def _resolve_sim_intents(state: CombatState, ais: list[EnemyAI]) -> None:
             state.player.powers["Shrink"] = (
                 state.player.powers.get("Shrink", 0)
                 - intent["player_shrink"]  # Shrink is stored as negative value
+            )
+
+        if intent.get("player_constrict"):
+            state.player.powers["Constrict"] = (
+                state.player.powers.get("Constrict", 0)
+                + intent["player_constrict"]
             )
 
         ai._pending_intent = None

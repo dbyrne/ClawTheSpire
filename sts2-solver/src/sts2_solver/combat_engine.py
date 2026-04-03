@@ -230,6 +230,11 @@ def end_turn(state: CombatState) -> None:
         if card.name == "Infection" or card.id == "INFECTION":
             state.player.hp -= 3
 
+    # Constrict: deal damage equal to stacks at end of turn
+    constrict = state.player.powers.get("Constrict", 0)
+    if constrict > 0:
+        state.player.hp -= constrict
+
     # Discard hand (except Retain)
     remaining = []
     for card in state.player.hand:

@@ -424,8 +424,8 @@ def _cloak_and_dagger(card: Card, card_db: CardDB | None) -> CardEffect:
 
 @register("LEADING_STRIKE")
 def _leading_strike(card: Card, card_db: CardDB | None) -> CardEffect:
-    """Deal 6(8) damage. Add 1 Shiv to your hand."""
-    dmg = 6 if not card.upgraded else 8
+    """Deal 7(9) damage. Add 1 Shiv to your hand."""
+    dmg = card.damage or (7 if not card.upgraded else 9)
 
     def effect(state: CombatState, target_idx: int | None = None) -> None:
         if target_idx is not None:
