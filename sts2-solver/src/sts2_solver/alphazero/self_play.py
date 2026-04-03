@@ -239,7 +239,16 @@ def play_one_game(
     if outcome is None:
         outcome = "lose"
 
-    value = 1.0 if outcome == "win" else -1.0
+    # Value based on HP remaining, not binary win/loss.
+    # Win with full HP = +1.0, win with 1 HP = ~+0.5
+    # Lose = scaled by how much HP was remaining (-0.2 to -1.0)
+    # This gives much richer training signal than binary +1/-1.
+    hp_frac = state.player.hp / max(1, state.player.max_hp)
+    if outcome == "win":
+        value = 0.5 + 0.5 * hp_frac  # [0.5, 1.0]
+    else:
+        value = -0.5 - 0.5 * (1.0 - hp_frac)  # [-1.0, -0.5]
+
     for sample in samples:
         sample.value = value
 
@@ -354,9 +363,9 @@ def train_worker(
     total_games = 0
     recent_games: list[dict] = []
 
-    print(f"AlphaZero training: {num_generations} generations, {games_per_generation} games/gen, {mcts_simulations} sims")
-    print(f"Checkpoints: {save_path}")
-    print(f"Progress: {progress_path}")
+    print(f"AlphaZero training: {num_generations} generations, {games_per_generation} games/gen, {mcts_simulations} sims", flush=True)
+    print(f"Checkpoints: {save_path}", flush=True)
+    print(f"Progress: {progress_path}", flush=True)
 
     for gen in range(1, num_generations + 1):
         gen_t0 = time.time()
@@ -430,7 +439,8 @@ def train_worker(
         print(
             f"Gen {gen:4d} | games={total_games} win={win_pct:.0f}% | "
             f"loss={total_loss:.3f} (v={v_loss:.3f} p={p_loss:.3f}) | "
-            f"{gen_elapsed:.1f}s"
+            f"{gen_elapsed:.1f}s",
+            flush=True,
         )
 
         # Save checkpoint
