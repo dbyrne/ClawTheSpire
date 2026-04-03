@@ -563,6 +563,39 @@ def _finisher(card: Card, card_db: CardDB | None) -> CardEffect:
     return effect
 
 
+@register("SKEWER")
+def _skewer(card: Card, card_db: CardDB | None) -> CardEffect:
+    """X-cost: Deal 7(10) damage X times."""
+    dmg = 7 if not card.upgraded else 10
+
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        if target_idx is not None:
+            x = state.last_x_cost  # Energy already deducted by engine
+            deal_damage(state, target_idx, dmg, hits=x)
+    return effect
+
+
+@register("MALAISE")
+def _malaise(card: Card, card_db: CardDB | None) -> CardEffect:
+    """X-cost: Enemy loses X Strength. Apply X Weak."""
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        if target_idx is not None:
+            x = state.last_x_cost
+            apply_power_to_enemy(state, target_idx, "Strength", -x)
+            apply_power_to_enemy(state, target_idx, "Weak", x)
+    return effect
+
+
+@register("PIERCING_WAIL")
+def _piercing_wail(card: Card, card_db: CardDB | None) -> CardEffect:
+    """ALL enemies lose 6(8) Strength this turn."""
+    loss = 6 if not card.upgraded else 8
+
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        apply_power_to_all_enemies(state, "Strength", -loss)
+    return effect
+
+
 @register("UP_MY_SLEEVE")
 def _up_my_sleeve(card: Card, card_db: CardDB | None) -> CardEffect:
     """Add 3(4) Shivs to your hand."""
