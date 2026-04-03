@@ -174,16 +174,23 @@ def state_from_snapshot(
         for p in (e.get("powers") or []):
             if isinstance(p, dict):
                 powers[p["name"]] = p["amount"]
-        # The API's intent_damage already includes enemy Strength.
-        # The combat engine adds Strength again in _enemy_attacks_player,
-        # so subtract it here to avoid double-counting.
+        # The API's intent_damage already includes enemy Strength and
+        # existing Weak on the enemy. The combat engine re-applies both,
+        # so reverse them here to get the base damage.
         raw_intent_damage = e.get("intent_damage")
         enemy_strength = powers.get("Strength", 0)
-        adjusted_damage = (
-            raw_intent_damage - enemy_strength
-            if raw_intent_damage is not None and enemy_strength > 0
-            else raw_intent_damage
-        )
+        enemy_weak = powers.get("Weak", 0)
+        adjusted_damage = raw_intent_damage
+
+        if adjusted_damage is not None:
+            # Reverse Weak: if enemy has Weak, the displayed damage was
+            # already multiplied by 0.75. Divide back to get pre-Weak damage.
+            if enemy_weak > 0:
+                import math
+                adjusted_damage = math.ceil(adjusted_damage / 0.75)
+            # Reverse Strength: subtract it so the engine can add it back
+            if enemy_strength > 0:
+                adjusted_damage = adjusted_damage - enemy_strength
 
         enemies.append(EnemyState(
             id=e.get("id", ""),
