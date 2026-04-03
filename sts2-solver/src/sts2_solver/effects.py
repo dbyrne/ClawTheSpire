@@ -32,6 +32,9 @@ def calculate_attack_damage(base: int, state: CombatState, target: EnemyState) -
         raw = math.floor(raw * 0.75)
     if target.powers.get("Vulnerable", 0) > 0:
         raw = math.floor(raw * 1.5)
+    # Double Damage: player deals double damage (e.g. from Twig Slime buff)
+    if player.powers.get("Double Damage", 0) > 0:
+        raw *= 2
     return max(0, raw)
 
 

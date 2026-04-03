@@ -221,6 +221,10 @@ def end_turn(state: CombatState) -> None:
         effect_fn(state, alive[0])
         state.player.discard_pile.append(card)
 
+    # Cloak Clasp relic: gain 1 Block per card in hand at end of turn
+    if "CLOAK_CLASP" in state.relics:
+        state.player.block += len(state.player.hand)
+
     # Discard hand (except Retain)
     remaining = []
     for card in state.player.hand:
@@ -323,6 +327,18 @@ def _tick_start_of_turn_powers(state: CombatState) -> None:
     if "Brutality" in powers:
         state.player.hp -= 1
         draw_cards(state, powers["Brutality"])
+
+    # Noxious Fumes: apply Poison to ALL enemies
+    if "Noxious Fumes" in powers:
+        for enemy in state.enemies:
+            if enemy.is_alive:
+                enemy.powers["Poison"] = enemy.powers.get("Poison", 0) + powers["Noxious Fumes"]
+
+    # Infinite Blades: add a Shiv to hand
+    if "Infinite Blades" in powers:
+        from .card_registry import _make_shiv
+        for _ in range(powers["Infinite Blades"]):
+            state.player.hand.append(_make_shiv())
 
     # Aggression: move a random Attack from discard to hand
     if "Aggression" in powers:
