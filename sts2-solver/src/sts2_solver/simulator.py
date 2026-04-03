@@ -149,6 +149,7 @@ ENEMY_MOVE_TABLES: dict[str, list[dict]] = {
         {"type": "Attack", "damage": 16, "hits": 1},                    # Chomp
     ],
     "SLITHERING_STRANGLER": [
+        {"type": "Defend", "self_block": 6},                                 # Coil
         {"type": "Debuff", "player_weak": 1, "player_vulnerable": 1},  # Constrict
         {"type": "Attack", "damage": 7, "hits": 2},                     # Thwack x2
         {"type": "Attack", "damage": 12, "hits": 1},                    # Lash
@@ -188,6 +189,7 @@ ENEMY_MOVE_TABLES: dict[str, list[dict]] = {
         {"type": "Attack", "damage": 11, "hits": 1},         # Killshot
     ],
     "AXE_RUBY_RAIDER": [
+        {"type": "Defend", "self_block": 5},                     # Block
         {"type": "Attack", "damage": 5, "hits": 1},          # Swing 1
         {"type": "Attack", "damage": 5, "hits": 1},          # Swing 2
         {"type": "Attack", "damage": 12, "hits": 1},         # Big Swing
