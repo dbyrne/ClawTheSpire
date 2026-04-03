@@ -86,6 +86,7 @@ class Runner:
         self._last_floor: int | None = None  # Track floor for shop reset
         self._last_screen_key: tuple[str, str] | None = None  # (screen, screen_type)
         self._screen_repeat_count: int = 0  # Same-screen repeat counter
+        self._combat_move_indices: dict[tuple[int, str], int] = {}  # Enemy move cycle tracking
 
         # TUI state
         self._status_text = "[dim]Starting...[/dim]"
@@ -656,6 +657,7 @@ class Runner:
 
         if turn == 1 or (isinstance(turn, int) and turn <= 1):
             self.logger.log_combat_start(gs)
+            self._combat_move_indices = {}
 
         # Use potions before solving (may use multiple in one turn)
         potions_used = 0
@@ -702,7 +704,8 @@ class Runner:
         while len(cards_played) < max_cards:
             # Solve from current game state
             try:
-                sim_state = state_from_mcp(gs, self.card_db)
+                sim_state = state_from_mcp(gs, self.card_db,
+                                          move_indices=self._combat_move_indices)
                 hand = list(sim_state.player.hand)
                 t0 = time.perf_counter()
                 from .config import detect_character
@@ -813,6 +816,36 @@ class Runner:
             combat = gs.get("combat") or {}
             player = combat.get("player") or {}
             enemies = combat.get("enemies") or []
+
+        # Update enemy move indices for next turn's predictions.
+        # On first sight, match observed intent to move table; on subsequent
+        # turns, just increment (deterministic cycling).
+        from .enemy_predict import _match_move_index
+        from .simulator import ENEMY_MOVE_TABLES
+        for i, e_raw in enumerate(enemies):
+            eid = e_raw.get("enemy_id", "")
+            key = (i, eid)
+            table = ENEMY_MOVE_TABLES.get(eid)
+            if not table:
+                continue
+            if key in self._combat_move_indices:
+                self._combat_move_indices[key] = (
+                    (self._combat_move_indices[key] + 1) % len(table)
+                )
+            else:
+                intents = e_raw.get("intents", [])
+                it, idmg, ihits = None, None, 1
+                for intent in intents:
+                    itype = intent.get("intent_type", "")
+                    if itype == "Attack":
+                        it = "Attack"
+                        idmg = intent.get("damage")
+                        ihits = intent.get("hits", 1)
+                    elif itype in ("Defend", "Buff", "Debuff", "StatusCard"):
+                        it = it or itype
+                idx = _match_move_index(eid, it, idmg, ihits)
+                if idx is not None:
+                    self._combat_move_indices[key] = idx
 
         # End turn if we're still in combat
         if not self.dry_run and "end_turn" in gs.get("available_actions", []):

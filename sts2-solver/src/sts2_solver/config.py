@@ -80,6 +80,12 @@ EVALUATOR = {
     # the plan. The runner then plays them first and re-solves with
     # the real drawn cards.
     "card_draw_value": 7.0,          # Per card drawn — roughly "average card value"
+
+    # 2-ply enemy simulation — after scoring the post-play state,
+    # simulate enemy intents resolving and penalize HP loss / lethal.
+    # Kept small (0.3) to avoid double-counting with existing block
+    # scoring which already accounts for incoming damage heuristically.
+    "enemy_sim_discount": 0.3,       # Weight on post-enemy-turn score
 }
 
 

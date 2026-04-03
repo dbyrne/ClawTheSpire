@@ -9,10 +9,12 @@ from __future__ import annotations
 
 from .actions import Action
 from .data_loader import CardDB
+from .enemy_predict import annotate_predictions
 from .models import Card, CombatState, EnemyState, PlayerState
 
 
-def state_from_mcp(raw: dict, card_db: CardDB) -> CombatState:
+def state_from_mcp(raw: dict, card_db: CardDB,
+                   move_indices: dict[tuple[int, str], int] | None = None) -> CombatState:
     """Convert an MCP game state dict into a CombatState.
 
     Args:
@@ -58,11 +60,17 @@ def state_from_mcp(raw: dict, card_db: CardDB) -> CombatState:
         for r in relics_raw
     )
 
+    floor = run.get("floor", 0)
+
+    # Predict future enemy intents from move tables
+    annotate_predictions(enemies, turns=2, move_indices=move_indices)
+
     return CombatState(
         player=player,
         enemies=enemies,
         turn=raw.get("turn", 1),
         relics=relic_ids,
+        floor=floor,
     )
 
 

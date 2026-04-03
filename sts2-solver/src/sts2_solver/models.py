@@ -82,6 +82,9 @@ class EnemyState:
     intent_hits: int = 1
     intent_block: int | None = None
 
+    # Predicted future intents (from move table lookahead)
+    predicted_intents: list[dict] = field(default_factory=list)
+
     @property
     def is_alive(self) -> bool:
         return self.hp > 0
@@ -94,5 +97,7 @@ class CombatState:
     turn: int = 0
     cards_played_this_turn: int = 0
     attacks_played_this_turn: int = 0
+    cards_drawn_this_turn: int = 0  # Total draw effects triggered (for scoring)
     last_x_cost: int = 0  # Energy spent on the most recent X-cost card
     relics: frozenset[str] = field(default_factory=frozenset)  # Relic IDs held
+    floor: int = 0  # Current floor number (for scaling bonuses)

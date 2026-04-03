@@ -9,8 +9,52 @@ Higher scores are better.
 
 from __future__ import annotations
 
+import math as _math_top
+
 from .config import EVALUATOR, POWER_VALUES
 from .models import CombatState
+
+
+def _estimate_post_enemy_hp(state: CombatState) -> int:
+    """Estimate player HP after enemy intents resolve, without copying state.
+
+    Simulates hit-by-hit block consumption and damage for all attacking
+    enemies. This is more accurate than the flat total_incoming calculation
+    in the main evaluator because multi-hit attacks interact with block
+    differently (each hit is absorbed individually).
+    """
+    block = state.player.block
+    hp = state.player.hp
+    weak_mult = 0.60 if "PAPER_KRANE" in state.relics else 0.75
+    player_vuln = state.player.powers.get("Vulnerable", 0) > 0
+
+    for enemy in state.enemies:
+        if not enemy.is_alive:
+            continue
+        if enemy.intent_type != "Attack" or enemy.intent_damage is None:
+            continue
+        for _ in range(enemy.intent_hits):
+            if hp <= 0:
+                break
+            raw = enemy.intent_damage + enemy.powers.get("Strength", 0)
+            if raw < 0:
+                raw = 0
+            if enemy.powers.get("Weak", 0) > 0:
+                raw = _math_top.floor(raw * weak_mult)
+            if player_vuln:
+                raw = _math_top.floor(raw * 1.5)
+            if "TUNGSTEN_ROD" in state.relics and raw > 0:
+                raw = max(0, raw - 1)
+            if block > 0:
+                if raw >= block:
+                    raw -= block
+                    block = 0
+                else:
+                    block -= raw
+                    raw = 0
+            hp -= raw
+
+    return max(0, hp)
 
 
 def evaluate_turn(state: CombatState, initial_state: CombatState, character: str = "ironclad") -> float:
@@ -53,6 +97,23 @@ def evaluate_turn(state: CombatState, initial_state: CombatState, character: str
             threat += per_hit * initial_enemy.intent_hits * EVALUATOR["threat_attack_damage_per"]
         threat += initial_enemy.max_hp * EVALUATOR["threat_max_hp_per"]
 
+        # Predicted intent lookahead: enemies about to buff or unleash
+        # big attacks next turn are more threatening than their current
+        # intent alone suggests.
+        for pred in initial_enemy.predicted_intents:
+            pred_type = pred.get("type")
+            if pred_type == "Buff":
+                # Enemy about to buff — killing it prevents scaling
+                threat += EVALUATOR["threat_buff_intent"] * 0.5
+                # Strength gains are especially dangerous
+                pred_str = pred.get("self_strength", 0) + pred.get("all_strength", 0)
+                if pred_str > 0:
+                    threat += pred_str * EVALUATOR["threat_strength_per"] * 0.5
+            elif pred_type == "Attack":
+                pred_dmg = pred.get("damage", 0) + enemy_str
+                pred_hits = pred.get("hits", 1)
+                threat += pred_dmg * pred_hits * EVALUATOR["threat_attack_damage_per"] * 0.5
+
         if current_hp <= 0:
             # Kill bonus: killing an enemy is very valuable - removes future
             # damage and status card sources
@@ -64,6 +125,16 @@ def evaluate_turn(state: CombatState, initial_state: CombatState, character: str
             # Enemies with Strength are increasingly dangerous
             if enemy_str > 0:
                 kill_bonus += enemy_str * EVALUATOR["strength_kill_bonus_per"]
+            # Predicted next moves make kills more urgent
+            for pred in initial_enemy.predicted_intents:
+                if pred.get("type") == "Buff":
+                    pred_str = pred.get("self_strength", 0) + pred.get("all_strength", 0)
+                    if pred_str > 0:
+                        kill_bonus += pred_str * EVALUATOR["strength_kill_bonus_per"] * 0.5
+                elif pred.get("type") == "Attack":
+                    pred_dmg = pred.get("damage", 0) * pred.get("hits", 1)
+                    if pred_dmg >= 20:
+                        kill_bonus += 10.0  # Prevent a big incoming hit
             score += kill_bonus * threat
             # Extra bonus for overkill efficiency is NOT given - wasted damage
             # on a dead enemy is slightly negative
@@ -131,9 +202,25 @@ def evaluate_turn(state: CombatState, initial_state: CombatState, character: str
             score -= EVALUATOR["lethal_damage_penalty"]
     else:
         # No attack incoming: block has less immediate value
-        # Still worth something if enemies are alive (future turns)
+        # But if predicted next-turn intents include attacks, block
+        # that persists (Barricade, Sturdy Clamp) has real value,
+        # and even non-persistent block means we chose defense on
+        # a safe turn — slightly penalize that opportunity cost.
         if any(e.hp > 0 for e in state.enemies):
-            score += state.player.block * EVALUATOR["idle_block_weight"]
+            # Check if next turn has predicted attacks
+            predicted_next_damage = 0
+            for enemy in state.enemies:
+                if enemy.hp <= 0:
+                    continue
+                for pred in enemy.predicted_intents[:1]:  # Next turn only
+                    if pred.get("type") == "Attack":
+                        pred_dmg = pred.get("damage", 0) + enemy.powers.get("Strength", 0)
+                        predicted_next_damage += max(0, pred_dmg) * pred.get("hits", 1)
+            if predicted_next_damage > 0:
+                # Block is more useful — big hit coming next turn
+                score += state.player.block * EVALUATOR["idle_block_weight"] * 3.0
+            else:
+                score += state.player.block * EVALUATOR["idle_block_weight"]
         else:
             # Combat won, block is worthless
             pass
@@ -177,7 +264,16 @@ def evaluate_turn(state: CombatState, initial_state: CombatState, character: str
             # Weak is more valuable against hard-hitting enemies
             score += weak * EVALUATOR["weak_vs_attack_value"]
         else:
-            score += weak * EVALUATOR["weak_vs_other_value"]
+            # Check predicted intents — if enemy attacks next turn,
+            # Weak applied now (multi-turn duration) is still valuable
+            next_attacks = any(
+                p.get("type") == "Attack" for p in enemy.predicted_intents
+            )
+            if next_attacks and weak > 1:
+                # Weak lasts multiple turns — value it between attack/other
+                score += weak * (EVALUATOR["weak_vs_attack_value"] * 0.6)
+            else:
+                score += weak * EVALUATOR["weak_vs_other_value"]
 
     # -----------------------------------------------------------------------
     # 5. Player buffs gained — scaled by remaining enemy HP
@@ -187,6 +283,12 @@ def evaluate_turn(state: CombatState, initial_state: CombatState, character: str
     # compensate, we scale power/buff values by how long the fight will
     # last — more remaining enemy HP = more future turns = more value
     # from scaling powers.
+    #
+    # Floor-based scaling: powers and poison become more valuable on later
+    # floors because fights are longer and enemies are tankier.
+    # Floor 10 = 1.2x, floor 20 = 1.4x, floor 50 = 2.0x.
+    scaling_bonus = 1.0 + (state.floor / 50.0)
+
     total_enemy_hp = sum(max(0, e.hp) for e in state.enemies)
     # Estimate remaining turns based on enemy HP vs our damage per turn
     # (rough: ~15 damage/turn baseline for Ironclad with 3 energy)
@@ -197,11 +299,11 @@ def evaluate_turn(state: CombatState, initial_state: CombatState, character: str
 
     str_gained = state.player.powers.get("Strength", 0) - initial_state.player.powers.get("Strength", 0)
     if str_gained > 0:
-        score += str_gained * EVALUATOR["strength_gained_value"] * fight_length_mult
+        score += str_gained * EVALUATOR["strength_gained_value"] * fight_length_mult * scaling_bonus
 
     dex_gained = state.player.powers.get("Dexterity", 0) - initial_state.player.powers.get("Dexterity", 0)
     if dex_gained > 0:
-        score += dex_gained * EVALUATOR["dexterity_gained_value"] * fight_length_mult
+        score += dex_gained * EVALUATOR["dexterity_gained_value"] * fight_length_mult * scaling_bonus
 
     # Permanent powers — per-character values
     char_powers = POWER_VALUES.get(character, POWER_VALUES.get("ironclad", {}))
@@ -209,7 +311,7 @@ def evaluate_turn(state: CombatState, initial_state: CombatState, character: str
         gained = (state.player.powers.get(power_name, 0)
                   - initial_state.player.powers.get(power_name, 0))
         if gained > 0:
-            score += gained * value_per * fight_length_mult
+            score += gained * value_per * fight_length_mult * scaling_bonus
 
     # Poison on enemies — score the actual future damage from stacks added.
     # Poison deals N + (N-1) + ... + 1 = N*(N+1)/2 total (triangle sum).
@@ -230,7 +332,7 @@ def evaluate_turn(state: CombatState, initial_state: CombatState, character: str
                 cur_triangle = cur_poison * (cur_poison + 1) / 2
                 prev_triangle = prev_poison * (prev_poison + 1) / 2
                 marginal_damage = cur_triangle - prev_triangle
-                score += marginal_damage * poison_discount
+                score += marginal_damage * poison_discount * scaling_bonus
 
     # -----------------------------------------------------------------------
     # 6. Card draw value — the solver can't populate draw piles from game
@@ -370,5 +472,21 @@ def evaluate_turn(state: CombatState, initial_state: CombatState, character: str
 
     # The Boot: min 5 unblocked damage — multi-hit low damage is better
     # (handled implicitly by combat engine damage calc)
+
+    # -----------------------------------------------------------------------
+    # 9. Post-enemy simulation (2-ply lookahead)
+    # -----------------------------------------------------------------------
+    # Simulate enemy intents resolving hit-by-hit against our block, then
+    # penalize actual HP loss. This catches cases the flat total_incoming
+    # heuristic misses — e.g. multi-hit attacks eating through block
+    # differently than a single big hit.
+    enemy_discount = EVALUATOR.get("enemy_sim_discount", 0)
+    if enemy_discount > 0 and any(e.is_alive for e in state.enemies):
+        hp_after = _estimate_post_enemy_hp(state)
+        hp_lost = state.player.hp - hp_after
+        if hp_lost > 0:
+            score -= hp_lost * EVALUATOR["unblocked_damage_penalty"] * enemy_discount
+        if hp_after <= 0:
+            score -= EVALUATOR["lethal_damage_penalty"] * enemy_discount
 
     return score
