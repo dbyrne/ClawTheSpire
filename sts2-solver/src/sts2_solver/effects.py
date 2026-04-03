@@ -24,7 +24,7 @@ CardEffect = Callable[[CombatState, int | None], None]
 def calculate_attack_damage(base: int, state: CombatState, target: EnemyState) -> int:
     """Calculate per-hit damage for an attack card."""
     player = state.player
-    raw = base + player.powers.get("Strength", 0)
+    raw = base + player.powers.get("Strength", 0) + player.powers.get("Shrink", 0)
     if raw < 0:
         raw = 0
     if player.powers.get("Weak", 0) > 0:

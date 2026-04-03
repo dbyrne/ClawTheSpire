@@ -143,6 +143,17 @@ def state_from_snapshot(
         for p in (e.get("powers") or []):
             if isinstance(p, dict):
                 powers[p["name"]] = p["amount"]
+        # The API's intent_damage already includes enemy Strength.
+        # The combat engine adds Strength again in _enemy_attacks_player,
+        # so subtract it here to avoid double-counting.
+        raw_intent_damage = e.get("intent_damage")
+        enemy_strength = powers.get("Strength", 0)
+        adjusted_damage = (
+            raw_intent_damage - enemy_strength
+            if raw_intent_damage is not None and enemy_strength > 0
+            else raw_intent_damage
+        )
+
         enemies.append(EnemyState(
             id=e.get("id", ""),
             name=e.get("name", "?"),
@@ -151,7 +162,7 @@ def state_from_snapshot(
             block=e.get("block", 0),
             powers=powers,
             intent_type=e.get("intent_type"),
-            intent_damage=e.get("intent_damage"),
+            intent_damage=adjusted_damage,
             intent_hits=e.get("intent_hits", 1),
             intent_block=e.get("intent_block"),
         ))

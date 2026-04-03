@@ -109,7 +109,7 @@ ENEMY_MOVE_TABLES: dict[str, list[dict]] = {
         {"type": "Buff", "self_strength": 2, "self_block": 5},  # Hiss
     ],
     "SHRINKER_BEETLE": [
-        {"type": "Debuff", "player_weak": 1, "self_block": 2},  # Shrinker
+        {"type": "Debuff", "player_shrink": 1},                   # Shrinker (applies -1 Strength via Shrink)
         {"type": "Attack", "damage": 7, "hits": 1},          # Chomp
         {"type": "Attack", "damage": 13, "hits": 1},         # Stomp
     ],
@@ -846,6 +846,11 @@ def _resolve_sim_intents(state: CombatState, ais: list[EnemyAI]) -> None:
             state.player.powers["Vulnerable"] = (
                 state.player.powers.get("Vulnerable", 0)
                 + intent["player_vulnerable"]
+            )
+        if intent.get("player_shrink"):
+            state.player.powers["Shrink"] = (
+                state.player.powers.get("Shrink", 0)
+                - intent["player_shrink"]  # Shrink is stored as negative value
             )
 
         ai._pending_intent = None
