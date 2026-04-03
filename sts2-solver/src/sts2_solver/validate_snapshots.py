@@ -273,9 +273,34 @@ def simulate_turn(
     # End turn + enemy phase
     end_turn(s)
     resolve_enemy_intents(s)
+    _apply_defend_block_from_move_table(s)
     tick_enemy_powers(s)
 
     return s
+
+
+def _apply_defend_block_from_move_table(state: CombatState) -> None:
+    """Apply enemy block from Defend intents when intent_block is missing.
+
+    The API sometimes reports intent_type=Defend without an intent_block
+    value. Fall back to the simulator's move table to find the block amount.
+    """
+    from .simulator import ENEMY_MOVE_TABLES
+
+    for enemy in state.enemies:
+        if not enemy.is_alive:
+            continue
+        if enemy.intent_type != "Defend" or enemy.intent_block is not None:
+            continue  # Already handled by resolve_enemy_intents
+
+        table = ENEMY_MOVE_TABLES.get(enemy.id)
+        if not table:
+            continue
+
+        for move in table:
+            if move["type"] == "Defend" and move.get("self_block"):
+                enemy.block += move["self_block"]
+                break
 
 
 def _apply_move_table_effects(state: CombatState) -> None:

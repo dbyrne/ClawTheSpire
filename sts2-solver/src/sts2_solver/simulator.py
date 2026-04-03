@@ -198,6 +198,7 @@ ENEMY_MOVE_TABLES: dict[str, list[dict]] = {
     ],
     "CROSSBOW_RUBY_RAIDER": [
         {"type": "Attack", "damage": 14, "hits": 1},         # Fire!
+        {"type": "Defend", "self_block": 3},                  # Brace
         {"type": "Buff", "self_strength": 2},                 # Reload
     ],
     "TRACKER_RUBY_RAIDER": [
