@@ -381,6 +381,11 @@ def tick_enemy_powers(state: CombatState) -> None:
     for enemy in state.enemies:
         if not enemy.is_alive:
             continue
+        # Territorial: gain Strength equal to stacks at end of turn
+        territorial = enemy.powers.get("Territorial", 0)
+        if territorial > 0:
+            enemy.powers["Strength"] = enemy.powers.get("Strength", 0) + territorial
+
         for debuff in ("Vulnerable", "Weak"):
             if debuff in enemy.powers:
                 enemy.powers[debuff] -= 1
