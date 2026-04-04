@@ -365,6 +365,35 @@ def play_full_run(
     if starter_relic:
         relics.add(starter_relic)
 
+    # Neow starting bonus (random — every real run gets one)
+    neow_bonus = rng.choice(["remove_strike", "gain_relic", "upgrade_card", "gain_gold", "transform"])
+    if neow_bonus == "remove_strike":
+        strikes = [i for i, c in enumerate(deck) if "Strike" in c.name]
+        if strikes:
+            deck.pop(rng.choice(strikes))
+    elif neow_bonus == "gain_relic":
+        available = [r for r in ELITE_RELIC_POOL if r not in relics]
+        if available:
+            relics.add(rng.choice(available))
+    elif neow_bonus == "upgrade_card":
+        upgradeable = [(i, c) for i, c in enumerate(deck)
+                       if not c.upgraded and c.card_type.value not in ("Status", "Curse")]
+        if upgradeable:
+            idx, card = rng.choice(upgradeable)
+            up = card_db.get_upgraded(card.id)
+            if up:
+                deck[idx] = up
+    elif neow_bonus == "gain_gold":
+        gold += 100
+    elif neow_bonus == "transform":
+        strikes = [i for i, c in enumerate(deck) if "Strike" in c.name]
+        for _ in range(min(2, len(strikes))):
+            if strikes:
+                idx = strikes.pop(rng.randrange(len(strikes)))
+                offered = _offer_card_rewards(pools, deck, 1)
+                if offered:
+                    deck[idx] = offered[0]
+
     # Run state
     all_samples: list[TrainingSample] = []
     deck_change_samples: list = []
@@ -562,6 +591,14 @@ def play_full_run(
                         if upgraded:
                             deck[idx] = upgraded
 
+        elif room_type == "treasure":
+            # Treasure/chest room: gold + chance of relic
+            gold += rng.randint(50, 100)
+            if rng.random() < 0.25:
+                available = [r for r in ELITE_RELIC_POOL if r not in relics]
+                if available:
+                    relics.add(rng.choice(available))
+
         elif room_type == "event":
             if event_idx < len(events_list):
                 eid = events_list[event_idx]
@@ -578,6 +615,14 @@ def play_full_run(
                         deck.pop(idx)
                 for card in changes["cards_added"]:
                     deck.append(card)
+                # Relic gains from events
+                for relic_tag in changes.get("relics_gained", []):
+                    if relic_tag == "_random":
+                        available = [r for r in ELITE_RELIC_POOL if r not in relics]
+                        if available:
+                            relics.add(rng.choice(available))
+                    else:
+                        relics.add(relic_tag)
 
         elif room_type == "shop":
             # Network-driven multi-step shop

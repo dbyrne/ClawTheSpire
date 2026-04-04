@@ -526,8 +526,8 @@ def _generate_act1_map(rng: random.Random) -> list[ROOM_TYPE]:
     rooms.append("weak")
     rooms.append("weak")
 
-    # Floor 4-9: mix of normal, event, shop (mid-act)
-    mid_rooms = ["normal", "normal", "normal", "event", "event", "shop"]
+    # Floor 4-9: mix of normal, event, shop, treasure (mid-act)
+    mid_rooms = ["normal", "normal", "normal", "event", "treasure", "shop"]
     rng.shuffle(mid_rooms)
     rooms.extend(mid_rooms)
 
@@ -565,7 +565,7 @@ def _generate_act1_map_with_choices(rng: random.Random) -> list:
     rooms.extend(["weak", "weak", "weak"])
 
     # Floor 4-9: each offers 2-3 choices from the mid-act pool
-    mid_pool = ["normal", "event", "shop", "elite"]
+    mid_pool = ["normal", "event", "shop", "elite", "treasure"]
     for _ in range(6):
         k = rng.choice([2, 3])
         rooms.append(rng.sample(mid_pool, k=k))
@@ -1001,12 +1001,13 @@ def _apply_event_option(
     """Apply an event option and return changes.
 
     Since we can't perfectly parse all event descriptions, we approximate
-    common patterns.
+    common patterns: HP, gold, max HP, card removal, upgrade, transform,
+    curse addition, and relic gain.
     """
     import re
     desc = (option.get("description") or "").lower()
     result = {"hp_delta": 0, "max_hp_delta": 0, "gold_delta": 0,
-              "cards_added": [], "cards_removed": []}
+              "cards_added": [], "cards_removed": [], "relics_gained": []}
 
     # Heal N HP
     heal_match = re.search(r'heal\s*(\d+)', desc)
@@ -1017,6 +1018,11 @@ def _apply_event_option(
     max_hp_match = re.search(r'gain\s*(\d+)\s*max hp', desc)
     if max_hp_match:
         result["max_hp_delta"] = int(max_hp_match.group(1))
+
+    # Lose N Max HP
+    lose_max_match = re.search(r'lose\s*(\d+)\s*max hp', desc)
+    if lose_max_match:
+        result["max_hp_delta"] -= int(lose_max_match.group(1))
 
     # Take N damage / Lose N HP
     dmg_match = re.search(r'(?:take|lose)\s*(\d+)\s*(?:damage|hp)', desc)
@@ -1032,6 +1038,60 @@ def _apply_event_option(
     gold_lose_match = re.search(r'lose\s*(\d+)\s*gold', desc)
     if gold_lose_match:
         result["gold_delta"] -= int(gold_lose_match.group(1))
+
+    # Remove card(s) from deck
+    if re.search(r'remove\s*\d*\s*card|remove.*strike|remove.*defend', desc):
+        n_remove = 1
+        n_match = re.search(r'remove\s*(\d+)', desc)
+        if n_match:
+            n_remove = int(n_match.group(1))
+        basics = [i for i, c in enumerate(deck)
+                  if c.name in ("Strike", "Defend") and not c.upgraded]
+        for _ in range(min(n_remove, len(basics))):
+            if basics:
+                idx = rng.choice(basics)
+                basics.remove(idx)
+                result["cards_removed"].append(idx)
+
+    # Upgrade a card
+    if re.search(r'upgrade\s*(?:a|1|one|random)?\s*card', desc):
+        upgradeable = [(i, c) for i, c in enumerate(deck)
+                       if not c.upgraded and c.card_type.value not in ("Status", "Curse")]
+        if upgradeable:
+            idx, card = rng.choice(upgradeable)
+            up = card_db.get_upgraded(card.id)
+            if up:
+                # Signal upgrade by removing old + adding new
+                result["cards_removed"].append(idx)
+                result["cards_added"].append(up)
+
+    # Transform card(s)
+    if re.search(r'transform', desc):
+        n_transform = 1
+        n_match = re.search(r'transform\s*(\d+)', desc)
+        if n_match:
+            n_transform = int(n_match.group(1))
+        basics = [i for i, c in enumerate(deck)
+                  if c.name in ("Strike", "Defend") and not c.upgraded]
+        pools = _build_card_pool(card_db, "silent")  # approximate
+        for _ in range(min(n_transform, len(basics))):
+            if basics:
+                idx = rng.choice(basics)
+                basics.remove(idx)
+                result["cards_removed"].append(idx)
+                offered = _offer_card_rewards(pools, deck, 1)
+                if offered:
+                    result["cards_added"].append(offered[0])
+
+    # Gain a relic
+    if re.search(r'(?:obtain|gain|receive).*relic', desc):
+        result["relics_gained"].append("_random")
+
+    # Add curse to deck
+    if re.search(r'(?:add|gain|receive).*curse|curse.*added', desc):
+        curse = card_db.get("CURSE") or card_db.get("REGRET") or card_db.get("DECAY")
+        if curse:
+            result["cards_added"].append(curse)
 
     return result
 
