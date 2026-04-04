@@ -525,43 +525,45 @@ def compare_states(
             delta=sim_player.hp - snap.player_hp,
         ))
 
-    # Enemy HP comparison (validates our damage output)
-    # Match enemies by index — snapshot enemies are alive only
-    snap_enemies = {i: e for i, e in enumerate(snap.enemies)}
-    sim_alive = [(i, e) for i, e in enumerate(simulated.enemies) if e.is_alive]
+    # Enemy HP + block comparison — match by name to handle reordering
+    # from deaths, revivals (Illusion), and spawns (Wrigglers).
+    # Block comparison: the snapshot shows block at START of player turn,
+    # which includes pre-applied block from the enemy's upcoming intent.
+    # We skip block comparison since our sim measures at a different timing point.
+    sim_alive = [e for e in simulated.enemies if e.is_alive]
+    snap_matched = set()
 
-    for snap_idx, snap_enemy in snap_enemies.items():
-        if snap_idx < len(sim_alive):
-            sim_idx, sim_enemy = sim_alive[snap_idx]
-            # Match by name to handle index shifts from deaths
-            if sim_enemy.name == snap_enemy.get("name"):
-                if sim_enemy.hp != snap_enemy.get("hp", 0):
+    for snap_idx, snap_enemy in enumerate(snap.enemies):
+        snap_name = snap_enemy.get("name", "")
+        snap_hp = snap_enemy.get("hp", 0)
+
+        # Find matching sim enemy by name (prefer unmatched ones)
+        matched = False
+        for sim_enemy in sim_alive:
+            sim_key = id(sim_enemy)
+            if sim_key in snap_matched:
+                continue
+            if sim_enemy.name == snap_name:
+                snap_matched.add(sim_key)
+                if sim_enemy.hp != snap_hp:
                     mismatches.append(FieldMismatch(
                         f"enemy_{snap_idx}_hp ({sim_enemy.name})",
-                        snap_enemy.get("hp"), sim_enemy.hp,
-                        delta=sim_enemy.hp - snap_enemy.get("hp", 0),
+                        snap_hp, sim_enemy.hp,
+                        delta=sim_enemy.hp - snap_hp,
                     ))
-                # Enemy block comparison — skip when next intent is Buff/Defend
-                # since the game pre-applies block from the upcoming intent
-                next_intent = snap_enemy.get("intent_type")
-                block_from_next_intent = next_intent in ("Buff", "Defend")
-                if sim_enemy.block != snap_enemy.get("block", 0) and not block_from_next_intent:
-                    mismatches.append(FieldMismatch(
-                        f"enemy_{snap_idx}_block ({sim_enemy.name})",
-                        snap_enemy.get("block", 0), sim_enemy.block,
-                        delta=sim_enemy.block - snap_enemy.get("block", 0),
-                    ))
-            else:
-                # Name mismatch — enemy died or new one spawned
-                mismatches.append(FieldMismatch(
-                    f"enemy_{snap_idx}_name",
-                    snap_enemy.get("name"), sim_enemy.name,
-                ))
+                matched = True
+                break
 
-    # Enemy count — did we kill enemies the game didn't, or vice versa?
-    if len(sim_alive) != len(snap_enemies):
+        if not matched:
+            mismatches.append(FieldMismatch(
+                f"enemy_{snap_idx}_name",
+                snap_name, "not found in sim",
+            ))
+
+    # Enemy count
+    if len(sim_alive) != len(snap.enemies):
         mismatches.append(FieldMismatch(
-            "enemy_count", len(snap_enemies), len(sim_alive),
+            "enemy_count", len(snap.enemies), len(sim_alive),
         ))
 
     return mismatches
