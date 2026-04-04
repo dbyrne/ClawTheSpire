@@ -325,10 +325,14 @@ def simulate_turn(
     # End turn + enemy phase
     end_turn(s)
     resolve_enemy_intents(s)
-    _apply_defend_block_from_move_table(s)
+    _apply_move_table_effects(s)
     tick_enemy_powers(s)
 
-    # Clear all enemy block (start_turn does this).
+    # Clear enemy block — start_turn does this, and the next snapshot is
+    # captured AFTER clearing.  The snapshot's enemy block comes from the
+    # UPCOMING intent being pre-applied (the game shows block the enemy
+    # will gain from whatever they're about to do next turn).
+    # We validate block separately using the next snapshot's intent info.
     for enemy in s.enemies:
         enemy.block = 0
 
@@ -520,15 +524,40 @@ def compare_states(
 
     # Enemy HP + block comparison — match by name to handle reordering
     # from deaths, revivals (Illusion), and spawns (Wrigglers).
-    # Block comparison: the snapshot shows block at START of player turn,
-    # which includes pre-applied block from the enemy's upcoming intent.
-    # We skip block comparison since our sim measures at a different timing point.
+    # Block: the snapshot's enemy block comes from the UPCOMING intent
+    # being pre-applied by the game (enemies display block they'll gain
+    # from their next action).  We compute expected block from the
+    # snapshot's own intent + move table and compare.
+    from .simulator import ENEMY_MOVE_TABLES
+
     sim_alive = [e for e in simulated.enemies if e.is_alive]
     snap_matched = set()
 
     for snap_idx, snap_enemy in enumerate(snap.enemies):
         snap_name = snap_enemy.get("name", "")
         snap_hp = snap_enemy.get("hp", 0)
+        snap_block = snap_enemy.get("block", 0)
+
+        # Compute expected block from this snapshot's intent + move table
+        snap_intent = snap_enemy.get("intent_type")
+        snap_intent_block = snap_enemy.get("intent_block")
+        snap_intent_damage = snap_enemy.get("intent_damage")
+        snap_enemy_id = snap_enemy.get("id", "")
+
+        expected_block = 0
+        if snap_intent == "Defend" and snap_intent_block is not None:
+            expected_block = snap_intent_block
+        # Also check move table for self_block on any intent type
+        table = ENEMY_MOVE_TABLES.get(snap_enemy_id, [])
+        for move in table:
+            if move["type"] == snap_intent:
+                if snap_intent == "Attack":
+                    if move.get("damage") == snap_intent_damage and move.get("self_block"):
+                        expected_block += move["self_block"]
+                        break
+                elif move.get("self_block"):
+                    expected_block += move["self_block"]
+                    break
 
         # Find matching sim enemy by name (prefer unmatched ones)
         matched = False
@@ -543,6 +572,12 @@ def compare_states(
                         f"enemy_{snap_idx}_hp ({sim_enemy.name})",
                         snap_hp, sim_enemy.hp,
                         delta=sim_enemy.hp - snap_hp,
+                    ))
+                if expected_block != snap_block:
+                    mismatches.append(FieldMismatch(
+                        f"enemy_{snap_idx}_block ({sim_enemy.name})",
+                        snap_block, expected_block,
+                        delta=expected_block - snap_block,
                     ))
                 matched = True
                 break
