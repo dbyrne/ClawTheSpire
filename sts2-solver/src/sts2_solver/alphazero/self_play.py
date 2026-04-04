@@ -565,6 +565,10 @@ def train_worker(
             "total_loss": round(total_loss, 4),
             "value_loss": round(v_loss, 4),
             "policy_loss": round(p_loss, 4),
+            "deck_loss": round(d_loss, 4),
+            "option_loss": round(o_loss, 4),
+            "deck_buffer_size": len(deck_buffer),
+            "option_buffer_size": len(option_buffer),
             "mcts_sims": mcts_simulations,
             "games_per_gen": games_per_generation,
             "elapsed": f"{hours}:{mins:02d}:{secs:02d}",
@@ -645,7 +649,10 @@ def train_monitor(progress_file: str | None = None, refresh_rate: float = 1.0):
         st.add_row("Total Loss", f"{stats.get('total_loss', 0):.4f}")
         st.add_row("Value Loss", f"{stats.get('value_loss', 0):.4f}")
         st.add_row("Policy Loss", f"{stats.get('policy_loss', 0):.4f}")
+        st.add_row("Deck Loss", f"{stats.get('deck_loss', 0):.4f}")
+        st.add_row("Option Loss", f"{stats.get('option_loss', 0):.4f}")
         st.add_row("", "")
+        st.add_row("Buffers", f"combat={stats.get('buffer_size', 0):,}  deck={stats.get('deck_buffer_size', 0):,}  option={stats.get('option_buffer_size', 0):,}")
         st.add_row("Sims/Move", str(stats.get("mcts_sims", "?")))
         st.add_row("Gen Time", f"{stats.get('gen_time', 0):.1f}s")
         st.add_row("Elapsed", stats.get("elapsed", "0:00"))
@@ -654,19 +661,19 @@ def train_monitor(progress_file: str | None = None, refresh_rate: float = 1.0):
         # Recent games
         gt = Table(expand=True, box=None)
         gt.add_column("#", style="dim", width=4)
-        gt.add_column("Encounter", width=25)
+        gt.add_column("Combats", width=20)
         gt.add_column("Result", width=6)
-        gt.add_column("Turns", width=5)
+        gt.add_column("Floor", width=5)
+        gt.add_column("HP", width=4)
         for game in stats.get("recent_games", [])[-15:]:
             style = "green" if game["outcome"] == "win" else "red"
             enc = game.get("encounter", "?")
-            if enc:
-                enc = enc.replace("ENCOUNTER_", "").replace("_", " ").title()
             gt.add_row(
                 str(game["num"]),
-                enc[:25],
+                enc[:20],
                 Text(game["outcome"], style=style),
                 str(game["turns"]),
+                str(game.get("hp", "?")),
             )
         layout["games"].update(Panel(gt, title="Recent Games"))
 
