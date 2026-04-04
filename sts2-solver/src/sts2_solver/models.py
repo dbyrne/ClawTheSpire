@@ -101,3 +101,4 @@ class CombatState:
     last_x_cost: int = 0  # Energy spent on the most recent X-cost card
     relics: frozenset[str] = field(default_factory=frozenset)  # Relic IDs held
     floor: int = 0  # Current floor number (for scaling bonuses)
+    gold: int = 0  # Current gold (used by non-combat decision heads)

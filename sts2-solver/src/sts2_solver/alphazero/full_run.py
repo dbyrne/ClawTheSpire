@@ -42,6 +42,7 @@ from ..simulator import (
     _set_enemy_intents,
     _resolve_sim_intents,
     _generate_act1_map,
+    _generate_act1_map_with_choices,
     _pick_encounter,
     _build_card_pool,
     _offer_card_rewards,
@@ -54,12 +55,18 @@ from ..simulator import (
     POTION_DROP_CHANCE,
     POTION_SLOTS,
     POTION_TYPES,
+    SHOP_CARD_REMOVE_COST,
+    SHOP_CARD_COSTS,
 )
 
 from .encoding import EncoderConfig, Vocabs
 from .mcts import MCTS
 from .network import STS2Network
-from .self_play import TrainingSample, DeckChangeSample
+from .self_play import (
+    TrainingSample, DeckChangeSample, OptionSample,
+    OPTION_REST, OPTION_SMITH, OPTION_SHOP_REMOVE, OPTION_SHOP_BUY,
+    OPTION_SHOP_LEAVE, ROOM_TYPE_TO_OPTION,
+)
 from .state_tensor import encode_state, encode_actions
 
 
@@ -256,6 +263,7 @@ class FullRunResult:
     deck_size: int
     samples: list[TrainingSample]
     deck_samples: list  # DeckChangeSample list
+    option_samples: list  # OptionSample list (rest/map/shop)
     combat_log: list[dict]
 
 
@@ -308,11 +316,12 @@ def play_full_run(
 
     # Act data + map
     act_data = _ACTS_BY_ID.get("OVERGROWTH", {})
-    room_sequence = _generate_act1_map(rng)
+    room_sequence = _generate_act1_map_with_choices(rng)
 
     # Run state
     all_samples: list[TrainingSample] = []
     deck_change_samples: list = []
+    option_samples: list = []
     combat_samples_by_floor: dict[int, list[TrainingSample]] = {}
     combat_log: list[dict] = []
     combats_won = 0
@@ -324,8 +333,37 @@ def play_full_run(
     event_idx = 0
     floor_reached = 0
 
-    for floor_num, room_type in enumerate(room_sequence, 1):
+    for floor_num, room_entry in enumerate(room_sequence, 1):
         floor_reached = floor_num
+
+        # Resolve map choice nodes via network
+        if isinstance(room_entry, list):
+            try:
+                network = mcts.network
+                player = PlayerState(hp=hp, max_hp=max_hp, energy=3, max_energy=3,
+                                     draw_pile=list(deck))
+                dummy = CombatState(player=player, enemies=[], floor=floor_num, gold=gold)
+                st = encode_state(dummy, vocabs, config)
+                st = {k: v.to(mcts.device) for k, v in st.items()}
+
+                opt_types = [ROOM_TYPE_TO_OPTION[rt] for rt in room_entry]
+                opt_cards = [0] * len(room_entry)
+
+                with torch.no_grad():
+                    hidden = network.encode_state(**st)
+                    best_idx, scores = network.pick_best_option(
+                        hidden, opt_types, opt_cards)
+
+                option_samples.append(OptionSample(
+                    state_tensors={k: v.cpu() for k, v in st.items()},
+                    option_types=opt_types, option_cards=opt_cards,
+                    chosen_idx=best_idx, value=0.0,
+                ))
+                room_type = room_entry[best_idx]
+            except Exception:
+                room_type = rng.choice(room_entry)
+        else:
+            room_type = room_entry
 
         if room_type in ("weak", "normal", "elite", "boss"):
             enc_id = _pick_encounter(act_data, room_type, rng, seen_encounters)
@@ -353,13 +391,15 @@ def play_full_run(
             if outcome == "lose":
                 # Assign values: run died here
                 _assign_run_values(combat_samples_by_floor, floor_reached,
-                                   len(room_sequence), 0, max_hp, deck_change_samples)
+                                   len(room_sequence), 0, max_hp,
+                                   deck_change_samples, option_samples)
                 return FullRunResult(
                     outcome="lose", floor_reached=floor_reached,
                     final_hp=0, max_hp=max_hp,
                     combats_won=combats_won, combats_fought=combats_fought,
                     deck_size=len(deck), samples=all_samples,
-                    deck_samples=deck_change_samples, combat_log=combat_log,
+                    deck_samples=deck_change_samples,
+                    option_samples=option_samples, combat_log=combat_log,
                 )
 
             combats_won += 1
@@ -386,25 +426,69 @@ def play_full_run(
 
             if room_type == "boss":
                 _assign_run_values(combat_samples_by_floor, floor_reached,
-                                   len(room_sequence), hp, max_hp, deck_change_samples)
+                                   len(room_sequence), hp, max_hp,
+                                   deck_change_samples, option_samples)
                 return FullRunResult(
                     outcome="win", floor_reached=floor_reached,
                     final_hp=hp, max_hp=max_hp,
                     combats_won=combats_won, combats_fought=combats_fought,
                     deck_size=len(deck), samples=all_samples,
-                    deck_samples=deck_change_samples, combat_log=combat_log,
+                    deck_samples=deck_change_samples,
+                    option_samples=option_samples, combat_log=combat_log,
                 )
 
         elif room_type == "rest":
-            decision = _rest_site_decision(hp, max_hp, deck, card_db, rng)
-            if decision["action"] == "rest":
-                hp = min(hp + decision["hp_delta"], max_hp)
-            else:
-                idx = decision["upgrade_card_idx"]
-                if idx is not None and idx < len(deck):
-                    upgraded = card_db.get_upgraded(deck[idx].id)
-                    if upgraded:
-                        deck[idx] = upgraded
+            # Network-scored rest site decision
+            try:
+                network = mcts.network
+                player = PlayerState(hp=hp, max_hp=max_hp, energy=3, max_energy=3,
+                                     draw_pile=list(deck))
+                dummy = CombatState(player=player, enemies=[], floor=floor_num, gold=gold)
+                st = encode_state(dummy, vocabs, config)
+                st = {k: v.to(mcts.device) for k, v in st.items()}
+
+                opt_types = [OPTION_REST]
+                opt_cards = [0]
+                deck_indices = [None]  # maps option idx → deck idx
+
+                for di, card in enumerate(deck):
+                    if not card.upgraded and card.card_type not in ("Status", "Curse"):
+                        up = card_db.get_upgraded(card.id)
+                        if up:
+                            opt_types.append(OPTION_SMITH)
+                            opt_cards.append(vocabs.cards.get(card.id.rstrip("+")))
+                            deck_indices.append(di)
+
+                with torch.no_grad():
+                    hidden = network.encode_state(**st)
+                    best_idx, scores = network.pick_best_option(
+                        hidden, opt_types, opt_cards)
+
+                option_samples.append(OptionSample(
+                    state_tensors={k: v.cpu() for k, v in st.items()},
+                    option_types=opt_types, option_cards=opt_cards,
+                    chosen_idx=best_idx, value=0.0,
+                ))
+
+                if best_idx == 0:
+                    hp = min(hp + int(max_hp * 0.3), max_hp)
+                else:
+                    di = deck_indices[best_idx]
+                    if di is not None and di < len(deck):
+                        upgraded = card_db.get_upgraded(deck[di].id)
+                        if upgraded:
+                            deck[di] = upgraded
+            except Exception:
+                # Fallback to heuristic
+                decision = _rest_site_decision(hp, max_hp, deck, card_db, rng)
+                if decision["action"] == "rest":
+                    hp = min(hp + decision["hp_delta"], max_hp)
+                else:
+                    idx = decision["upgrade_card_idx"]
+                    if idx is not None and idx < len(deck):
+                        upgraded = card_db.get_upgraded(deck[idx].id)
+                        if upgraded:
+                            deck[idx] = upgraded
 
         elif room_type == "event":
             if event_idx < len(events_list):
@@ -424,23 +508,97 @@ def play_full_run(
                     deck.append(card)
 
         elif room_type == "shop":
-            shop_result = _simulate_shop(deck, gold, card_db, pools, rng)
-            gold += shop_result["gold_delta"]
-            for idx in sorted(shop_result.get("cards_removed", []), reverse=True):
-                if idx < len(deck):
-                    deck.pop(idx)
-            for card in shop_result.get("cards_added", []):
-                deck.append(card)
+            # Network-driven multi-step shop
+            try:
+                network = mcts.network
+                shop_cards = _offer_card_rewards(pools, deck, 3)
+                shop_costs = []
+                for sc in shop_cards:
+                    cost = 75
+                    for rarity, pool_cards in pools.items():
+                        if any(c.id == sc.id for c in pool_cards):
+                            cost = SHOP_CARD_COSTS.get(rarity, 75)
+                            break
+                    shop_costs.append(cost)
+
+                for _step in range(5):
+                    player = PlayerState(hp=hp, max_hp=max_hp, energy=3,
+                                         max_energy=3, draw_pile=list(deck))
+                    dummy = CombatState(player=player, enemies=[],
+                                        floor=floor_num, gold=gold)
+                    st = encode_state(dummy, vocabs, config)
+                    st = {k: v.to(mcts.device) for k, v in st.items()}
+
+                    opt_types = []
+                    opt_cards = []
+                    actions = []  # ("remove", deck_idx) | ("buy", shop_idx, cost) | ("leave",)
+
+                    # Remove options (Strike/Defend only)
+                    if gold >= SHOP_CARD_REMOVE_COST:
+                        for di, card in enumerate(deck):
+                            if card.name in ("Strike", "Defend") and not card.upgraded:
+                                opt_types.append(OPTION_SHOP_REMOVE)
+                                opt_cards.append(vocabs.cards.get(card.id.rstrip("+")))
+                                actions.append(("remove", di))
+
+                    # Buy card options
+                    for si, (sc, cost) in enumerate(zip(shop_cards, shop_costs)):
+                        if sc is not None and gold >= cost:
+                            opt_types.append(OPTION_SHOP_BUY)
+                            opt_cards.append(vocabs.cards.get(sc.id.rstrip("+")))
+                            actions.append(("buy", si, cost))
+
+                    # Leave option (always available)
+                    opt_types.append(OPTION_SHOP_LEAVE)
+                    opt_cards.append(0)
+                    actions.append(("leave",))
+
+                    if len(opt_types) == 1:
+                        break  # only leave available
+
+                    with torch.no_grad():
+                        hidden = network.encode_state(**st)
+                        best_idx, scores = network.pick_best_option(
+                            hidden, opt_types, opt_cards)
+
+                    option_samples.append(OptionSample(
+                        state_tensors={k: v.cpu() for k, v in st.items()},
+                        option_types=opt_types, option_cards=opt_cards,
+                        chosen_idx=best_idx, value=0.0,
+                    ))
+
+                    action = actions[best_idx]
+                    if action[0] == "leave":
+                        break
+                    elif action[0] == "remove":
+                        deck.pop(action[1])
+                        gold -= SHOP_CARD_REMOVE_COST
+                    elif action[0] == "buy":
+                        deck.append(shop_cards[action[1]])
+                        gold -= action[2]
+                        shop_cards[action[1]] = None  # sold out
+
+            except Exception:
+                # Fallback to heuristic
+                shop_result = _simulate_shop(deck, gold, card_db, pools, rng)
+                gold += shop_result["gold_delta"]
+                for idx in sorted(shop_result.get("cards_removed", []), reverse=True):
+                    if idx < len(deck):
+                        deck.pop(idx)
+                for card in shop_result.get("cards_added", []):
+                    deck.append(card)
 
     # Completed all floors without boss (shouldn't happen normally)
     _assign_run_values(combat_samples_by_floor, floor_reached,
-                       len(room_sequence), hp, max_hp, deck_change_samples)
+                       len(room_sequence), hp, max_hp,
+                       deck_change_samples, option_samples)
     return FullRunResult(
         outcome="lose", floor_reached=floor_reached,
         final_hp=hp, max_hp=max_hp,
         combats_won=combats_won, combats_fought=combats_fought,
         deck_size=len(deck), samples=all_samples,
-        deck_samples=deck_change_samples, combat_log=combat_log,
+        deck_samples=deck_change_samples,
+        option_samples=option_samples, combat_log=combat_log,
     )
 
 
@@ -451,12 +609,12 @@ def _assign_run_values(
     final_hp: int,
     max_hp: int,
     deck_change_samples: list | None = None,
+    option_samples: list | None = None,
 ) -> None:
     """Assign training values to all samples based on run outcome.
 
     Combat samples from later combats get values closer to the actual outcome.
-    Deck change samples all get the run-level value (the card pick's impact
-    is measured by how the whole run went).
+    Deck change and option samples all get the run-level value.
     """
     base = floor_reached / max(1, total_floors)
     hp_bonus = final_hp / max(1, max_hp) * 0.3
@@ -472,7 +630,10 @@ def _assign_run_values(
         for sample in combat_samples_by_floor[floor]:
             sample.value = floor_value
 
-    # Deck change samples get the full run value
+    # Deck change and option samples get the full run value
     if deck_change_samples:
         for sample in deck_change_samples:
+            sample.value = run_value
+    if option_samples:
+        for sample in option_samples:
             sample.value = run_value

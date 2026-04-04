@@ -123,7 +123,7 @@ class STS2Network(nn.Module):
             + cfg.player_feature_dim    # player scalars
             + 32 * cfg.max_enemies      # enemies
             + cfg.relic_embed_dim       # relics
-            + 2                         # floor, turn
+            + 4                         # floor, turn, gold, deck_size
         )
         self.trunk = nn.Sequential(
             nn.Linear(trunk_input_dim, 256),
@@ -152,6 +152,18 @@ class STS2Network(nn.Module):
         # Output: scalar score (how good is the deck with this change)
         self.deck_eval_head = nn.Sequential(
             nn.Linear(256 + cfg.card_embed_dim, 64),
+            nn.ReLU(),
+            nn.Linear(64, 1),
+            nn.Tanh(),
+        )
+
+        # --- Option evaluation head ---
+        # Unified head for non-combat decisions (rest/map/shop).
+        # Scores each available option by combining trunk hidden state with
+        # an option type embedding and an optional card embedding.
+        self.option_type_embed = nn.Embedding(16, 16, padding_idx=0)
+        self.option_eval_head = nn.Sequential(
+            nn.Linear(256 + 16 + cfg.card_embed_dim, 64),
             nn.ReLU(),
             nn.Linear(64, 1),
             nn.Tanh(),
@@ -303,3 +315,45 @@ class STS2Network(nn.Module):
             else:
                 best_idx = max(range(len(scores)), key=lambda i: scores[i])
                 return best_idx, scores
+
+    # ------------------------------------------------------------------
+    # Option evaluation (rest / map / shop)
+    # ------------------------------------------------------------------
+
+    def evaluate_options(
+        self,
+        hidden: torch.Tensor,         # (batch, 256)
+        option_types: torch.Tensor,    # (batch, num_options) — option type indices
+        option_cards: torch.Tensor,    # (batch, num_options) — card vocab indices (0 if N/A)
+        option_mask: torch.Tensor,     # (batch, num_options) — True = invalid/padded
+    ) -> torch.Tensor:
+        """Score a set of discrete options. Returns (batch, num_options) in [-1, 1]."""
+        type_embeds = self.option_type_embed(option_types)      # (B, N, 16)
+        card_embeds = self.card_embed(option_cards)              # (B, N, 32)
+
+        batch, num_opts, _ = type_embeds.shape
+        hidden_exp = hidden.unsqueeze(1).expand(-1, num_opts, -1)  # (B, N, 256)
+
+        combined = torch.cat([hidden_exp, type_embeds, card_embeds], dim=-1)  # (B, N, 304)
+        scores = self.option_eval_head(combined).squeeze(-1)      # (B, N)
+
+        # Mask invalid options with large negative
+        scores = scores.masked_fill(option_mask, -1e9)
+        return scores
+
+    def pick_best_option(
+        self,
+        hidden: torch.Tensor,       # (1, 256)
+        option_types: list[int],
+        option_cards: list[int],
+    ) -> tuple[int, list[float]]:
+        """Pick the highest-scoring option. Returns (best_index, all_scores)."""
+        with torch.no_grad():
+            device = hidden.device
+            types_t = torch.tensor([option_types], dtype=torch.long, device=device)
+            cards_t = torch.tensor([option_cards], dtype=torch.long, device=device)
+            mask = torch.zeros(1, len(option_types), dtype=torch.bool, device=device)
+            scores = self.evaluate_options(hidden, types_t, cards_t, mask)
+            scores_list = scores[0].tolist()
+            best_idx = max(range(len(scores_list)), key=lambda i: scores_list[i])
+            return best_idx, scores_list

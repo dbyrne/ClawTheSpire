@@ -86,6 +86,39 @@ class DeckChangeSample:
     value: float  # Run outcome value (assigned after run ends)
 
 
+@dataclass
+class OptionSample:
+    """Training sample for non-combat decisions (rest/map/shop)."""
+    state_tensors: dict[str, torch.Tensor]
+    option_types: list[int]   # Option type indices (see OPTION_* constants)
+    option_cards: list[int]   # Card vocab indices (0 when N/A)
+    chosen_idx: int           # Which option was picked
+    value: float              # Run outcome value (assigned after run ends)
+
+
+# Option type constants (indices into option_type_embed)
+OPTION_REST = 1
+OPTION_SMITH = 2
+OPTION_MAP_WEAK = 3
+OPTION_MAP_NORMAL = 4
+OPTION_MAP_ELITE = 5
+OPTION_MAP_EVENT = 6
+OPTION_MAP_SHOP = 7
+OPTION_MAP_REST = 8
+OPTION_SHOP_REMOVE = 9
+OPTION_SHOP_BUY = 10
+OPTION_SHOP_LEAVE = 11
+
+ROOM_TYPE_TO_OPTION = {
+    "weak": OPTION_MAP_WEAK,
+    "normal": OPTION_MAP_NORMAL,
+    "elite": OPTION_MAP_ELITE,
+    "event": OPTION_MAP_EVENT,
+    "shop": OPTION_MAP_SHOP,
+    "rest": OPTION_MAP_REST,
+}
+
+
 class ReplayBuffer:
     """Fixed-size buffer of training samples."""
 
@@ -273,9 +306,10 @@ def train_batch(
     optimizer: torch.optim.Optimizer,
     samples: list[TrainingSample],
     deck_samples: list | None = None,
+    option_samples: list | None = None,
     device: str = "cpu",
-) -> tuple[float, float, float, float]:
-    """Train on a batch. Returns (total_loss, value_loss, policy_loss, deck_loss)."""
+) -> tuple[float, float, float, float, float]:
+    """Train on a batch. Returns (total, value, policy, deck, option) losses."""
     network.train()
     value_losses = []
     policy_losses = []
@@ -341,10 +375,39 @@ def train_batch(
         except Exception:
             continue
 
+    # Train option evaluation head on option samples (rest/map/shop)
+    option_losses = []
+    for sample in (option_samples or []):
+        try:
+            state_tensors = {k: v.to(device) for k, v in sample.state_tensors.items()}
+            hidden = network.encode_state(**state_tensors)
+
+            max_card_id = network.card_embed.num_embeddings - 1
+            clamped_cards = [min(c, max_card_id) for c in sample.option_cards]
+            types_t = torch.tensor([sample.option_types], dtype=torch.long, device=device)
+            cards_t = torch.tensor([clamped_cards], dtype=torch.long, device=device)
+            mask = torch.zeros(1, len(sample.option_types), dtype=torch.bool, device=device)
+
+            scores = network.evaluate_options(hidden, types_t, cards_t, mask)
+
+            target = torch.tensor([[sample.value]], dtype=torch.float32, device=device)
+            chosen_score = scores[0, sample.chosen_idx].unsqueeze(0).unsqueeze(0)
+            o_loss = F.mse_loss(chosen_score, target)
+
+            if not torch.isnan(o_loss):
+                option_losses.append(o_loss.item())
+                optimizer.zero_grad()
+                o_loss.backward()
+                torch.nn.utils.clip_grad_norm_(network.parameters(), 1.0)
+                optimizer.step()
+        except Exception:
+            continue
+
     avg_v = sum(value_losses) / max(1, len(value_losses))
     avg_p = sum(policy_losses) / max(1, len(policy_losses))
     avg_d = sum(deck_losses) / max(1, len(deck_losses))
-    return avg_v + avg_p + avg_d, avg_v, avg_p, avg_d
+    avg_o = sum(option_losses) / max(1, len(option_losses))
+    return avg_v + avg_p + avg_d + avg_o, avg_v, avg_p, avg_d, avg_o
 
 
 # ---------------------------------------------------------------------------
@@ -395,6 +458,7 @@ def train_worker(
     optimizer = Adam(network.parameters(), lr=lr)
     replay_buffer = ReplayBuffer(capacity=50_000)
     deck_buffer = ReplayBuffer(capacity=10_000)
+    option_buffer = ReplayBuffer(capacity=10_000)
     mcts = MCTS(network, vocabs, config, card_db=card_db, device="cpu")
 
     save_path = Path(save_dir) if save_dir else Path(__file__).resolve().parents[4] / "alphazero_checkpoints"
@@ -442,6 +506,8 @@ def train_worker(
                 replay_buffer.add(sample)
             for ds in result.deck_samples:
                 deck_buffer.add(ds)
+            for os in result.option_samples:
+                option_buffer.add(os)
 
             total_games += 1
             if result.outcome == "win":
@@ -459,13 +525,17 @@ def train_worker(
                 recent_games = recent_games[-50:]
 
         # --- Training ---
-        v_loss = p_loss = d_loss = total_loss = 0.0
+        v_loss = p_loss = d_loss = o_loss = total_loss = 0.0
         if len(replay_buffer) >= batch_size:
             for epoch in range(train_epochs):
                 batch = replay_buffer.sample(batch_size)
                 deck_batch = deck_buffer.sample(min(32, len(deck_buffer))) if len(deck_buffer) > 0 else []
-                total_loss, v_loss, p_loss, d_loss = train_batch(
-                    network, optimizer, batch, deck_samples=deck_batch, device="cpu",
+                option_batch = option_buffer.sample(min(32, len(option_buffer))) if len(option_buffer) > 0 else []
+                total_loss, v_loss, p_loss, d_loss, o_loss = train_batch(
+                    network, optimizer, batch,
+                    deck_samples=deck_batch,
+                    option_samples=option_batch,
+                    device="cpu",
                 )
 
         gen_elapsed = time.time() - gen_t0
@@ -498,7 +568,7 @@ def train_worker(
         win_pct = total_wins / max(1, total_games) * 100
         print(
             f"Gen {gen:4d} | games={total_games} win={win_pct:.0f}% | "
-            f"loss={total_loss:.3f} (v={v_loss:.3f} p={p_loss:.3f} d={d_loss:.3f}) | "
+            f"loss={total_loss:.3f} (v={v_loss:.3f} p={p_loss:.3f} d={d_loss:.3f} o={o_loss:.3f}) | "
             f"{gen_elapsed:.1f}s",
             flush=True,
         )

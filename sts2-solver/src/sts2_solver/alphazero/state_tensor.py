@@ -118,7 +118,12 @@ def encode_state(
     relic_mask = [False] * relic_size + [True] * (cfg.max_relics - relic_size)
 
     # --- Scalars ---
-    scalars = [state.floor / 50.0, state.turn / 20.0]
+    scalars = [
+        state.floor / 50.0,
+        state.turn / 20.0,
+        state.gold / 300.0,
+        len(state.player.draw_pile) / 30.0,
+    ]
 
     return {
         "hand_features": torch.tensor([hand_features], dtype=torch.float32),

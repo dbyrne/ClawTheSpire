@@ -193,7 +193,7 @@ class EncoderConfig:
             + self.player_feature_dim
             + self.enemy_feature_dim * self.max_enemies
             + self.relic_embed_dim  # summed relic embeddings
-            + 2  # floor, turn
+            + 4  # floor, turn, gold, deck_size
         )
 
     @property

@@ -151,7 +151,7 @@ ENEMY_MOVE_TABLES: dict[str, list[dict]] = {
         {"type": "Attack", "damage": 16, "hits": 1},                              # Chomp
     ],
     "SLITHERING_STRANGLER": [
-        {"type": "Debuff", "player_constrict": 3},                     # Constrict
+        {"type": "Debuff", "player_constrict": 3, "self_block": 5},   # Constrict (+ block)
         {"type": "Attack", "damage": 7, "hits": 1, "self_block": 5},  # Thwack (dmg + block)
         {"type": "Attack", "damage": 12, "hits": 1},                  # Lash
     ],
@@ -191,15 +191,15 @@ ENEMY_MOVE_TABLES: dict[str, list[dict]] = {
     "AXE_RUBY_RAIDER": [
         {"type": "Attack", "damage": 5, "hits": 1, "self_block": 5},  # Swing (dmg + block)
         {"type": "Attack", "damage": 5, "hits": 1, "self_block": 5},  # Swing (repeats)
-        {"type": "Attack", "damage": 12, "hits": 1},                  # Big Swing
+        {"type": "Attack", "damage": 12, "hits": 1, "self_block": 5}, # Big Swing (+ block)
     ],
     "BRUTE_RUBY_RAIDER": [
         {"type": "Attack", "damage": 7, "hits": 1},           # Beat
         {"type": "Buff", "self_strength": 3},                  # Clap (gain 3 STR)
     ],
     "CROSSBOW_RUBY_RAIDER": [
-        {"type": "Defend", "self_block": 3},                   # Reload (block only)
-        {"type": "Attack", "damage": 14, "hits": 1},          # Fire!
+        {"type": "Defend"},                                             # Reload (no block)
+        {"type": "Attack", "damage": 14, "hits": 1, "self_block": 3},  # Fire! (+ block)
     ],
     "TRACKER_RUBY_RAIDER": [
         {"type": "Debuff", "player_frail": 2},                # Track (applies 2 Frail)
@@ -543,6 +543,40 @@ def _generate_act1_map(rng: random.Random) -> list[ROOM_TYPE]:
     rooms.append("rest")
 
     # Floor 15: boss
+    rooms.append("boss")
+
+    return rooms
+
+
+def _generate_act1_map_with_choices(rng: random.Random) -> list:
+    """Generate Act 1 map with player-facing choices at some floors.
+
+    Returns a list where each entry is either a single room type string
+    (forced) or a list of 2-3 room type strings (player chooses).
+    """
+    rooms: list = []
+
+    # Floor 1-3: forced weak
+    rooms.extend(["weak", "weak", "weak"])
+
+    # Floor 4-9: each offers 2-3 choices from the mid-act pool
+    mid_pool = ["normal", "event", "shop", "elite"]
+    for _ in range(6):
+        k = rng.choice([2, 3])
+        rooms.append(rng.sample(mid_pool, k=k))
+
+    # Floor 10: forced rest
+    rooms.append("rest")
+
+    # Floor 11-13: harder choices
+    late_pool = ["normal", "elite", "event", "rest"]
+    for _ in range(3):
+        rooms.append(rng.sample(late_pool, k=2))
+
+    # Floor 14: forced rest
+    rooms.append("rest")
+
+    # Floor 15: forced boss
     rooms.append("boss")
 
     return rooms
