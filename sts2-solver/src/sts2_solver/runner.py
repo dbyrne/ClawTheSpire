@@ -221,7 +221,7 @@ class Runner:
         # Load latest checkpoint if available
         from pathlib import Path as _Path
         ckpt_dir = _Path(__file__).resolve().parents[3] / "alphazero_checkpoints"
-        ckpts = sorted(ckpt_dir.glob("gen_*.pt")) if ckpt_dir.exists() else []
+        ckpts = sorted(ckpt_dir.glob("gen_*.pt"), key=lambda p: p.stat().st_mtime) if ckpt_dir.exists() else []
         self._checkpoint_name = None
         if ckpts:
             ckpt = torch.load(ckpts[-1], map_location="cpu", weights_only=True)

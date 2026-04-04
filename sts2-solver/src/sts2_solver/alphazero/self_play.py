@@ -467,7 +467,7 @@ def train_worker(
     # Load latest checkpoint if available (warm start)
     # Filter out keys with shape mismatches (e.g. trunk input dim changed)
     import torch as _torch
-    ckpts = sorted(save_path.glob("gen_*.pt"))
+    ckpts = sorted(save_path.glob("gen_*.pt"), key=lambda p: p.stat().st_mtime)
     if ckpts:
         ckpt = _torch.load(ckpts[-1], map_location="cpu", weights_only=True)
         saved_state = ckpt["model_state"]
