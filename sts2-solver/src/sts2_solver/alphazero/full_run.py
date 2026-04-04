@@ -132,7 +132,7 @@ def mcts_combat(
                 break
 
             state_tensors = encode_state(state, vocabs, config)
-            action_features, action_mask = encode_actions(actions, state, vocabs, config)
+            action_card_ids, action_features, action_mask = encode_actions(actions, state, vocabs, config)
 
             action, policy = mcts.search(
                 state, num_simulations=mcts_simulations,
@@ -143,6 +143,7 @@ def mcts_combat(
                 state_tensors=state_tensors,
                 policy=policy,
                 value=0.0,  # Filled after run ends
+                action_card_ids=action_card_ids,
                 action_features=action_features,
                 action_mask=action_mask,
                 num_actions=len(actions),
@@ -633,10 +634,16 @@ def _assign_run_values(
     discount = 0.95
     sorted_floors = sorted(combat_samples_by_floor.keys(), reverse=True)
 
+    turn_discount = 0.99  # within-combat temporal discount
     for i, floor in enumerate(sorted_floors):
         floor_value = run_value * (discount ** i)
-        for sample in combat_samples_by_floor[floor]:
-            sample.value = floor_value
+        floor_samples = combat_samples_by_floor[floor]
+        # Later samples within the combat get values closer to floor_value,
+        # earlier samples are discounted toward 0 (more uncertain)
+        n = len(floor_samples)
+        for j, sample in enumerate(floor_samples):
+            turns_from_end = n - 1 - j
+            sample.value = floor_value * (turn_discount ** turns_from_end)
 
     # Deck change and option samples get the full run value
     if deck_change_samples:

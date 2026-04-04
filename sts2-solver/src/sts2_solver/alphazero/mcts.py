@@ -199,6 +199,16 @@ class MCTS:
 
         Returns the network's value estimate for this state.
         """
+        # Lazy state computation: compute on first visit
+        if node.state is None and node.parent is not None and node.parent_action is not None:
+            result = step(node.parent.state, node.parent_action, self.card_db)
+            node.state = result.state
+            if result.done:
+                node.is_terminal = True
+                node.terminal_value = 1.0 if result.outcome == "win" else -1.0
+                node.is_expanded = True
+                return node.terminal_value
+
         # Check for terminal state
         outcome = is_combat_over(node.state)
         if outcome is not None:
@@ -224,33 +234,28 @@ class MCTS:
 
             hidden = self.network.encode_state(**state_tensors)
 
-            action_features, action_mask = encode_actions(
+            action_card_ids, action_features, action_mask = encode_actions(
                 node.legal_actions, node.state, self.vocabs, self.config,
             )
+            action_card_ids = action_card_ids.to(self.device)
             action_features = action_features.to(self.device)
             action_mask = action_mask.to(self.device)
 
-            value, logits = self.network.forward(hidden, action_features, action_mask)
+            value, logits = self.network.forward(hidden, action_card_ids, action_features, action_mask)
 
             # Softmax over legal actions
             probs = torch.nn.functional.softmax(logits[0, :len(node.legal_actions)], dim=0)
             probs = probs.cpu().tolist()
             value = value.item()
 
-        # Create child nodes (lazy — state computed on visit)
+        # Create child nodes lazily — state computed on first visit
         for i, action in enumerate(node.legal_actions):
-            child_state = step(node.state, action, self.card_db).state
             child = Node(
-                state=child_state,
+                state=None,  # computed lazily on first visit
                 parent=node,
                 parent_action=action,
                 prior=probs[i] if i < len(probs) else 1.0 / len(node.legal_actions),
             )
-            # Check if child is terminal
-            child_outcome = is_combat_over(child_state)
-            if child_outcome is not None:
-                child.is_terminal = True
-                child.terminal_value = 1.0 if child_outcome == "win" else -1.0
             node.children[i] = child
 
         node.is_expanded = True

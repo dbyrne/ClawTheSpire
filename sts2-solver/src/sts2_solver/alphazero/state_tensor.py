@@ -176,62 +176,63 @@ def encode_actions(
     vocabs: Vocabs,
     config: EncoderConfig | None = None,
     max_actions: int = 30,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Encode a list of legal actions into tensors.
 
     Returns:
-        action_features: (1, max_actions, action_dim) — action embeddings
+        action_card_ids: (1, max_actions) — card vocab indices (0 for non-card actions)
+        action_features: (1, max_actions, action_feat_dim) — target/flags
         action_mask: (1, max_actions) — True for invalid/padded slots
+
+    action_feat_dim = max_enemies + 1 (target one-hot) + 5 (potion type) + 2 (flags)
     """
     cfg = config or EncoderConfig()
-    action_dim = cfg.action_dim
+    # Feature dims: target_onehot(max_enemies+1) + potion_type(5) + is_end_turn(1) + is_use_potion(1)
+    feat_dim = cfg.max_enemies + 1 + 5 + 2
 
+    card_ids = []
     features = []
     for action in actions[:max_actions]:
-        vec = [0.0] * action_dim
+        vec = [0.0] * feat_dim
+        cid = 0  # PAD = no card
 
         if action.action_type == "end_turn":
-            vec[-2] = 1.0  # end_turn flag (second to last)
+            vec[-2] = 1.0  # is_end_turn
         elif action.action_type == "use_potion":
-            vec[-1] = 1.0  # use_potion flag (last)
-            # Encode potion type in card-stats region
+            vec[-1] = 1.0  # is_use_potion
+            # Potion type one-hot (after target slots)
+            pot_offset = cfg.max_enemies + 1
             if action.potion_idx is not None and action.potion_idx < len(state.player.potions):
                 pot = state.player.potions[action.potion_idx]
                 if pot:
-                    # Use first 5 dims for potion type one-hot
-                    if pot.get("heal"):     vec[0] = 1.0
-                    elif pot.get("block"):  vec[1] = 1.0
-                    elif pot.get("strength"): vec[2] = 1.0
-                    elif pot.get("damage_all"): vec[3] = 1.0
-                    elif pot.get("enemy_weak"): vec[4] = 1.0
+                    if pot.get("heal"):       vec[pot_offset] = 1.0
+                    elif pot.get("block"):    vec[pot_offset + 1] = 1.0
+                    elif pot.get("strength"): vec[pot_offset + 2] = 1.0
+                    elif pot.get("damage_all"): vec[pot_offset + 3] = 1.0
+                    elif pot.get("enemy_weak"): vec[pot_offset + 4] = 1.0
         else:
-            # Card embedding index (will be looked up by network)
+            # Card play — pass vocab ID for learned embedding lookup
             if action.card_idx is not None and action.card_idx < len(state.player.hand):
                 card = state.player.hand[action.card_idx]
                 base_id = card.id.rstrip("+")
-                card_idx = vocabs.cards.get(base_id)
-                # Pack card index as normalized float in first dim
-                vec[0] = card_idx / max(1, len(vocabs.cards))
-                # Card stats in next dims
-                stats = card_stats_vector(card)
-                for j, s in enumerate(stats[:cfg.card_embed_dim - 1]):
-                    vec[1 + j] = s
+                cid = vocabs.cards.get(base_id)
 
             # Target one-hot
-            if action.target_idx is not None:
-                target_slot = cfg.card_embed_dim + action.target_idx
-                if target_slot < action_dim - 2:
-                    vec[target_slot] = 1.0
+            if action.target_idx is not None and action.target_idx < cfg.max_enemies + 1:
+                vec[action.target_idx] = 1.0
 
+        card_ids.append(cid)
         features.append(vec)
 
     actual = len(features)
     while len(features) < max_actions:
-        features.append([0.0] * action_dim)
+        features.append([0.0] * feat_dim)
+        card_ids.append(0)
 
     mask = [False] * actual + [True] * (max_actions - actual)
 
     return (
+        torch.tensor([card_ids], dtype=torch.long),
         torch.tensor([features], dtype=torch.float32),
         torch.tensor([mask], dtype=torch.bool),
     )

@@ -190,22 +190,32 @@ class EncoderConfig:
 
     @property
     def state_dim(self) -> int:
-        """Total state vector dimension after encoding."""
+        """Total state vector dimension after encoding.
+
+        Note: enemies are projected to 32-dim each in the network, so the
+        actual trunk input uses 32*max_enemies, not enemy_feature_dim*max_enemies.
+        This property reflects the pre-projection total for reference.
+        """
         return (
             self.card_embed_dim  # hand (after attention + pool)
             + self.pile_feature_dim * 3  # draw, discard, exhaust
             + self.player_feature_dim
-            + self.enemy_feature_dim * self.max_enemies
+            + 32 * self.max_enemies  # enemies (after projection)
             + self.relic_embed_dim  # summed relic embeddings
             + self.max_potions * self.potion_feature_dim  # potion slots
             + 4  # floor, turn, gold, deck_size
         )
 
     @property
+    def action_feat_dim(self) -> int:
+        """Action feature vector dimension (excluding learned card embedding)."""
+        # target_onehot(max_enemies+1) + potion_type(5) + is_end_turn(1) + is_use_potion(1)
+        return self.max_enemies + 1 + 5 + 2
+
+    @property
     def action_dim(self) -> int:
-        """Action vector dimension."""
-        # card_embed(32) + target_onehot(max_enemies+1) + is_end_turn(1) + is_use_potion(1)
-        return self.card_embed_dim + self.max_enemies + 3
+        """Full action dimension (card embedding + features)."""
+        return self.card_embed_dim + self.action_feat_dim
 
 
 # ---------------------------------------------------------------------------

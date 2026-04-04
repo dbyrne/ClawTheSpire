@@ -73,6 +73,7 @@ class TrainingSample:
     state_tensors: dict[str, torch.Tensor]
     policy: list[float]
     value: float
+    action_card_ids: torch.Tensor
     action_features: torch.Tensor
     action_mask: torch.Tensor
     num_actions: int
@@ -315,20 +316,21 @@ def train_batch(
     value_losses = []
     policy_losses = []
     deck_losses = []
-
-    # Accumulate combat gradients across the batch, then step once
+    option_losses = []
     nan_combat = nan_deck = nan_option = 0
+
+    # --- Combat samples: accumulate gradients, step once ---
     optimizer.zero_grad()
-    batch_loss = torch.tensor(0.0, device=device)
     valid_count = 0
 
     for sample in samples:
         state_tensors = {k: v.to(device) for k, v in sample.state_tensors.items()}
+        action_card_ids = sample.action_card_ids.to(device)
         action_features = sample.action_features.to(device)
         action_mask = sample.action_mask.to(device)
 
         hidden = network.encode_state(**state_tensors)
-        value, logits = network.forward(hidden, action_features, action_mask)
+        value, logits = network.forward(hidden, action_card_ids, action_features, action_mask)
 
         target_value = torch.tensor([[sample.value]], dtype=torch.float32, device=device)
         v_loss = F.mse_loss(value, target_value)
@@ -348,27 +350,27 @@ def train_batch(
             continue
         value_losses.append(v_loss.item())
         policy_losses.append(p_loss.item())
-        batch_loss = batch_loss + loss
+        # Accumulate gradients without growing the graph (#8)
+        (loss / max(1, len(samples))).backward()
         valid_count += 1
 
     if valid_count > 0:
-        (batch_loss / valid_count).backward()
         torch.nn.utils.clip_grad_norm_(network.parameters(), 1.0)
         optimizer.step()
 
-    # Train deck evaluation head on deck change samples
+    # --- Deck samples: accumulate gradients, step once (#1) ---
+    optimizer.zero_grad()
+    deck_valid = 0
     for sample in (deck_samples or []):
         try:
             state_tensors = {k: v.to(device) for k, v in sample.state_tensors.items()}
             hidden = network.encode_state(**state_tensors)
 
-            # Clamp card IDs to valid range
             max_id = network.card_embed.num_embeddings - 1
             clamped_ids = [min(c, max_id) for c in sample.candidate_card_ids]
             card_ids = torch.tensor([clamped_ids], dtype=torch.long, device=device)
-            scores = network.evaluate_deck_change(hidden, card_ids)  # (1, num_candidates)
+            scores = network.evaluate_deck_change(hidden, card_ids)
 
-            # Target: the chosen card should score highest, value = run outcome
             target = torch.tensor([[sample.value]], dtype=torch.float32, device=device)
             if sample.chosen_idx >= 0 and sample.chosen_idx < len(sample.candidate_card_ids):
                 chosen_score = scores[0, sample.chosen_idx].unsqueeze(0).unsqueeze(0)
@@ -380,15 +382,19 @@ def train_batch(
                 nan_deck += 1
                 continue
             deck_losses.append(d_loss.item())
-            optimizer.zero_grad()
-            d_loss.backward()
-            torch.nn.utils.clip_grad_norm_(network.parameters(), 1.0)
-            optimizer.step()
+            n_deck = max(1, len(deck_samples or []))
+            (d_loss / n_deck).backward()
+            deck_valid += 1
         except Exception:
             continue
 
-    # Train option evaluation head on option samples (rest/map/shop)
-    option_losses = []
+    if deck_valid > 0:
+        torch.nn.utils.clip_grad_norm_(network.parameters(), 1.0)
+        optimizer.step()
+
+    # --- Option samples: accumulate gradients, step once (#1) ---
+    optimizer.zero_grad()
+    option_valid = 0
     for sample in (option_samples or []):
         try:
             state_tensors = {k: v.to(device) for k, v in sample.state_tensors.items()}
@@ -410,12 +416,15 @@ def train_batch(
                 nan_option += 1
                 continue
             option_losses.append(o_loss.item())
-            optimizer.zero_grad()
-            o_loss.backward()
-            torch.nn.utils.clip_grad_norm_(network.parameters(), 1.0)
-            optimizer.step()
+            n_opt = max(1, len(option_samples or []))
+            (o_loss / n_opt).backward()
+            option_valid += 1
         except Exception:
             continue
+
+    if option_valid > 0:
+        torch.nn.utils.clip_grad_norm_(network.parameters(), 1.0)
+        optimizer.step()
 
     total_nan = nan_combat + nan_deck + nan_option
     if total_nan > 0:

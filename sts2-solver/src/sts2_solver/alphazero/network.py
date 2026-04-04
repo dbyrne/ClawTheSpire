@@ -153,10 +153,12 @@ class STS2Network(nn.Module):
         )
 
         # --- Policy head ---
-        # Project hidden state to action-scoring space
-        self.policy_project = nn.Linear(256, cfg.action_dim)
-        # Project action embedding to same space
-        self.action_project = nn.Linear(cfg.action_dim, cfg.action_dim)
+        # Actions are encoded as: learned card embedding + feature vector (target/flags)
+        # action_feat_dim = max_enemies+1 (target) + 5 (potion type) + 2 (flags)
+        action_feat_dim = cfg.max_enemies + 1 + 5 + 2
+        policy_action_dim = cfg.card_embed_dim + action_feat_dim
+        self.policy_project = nn.Linear(256, policy_action_dim)
+        self.action_project = nn.Linear(policy_action_dim, policy_action_dim)
 
         # --- Deck evaluation head ---
         # Scores a hypothetical deck change (add/remove/upgrade card).
@@ -210,12 +212,13 @@ class STS2Network(nn.Module):
         hand_input = torch.cat([hand_embeds, hand_features], dim=-1)  # + stats
         hand_vec = self.hand_encoder(hand_input, hand_mask)  # (batch, 32)
 
-        # Piles: sum card embeddings, project
+        # Piles: mean card embeddings, project (#7 — mean preserves scale across pile sizes)
         def encode_pile(card_ids, mask):
             embeds = self.card_embed(card_ids)  # (batch, max_pile, 32)
             valid = (~mask).unsqueeze(-1).float()
-            summed = (embeds * valid).sum(dim=1)  # (batch, 32)
-            return self.pile_project(summed)
+            count = valid.sum(dim=1).clamp(min=1)  # (batch, 1)
+            meaned = (embeds * valid).sum(dim=1) / count  # (batch, 32)
+            return self.pile_project(meaned)
 
         draw_vec = encode_pile(draw_card_ids, draw_mask)
         discard_vec = encode_pile(discard_card_ids, discard_mask)
@@ -257,20 +260,24 @@ class STS2Network(nn.Module):
     def forward(
         self,
         hidden: torch.Tensor,            # (batch, 256)
-        action_features: torch.Tensor,    # (batch, max_actions, action_dim)
+        action_card_ids: torch.Tensor,    # (batch, max_actions) — card vocab indices
+        action_features: torch.Tensor,    # (batch, max_actions, action_feat_dim)
         action_mask: torch.Tensor,        # (batch, max_actions) — True = invalid
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Returns:
-            value: (batch, 1) — win probability in [-1, 1]
+            value: (batch, 1) — estimated run value
             policy_logits: (batch, max_actions) — masked logits
         """
         # Value
         value = self.value_head(hidden)
 
-        # Policy: project hidden → action space, dot with action embeddings
-        state_action = self.policy_project(hidden)  # (batch, action_dim)
-        action_embeds = self.action_project(action_features)  # (batch, max_actions, action_dim)
+        # Policy: combine learned card embeddings with action features
+        card_embeds = self.card_embed(action_card_ids)  # (batch, max_actions, card_embed_dim)
+        action_combined = torch.cat([card_embeds, action_features], dim=-1)  # (batch, max_actions, policy_action_dim)
+
+        state_action = self.policy_project(hidden)            # (batch, policy_action_dim)
+        action_embeds = self.action_project(action_combined)  # (batch, max_actions, policy_action_dim)
 
         # Dot product: (batch, max_actions)
         logits = torch.einsum("bd,bnd->bn", state_action, action_embeds)
@@ -282,6 +289,7 @@ class STS2Network(nn.Module):
 
     def predict(
         self, hidden: torch.Tensor,
+        action_card_ids: torch.Tensor,
         action_features: torch.Tensor,
         action_mask: torch.Tensor,
     ) -> tuple[float, list[float]]:
@@ -289,6 +297,7 @@ class STS2Network(nn.Module):
         with torch.no_grad():
             value, logits = self.forward(
                 hidden.unsqueeze(0),
+                action_card_ids.unsqueeze(0),
                 action_features.unsqueeze(0),
                 action_mask.unsqueeze(0),
             )
