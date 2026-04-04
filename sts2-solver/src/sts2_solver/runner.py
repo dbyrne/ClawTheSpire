@@ -50,6 +50,11 @@ from .solver import solve_turn, format_solution
 from .alphazero.encoding import build_vocabs_from_card_db, EncoderConfig
 from .alphazero.network import STS2Network
 from .alphazero.mcts import MCTS as AlphaZeroMCTS
+from .alphazero.state_tensor import encode_state as az_encode_state
+from .alphazero.self_play import (
+    OPTION_REST, OPTION_SMITH, OPTION_SHOP_REMOVE, OPTION_SHOP_BUY,
+    OPTION_SHOP_LEAVE, ROOM_TYPE_TO_OPTION,
+)
 
 
 DEFAULT_CHARACTER = "Ironclad"
@@ -219,8 +224,12 @@ class Runner:
         ckpts = sorted(ckpt_dir.glob("gen_*.pt")) if ckpt_dir.exists() else []
         if ckpts:
             ckpt = torch.load(ckpts[-1], map_location="cpu", weights_only=True)
-            network.load_state_dict(ckpt["model_state"], strict=False)
-            self.console.print(f"[dim]Loaded checkpoint: {ckpts[-1].name}[/dim]")
+            saved = ckpt["model_state"]
+            current = network.state_dict()
+            compatible = {k: v for k, v in saved.items()
+                          if k in current and v.shape == current[k].shape}
+            network.load_state_dict(compatible, strict=False)
+            self.console.print(f"[dim]Loaded checkpoint: {ckpts[-1].name} ({len(compatible)}/{len(saved)} params)[/dim]")
         else:
             self.console.print("[dim]No checkpoint found — using random network[/dim]")
         self._mcts = AlphaZeroMCTS(
@@ -1274,8 +1283,12 @@ class Runner:
                         self._log_action(f"  [red]Failed: {e}[/red]")
                 return
 
-        # Deterministic decisions for all screen types except events
-        # deck_select is handled earlier in the flow (multi-select, combat, etc.)
+        # Try network-based decisions first, fall back to deterministic
+        _NETWORK_HANDLERS = {
+            "rest": self._az_decide_rest,
+            "map": self._az_decide_map,
+            "shop": self._az_decide_shop,
+        }
         _DETERMINISTIC_HANDLERS = {
             "rest": lambda: decide_rest(gs),
             "card_reward": lambda: decide_card_reward(gs, self.game_data),
@@ -1283,6 +1296,15 @@ class Runner:
             "shop": lambda: decide_shop(gs, self.game_data),
             "boss_relic": lambda: decide_boss_relic(gs, self.game_data),
         }
+
+        net_handler = _NETWORK_HANDLERS.get(screen_type)
+        if net_handler:
+            decision = net_handler(gs)
+            if decision is not None:
+                self._execute_deterministic(
+                    gs, decision, screen_type, actions, run,
+                )
+                return
 
         handler = _DETERMINISTIC_HANDLERS.get(screen_type)
         if handler:
@@ -1334,6 +1356,213 @@ class Runner:
         self._log_action(f"  [blue]{decision_line}[/blue]")
         self.action_count += 1
         self._refresh()
+
+    # ------------------------------------------------------------------
+    # AlphaZero network non-combat decisions
+    # ------------------------------------------------------------------
+
+    def _az_run_state_tensors(self, gs: dict) -> tuple:
+        """Build encoded state tensors from live game state for non-combat decisions.
+
+        Returns (state_tensors, hidden, hp, max_hp, gold, floor, deck_cards).
+        """
+        import torch
+        from .deterministic_advisor import _get_deck, _gold, _floor
+        from .models import PlayerState, CombatState
+
+        run = gs.get("run") or {}
+        hp = run.get("current_hp", 70)
+        max_hp = run.get("max_hp", 70)
+        gold = _gold(gs)
+        floor = _floor(gs)
+
+        # Build deck as Card objects
+        deck_cards = []
+        for raw in _get_deck(gs):
+            card_id = raw.get("card_id") or raw.get("id", "")
+            card = self.card_db.get(card_id)
+            if not card and raw.get("upgraded"):
+                card = self.card_db.get(card_id.rstrip("+") + "+")
+            if card:
+                deck_cards.append(card)
+
+        player = PlayerState(hp=hp, max_hp=max_hp, energy=3, max_energy=3,
+                             draw_pile=list(deck_cards))
+        dummy = CombatState(player=player, enemies=[], floor=floor, gold=gold)
+        st = az_encode_state(dummy, self._mcts_vocabs, self._mcts_config)
+
+        with torch.no_grad():
+            hidden = self._mcts.network.encode_state(**st)
+
+        return st, hidden, hp, max_hp, gold, floor, deck_cards
+
+    def _az_decide_rest(self, gs: dict) -> "Decision | None":
+        """Use network to decide rest vs upgrade at a rest site."""
+        import torch
+        from .deterministic_advisor import Decision
+
+        try:
+            st, hidden, hp, max_hp, gold, floor, deck = self._az_run_state_tensors(gs)
+            network = self._mcts.network
+            vocabs = self._mcts_vocabs
+
+            opt_types = [OPTION_REST]
+            opt_cards = [0]
+            rest_idx_map = [None]  # option idx → rest option index
+
+            # Find rest/upgrade option indices from game state
+            rest_data = gs.get("rest") or (gs.get("agent_view") or {}).get("rest") or {}
+            options = rest_data.get("options", [])
+            game_rest_idx, game_upgrade_idx = None, None
+            for i, opt in enumerate(options):
+                name = (opt.get("name") or opt.get("title") or opt.get("id", "")).lower()
+                idx = opt.get("index", i)
+                if "rest" in name or "heal" in name or "sleep" in name:
+                    game_rest_idx = idx
+                elif "upgrade" in name or "smith" in name:
+                    game_upgrade_idx = idx
+
+            # Build upgrade options
+            upgrade_deck_indices = []
+            if game_upgrade_idx is not None:
+                for di, card in enumerate(deck):
+                    if not card.upgraded and card.card_type not in ("Status", "Curse"):
+                        up = self.card_db.get_upgraded(card.id)
+                        if up:
+                            opt_types.append(OPTION_SMITH)
+                            opt_cards.append(vocabs.cards.get(card.id.rstrip("+")))
+                            upgrade_deck_indices.append(di)
+
+            with torch.no_grad():
+                best_idx, scores = network.pick_best_option(hidden, opt_types, opt_cards)
+
+            if best_idx == 0:
+                return Decision("choose_rest_option",
+                                game_rest_idx if game_rest_idx is not None else 0,
+                                f"Network: rest (score={scores[0]:.2f})")
+            else:
+                card_di = upgrade_deck_indices[best_idx - 1]
+                card_name = deck[card_di].name
+                return Decision("choose_rest_option",
+                                game_upgrade_idx if game_upgrade_idx is not None else 1,
+                                f"Network: upgrade {card_name} (score={scores[best_idx]:.2f})")
+        except Exception as e:
+            self._log_action(f"  [dim]Network rest failed ({e}), falling back[/dim]")
+            return None
+
+    def _az_decide_map(self, gs: dict) -> "Decision | None":
+        """Use network to score map node types and pick the best."""
+        import torch
+        from .deterministic_advisor import Decision
+
+        try:
+            st, hidden, hp, max_hp, gold, floor, deck = self._az_run_state_tensors(gs)
+            network = self._mcts.network
+
+            map_data = gs.get("map") or (gs.get("agent_view") or {}).get("map") or {}
+            nodes = map_data.get("available_nodes") or map_data.get("nodes") or []
+            if not nodes:
+                return None
+
+            opt_types = []
+            opt_cards = []
+            node_indices = []
+
+            for i, node in enumerate(nodes):
+                idx = node.get("index", i)
+                t = (node.get("node_type") or node.get("type") or
+                     node.get("icon") or node.get("symbol", "")).lower()
+
+                # Map game node type to our option type
+                if "elite" in t:
+                    rt = "elite"
+                elif "rest" in t:
+                    rt = "rest"
+                elif "shop" in t or "merchant" in t:
+                    rt = "shop"
+                elif "event" in t or "unknown" in t or "mystery" in t:
+                    rt = "event"
+                else:
+                    rt = "normal"  # monster, treasure, etc.
+
+                opt_type = ROOM_TYPE_TO_OPTION.get(rt)
+                if opt_type is not None:
+                    opt_types.append(opt_type)
+                    opt_cards.append(0)
+                    node_indices.append(idx)
+
+            if not opt_types:
+                return None
+
+            with torch.no_grad():
+                best_idx, scores = network.pick_best_option(hidden, opt_types, opt_cards)
+
+            chosen_node = node_indices[best_idx]
+            return Decision("choose_map_node", chosen_node,
+                            f"Network: node {chosen_node} (score={scores[best_idx]:.2f})")
+        except Exception as e:
+            self._log_action(f"  [dim]Network map failed ({e}), falling back[/dim]")
+            return None
+
+    def _az_decide_shop(self, gs: dict) -> "Decision | None":
+        """Use network for one shop action (remove/buy/leave)."""
+        import torch
+        from .deterministic_advisor import Decision
+
+        try:
+            st, hidden, hp, max_hp, gold, floor, deck = self._az_run_state_tensors(gs)
+            network = self._mcts.network
+            vocabs = self._mcts_vocabs
+            actions = gs.get("available_actions", [])
+
+            opt_types = []
+            opt_cards = []
+            shop_actions = []  # (action_name, option_index, reasoning)
+
+            shop = gs.get("shop") or (gs.get("agent_view") or {}).get("shop") or {}
+
+            # Remove card options
+            if "remove_card_at_shop" in actions:
+                remove_cost = shop.get("remove_cost", 75)
+                if isinstance(remove_cost, int) and remove_cost <= gold:
+                    for di, card in enumerate(deck):
+                        if card.name in ("Strike", "Defend") and not card.upgraded:
+                            opt_types.append(OPTION_SHOP_REMOVE)
+                            opt_cards.append(vocabs.cards.get(card.id.rstrip("+")))
+                            shop_actions.append(("remove_card_at_shop", None,
+                                                 f"Remove {card.name}"))
+
+            # Buy card options
+            if "buy_card" in actions:
+                cards = shop.get("cards", [])
+                for i, card_info in enumerate(cards):
+                    price = card_info.get("price", card_info.get("cost", 999))
+                    if not isinstance(price, int) or price > gold:
+                        continue
+                    card_id = card_info.get("card_id") or card_info.get("id", "")
+                    opt_types.append(OPTION_SHOP_BUY)
+                    opt_cards.append(vocabs.cards.get(card_id.rstrip("+").rstrip("+")))
+                    name = card_info.get("name", card_id)
+                    shop_actions.append(("buy_card", i, f"Buy {name} ({price}g)"))
+
+            # Leave option
+            if "close_shop_inventory" in actions:
+                opt_types.append(OPTION_SHOP_LEAVE)
+                opt_cards.append(0)
+                shop_actions.append(("close_shop_inventory", None, "Leave shop"))
+
+            if not opt_types:
+                return None
+
+            with torch.no_grad():
+                best_idx, scores = network.pick_best_option(hidden, opt_types, opt_cards)
+
+            action_name, opt_idx, reason = shop_actions[best_idx]
+            return Decision(action_name, opt_idx,
+                            f"Network: {reason} (score={scores[best_idx]:.2f})")
+        except Exception as e:
+            self._log_action(f"  [dim]Network shop failed ({e}), falling back[/dim]")
+            return None
 
     # ------------------------------------------------------------------
     # Deterministic decision execution
