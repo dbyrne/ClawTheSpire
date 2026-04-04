@@ -57,10 +57,16 @@ def _on_enemy_death(state: CombatState, enemy_idx: int, from_poison: bool = Fals
     """Handle enemy death triggers.
 
     Called when an enemy's HP drops to 0 or below. Handles:
+    - Illusion: revive at full HP (Eye With Teeth)
     - Infested: spawn Wrigglers (Phrog Parasite)
-    - Minion: (no special handling needed, just stops acting)
     """
     enemy = state.enemies[enemy_idx]
+
+    # Illusion: revive at full HP each turn
+    if enemy.powers.get("Illusion", 0) > 0:
+        enemy.hp = enemy.max_hp
+        return  # Don't process other death triggers
+
     infested = enemy.powers.get("Infested", 0)
     if infested > 0:
         # Spawn Wrigglers
