@@ -19,11 +19,10 @@ Architecture:
         - Score = dot(hidden_projected, action_embed)
         - Supports play_card, end_turn, use_potion, and choose_card actions
 
-    Deck evaluation head:
-        hidden + card_embed → Linear(288→64) → ReLU → Linear(64→1)
-
-    Option evaluation head:
+    Option evaluation head (all non-combat decisions):
         hidden + option_type_embed + card_embed → Linear(304→64) → ReLU → Linear(64→1)
+        Handles card rewards, rest/smith, map pathing, shop buy/remove/leave.
+        Type embedding carries context (free reward vs gold cost vs removal).
 """
 
 from __future__ import annotations
@@ -156,20 +155,10 @@ class STS2Network(nn.Module):
         self.policy_project = nn.Linear(256, policy_action_dim)
         self.action_project = nn.Linear(policy_action_dim, policy_action_dim)
 
-        # --- Deck evaluation head ---
-        # Scores a hypothetical deck change (add/remove/upgrade card).
-        # Input: trunk hidden (256) + candidate card embedding (card_embed_dim)
-        # Output: scalar score (how good is the deck with this change)
-        self.deck_eval_head = nn.Sequential(
-            nn.Linear(256 + cfg.card_embed_dim, 64),
-            nn.ReLU(),
-            nn.Linear(64, 1),
-        )
-
         # --- Option evaluation head ---
-        # Unified head for non-combat decisions (rest/map/shop).
-        # Scores each available option by combining trunk hidden state with
-        # an option type embedding and an optional card embedding.
+        # Unified head for ALL non-combat decisions: card rewards, rest/smith,
+        # map pathing, and shop (buy/remove/leave). Option type embedding
+        # carries context (free reward vs 75g purchase vs 50g removal).
         self.option_type_embed = nn.Embedding(cfg.num_option_types, cfg.option_type_embed_dim, padding_idx=0)
         self.option_eval_head = nn.Sequential(
             nn.Linear(256 + cfg.option_type_embed_dim + cfg.card_embed_dim, 64),
@@ -304,58 +293,8 @@ class STS2Network(nn.Module):
             probs = F.softmax(logits[0], dim=0)
             return value.item(), probs.tolist()
 
-    def evaluate_deck_change(
-        self,
-        hidden: torch.Tensor,        # (batch, 256) — current deck/state encoding
-        card_ids: torch.Tensor,       # (batch, num_candidates) — candidate card vocab indices
-    ) -> torch.Tensor:
-        """Score candidate cards for deck modification (add/remove/upgrade).
-
-        Returns (batch, num_candidates) scores (unbounded).
-        Higher = better deck after this change.
-        """
-        card_embeds = self.card_embed(card_ids)  # (batch, num_candidates, card_embed_dim)
-        batch, num_cands, _ = card_embeds.shape
-
-        # Broadcast hidden to match each candidate
-        hidden_expanded = hidden.unsqueeze(1).expand(-1, num_cands, -1)  # (batch, num_cands, 256)
-
-        # Concatenate hidden + card embed, pass through deck eval head
-        combined = torch.cat([hidden_expanded, card_embeds], dim=-1)  # (batch, num_cands, 256+card_embed_dim)
-        scores = self.deck_eval_head(combined).squeeze(-1)  # (batch, num_candidates)
-
-        return scores
-
-    def pick_card_reward(
-        self,
-        hidden: torch.Tensor,           # (1, 256)
-        candidate_card_ids: list[int],   # vocab indices for offered cards
-        skip_allowed: bool = True,
-    ) -> tuple[int | None, list[float]]:
-        """Pick the best card from a reward offering, or skip.
-
-        Returns (index into candidates or None for skip, scores).
-        """
-        with torch.no_grad():
-            card_ids = torch.tensor([candidate_card_ids], dtype=torch.long)
-            scores = self.evaluate_deck_change(hidden, card_ids)  # (1, num_candidates)
-            scores = scores[0].tolist()
-
-            # Current deck value (no change) = value head output
-            current_value = self.value_head(hidden).item()
-
-            if skip_allowed:
-                # Skip if no candidate improves on current deck value
-                best_idx = max(range(len(scores)), key=lambda i: scores[i])
-                if scores[best_idx] <= current_value:
-                    return None, scores
-                return best_idx, scores
-            else:
-                best_idx = max(range(len(scores)), key=lambda i: scores[i])
-                return best_idx, scores
-
     # ------------------------------------------------------------------
-    # Option evaluation (rest / map / shop)
+    # Option evaluation (all non-combat decisions)
     # ------------------------------------------------------------------
 
     def evaluate_options(

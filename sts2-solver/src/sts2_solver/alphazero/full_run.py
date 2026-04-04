@@ -63,9 +63,10 @@ from .encoding import EncoderConfig, Vocabs
 from .mcts import MCTS
 from .network import STS2Network
 from .self_play import (
-    TrainingSample, DeckChangeSample, OptionSample,
+    TrainingSample, OptionSample,
     OPTION_REST, OPTION_SMITH, OPTION_SHOP_REMOVE, OPTION_SHOP_BUY,
-    OPTION_SHOP_LEAVE, ROOM_TYPE_TO_OPTION,
+    OPTION_SHOP_LEAVE, OPTION_CARD_REWARD, OPTION_CARD_SKIP,
+    ROOM_TYPE_TO_OPTION,
 )
 from ..effects import discard_card_from_hand
 from .state_tensor import encode_state, encode_actions
@@ -210,11 +211,11 @@ def _network_pick_card(
     vocabs: Vocabs,
     config: EncoderConfig,
     card_db: CardDB,
-) -> tuple[Card | None, DeckChangeSample | None]:
-    """Use the network's deck evaluation head to pick a card reward.
+) -> tuple[Card | None, OptionSample | None]:
+    """Use the option evaluation head to pick a card reward.
 
-    Evaluates each offered card by scoring how much it improves the deck.
-    Skips if no card improves the current deck value.
+    Each offered card is scored as OPTION_CARD_REWARD with its card embedding.
+    A OPTION_CARD_SKIP option competes on the same scale.
 
     Returns (picked_card_or_None, training_sample_or_None).
     """
@@ -224,7 +225,6 @@ def _network_pick_card(
     network = mcts.network
 
     # Build a minimal combat state to encode the deck context
-    # (no enemies, just deck/HP/relics for the trunk to evaluate)
     player = PlayerState(
         hp=hp, max_hp=max_hp, energy=3, max_energy=3,
         hand=[], draw_pile=list(deck),
@@ -236,28 +236,30 @@ def _network_pick_card(
         state_tensors = encode_state(dummy_state, vocabs, config)
         state_tensors = {k: v.to(mcts.device) for k, v in state_tensors.items()}
 
+        # Build options: one CARD_REWARD per offered card + one CARD_SKIP
+        opt_types = [OPTION_CARD_REWARD] * len(offered) + [OPTION_CARD_SKIP]
+        opt_cards = []
+        for card in offered:
+            base_id = card.id.rstrip("+")
+            opt_cards.append(vocabs.cards.get(base_id))
+        opt_cards.append(0)  # PAD for skip
+
         with torch.no_grad():
             hidden = network.encode_state(**state_tensors)
-
-            # Get vocab indices for offered cards
-            candidate_ids = []
-            for card in offered:
-                base_id = card.id.rstrip("+")
-                candidate_ids.append(vocabs.cards.get(base_id))
-
-            best_idx, scores = network.pick_card_reward(
-                hidden, candidate_ids, skip_allowed=True,
-            )
+            best_idx, scores = network.pick_best_option(
+                hidden, opt_types, opt_cards)
 
         # Build training sample
-        sample = DeckChangeSample(
+        sample = OptionSample(
             state_tensors={k: v.cpu() for k, v in state_tensors.items()},
-            candidate_card_ids=candidate_ids,
-            chosen_idx=best_idx if best_idx is not None else -1,
+            option_types=opt_types,
+            option_cards=opt_cards,
+            chosen_idx=best_idx,
             value=0.0,  # Filled after run ends
         )
 
-        if best_idx is not None and best_idx < len(offered):
+        # Last option is skip
+        if best_idx < len(offered):
             return offered[best_idx], sample
         return None, sample
 
@@ -282,7 +284,7 @@ class FullRunResult:
     combats_fought: int
     deck_size: int
     samples: list[TrainingSample]
-    deck_samples: list  # DeckChangeSample list
+    deck_samples: list  # OptionSample list (card rewards, routed through option head)
     option_samples: list  # OptionSample list (rest/map/shop)
     combat_log: list[dict]
 

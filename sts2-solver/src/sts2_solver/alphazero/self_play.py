@@ -80,15 +80,6 @@ class TrainingSample:
 
 
 @dataclass
-class DeckChangeSample:
-    """Training sample for deck modification decisions (card reward/remove)."""
-    state_tensors: dict[str, torch.Tensor]  # Deck state BEFORE the change
-    candidate_card_ids: list[int]  # Vocab indices for offered cards
-    chosen_idx: int  # Which card was picked (or -1 for skip)
-    value: float  # Run outcome value (assigned after run ends)
-
-
-@dataclass
 class OptionSample:
     """Training sample for non-combat decisions (rest/map/shop)."""
     state_tensors: dict[str, torch.Tensor]
@@ -110,6 +101,8 @@ OPTION_MAP_REST = 8
 OPTION_SHOP_REMOVE = 9
 OPTION_SHOP_BUY = 10
 OPTION_SHOP_LEAVE = 11
+OPTION_CARD_REWARD = 12
+OPTION_CARD_SKIP = 13
 
 ROOM_TYPE_TO_OPTION = {
     "weak": OPTION_MAP_WEAK,
@@ -337,17 +330,15 @@ def train_batch(
     network: STS2Network,
     optimizer: torch.optim.Optimizer,
     samples: list[TrainingSample],
-    deck_samples: list | None = None,
     option_samples: list | None = None,
     device: str = "cpu",
-) -> tuple[float, float, float, float, float]:
-    """Train on a batch. Returns (total, value, policy, deck, option) losses."""
+) -> tuple[float, float, float, float]:
+    """Train on a batch. Returns (total, value, policy, option) losses."""
     network.train()
     value_losses = []
     policy_losses = []
-    deck_losses = []
     option_losses = []
-    nan_combat = nan_deck = nan_option = 0
+    nan_combat = nan_option = 0
 
     # --- Combat samples: accumulate gradients, step once ---
     optimizer.zero_grad()
@@ -388,41 +379,7 @@ def train_batch(
         torch.nn.utils.clip_grad_norm_(network.parameters(), 1.0)
         optimizer.step()
 
-    # --- Deck samples: accumulate gradients, step once (#1) ---
-    optimizer.zero_grad()
-    deck_valid = 0
-    for sample in (deck_samples or []):
-        try:
-            state_tensors = {k: v.to(device) for k, v in sample.state_tensors.items()}
-            hidden = network.encode_state(**state_tensors)
-
-            max_id = network.card_embed.num_embeddings - 1
-            clamped_ids = [c if c <= max_id else 1 for c in sample.candidate_card_ids]  # 1=UNK
-            card_ids = torch.tensor([clamped_ids], dtype=torch.long, device=device)
-            scores = network.evaluate_deck_change(hidden, card_ids)
-
-            target = torch.tensor([[sample.value]], dtype=torch.float32, device=device)
-            if sample.chosen_idx >= 0 and sample.chosen_idx < len(sample.candidate_card_ids):
-                chosen_score = scores[0, sample.chosen_idx].unsqueeze(0).unsqueeze(0)
-            else:
-                chosen_score = network.value_head(hidden)
-            d_loss = 0.25 * F.mse_loss(chosen_score, target)
-
-            if torch.isnan(d_loss):
-                nan_deck += 1
-                continue
-            deck_losses.append(d_loss.item())
-            n_deck = max(1, len(deck_samples or []))
-            (d_loss / n_deck).backward()
-            deck_valid += 1
-        except Exception:
-            continue
-
-    if deck_valid > 0:
-        torch.nn.utils.clip_grad_norm_(network.parameters(), 1.0)
-        optimizer.step()
-
-    # --- Option samples: accumulate gradients, step once (#1) ---
+    # --- Option samples (all non-combat decisions): accumulate gradients, step once ---
     optimizer.zero_grad()
     option_valid = 0
     for sample in (option_samples or []):
@@ -456,15 +413,14 @@ def train_batch(
         torch.nn.utils.clip_grad_norm_(network.parameters(), 1.0)
         optimizer.step()
 
-    total_nan = nan_combat + nan_deck + nan_option
+    total_nan = nan_combat + nan_option
     if total_nan > 0:
-        print(f"  [warn] NaN losses skipped: combat={nan_combat} deck={nan_deck} option={nan_option}", flush=True)
+        print(f"  [warn] NaN losses skipped: combat={nan_combat} option={nan_option}", flush=True)
 
     avg_v = sum(value_losses) / max(1, len(value_losses))
     avg_p = sum(policy_losses) / max(1, len(policy_losses))
-    avg_d = sum(deck_losses) / max(1, len(deck_losses))
     avg_o = sum(option_losses) / max(1, len(option_losses))
-    return avg_v + avg_p + avg_d + avg_o, avg_v, avg_p, avg_d, avg_o
+    return avg_v + avg_p + avg_o, avg_v, avg_p, avg_o
 
 
 # ---------------------------------------------------------------------------
@@ -522,8 +478,7 @@ def train_worker(
     ], lr=lr)
     scheduler = CosineAnnealingLR(optimizer, T_max=num_generations, eta_min=1e-5)
     replay_buffer = ReplayBuffer(capacity=50_000)
-    deck_buffer = ReplayBuffer(capacity=10_000)
-    option_buffer = ReplayBuffer(capacity=10_000)
+    option_buffer = ReplayBuffer(capacity=15_000)  # All non-combat decisions (cards, rest, map, shop)
     mcts = MCTS(network, vocabs, config, card_db=card_db, device="cpu")
 
     save_path = Path(save_dir) if save_dir else Path(__file__).resolve().parents[4] / "alphazero_checkpoints"
@@ -591,8 +546,8 @@ def train_worker(
             is_win = result.outcome == "win"
             for sample in result.samples:
                 replay_buffer.add(sample, is_win=is_win)
-            for ds in result.deck_samples:
-                deck_buffer.add(ds, is_win=is_win)
+            for os in result.deck_samples:
+                option_buffer.add(os, is_win=is_win)
             for os in result.option_samples:
                 option_buffer.add(os, is_win=is_win)
 
@@ -612,15 +567,13 @@ def train_worker(
                 recent_games = recent_games[-50:]
 
         # --- Training ---
-        v_loss = p_loss = d_loss = o_loss = total_loss = 0.0
+        v_loss = p_loss = o_loss = total_loss = 0.0
         if len(replay_buffer) >= batch_size:
             for epoch in range(train_epochs):
                 batch = replay_buffer.sample(batch_size)
-                deck_batch = deck_buffer.sample(min(32, len(deck_buffer))) if len(deck_buffer) > 0 else []
-                option_batch = option_buffer.sample(min(32, len(option_buffer))) if len(option_buffer) > 0 else []
-                total_loss, v_loss, p_loss, d_loss, o_loss = train_batch(
+                option_batch = option_buffer.sample(min(48, len(option_buffer))) if len(option_buffer) > 0 else []
+                total_loss, v_loss, p_loss, o_loss = train_batch(
                     network, optimizer, batch,
-                    deck_samples=deck_batch,
                     option_samples=option_batch,
                     device="cpu",
                 )
@@ -642,9 +595,7 @@ def train_worker(
             "total_loss": round(total_loss, 4),
             "value_loss": round(v_loss, 4),
             "policy_loss": round(p_loss, 4),
-            "deck_loss": round(d_loss, 4),
             "option_loss": round(o_loss, 4),
-            "deck_buffer_size": len(deck_buffer),
             "option_buffer_size": len(option_buffer),
             "lr": round(scheduler.get_last_lr()[0], 6),
             "mcts_sims": mcts_simulations,
@@ -662,7 +613,7 @@ def train_worker(
         cur_lr = scheduler.get_last_lr()[0]
         print(
             f"Gen {gen:4d} | games={total_games} win={win_pct:.0f}% | "
-            f"loss={total_loss:.3f} (v={v_loss:.3f} p={p_loss:.3f} d={d_loss:.3f} o={o_loss:.3f}) | "
+            f"loss={total_loss:.3f} (v={v_loss:.3f} p={p_loss:.3f} o={o_loss:.3f}) | "
             f"lr={cur_lr:.1e} | {gen_elapsed:.1f}s",
             flush=True,
         )
@@ -728,10 +679,9 @@ def train_monitor(progress_file: str | None = None, refresh_rate: float = 1.0):
         st.add_row("Total Loss", f"{stats.get('total_loss', 0):.4f}")
         st.add_row("Value Loss", f"{stats.get('value_loss', 0):.4f}")
         st.add_row("Policy Loss", f"{stats.get('policy_loss', 0):.4f}")
-        st.add_row("Deck Loss", f"{stats.get('deck_loss', 0):.4f}")
         st.add_row("Option Loss", f"{stats.get('option_loss', 0):.4f}")
         st.add_row("", "")
-        st.add_row("Buffers", f"combat={stats.get('buffer_size', 0):,}  deck={stats.get('deck_buffer_size', 0):,}  option={stats.get('option_buffer_size', 0):,}")
+        st.add_row("Buffers", f"combat={stats.get('buffer_size', 0):,}  option={stats.get('option_buffer_size', 0):,}")
         st.add_row("Learning Rate", f"{stats.get('lr', 0):.1e}")
         st.add_row("Sims/Move", str(stats.get("mcts_sims", "?")))
         st.add_row("Gen Time", f"{stats.get('gen_time', 0):.1f}s")

@@ -90,9 +90,9 @@ This forces the network to not rely too heavily on any single feature, making it
 more robust. Think of it as training multiple slightly different networks and
 averaging them.
 
-### The four output heads
+### The three output heads
 
-The 256-dim hidden state feeds into four specialized heads:
+The 256-dim hidden state feeds into three specialized heads:
 
 #### 1. Value Head — "How likely are we to win?"
 
@@ -132,24 +132,31 @@ It doesn't need to memorize every specific (state, action) pair.
 
 Invalid actions get their scores set to negative infinity so they're never chosen.
 
-#### 3. Deck Evaluation Head — "Should I take this card reward?"
-
-```
-hidden(256) + card_embed(32) = 288 -> Linear(288->64) -> ReLU -> Linear(64->1)
-```
-
-After winning a combat, you're offered 3 cards. This head scores each one:
-"how good would my deck be if I added this card?" If no card scores higher than
-the current deck value, it skips.
-
-#### 4. Option Evaluation Head — "Rest, upgrade, or take this map path?"
+#### 3. Option Evaluation Head — "What should I do outside of combat?"
 
 ```
 hidden(256) + option_type_embed(16) + card_embed(32) = 304 -> Linear -> score
 ```
 
-Scores non-combat choices: rest vs smith at campfires, which map path to take,
-what to buy/remove at shops.
+**One head for all non-combat decisions.** The option type embedding (16-dim)
+carries context, while the card embedding (32-dim) identifies the card involved:
+
+| Decision | Option Type | Card Embed |
+|----------|------------|------------|
+| Card reward: take Backstab | CARD_REWARD | Backstab |
+| Card reward: skip | CARD_SKIP | zeros |
+| Shop: buy Footwork (75g) | SHOP_BUY | Footwork |
+| Shop: remove Strike (50g) | SHOP_REMOVE | Strike |
+| Shop: leave | SHOP_LEAVE | zeros |
+| Rest site: heal | REST | zeros |
+| Rest site: upgrade Defend | SMITH | Defend |
+| Map: take elite path | MAP_ELITE | zeros |
+
+*Why one head instead of separate card/shop/rest heads?* "Should I take Backstab
+as a free reward?" and "Should I buy Backstab for 75g?" are the same question —
+"does this card improve my deck?" — just with different context. A single head
+with type embeddings shares card-scoring knowledge across all decision types and
+gets more training data per parameter.
 
 ---
 
