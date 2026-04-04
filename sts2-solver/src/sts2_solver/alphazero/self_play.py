@@ -336,7 +336,7 @@ def train_batch(
         log_probs = F.log_softmax(logits[0, :len(sample.policy)], dim=0)
         p_loss = -torch.sum(target_policy[:len(log_probs)] * log_probs)
 
-        loss = v_loss + p_loss
+        loss = 0.25 * v_loss + p_loss
         if torch.isnan(loss):
             continue
         value_losses.append(v_loss.item())
@@ -365,7 +365,7 @@ def train_batch(
                 chosen_score = scores[0, sample.chosen_idx].unsqueeze(0).unsqueeze(0)
             else:
                 chosen_score = network.value_head(hidden)
-            d_loss = F.mse_loss(chosen_score, target)
+            d_loss = 0.25 * F.mse_loss(chosen_score, target)
 
             if not torch.isnan(d_loss):
                 deck_losses.append(d_loss.item())
@@ -393,7 +393,7 @@ def train_batch(
 
             target = torch.tensor([[sample.value]], dtype=torch.float32, device=device)
             chosen_score = scores[0, sample.chosen_idx].unsqueeze(0).unsqueeze(0)
-            o_loss = F.mse_loss(chosen_score, target)
+            o_loss = 0.25 * F.mse_loss(chosen_score, target)
 
             if not torch.isnan(o_loss):
                 option_losses.append(o_loss.item())
@@ -456,7 +456,7 @@ def train_worker(
     vocabs = build_vocabs_from_card_db(card_db)
     config = EncoderConfig()
     network = STS2Network(vocabs, config)
-    optimizer = Adam(network.parameters(), lr=lr)
+    optimizer = Adam(network.parameters(), lr=lr, weight_decay=1e-4)
     scheduler = CosineAnnealingLR(optimizer, T_max=num_generations, eta_min=1e-5)
     replay_buffer = ReplayBuffer(capacity=50_000)
     deck_buffer = ReplayBuffer(capacity=10_000)
