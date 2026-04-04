@@ -57,6 +57,7 @@ from ..simulator import (
     POTION_TYPES,
     SHOP_CARD_REMOVE_COST,
     SHOP_CARD_COSTS,
+    SHOP_POTION_COST,
 )
 
 from .encoding import EncoderConfig, Vocabs
@@ -66,7 +67,7 @@ from .self_play import (
     TrainingSample, OptionSample,
     OPTION_REST, OPTION_SMITH, OPTION_SHOP_REMOVE, OPTION_SHOP_BUY,
     OPTION_SHOP_LEAVE, OPTION_CARD_REWARD, OPTION_CARD_SKIP,
-    ROOM_TYPE_TO_OPTION,
+    OPTION_SHOP_BUY_POTION, ROOM_TYPE_TO_OPTION,
 )
 from ..effects import discard_card_from_hand
 from .state_tensor import encode_state, encode_actions
@@ -555,9 +556,13 @@ def play_full_run(
                             break
                     shop_costs.append(cost)
 
-                for _step in range(5):
+                # Offer 2 random potions at the shop
+                shop_potions = [rng.choice(POTION_TYPES) for _ in range(2)]
+
+                for _step in range(6):
                     player = PlayerState(hp=hp, max_hp=max_hp, energy=3,
-                                         max_energy=3, draw_pile=list(deck))
+                                         max_energy=3, draw_pile=list(deck),
+                                         potions=[dict(p) for p in potions])
                     dummy = CombatState(player=player, enemies=[],
                                         floor=floor_num, gold=gold)
                     st = encode_state(dummy, vocabs, config)
@@ -565,7 +570,7 @@ def play_full_run(
 
                     opt_types = []
                     opt_cards = []
-                    actions = []  # ("remove", deck_idx) | ("buy", shop_idx, cost) | ("leave",)
+                    actions = []  # ("remove", deck_idx) | ("buy", shop_idx, cost) | ("potion", pot_idx) | ("leave",)
 
                     # Remove options (Strike/Defend only)
                     if gold >= SHOP_CARD_REMOVE_COST:
@@ -581,6 +586,14 @@ def play_full_run(
                             opt_types.append(OPTION_SHOP_BUY)
                             opt_cards.append(vocabs.cards.get(sc.id.rstrip("+")))
                             actions.append(("buy", si, cost))
+
+                    # Buy potion options (if we have room and gold)
+                    if gold >= SHOP_POTION_COST and len(potions) < POTION_SLOTS:
+                        for pi, pot in enumerate(shop_potions):
+                            if pot is not None:
+                                opt_types.append(OPTION_SHOP_BUY_POTION)
+                                opt_cards.append(0)  # Potions aren't cards
+                                actions.append(("potion", pi))
 
                     # Leave option (always available)
                     opt_types.append(OPTION_SHOP_LEAVE)
@@ -611,6 +624,10 @@ def play_full_run(
                         deck.append(shop_cards[action[1]])
                         gold -= action[2]
                         shop_cards[action[1]] = None  # sold out
+                    elif action[0] == "potion":
+                        potions.append(dict(shop_potions[action[1]]))
+                        gold -= SHOP_POTION_COST
+                        shop_potions[action[1]] = None  # sold out
 
             except Exception:
                 # Fallback to heuristic

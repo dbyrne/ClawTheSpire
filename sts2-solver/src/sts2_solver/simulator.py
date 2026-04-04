@@ -1091,6 +1091,7 @@ def _rest_site_decision(
 
 SHOP_CARD_REMOVE_COST = 75
 SHOP_CARD_COSTS = {"Common": 50, "Uncommon": 75, "Rare": 150}
+SHOP_POTION_COST = 50  # Flat cost for any potion
 
 
 def _simulate_shop(
