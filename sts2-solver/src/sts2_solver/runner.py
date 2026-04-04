@@ -229,6 +229,10 @@ class Runner:
             current = network.state_dict()
             compatible = {k: v for k, v in saved.items()
                           if k in current and v.shape == current[k].shape}
+            skipped = set(saved.keys()) - set(compatible.keys())
+            if any("trunk.0" in k for k in skipped):
+                for k in [k for k in compatible if k.startswith("trunk.")]:
+                    compatible.pop(k)
             network.load_state_dict(compatible, strict=False)
             self._checkpoint_name = ckpts[-1].name
             self.console.print(f"[dim]Loaded checkpoint: {self._checkpoint_name} ({len(compatible)}/{len(saved)} params)[/dim]")

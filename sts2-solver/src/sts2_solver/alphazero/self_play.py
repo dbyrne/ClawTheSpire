@@ -477,6 +477,13 @@ def train_worker(
             if k in current_state and v.shape == current_state[k].shape
         }
         skipped = set(saved_state.keys()) - set(compatible.keys())
+        # If trunk.0 was skipped (input dim changed), also skip trunk.2
+        # to avoid NaN from mismatched weight expectations
+        if any("trunk.0" in k for k in skipped):
+            trunk_keys = [k for k in compatible if k.startswith("trunk.")]
+            for k in trunk_keys:
+                compatible.pop(k)
+                skipped.add(k)
         network.load_state_dict(compatible, strict=False)
         msg = f"Warm start from {ckpts[-1].name} ({len(compatible)}/{len(saved_state)} params)"
         if skipped:

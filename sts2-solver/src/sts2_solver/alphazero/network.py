@@ -72,13 +72,18 @@ class CardSetEncoder(nn.Module):
         """
         x = self.project_in(card_features)  # (batch, max_cards, embed_dim)
 
+        # Handle empty sets (all masked) — return zeros to avoid attention NaN
+        valid_mask = (~mask).unsqueeze(-1).float()  # (batch, max_cards, 1)
+        num_valid = valid_mask.sum(dim=1)  # (batch, 1)
+        if (num_valid == 0).all():
+            return torch.zeros(x.shape[0], self.card_embed_dim, device=x.device)
+
         # Self-attention with padding mask
         attn_out, _ = self.attention(x, x, x, key_padding_mask=mask)
         x = self.layer_norm(x + attn_out)  # Residual + norm
 
         # Mean pool over non-padded positions
-        valid_mask = (~mask).unsqueeze(-1).float()  # (batch, max_cards, 1)
-        pooled = (x * valid_mask).sum(dim=1) / valid_mask.sum(dim=1).clamp(min=1)
+        pooled = (x * valid_mask).sum(dim=1) / num_valid.clamp(min=1)
         return pooled  # (batch, card_embed_dim)
 
 
