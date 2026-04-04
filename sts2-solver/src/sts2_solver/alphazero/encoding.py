@@ -264,7 +264,10 @@ def power_indices_and_amounts(
         if i < len(sorted_powers):
             name, amount = sorted_powers[i]
             indices.append(vocab.get(name))
-            amounts.append(amount / 20.0)
+            # log-scale normalization: handles both small (Strength 2) and
+            # large (Poison 60) amounts without saturation
+            import math
+            amounts.append(math.copysign(math.log1p(abs(amount)), amount))
         else:
             indices.append(0)  # PAD
             amounts.append(0.0)

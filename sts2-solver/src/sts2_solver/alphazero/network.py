@@ -240,10 +240,11 @@ class STS2Network(nn.Module):
         enemy_vecs = self.enemy_project(enemy_full)         # (batch, max_enemies, 32)
         enemy_flat = enemy_vecs.reshape(batch, cfg.max_enemies * 32)
 
-        # Relics: sum embeddings
+        # Relics: mean embeddings (#6 — normalize by count)
         relic_embeds = self.relic_embed(relic_ids)  # (batch, max_relics, 8)
         relic_valid = (~relic_mask).unsqueeze(-1).float()
-        relic_vec = (relic_embeds * relic_valid).sum(dim=1)  # (batch, 8)
+        relic_count = relic_valid.sum(dim=1).clamp(min=1)  # (batch, 1)
+        relic_vec = (relic_embeds * relic_valid).sum(dim=1) / relic_count  # (batch, 8)
 
         # Concatenate everything
         state_vec = torch.cat([
@@ -252,10 +253,10 @@ class STS2Network(nn.Module):
         ], dim=-1)
 
         # Trunk with residual + layer norm
-        h = F.relu(self.trunk_in(state_vec))        # (batch, 256)
-        h = h + self.trunk_hidden(self.trunk_dropout(h))  # residual
-        h = self.trunk_norm(F.relu(h))
-        return self.trunk_dropout(h)
+        h = F.relu(self.trunk_in(state_vec))                     # (batch, 256)
+        h = h + self.trunk_dropout(F.relu(self.trunk_hidden(h))) # residual + dropout on output
+        h = self.trunk_norm(h)
+        return h
 
     def forward(
         self,

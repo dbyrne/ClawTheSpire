@@ -367,7 +367,7 @@ def train_batch(
             hidden = network.encode_state(**state_tensors)
 
             max_id = network.card_embed.num_embeddings - 1
-            clamped_ids = [min(c, max_id) for c in sample.candidate_card_ids]
+            clamped_ids = [c if c <= max_id else 1 for c in sample.candidate_card_ids]  # 1=UNK
             card_ids = torch.tensor([clamped_ids], dtype=torch.long, device=device)
             scores = network.evaluate_deck_change(hidden, card_ids)
 
@@ -401,7 +401,7 @@ def train_batch(
             hidden = network.encode_state(**state_tensors)
 
             max_card_id = network.card_embed.num_embeddings - 1
-            clamped_cards = [min(c, max_card_id) for c in sample.option_cards]
+            clamped_cards = [c if c <= max_card_id else 1 for c in sample.option_cards]  # 1=UNK
             types_t = torch.tensor([sample.option_types], dtype=torch.long, device=device)
             cards_t = torch.tensor([clamped_cards], dtype=torch.long, device=device)
             mask = torch.zeros(1, len(sample.option_types), dtype=torch.bool, device=device)
@@ -482,7 +482,14 @@ def train_worker(
     vocabs = build_vocabs_from_card_db(card_db)
     config = EncoderConfig()
     network = STS2Network(vocabs, config)
-    optimizer = Adam(network.parameters(), lr=lr, weight_decay=1e-4)
+    # Exclude embedding tables from weight decay so rare cards/powers
+    # can develop strong representations (#12)
+    embed_params = [p for n, p in network.named_parameters() if "embed" in n]
+    other_params = [p for n, p in network.named_parameters() if "embed" not in n]
+    optimizer = Adam([
+        {"params": embed_params, "weight_decay": 0},
+        {"params": other_params, "weight_decay": 1e-4},
+    ], lr=lr)
     scheduler = CosineAnnealingLR(optimizer, T_max=num_generations, eta_min=1e-5)
     replay_buffer = ReplayBuffer(capacity=50_000)
     deck_buffer = ReplayBuffer(capacity=10_000)
