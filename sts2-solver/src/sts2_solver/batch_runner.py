@@ -85,9 +85,9 @@ def run_one_game(cfg: dict, game_num: int) -> dict | None:
             character=cfg["character"],
             logs_dir=logs_dir,
         )
-        if runner._checkpoint_name:
-            print(f"  Checkpoint: {runner._checkpoint_name}")
         runner.run()
+        if getattr(runner, "_checkpoint_name", None):
+            print(f"  Checkpoint: {runner._checkpoint_name}")
     except KeyboardInterrupt:
         raise
     except Exception as e:
