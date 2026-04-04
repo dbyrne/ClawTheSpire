@@ -222,6 +222,7 @@ class Runner:
         from pathlib import Path as _Path
         ckpt_dir = _Path(__file__).resolve().parents[3] / "alphazero_checkpoints"
         ckpts = sorted(ckpt_dir.glob("gen_*.pt")) if ckpt_dir.exists() else []
+        self._checkpoint_name = None
         if ckpts:
             ckpt = torch.load(ckpts[-1], map_location="cpu", weights_only=True)
             saved = ckpt["model_state"]
@@ -229,7 +230,8 @@ class Runner:
             compatible = {k: v for k, v in saved.items()
                           if k in current and v.shape == current[k].shape}
             network.load_state_dict(compatible, strict=False)
-            self.console.print(f"[dim]Loaded checkpoint: {ckpts[-1].name} ({len(compatible)}/{len(saved)} params)[/dim]")
+            self._checkpoint_name = ckpts[-1].name
+            self.console.print(f"[dim]Loaded checkpoint: {self._checkpoint_name} ({len(compatible)}/{len(saved)} params)[/dim]")
         else:
             self.console.print("[dim]No checkpoint found — using random network[/dim]")
         self._mcts = AlphaZeroMCTS(
@@ -239,6 +241,7 @@ class Runner:
         self.logger.metadata = {
             "advisor_model": self.advisor.model,
             "advisor_local": self.advisor.is_local,
+            "checkpoint": self._checkpoint_name or "none",
         }
         try:
             health = self.client.get_health()
