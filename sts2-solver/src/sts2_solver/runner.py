@@ -529,14 +529,25 @@ class Runner:
 
     def _handle_bundle_selection(self) -> None:
         """Handle card pack/bundle selection screens (e.g. Neow's Scroll Boxes)."""
-        # Pick the first bundle — could be improved with card tier analysis
-        self._log_action("[dim]auto: choose_bundle 0[/dim]")
-        if not self.dry_run:
-            try:
-                self._execute_with_retry("choose_bundle", option_index=0)
-                time.sleep(1.0)
-            except Exception:
-                pass
+        gs = self.game_state
+        actions = gs.get("available_actions", [])
+
+        if "choose_bundle" in actions:
+            self._log_action("[dim]auto: choose_bundle 0[/dim]")
+            if not self.dry_run:
+                try:
+                    self._execute_with_retry("choose_bundle", option_index=0)
+                    time.sleep(1.0)
+                except Exception:
+                    pass
+        elif "confirm_bundle" in actions:
+            self._log_action("[dim]auto: confirm_bundle[/dim]")
+            if not self.dry_run:
+                try:
+                    self._execute_with_retry("confirm_bundle")
+                    time.sleep(1.0)
+                except Exception:
+                    pass
 
     # ------------------------------------------------------------------
     # Combat
