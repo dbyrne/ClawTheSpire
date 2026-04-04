@@ -465,12 +465,23 @@ def train_worker(
     save_path.mkdir(parents=True, exist_ok=True)
 
     # Load latest checkpoint if available (warm start)
+    # Filter out keys with shape mismatches (e.g. trunk input dim changed)
     import torch as _torch
     ckpts = sorted(save_path.glob("gen_*.pt"))
     if ckpts:
         ckpt = _torch.load(ckpts[-1], map_location="cpu", weights_only=True)
-        network.load_state_dict(ckpt["model_state"], strict=False)
-        print(f"Warm start from {ckpts[-1].name}", flush=True)
+        saved_state = ckpt["model_state"]
+        current_state = network.state_dict()
+        compatible = {
+            k: v for k, v in saved_state.items()
+            if k in current_state and v.shape == current_state[k].shape
+        }
+        skipped = set(saved_state.keys()) - set(compatible.keys())
+        network.load_state_dict(compatible, strict=False)
+        msg = f"Warm start from {ckpts[-1].name} ({len(compatible)}/{len(saved_state)} params)"
+        if skipped:
+            msg += f", skipped {len(skipped)} shape-mismatched"
+        print(msg, flush=True)
 
     progress_path = Path(progress_file) if progress_file else _default_progress_path()
 
