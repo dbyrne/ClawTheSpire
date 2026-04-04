@@ -134,14 +134,11 @@ class STS2Network(nn.Module):
             + cfg.max_potions * cfg.potion_feature_dim  # potions
             + 4                         # floor, turn, gold, deck_size
         )
-        self.trunk = nn.Sequential(
-            nn.Linear(trunk_input_dim, 256),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(256, 256),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-        )
+        # Trunk with residual connection + layer norm for stable training
+        self.trunk_in = nn.Linear(trunk_input_dim, 256)
+        self.trunk_hidden = nn.Linear(256, 256)
+        self.trunk_norm = nn.LayerNorm(256)
+        self.trunk_dropout = nn.Dropout(0.1)
 
         # --- Value head ---
         # Linear output (no Tanh) — targets are clamped to [-1, 1] by
@@ -254,8 +251,11 @@ class STS2Network(nn.Module):
             player_features, enemy_flat, relic_vec, potion_features, scalars,
         ], dim=-1)
 
-        # Trunk
-        return self.trunk(state_vec)
+        # Trunk with residual + layer norm
+        h = F.relu(self.trunk_in(state_vec))        # (batch, 256)
+        h = h + self.trunk_hidden(self.trunk_dropout(h))  # residual
+        h = self.trunk_norm(F.relu(h))
+        return self.trunk_dropout(h)
 
     def forward(
         self,
