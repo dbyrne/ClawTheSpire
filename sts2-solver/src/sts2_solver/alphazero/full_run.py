@@ -151,7 +151,12 @@ def mcts_combat(
             if action.action_type == "end_turn":
                 break
 
-            if action.card_idx is not None and can_play_card(state, action.card_idx):
+            if action.action_type == "use_potion":
+                from ..combat_engine import use_potion as _use_potion
+                if action.potion_idx is not None:
+                    _use_potion(state, action.potion_idx)
+                cards_this_turn += 1  # count toward safety cap
+            elif action.card_idx is not None and can_play_card(state, action.card_idx):
                 play_card(state, action.card_idx, action.target_idx, card_db)
                 cards_this_turn += 1
 
