@@ -575,7 +575,10 @@ def train_worker(
         # --- Self-play: full Act 1 runs ---
         gen_wins = 0
         for game_num in range(games_per_generation):
-            game_temp = max(0.1, temperature * (1.0 - gen / num_generations * 0.5))
+            # Cosine decay: smooth exploration → exploitation over full training.
+            # Stays above 0.5 for ~60% of training, floors at 0.3 (not 0.1).
+            progress = gen / num_generations
+            game_temp = 0.3 + 0.7 * temperature * (1 + math.cos(math.pi * progress)) / 2
 
             result = play_full_run(
                 mcts, card_db, vocabs, config,

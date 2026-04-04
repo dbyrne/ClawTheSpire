@@ -501,11 +501,14 @@ def _catalyst(card: Card, card_db: CardDB | None) -> CardEffect:
 @register("CALCULATED_GAMBLE")
 def _calculated_gamble(card: Card, card_db: CardDB | None) -> CardEffect:
     """Discard your hand. Draw that many cards. Exhaust (not if upgraded)."""
+    from .effects import discard_card_from_hand as _discard
+
     def effect(state: CombatState, target_idx: int | None = None) -> None:
         hand_size = len(state.player.hand)
-        # Discard entire hand
-        state.player.discard_pile.extend(state.player.hand)
-        state.player.hand.clear()
+        # Discard entire hand — iterate backwards so indices stay valid.
+        # Each discard triggers Sly effects (Tactician +energy, Reflex +draw, etc.)
+        for i in range(hand_size - 1, -1, -1):
+            _discard(state, i)
         # Draw same number
         draw_cards(state, hand_size)
     return effect
