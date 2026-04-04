@@ -328,16 +328,9 @@ def simulate_turn(
     _apply_defend_block_from_move_table(s)
     tick_enemy_powers(s)
 
-    # Clear enemy block (start_turn would do this, but we don't call it).
-    # The next snapshot is taken after start_turn clears block.
-    # Exception: block from Defend or Attack+self_block persists into next snapshot.
+    # Clear all enemy block (start_turn does this).
     for enemy in s.enemies:
-        has_granted_block = (
-            enemy.intent_type == "Defend"
-            or getattr(enemy, "_has_move_table_block", False)
-        )
-        if not has_granted_block:
-            enemy.block = 0
+        enemy.block = 0
 
     return s
 
