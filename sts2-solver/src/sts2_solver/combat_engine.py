@@ -133,6 +133,42 @@ def play_card(
     _move_card_after_play(state, card)
 
 
+def use_potion(state: CombatState, potion_idx: int) -> None:
+    """Use a potion from the given slot. Mutates state in place."""
+    if potion_idx >= len(state.player.potions):
+        return
+    pot = state.player.potions[potion_idx]
+    if not pot:
+        return
+
+    if pot.get("heal"):
+        state.player.hp = min(state.player.hp + pot["heal"], state.player.max_hp)
+    elif pot.get("block"):
+        state.player.block += pot["block"]
+    elif pot.get("strength"):
+        state.player.powers["Strength"] = (
+            state.player.powers.get("Strength", 0) + pot["strength"]
+        )
+    elif pot.get("damage_all"):
+        for e in state.enemies:
+            if e.is_alive:
+                dmg = pot["damage_all"]
+                if e.block > 0:
+                    if dmg >= e.block:
+                        dmg -= e.block
+                        e.block = 0
+                    else:
+                        e.block -= dmg
+                        dmg = 0
+                e.hp -= dmg
+    elif pot.get("enemy_weak"):
+        for e in state.enemies:
+            if e.is_alive:
+                e.powers["Weak"] = e.powers.get("Weak", 0) + pot["enemy_weak"]
+
+    state.player.potions[potion_idx] = {}  # empty the slot
+
+
 def _move_card_after_play(state: CombatState, card: Card) -> None:
     """Move a played card to the correct zone."""
     should_exhaust = (

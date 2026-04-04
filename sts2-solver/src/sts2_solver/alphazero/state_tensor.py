@@ -117,6 +117,22 @@ def encode_state(
         relic_ids.append(PAD_IDX)
     relic_mask = [False] * relic_size + [True] * (cfg.max_relics - relic_size)
 
+    # --- Potions ---
+    potion_features = []
+    for i in range(cfg.max_potions):
+        if i < len(state.player.potions) and state.player.potions[i]:
+            pot = state.player.potions[i]
+            potion_features.extend([
+                1.0,                                    # occupied
+                1.0 if pot.get("heal") else 0.0,        # is_heal
+                1.0 if pot.get("block") else 0.0,       # is_block
+                1.0 if pot.get("strength") else 0.0,    # is_strength
+                1.0 if pot.get("damage_all") else 0.0,  # is_damage
+                1.0 if pot.get("enemy_weak") else 0.0,  # is_weak
+            ])
+        else:
+            potion_features.extend([0.0] * cfg.potion_feature_dim)
+
     # --- Scalars ---
     scalars = [
         state.floor / 50.0,
@@ -139,6 +155,7 @@ def encode_state(
         "enemy_features": torch.tensor([enemy_features], dtype=torch.float32),
         "relic_ids": torch.tensor([relic_ids], dtype=torch.long),
         "relic_mask": torch.tensor([relic_mask], dtype=torch.bool),
+        "potion_features": torch.tensor([potion_features], dtype=torch.float32),
         "scalars": torch.tensor([scalars], dtype=torch.float32),
     }
 
@@ -164,7 +181,19 @@ def encode_actions(
         vec = [0.0] * action_dim
 
         if action.action_type == "end_turn":
-            vec[-1] = 1.0  # end_turn flag
+            vec[-2] = 1.0  # end_turn flag (second to last)
+        elif action.action_type == "use_potion":
+            vec[-1] = 1.0  # use_potion flag (last)
+            # Encode potion type in card-stats region
+            if action.potion_idx is not None and action.potion_idx < len(state.player.potions):
+                pot = state.player.potions[action.potion_idx]
+                if pot:
+                    # Use first 5 dims for potion type one-hot
+                    if pot.get("heal"):     vec[0] = 1.0
+                    elif pot.get("block"):  vec[1] = 1.0
+                    elif pot.get("strength"): vec[2] = 1.0
+                    elif pot.get("damage_all"): vec[3] = 1.0
+                    elif pot.get("enemy_weak"): vec[4] = 1.0
         else:
             # Card embedding index (will be looked up by network)
             if action.card_idx is not None and action.card_idx < len(state.player.hand):
@@ -181,7 +210,7 @@ def encode_actions(
             # Target one-hot
             if action.target_idx is not None:
                 target_slot = cfg.card_embed_dim + action.target_idx
-                if target_slot < action_dim - 1:
+                if target_slot < action_dim - 2:
                     vec[target_slot] = 1.0
 
         features.append(vec)

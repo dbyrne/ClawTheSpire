@@ -23,6 +23,7 @@ from .combat_engine import (
     resolve_enemy_intents,
     start_turn,
     tick_enemy_powers,
+    use_potion,
 )
 from .data_loader import CardDB
 from .models import CombatState
@@ -65,6 +66,18 @@ def step(state: CombatState, action: Action, card_db: CardDB | None = None) -> S
             return StepResult(new_state, done=True, outcome=outcome, turn_ended=True)
         start_turn(new_state)
         return StepResult(new_state, done=False, outcome=None, turn_ended=True)
+
+    # use_potion
+    if action.action_type == "use_potion":
+        if action.potion_idx is not None:
+            use_potion(new_state, action.potion_idx)
+        outcome = is_combat_over(new_state)
+        return StepResult(
+            new_state,
+            done=outcome is not None,
+            outcome=outcome,
+            turn_ended=False,
+        )
 
     # play_card
     if action.card_idx is not None and can_play_card(new_state, action.card_idx):

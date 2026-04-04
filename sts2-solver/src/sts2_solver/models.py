@@ -65,6 +65,7 @@ class PlayerState:
     draw_pile: list[Card] = field(default_factory=list)
     discard_pile: list[Card] = field(default_factory=list)
     exhaust_pile: list[Card] = field(default_factory=list)
+    potions: list[dict] = field(default_factory=list)  # [{"name": ..., "heal": 20}, ...]
 
 
 @dataclass

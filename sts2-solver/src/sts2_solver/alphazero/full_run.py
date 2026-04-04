@@ -88,8 +88,9 @@ def mcts_combat(
     mcts_simulations: int = 100,
     temperature: float = 1.0,
     max_turns: int = 30,
-) -> tuple[list[TrainingSample], str, int, int]:
-    """Run one combat using MCTS. Returns (samples, outcome, turns, hp_after)."""
+    potions: list[dict] | None = None,
+) -> tuple[list[TrainingSample], str, int, int, list[dict]]:
+    """Run one combat using MCTS. Returns (samples, outcome, turns, hp_after, remaining_potions)."""
     _ensure_data_loaded()
 
     enc = _ENCOUNTERS_BY_ID.get(encounter_id, {})
@@ -102,7 +103,7 @@ def mcts_combat(
         enemy_ais.append(_create_enemy_ai(mid))
 
     if not enemies:
-        return [], "win", 0, player_hp
+        return [], "win", 0, player_hp, potions or []
 
     draw_pile = list(deck)
     rng.shuffle(draw_pile)
@@ -110,6 +111,7 @@ def mcts_combat(
         hp=player_hp, max_hp=player_max_hp,
         energy=player_max_energy, max_energy=player_max_energy,
         draw_pile=draw_pile,
+        potions=[dict(p) for p in (potions or [])],
     )
     state = CombatState(player=player, enemies=enemies)
     samples: list[TrainingSample] = []
@@ -173,7 +175,8 @@ def mcts_combat(
         outcome = "lose"
 
     hp_after = max(0, state.player.hp) if outcome == "win" else 0
-    return samples, outcome, turn_num, hp_after
+    remaining_potions = [p for p in state.player.potions if p]
+    return samples, outcome, turn_num, hp_after, remaining_potions
 
 
 # ---------------------------------------------------------------------------
@@ -370,12 +373,12 @@ def play_full_run(
             if enc_id is None:
                 continue
 
-            samples, outcome, turns, hp_after = mcts_combat(
+            samples, outcome, turns, hp_after, potions = mcts_combat(
                 deck=deck, player_hp=hp, player_max_hp=max_hp,
                 player_max_energy=max_energy, encounter_id=enc_id,
                 card_db=card_db, mcts=mcts, vocabs=vocabs, config=config,
                 rng=rng, mcts_simulations=mcts_simulations,
-                temperature=temperature,
+                temperature=temperature, potions=potions,
             )
 
             combats_fought += 1

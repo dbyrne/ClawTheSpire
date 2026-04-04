@@ -157,6 +157,10 @@ class EncoderConfig:
     max_player_powers: int = 10
     max_enemy_powers: int = 6
 
+    # Potion slots
+    max_potions: int = 3
+    potion_feature_dim: int = 6  # occupied(1) + type one-hot(5): heal/block/str/dmg/weak
+
     # Derived: total state vector size (computed after building)
     @property
     def card_feature_dim(self) -> int:
@@ -193,14 +197,15 @@ class EncoderConfig:
             + self.player_feature_dim
             + self.enemy_feature_dim * self.max_enemies
             + self.relic_embed_dim  # summed relic embeddings
+            + self.max_potions * self.potion_feature_dim  # potion slots
             + 4  # floor, turn, gold, deck_size
         )
 
     @property
     def action_dim(self) -> int:
         """Action vector dimension."""
-        # card_embed(32) + target_onehot(max_enemies+1) + is_end_turn(1)
-        return self.card_embed_dim + self.max_enemies + 2
+        # card_embed(32) + target_onehot(max_enemies+1) + is_end_turn(1) + is_use_potion(1)
+        return self.card_embed_dim + self.max_enemies + 3
 
 
 # ---------------------------------------------------------------------------

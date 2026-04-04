@@ -17,14 +17,16 @@ if TYPE_CHECKING:
 class Action:
     """A single action the player can take."""
 
-    action_type: str  # "play_card" or "end_turn"
+    action_type: str  # "play_card", "end_turn", or "use_potion"
     card_idx: int | None = None
     target_idx: int | None = None
+    potion_idx: int | None = None  # slot index for use_potion
 
     def __repr__(self) -> str:
         if self.action_type == "end_turn":
             return "EndTurn"
-        card_name = ""  # Filled in by caller if needed
+        if self.action_type == "use_potion":
+            return f"Potion({self.potion_idx})"
         if self.target_idx is not None:
             return f"Play({self.card_idx}->enemy{self.target_idx})"
         return f"Play({self.card_idx})"
@@ -62,6 +64,13 @@ def enumerate_actions(state: CombatState) -> list[Action]:
         else:
             # Self-target or AllEnemies - no target selection needed
             actions.append(Action("play_card", card_idx=i))
+
+    # Potion actions (before end turn so MCTS considers them)
+    for i, pot in enumerate(state.player.potions):
+        if not pot:
+            continue
+        # All current potion types are self-target or AoE (no single-enemy target)
+        actions.append(Action("use_potion", potion_idx=i))
 
     actions.append(END_TURN)
     return actions

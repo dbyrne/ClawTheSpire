@@ -123,6 +123,7 @@ class STS2Network(nn.Module):
             + cfg.player_feature_dim    # player scalars
             + 32 * cfg.max_enemies      # enemies
             + cfg.relic_embed_dim       # relics
+            + cfg.max_potions * cfg.potion_feature_dim  # potions
             + 4                         # floor, turn, gold, deck_size
         )
         self.trunk = nn.Sequential(
@@ -184,7 +185,8 @@ class STS2Network(nn.Module):
         enemy_features: torch.Tensor,    # (batch, max_enemies, enemy_feature_dim)
         relic_ids: torch.Tensor,         # (batch, max_relics)
         relic_mask: torch.Tensor,        # (batch, max_relics)
-        scalars: torch.Tensor,           # (batch, 2) — floor, turn
+        potion_features: torch.Tensor,   # (batch, max_potions * potion_feature_dim)
+        scalars: torch.Tensor,           # (batch, 4) — floor, turn, gold, deck_size
     ) -> torch.Tensor:
         """Encode full state into a hidden vector. Returns (batch, 256)."""
         batch = hand_features.shape[0]
@@ -219,7 +221,7 @@ class STS2Network(nn.Module):
         # Concatenate everything
         state_vec = torch.cat([
             hand_vec, draw_vec, discard_vec, exhaust_vec,
-            player_features, enemy_flat, relic_vec, scalars,
+            player_features, enemy_flat, relic_vec, potion_features, scalars,
         ], dim=-1)
 
         # Trunk

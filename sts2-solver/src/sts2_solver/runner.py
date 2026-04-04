@@ -1564,6 +1564,65 @@ class Runner:
             self._log_action(f"  [dim]Network shop failed ({e}), falling back[/dim]")
             return None
 
+    def _az_decide_deck_select(self, gs: dict) -> "Decision | None":
+        """Use network deck_eval_head for card removal/upgrade/transform."""
+        import torch
+        from .deterministic_advisor import Decision
+
+        try:
+            st, hidden, hp, max_hp, gold, floor, deck = self._az_run_state_tensors(gs)
+            network = self._mcts.network
+            vocabs = self._mcts_vocabs
+
+            sel = gs.get("selection") or {}
+            prompt = (sel.get("prompt") or "").lower()
+            cards = sel.get("cards", [])
+
+            if not cards:
+                return None
+
+            is_remove = "remove" in prompt or "transform" in prompt
+            is_upgrade = "upgrade" in prompt
+
+            # Build card IDs for evaluation
+            card_ids = []
+            card_indices = []  # game option indices
+            for card_info in cards:
+                card_id = card_info.get("card_id") or card_info.get("id", "")
+                idx = card_info.get("index", len(card_ids))
+
+                if is_upgrade:
+                    # Score the upgraded version
+                    up_id = card_id.rstrip("+") + "+"
+                    card_ids.append(vocabs.cards.get(up_id.rstrip("+")))
+                else:
+                    card_ids.append(vocabs.cards.get(card_id.rstrip("+")))
+                card_indices.append(idx)
+
+            if not card_ids:
+                return None
+
+            with torch.no_grad():
+                ids_t = torch.tensor([card_ids], dtype=torch.long)
+                scores = network.evaluate_deck_change(hidden, ids_t)
+                scores_list = scores[0].tolist()
+
+            if is_remove:
+                # Remove: pick lowest-scored card
+                best = min(range(len(scores_list)), key=lambda i: scores_list[i])
+            else:
+                # Upgrade: pick highest-scored card
+                best = max(range(len(scores_list)), key=lambda i: scores_list[i])
+
+            chosen_idx = card_indices[best]
+            card_name = cards[best].get("name", "?")
+            action = "remove" if is_remove else "upgrade"
+            return Decision("select_deck_card", chosen_idx,
+                            f"Network: {action} {card_name} (score={scores_list[best]:.2f})")
+        except Exception as e:
+            self._log_action(f"  [dim]Network deck_select failed ({e}), falling back[/dim]")
+            return None
+
     # ------------------------------------------------------------------
     # Deterministic decision execution
     # ------------------------------------------------------------------
@@ -1677,8 +1736,10 @@ class Runner:
             self._handle_single_deck_select(gs)
 
     def _handle_single_deck_select(self, gs: dict) -> None:
-        """Single-select deck screen — use deterministic advisor."""
-        decision = decide_deck_select(gs)
+        """Single-select deck screen — try network, fall back to deterministic."""
+        decision = self._az_decide_deck_select(gs)
+        if decision is None:
+            decision = decide_deck_select(gs)
         actions = gs.get("available_actions", [])
         run = gs.get("run") or {}
         self._execute_deterministic(gs, decision, "deck_select", actions, run)
