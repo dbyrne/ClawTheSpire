@@ -189,23 +189,21 @@ ENEMY_MOVE_TABLES: dict[str, list[dict]] = {
         {"type": "Attack", "damage": 11, "hits": 1},         # Killshot
     ],
     "AXE_RUBY_RAIDER": [
-        {"type": "Defend", "self_block": 5},                     # Block
-        {"type": "Attack", "damage": 5, "hits": 1},          # Swing 1
-        {"type": "Attack", "damage": 5, "hits": 1},          # Swing 2
-        {"type": "Attack", "damage": 12, "hits": 1},         # Big Swing
+        {"type": "Attack", "damage": 5, "hits": 1, "self_block": 5},  # Swing (dmg + block)
+        {"type": "Attack", "damage": 5, "hits": 1, "self_block": 5},  # Swing (repeats)
+        {"type": "Attack", "damage": 12, "hits": 1},                  # Big Swing
     ],
     "BRUTE_RUBY_RAIDER": [
-        {"type": "Attack", "damage": 7, "hits": 1},          # Beat
-        {"type": "Buff", "self_strength": 3},                 # Roar (self-buff primarily)
+        {"type": "Attack", "damage": 7, "hits": 1},           # Beat
+        {"type": "Buff", "self_strength": 3},                  # Clap (gain 3 STR)
     ],
     "CROSSBOW_RUBY_RAIDER": [
-        {"type": "Attack", "damage": 14, "hits": 1},         # Fire!
-        {"type": "Defend", "self_block": 3},                  # Brace
-        {"type": "Buff", "self_strength": 2},                 # Reload
+        {"type": "Defend", "self_block": 3},                   # Reload (block only)
+        {"type": "Attack", "damage": 14, "hits": 1},          # Fire!
     ],
     "TRACKER_RUBY_RAIDER": [
-        {"type": "Buff", "player_vulnerable": 2},             # Track (marks player)
-        {"type": "Attack", "damage": 1, "hits": 5},          # Unleash the Hounds
+        {"type": "Debuff", "player_frail": 2},                # Track (applies 2 Frail)
+        {"type": "Attack", "damage": 1, "hits": 8},           # Unleash the Hounds (1x8)
     ],
 
     # --- Elites ---
