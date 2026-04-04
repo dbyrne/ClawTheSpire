@@ -316,6 +316,11 @@ def train_batch(
     policy_losses = []
     deck_losses = []
 
+    # Accumulate combat gradients across the batch, then step once
+    optimizer.zero_grad()
+    batch_loss = torch.tensor(0.0, device=device)
+    valid_count = 0
+
     for sample in samples:
         state_tensors = {k: v.to(device) for k, v in sample.state_tensors.items()}
         action_features = sample.action_features.to(device)
@@ -341,9 +346,11 @@ def train_batch(
             continue
         value_losses.append(v_loss.item())
         policy_losses.append(p_loss.item())
+        batch_loss = batch_loss + loss
+        valid_count += 1
 
-        optimizer.zero_grad()
-        loss.backward()
+    if valid_count > 0:
+        (batch_loss / valid_count).backward()
         torch.nn.utils.clip_grad_norm_(network.parameters(), 1.0)
         optimizer.step()
 
