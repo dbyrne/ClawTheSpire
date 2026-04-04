@@ -15,7 +15,7 @@ from .encoding import (
     EncoderConfig,
     Vocabs,
     card_stats_vector,
-    power_vector,
+    power_indices_and_amounts,
     PAD_IDX,
 )
 
@@ -70,36 +70,42 @@ def encode_state(
 
     # --- Player features ---
     player_hp_frac = state.player.hp / max(1, state.player.max_hp)
-    player_features = [
+    player_power_ids, player_power_amts = power_indices_and_amounts(
+        state.player.powers, vocabs.powers, cfg.max_player_powers)
+    player_scalars = [
         player_hp_frac,
         state.player.hp / 100.0,
         state.player.block / 50.0,
         state.player.energy / 5.0,
         state.player.max_energy / 5.0,
-        *power_vector(state.player.powers, vocabs.powers, cfg.max_player_powers),
     ]
 
     # --- Enemies ---
-    enemy_features = []
+    enemy_scalars = []
+    enemy_power_ids_all = []
+    enemy_power_amts_all = []
     for i in range(cfg.max_enemies):
         if i < len(state.enemies) and state.enemies[i].is_alive:
             e = state.enemies[i]
             hp_frac = e.hp / max(1, e.max_hp)
             intent_idx = vocabs.intent_types.get(e.intent_type or "")
-            # One-hot intent embedding will be done by the network
-            # Here we just pass the index and scalar features
-            features = [
+            e_scalars = [
                 hp_frac,
                 e.hp / 100.0,
                 e.block / 50.0,
                 intent_idx / max(1, len(vocabs.intent_types)),
                 (e.intent_damage or 0) / 30.0,
                 (e.intent_hits or 1) / 5.0,
-                *power_vector(e.powers, vocabs.powers, cfg.max_enemy_powers),
             ]
+            e_pow_ids, e_pow_amts = power_indices_and_amounts(
+                e.powers, vocabs.powers, cfg.max_enemy_powers)
         else:
-            features = [0.0] * cfg.enemy_feature_dim
-        enemy_features.append(features)
+            e_scalars = [0.0] * 6
+            e_pow_ids = [0] * cfg.max_enemy_powers
+            e_pow_amts = [0.0] * cfg.max_enemy_powers
+        enemy_scalars.append(e_scalars)
+        enemy_power_ids_all.extend(e_pow_ids)
+        enemy_power_amts_all.extend(e_pow_amts)
 
     # --- Relics ---
     relic_ids = []
@@ -151,8 +157,12 @@ def encode_state(
         "discard_mask": torch.tensor([discard_mask], dtype=torch.bool),
         "exhaust_card_ids": torch.tensor([exhaust_ids], dtype=torch.long),
         "exhaust_mask": torch.tensor([exhaust_mask], dtype=torch.bool),
-        "player_features": torch.tensor([player_features], dtype=torch.float32),
-        "enemy_features": torch.tensor([enemy_features], dtype=torch.float32),
+        "player_scalars": torch.tensor([player_scalars], dtype=torch.float32),
+        "player_power_ids": torch.tensor([player_power_ids], dtype=torch.long),
+        "player_power_amts": torch.tensor([player_power_amts], dtype=torch.float32),
+        "enemy_scalars": torch.tensor([enemy_scalars], dtype=torch.float32),
+        "enemy_power_ids": torch.tensor([enemy_power_ids_all], dtype=torch.long),
+        "enemy_power_amts": torch.tensor([enemy_power_amts_all], dtype=torch.float32),
         "relic_ids": torch.tensor([relic_ids], dtype=torch.long),
         "relic_mask": torch.tensor([relic_mask], dtype=torch.bool),
         "potion_features": torch.tensor([potion_features], dtype=torch.float32),

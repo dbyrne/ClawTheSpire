@@ -317,6 +317,7 @@ def train_batch(
     deck_losses = []
 
     # Accumulate combat gradients across the batch, then step once
+    nan_combat = nan_deck = nan_option = 0
     optimizer.zero_grad()
     batch_loss = torch.tensor(0.0, device=device)
     valid_count = 0
@@ -343,6 +344,7 @@ def train_batch(
 
         loss = 0.25 * v_loss + p_loss
         if torch.isnan(loss):
+            nan_combat += 1
             continue
         value_losses.append(v_loss.item())
         policy_losses.append(p_loss.item())
@@ -374,12 +376,14 @@ def train_batch(
                 chosen_score = network.value_head(hidden)
             d_loss = 0.25 * F.mse_loss(chosen_score, target)
 
-            if not torch.isnan(d_loss):
-                deck_losses.append(d_loss.item())
-                optimizer.zero_grad()
-                d_loss.backward()
-                torch.nn.utils.clip_grad_norm_(network.parameters(), 1.0)
-                optimizer.step()
+            if torch.isnan(d_loss):
+                nan_deck += 1
+                continue
+            deck_losses.append(d_loss.item())
+            optimizer.zero_grad()
+            d_loss.backward()
+            torch.nn.utils.clip_grad_norm_(network.parameters(), 1.0)
+            optimizer.step()
         except Exception:
             continue
 
@@ -402,14 +406,20 @@ def train_batch(
             chosen_score = scores[0, sample.chosen_idx].unsqueeze(0).unsqueeze(0)
             o_loss = 0.25 * F.mse_loss(chosen_score, target)
 
-            if not torch.isnan(o_loss):
-                option_losses.append(o_loss.item())
-                optimizer.zero_grad()
-                o_loss.backward()
-                torch.nn.utils.clip_grad_norm_(network.parameters(), 1.0)
-                optimizer.step()
+            if torch.isnan(o_loss):
+                nan_option += 1
+                continue
+            option_losses.append(o_loss.item())
+            optimizer.zero_grad()
+            o_loss.backward()
+            torch.nn.utils.clip_grad_norm_(network.parameters(), 1.0)
+            optimizer.step()
         except Exception:
             continue
+
+    total_nan = nan_combat + nan_deck + nan_option
+    if total_nan > 0:
+        print(f"  [warn] NaN losses skipped: combat={nan_combat} deck={nan_deck} option={nan_option}", flush=True)
 
     avg_v = sum(value_losses) / max(1, len(value_losses))
     avg_p = sum(policy_losses) / max(1, len(policy_losses))

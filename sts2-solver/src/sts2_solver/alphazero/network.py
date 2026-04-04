@@ -111,6 +111,9 @@ class STS2Network(nn.Module):
         self.intent_embed = nn.Embedding(
             len(vocabs.intent_types), cfg.intent_embed_dim, padding_idx=PAD_IDX
         )
+        self.power_embed = nn.Embedding(
+            len(vocabs.powers), cfg.power_embed_dim, padding_idx=PAD_IDX
+        )
 
         # --- Hand encoder (set attention) ---
         self.hand_encoder = CardSetEncoder(cfg)
@@ -134,16 +137,19 @@ class STS2Network(nn.Module):
         self.trunk = nn.Sequential(
             nn.Linear(trunk_input_dim, 256),
             nn.ReLU(),
+            nn.Dropout(0.1),
             nn.Linear(256, 256),
             nn.ReLU(),
+            nn.Dropout(0.1),
         )
 
         # --- Value head ---
+        # Linear output (no Tanh) — targets are clamped to [-1, 1] by
+        # _assign_run_values. Avoids Tanh gradient saturation near ±1.
         self.value_head = nn.Sequential(
             nn.Linear(256, 64),
             nn.ReLU(),
             nn.Linear(64, 1),
-            nn.Tanh(),
         )
 
         # --- Policy head ---
@@ -160,7 +166,6 @@ class STS2Network(nn.Module):
             nn.Linear(256 + cfg.card_embed_dim, 64),
             nn.ReLU(),
             nn.Linear(64, 1),
-            nn.Tanh(),
         )
 
         # --- Option evaluation head ---
@@ -172,7 +177,6 @@ class STS2Network(nn.Module):
             nn.Linear(256 + 16 + cfg.card_embed_dim, 64),
             nn.ReLU(),
             nn.Linear(64, 1),
-            nn.Tanh(),
         )
 
     def encode_state(
@@ -186,8 +190,12 @@ class STS2Network(nn.Module):
         discard_mask: torch.Tensor,      # (batch, max_discard)
         exhaust_card_ids: torch.Tensor,  # (batch, max_exhaust)
         exhaust_mask: torch.Tensor,      # (batch, max_exhaust)
-        player_features: torch.Tensor,   # (batch, player_feature_dim)
-        enemy_features: torch.Tensor,    # (batch, max_enemies, enemy_feature_dim)
+        player_scalars: torch.Tensor,    # (batch, 5)
+        player_power_ids: torch.Tensor,  # (batch, max_player_powers)
+        player_power_amts: torch.Tensor, # (batch, max_player_powers)
+        enemy_scalars: torch.Tensor,     # (batch, max_enemies, 6)
+        enemy_power_ids: torch.Tensor,   # (batch, max_enemies * max_enemy_powers)
+        enemy_power_amts: torch.Tensor,  # (batch, max_enemies * max_enemy_powers)
         relic_ids: torch.Tensor,         # (batch, max_relics)
         relic_mask: torch.Tensor,        # (batch, max_relics)
         potion_features: torch.Tensor,   # (batch, max_potions * potion_feature_dim)
@@ -200,7 +208,6 @@ class STS2Network(nn.Module):
         # Hand: card embeddings concatenated with stats → attention → pool
         hand_embeds = self.card_embed(hand_card_ids)  # (batch, max_hand, 32)
         hand_input = torch.cat([hand_embeds, hand_features], dim=-1)  # + stats
-        # Trim to card_feature_dim if needed
         hand_vec = self.hand_encoder(hand_input, hand_mask)  # (batch, 32)
 
         # Piles: sum card embeddings, project
@@ -214,8 +221,23 @@ class STS2Network(nn.Module):
         discard_vec = encode_pile(discard_card_ids, discard_mask)
         exhaust_vec = encode_pile(exhaust_card_ids, exhaust_mask)
 
-        # Enemies: project each slot
-        enemy_vecs = self.enemy_project(enemy_features)  # (batch, max_enemies, 32)
+        # Player: scalars + power embeddings concatenated with amounts
+        p_pow_embeds = self.power_embed(player_power_ids)  # (batch, max_pp, 8)
+        p_pow_amts = player_power_amts.unsqueeze(-1)       # (batch, max_pp, 1)
+        p_pow_combined = torch.cat([p_pow_embeds, p_pow_amts], dim=-1)  # (batch, max_pp, 9)
+        p_pow_flat = p_pow_combined.reshape(batch, -1)      # (batch, max_pp * 9)
+        player_features = torch.cat([player_scalars, p_pow_flat], dim=-1)
+
+        # Enemies: scalars + power embeddings per enemy slot
+        total_e_powers = cfg.max_enemies * cfg.max_enemy_powers
+        e_pow_embeds = self.power_embed(enemy_power_ids)    # (batch, total, 8)
+        e_pow_amts = enemy_power_amts.unsqueeze(-1)         # (batch, total, 1)
+        e_pow_combined = torch.cat([e_pow_embeds, e_pow_amts], dim=-1)  # (batch, total, 9)
+        e_pow_flat = e_pow_combined.reshape(batch, cfg.max_enemies, cfg.max_enemy_powers * (cfg.power_embed_dim + 1))
+
+        # Concatenate enemy scalars with their power features
+        enemy_full = torch.cat([enemy_scalars, e_pow_flat], dim=-1)  # (batch, max_enemies, enemy_feature_dim)
+        enemy_vecs = self.enemy_project(enemy_full)         # (batch, max_enemies, 32)
         enemy_flat = enemy_vecs.reshape(batch, cfg.max_enemies * 32)
 
         # Relics: sum embeddings
@@ -280,7 +302,7 @@ class STS2Network(nn.Module):
     ) -> torch.Tensor:
         """Score candidate cards for deck modification (add/remove/upgrade).
 
-        Returns (batch, num_candidates) scores in [-1, 1].
+        Returns (batch, num_candidates) scores (unbounded).
         Higher = better deck after this change.
         """
         card_embeds = self.card_embed(card_ids)  # (batch, num_candidates, card_embed_dim)
@@ -334,7 +356,7 @@ class STS2Network(nn.Module):
         option_cards: torch.Tensor,    # (batch, num_options) — card vocab indices (0 if N/A)
         option_mask: torch.Tensor,     # (batch, num_options) — True = invalid/padded
     ) -> torch.Tensor:
-        """Score a set of discrete options. Returns (batch, num_options) in [-1, 1]."""
+        """Score a set of discrete options. Returns (batch, num_options) scores (unbounded)."""
         type_embeds = self.option_type_embed(option_types)      # (B, N, 16)
         card_embeds = self.card_embed(option_cards)              # (B, N, 32)
 

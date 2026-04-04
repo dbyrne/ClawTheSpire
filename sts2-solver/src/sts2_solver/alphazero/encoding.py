@@ -173,15 +173,15 @@ class EncoderConfig:
     def enemy_feature_dim(self) -> int:
         """Per-enemy feature vector."""
         # hp_frac(1) + hp_raw(1) + block(1) + intent_idx(1) +
-        # intent_damage(1) + intent_hits(1) + power_vec(max_enemy_powers * 2)
-        return 6 + self.max_enemy_powers * 2
+        # intent_damage(1) + intent_hits(1) + power_vec(max_enemy_powers * (embed+1))
+        return 6 + self.max_enemy_powers * (self.power_embed_dim + 1)
 
     @property
     def player_feature_dim(self) -> int:
         """Player scalar features."""
         # hp_frac(1) + hp_raw(1) + block(1) + energy(1) + max_energy(1) +
-        # power_vec(max_player_powers * 2)
-        return 5 + self.max_player_powers * 2
+        # power_vec(max_player_powers * (embed+1))
+        return 5 + self.max_player_powers * (self.power_embed_dim + 1)
 
     @property
     def pile_feature_dim(self) -> int:
@@ -237,26 +237,25 @@ def card_stats_vector(card) -> list[float]:
     ]
 
 
-def power_vector(
+def power_indices_and_amounts(
     powers: dict[str, int],
     vocab: Vocabulary,
     max_powers: int,
-) -> list[float]:
-    """Encode a powers dict as a fixed-size vector.
+) -> tuple[list[int], list[float]]:
+    """Encode a powers dict as parallel lists of vocab indices and amounts.
 
-    Returns pairs of (power_index_normalized, amount_normalized) for
-    the top max_powers powers by absolute amount.
+    Returns (indices, amounts) for the top max_powers powers by absolute amount.
+    Indices are vocab indices (0 = PAD for empty slots).
     """
-    # Sort by absolute amount descending
     sorted_powers = sorted(powers.items(), key=lambda x: abs(x[1]), reverse=True)
-    vec = []
+    indices = []
+    amounts = []
     for i in range(max_powers):
         if i < len(sorted_powers):
             name, amount = sorted_powers[i]
-            idx = vocab.get(name)
-            vec.append(idx / max(1, len(vocab)))  # Normalized index
-            vec.append(amount / 20.0)  # Normalized amount
+            indices.append(vocab.get(name))
+            amounts.append(amount / 20.0)
         else:
-            vec.append(0.0)
-            vec.append(0.0)
-    return vec
+            indices.append(0)  # PAD
+            amounts.append(0.0)
+    return indices, amounts
