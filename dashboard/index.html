@@ -230,7 +230,7 @@
                 afterLabel: (ctx) => {
                   if (ctx.datasetIndex !== 0) return '';
                   const r = runs[ctx.dataIndex];
-                  return `Gen: ${r.gen}\nModel: ${r.model}`;
+                  return `Gen: ${r.gen}\nCheckpoint: ${r.checkpoint || 'none'}`;
                 },
               },
             },

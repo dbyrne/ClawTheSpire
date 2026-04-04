@@ -77,7 +77,7 @@ def _parse_run(fp: Path, gen: str) -> dict | None:
         "gen": gen,
         "ts": ts,
         "floor": last.get("floor", 0),
-        "model": first.get("advisor_model", "unknown"),
+        "checkpoint": first.get("checkpoint", first.get("advisor_model", "unknown")),
         "character": first.get("character", "?"),
     }
 
@@ -96,7 +96,7 @@ def build_data(runs: list[dict]) -> dict:
                 "run_number": r["run_number"],
                 "floor": r["floor"],
                 "gen": r["gen"],
-                "model": r["model"],
+                "checkpoint": r["checkpoint"],
                 "run_id": r["run_id"],
                 "character": r.get("character", "The Ironclad"),
             }
