@@ -26,6 +26,7 @@ from .combat_engine import (
     use_potion,
 )
 from .data_loader import CardDB
+from .effects import discard_card_from_hand, add_card_to_hand
 from .models import CombatState
 
 
@@ -54,8 +55,14 @@ def step(state: CombatState, action: Action, card_db: CardDB | None = None) -> S
 
     For play_card actions: plays the card, checks for combat end.
     For end_turn: discards hand, resolves enemy intents, starts next turn.
+    For choose_card: resolves a pending choice (discard, pick from pile, etc.).
     """
     new_state = deepcopy(state)
+
+    if action.action_type == "choose_card":
+        _resolve_choice(new_state, action, card_db)
+        outcome = is_combat_over(new_state)
+        return StepResult(new_state, done=outcome is not None, outcome=outcome, turn_ended=False)
 
     if action.action_type == "end_turn":
         end_turn(new_state)
@@ -92,6 +99,54 @@ def step(state: CombatState, action: Action, card_db: CardDB | None = None) -> S
     )
 
 
+def _resolve_choice(state: CombatState, action: Action, card_db: CardDB | None = None) -> None:
+    """Resolve a pending choice action. Mutates state in place."""
+    pc = state.pending_choice
+    if pc is None or action.choice_idx is None:
+        return
+
+    if pc.choice_type == "discard_from_hand":
+        idx = action.choice_idx
+        if idx < len(state.player.hand):
+            discard_card_from_hand(state, idx)
+
+        pc.chosen_so_far.append(idx)
+        if len(pc.chosen_so_far) >= pc.num_choices:
+            _post_resolve(state, pc, card_db)
+            state.pending_choice = None
+
+    elif pc.choice_type == "choose_from_discard":
+        idx = action.choice_idx
+        if idx < len(state.player.discard_pile):
+            card = state.player.discard_pile.pop(idx)
+            source = pc.source_card_id.rstrip("+")
+            if source == "HEADBUTT":
+                state.player.draw_pile.append(card)
+            elif source in ("HOLOGRAM", "GRAVEBLAST"):
+                state.player.hand.append(card)
+            else:
+                state.player.hand.append(card)
+        state.pending_choice = None
+
+    elif pc.choice_type == "choose_from_hand":
+        idx = action.choice_idx
+        # Source-specific logic (Nightmare, Dual Wield, etc.) — future P2
+        state.pending_choice = None
+
+
+def _post_resolve(state: CombatState, pc, card_db: CardDB | None = None) -> None:
+    """Run post-resolution effects after all choices are made."""
+    source = pc.source_card_id.rstrip("+")
+
+    if source == "HIDDEN_DAGGERS":
+        # After discarding 2 cards, add 2 Shivs to hand
+        if card_db:
+            shiv = card_db.get("SHIV")
+            if shiv:
+                for _ in range(2):
+                    state.player.hand.append(shiv)
+
+
 def step_sequence(
     state: CombatState,
     actions: list[Action],
@@ -103,7 +158,13 @@ def step_sequence(
 
     for action in actions:
         # step on the current state directly (we already copied)
-        if action.action_type == "end_turn":
+        if action.action_type == "choose_card":
+            _resolve_choice(current, action, card_db)
+            outcome = is_combat_over(current)
+            if outcome:
+                return StepResult(current, done=True, outcome=outcome, turn_ended=False)
+            result = StepResult(current, done=False, outcome=outcome, turn_ended=False)
+        elif action.action_type == "end_turn":
             end_turn(current)
             resolve_enemy_intents(current)
             tick_enemy_powers(current)
@@ -112,6 +173,13 @@ def step_sequence(
                 return StepResult(current, done=True, outcome=outcome, turn_ended=True)
             start_turn(current)
             result = StepResult(current, done=False, outcome=None, turn_ended=True)
+        elif action.action_type == "use_potion":
+            if action.potion_idx is not None:
+                use_potion(current, action.potion_idx)
+            outcome = is_combat_over(current)
+            if outcome:
+                return StepResult(current, done=True, outcome=outcome, turn_ended=False)
+            result = StepResult(current, done=False, outcome=outcome, turn_ended=False)
         else:
             if action.card_idx is not None and can_play_card(current, action.card_idx):
                 play_card(current, action.card_idx, action.target_idx, card_db)

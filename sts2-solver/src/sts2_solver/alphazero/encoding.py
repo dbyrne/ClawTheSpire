@@ -149,6 +149,7 @@ class EncoderConfig:
 
     # Enemy slots
     max_enemies: int = 5
+    enemy_projected_dim: int = 32  # Per-enemy projection output size
 
     # Relic slots
     max_relics: int = 10
@@ -161,17 +162,25 @@ class EncoderConfig:
     max_potions: int = 3
     potion_feature_dim: int = 6  # occupied(1) + type one-hot(5): heal/block/str/dmg/weak
 
-    # Derived: total state vector size (computed after building)
+    # Option evaluation
+    num_option_types: int = 16
+    option_type_embed_dim: int = 16
+
+    # Card stats vector: upgraded(1) + cost(1) + damage(1) + block(1) +
+    # is_x_cost(1) + card_type_onehot(5) + target_type_onehot(5) = 15
+    card_stats_dim: int = 15
+
+    # Global scalars: floor, turn, gold, deck_size, has_pending_choice, choice_type
+    num_scalars: int = 6
+
     @property
     def card_feature_dim(self) -> int:
         """Per-card feature vector before attention: embedding + stats."""
-        # card_embed + upgraded(1) + cost(1) + damage(1) + block(1) +
-        # card_type_onehot(5) + target_type_onehot(5) + is_x_cost(1)
-        return self.card_embed_dim + 15
+        return self.card_embed_dim + self.card_stats_dim
 
     @property
     def enemy_feature_dim(self) -> int:
-        """Per-enemy feature vector."""
+        """Per-enemy feature vector (before projection)."""
         # hp_frac(1) + hp_raw(1) + block(1) + intent_idx(1) +
         # intent_damage(1) + intent_hits(1) + power_vec(max_enemy_powers * (embed+1))
         return 6 + self.max_enemy_powers * (self.power_embed_dim + 1)
@@ -185,32 +194,31 @@ class EncoderConfig:
 
     @property
     def pile_feature_dim(self) -> int:
-        """Per-pile summary: card_embed_dim (summed embeddings)."""
+        """Per-pile summary: card_embed_dim (mean embeddings projected)."""
         return self.card_embed_dim
 
     @property
     def state_dim(self) -> int:
-        """Total state vector dimension after encoding.
+        """Total trunk input dimension after encoding.
 
-        Note: enemies are projected to 32-dim each in the network, so the
-        actual trunk input uses 32*max_enemies, not enemy_feature_dim*max_enemies.
-        This property reflects the pre-projection total for reference.
+        Enemies are projected to enemy_projected_dim each in the network.
+        Scalars (6): floor, turn, gold, deck_size, has_pending_choice, choice_type.
         """
         return (
-            self.card_embed_dim  # hand (after attention + pool)
-            + self.pile_feature_dim * 3  # draw, discard, exhaust
-            + self.player_feature_dim
-            + 32 * self.max_enemies  # enemies (after projection)
-            + self.relic_embed_dim  # summed relic embeddings
-            + self.max_potions * self.potion_feature_dim  # potion slots
-            + 4  # floor, turn, gold, deck_size
+            self.card_embed_dim                         # hand (attention → pool)
+            + self.pile_feature_dim * 3                 # draw, discard, exhaust
+            + self.player_feature_dim                   # player scalars + powers
+            + self.enemy_projected_dim * self.max_enemies  # enemies (projected)
+            + self.relic_embed_dim                      # relics (mean embed)
+            + self.max_potions * self.potion_feature_dim   # potions
+            + self.num_scalars                          # global scalars
         )
 
     @property
     def action_feat_dim(self) -> int:
         """Action feature vector dimension (excluding learned card embedding)."""
-        # target_onehot(max_enemies+1) + potion_type(5) + is_end_turn(1) + is_use_potion(1)
-        return self.max_enemies + 1 + 5 + 2
+        # target_onehot(max_enemies+1) + potion_type(5) + is_end_turn(1) + is_use_potion(1) + is_choose_card(1)
+        return self.max_enemies + 1 + 5 + 3
 
     @property
     def action_dim(self) -> int:

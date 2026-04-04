@@ -92,6 +92,21 @@ class EnemyState:
 
 
 @dataclass
+class PendingChoice:
+    """A sub-decision the player must make before combat can proceed.
+
+    Created by card effects that require player input (e.g., "discard 1 card").
+    When set on CombatState, enumerate_actions() returns only choose_card actions.
+    """
+
+    choice_type: str        # "discard_from_hand", "choose_from_discard", "choose_from_hand"
+    num_choices: int         # How many cards must be chosen (1 for Survivor, 2 for Hidden Daggers)
+    source_card_id: str      # Card that triggered this choice (for post-resolve hooks)
+    valid_indices: list[int] | None = None  # Restrict which indices are valid (None = all)
+    chosen_so_far: list[int] = field(default_factory=list)  # For multi-select
+
+
+@dataclass
 class CombatState:
     player: PlayerState
     enemies: list[EnemyState]
@@ -103,3 +118,4 @@ class CombatState:
     relics: frozenset[str] = field(default_factory=frozenset)  # Relic IDs held
     floor: int = 0  # Current floor number (for scaling bonuses)
     gold: int = 0  # Current gold (used by non-combat decision heads)
+    pending_choice: PendingChoice | None = None  # Sub-choice awaiting player input

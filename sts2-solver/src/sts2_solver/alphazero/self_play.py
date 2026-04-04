@@ -122,15 +122,34 @@ ROOM_TYPE_TO_OPTION = {
 
 
 class ReplayBuffer:
-    """Fixed-size buffer of training samples."""
+    """Fixed-size buffer with separate win reservoir for prioritized replay.
 
-    def __init__(self, capacity: int = 50_000):
+    Maintains a main FIFO buffer plus a dedicated win buffer that preserves
+    samples from winning games.  When sampling, ``win_mix_ratio`` of the
+    batch is drawn from the win buffer (if available) so the network always
+    sees positive signal even when wins are rare.
+    """
+
+    def __init__(self, capacity: int = 50_000, win_capacity: int = 10_000,
+                 win_mix_ratio: float = 0.25):
         self.buffer: deque[TrainingSample] = deque(maxlen=capacity)
+        self.win_buffer: deque[TrainingSample] = deque(maxlen=win_capacity)
+        self.win_mix_ratio = win_mix_ratio
 
-    def add(self, sample: TrainingSample) -> None:
+    def add(self, sample: TrainingSample, is_win: bool = False) -> None:
         self.buffer.append(sample)
+        if is_win:
+            self.win_buffer.append(sample)
 
     def sample(self, batch_size: int) -> list[TrainingSample]:
+        if len(self.win_buffer) > 0 and self.win_mix_ratio > 0:
+            n_win = max(1, int(batch_size * self.win_mix_ratio))
+            n_main = batch_size - n_win
+            win_samples = random.sample(
+                list(self.win_buffer), min(n_win, len(self.win_buffer)))
+            main_samples = random.sample(
+                list(self.buffer), min(n_main, len(self.buffer)))
+            return win_samples + main_samples
         return random.sample(list(self.buffer), min(batch_size, len(self.buffer)))
 
     def __len__(self) -> int:
@@ -241,7 +260,7 @@ def play_one_game(
             state_tensors = encode_state(state, vocabs, config)
             action_features, action_mask = encode_actions(actions, state, vocabs, config)
 
-            action, policy = mcts.search(
+            action, policy, _root_value = mcts.search(
                 state, num_simulations=mcts_simulations,
                 temperature=temperature,
             )
@@ -258,7 +277,18 @@ def play_one_game(
             if action.action_type == "end_turn":
                 break
 
-            if action.card_idx is not None:
+            if action.action_type == "choose_card":
+                # Resolve pending choice — doesn't count as a card play
+                if action.choice_idx is not None and state.pending_choice is not None:
+                    from ..effects import discard_card_from_hand
+                    pc = state.pending_choice
+                    if pc.choice_type == "discard_from_hand":
+                        if action.choice_idx < len(state.player.hand):
+                            discard_card_from_hand(state, action.choice_idx)
+                        pc.chosen_so_far.append(action.choice_idx)
+                        if len(pc.chosen_so_far) >= pc.num_choices:
+                            state.pending_choice = None
+            elif action.card_idx is not None:
                 from ..combat_engine import can_play_card
                 if can_play_card(state, action.card_idx):
                     play_card(state, action.card_idx, action.target_idx, card_db)
@@ -555,12 +585,13 @@ def train_worker(
                 rng=rng,
             )
 
+            is_win = result.outcome == "win"
             for sample in result.samples:
-                replay_buffer.add(sample)
+                replay_buffer.add(sample, is_win=is_win)
             for ds in result.deck_samples:
-                deck_buffer.add(ds)
+                deck_buffer.add(ds, is_win=is_win)
             for os in result.option_samples:
-                option_buffer.add(os)
+                option_buffer.add(os, is_win=is_win)
 
             total_games += 1
             if result.outcome == "win":
@@ -571,7 +602,7 @@ def train_worker(
                 "num": total_games,
                 "encounter": f"Act1 ({result.combats_won}/{result.combats_fought})",
                 "outcome": result.outcome,
-                "turns": result.floor_reached,
+                "floor": result.floor_reached,
                 "hp": result.final_hp,
             })
             if len(recent_games) > 50:
@@ -714,11 +745,13 @@ def train_monitor(progress_file: str | None = None, refresh_rate: float = 1.0):
         for game in stats.get("recent_games", [])[-15:]:
             style = "green" if game["outcome"] == "win" else "red"
             enc = game.get("encounter", "?")
+            # Support both old "turns" key and new "floor" key
+            floor = game.get("floor", game.get("turns", "?"))
             gt.add_row(
                 str(game["num"]),
                 enc[:20],
                 Text(game["outcome"], style=style),
-                str(game["turns"]),
+                str(floor),
                 str(game.get("hp", "?")),
             )
         layout["games"].update(Panel(gt, title="Recent Games"))

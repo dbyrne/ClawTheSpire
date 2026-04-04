@@ -228,6 +228,67 @@ def add_card_to_draw(state: CombatState, card: Card) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Discard-from-hand with Sly triggers
+# ---------------------------------------------------------------------------
+
+def discard_card_from_hand(state: CombatState, card_idx: int) -> Card:
+    """Remove a card from hand to discard pile. Fires Sly triggers.
+
+    This is for card-effect discards (Survivor, Acrobatics, etc.), NOT
+    end-of-turn discards. Sly only triggers on card-effect discards.
+    """
+    card = state.player.hand.pop(card_idx)
+    state.player.discard_pile.append(card)
+    _on_discard_from_hand(state, card)
+    return card
+
+
+def _on_discard_from_hand(state: CombatState, card: Card) -> None:
+    """Fire triggers when a card is discarded from hand by a card effect."""
+    if "Sly" in card.keywords:
+        _trigger_sly_effect(state, card)
+
+
+def _trigger_sly_effect(state: CombatState, card: Card) -> None:
+    """Execute a Sly card's effect (triggered when discarded from hand)."""
+    card_id = card.id.rstrip("+")
+
+    if card_id == "TACTICIAN":
+        # +1 energy (+2 upgraded)
+        gain_energy(state, 1 if not card.upgraded else 2)
+
+    elif card_id == "REFLEX":
+        # Draw 2 cards (3 upgraded)
+        draw_cards(state, 2 if not card.upgraded else 3)
+
+    elif card_id == "UNTOUCHABLE":
+        # Gain 9 block (12 upgraded)
+        gain_block(state, 9 if not card.upgraded else 12)
+
+    elif card_id == "ABRASIVE":
+        # Gain 1 Dexterity + 4 Thorns (upgraded: 2 Dex + 5 Thorns)
+        apply_power_to_player(state, "Dexterity", 1 if not card.upgraded else 2)
+        apply_power_to_player(state, "Thorns", 4 if not card.upgraded else 5)
+
+    elif card_id == "FLICK_FLACK":
+        # Deal 7 damage to ALL enemies (10 upgraded)
+        deal_damage_all(state, 7 if not card.upgraded else 10)
+
+    elif card_id == "HAZE":
+        # Apply 4 Poison to ALL enemies (6 upgraded)
+        apply_power_to_all_enemies(state, "Poison", 4 if not card.upgraded else 6)
+
+    elif card_id == "RICOCHET":
+        # Deal 3 damage to random enemy 4 times (4 damage upgraded)
+        alive = [i for i, e in enumerate(state.enemies) if e.is_alive]
+        if alive:
+            dmg = 3 if not card.upgraded else 4
+            for _ in range(4):
+                idx = random.choice(alive)
+                deal_damage(state, idx, dmg, 1)
+
+
+# ---------------------------------------------------------------------------
 # Auto-generation of card effects from structured data
 # ---------------------------------------------------------------------------
 

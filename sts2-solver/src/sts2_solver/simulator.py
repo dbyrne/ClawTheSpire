@@ -500,14 +500,14 @@ def _pick_card_reward(offered: list[Card], deck: list[Card]) -> Card | None:
 # Act 1 map model
 # ---------------------------------------------------------------------------
 
-# Act 1 (Overgrowth) has 15 rooms. Approximate room distribution:
-# - Rooms 1-2: weak encounters
-# - Rooms 3-8: normal encounters
-# - Room 9: rest site (mid-act)
-# - Rooms 10-12: normal/elite encounters
-# - Room 13: rest site (pre-boss)
-# - Room 14: event
-# - Room 15: boss
+# Act 1 (Overgrowth) has 17 rooms. Derived from real game logs:
+# - Floors 1-3: weak encounters
+# - Floors 4-9: normal encounters, events, shops (mid-act)
+# - Floor 10: rest site (mid-act)
+# - Floors 11-14: normal/elite encounters, events
+# - Floor 15: event or shop
+# - Floor 16: rest site (pre-boss)
+# - Floor 17: boss
 
 ROOM_TYPE = str  # "weak", "normal", "elite", "rest", "event", "boss", "shop"
 
@@ -515,7 +515,7 @@ ROOM_TYPE = str  # "weak", "normal", "elite", "rest", "event", "boss", "shop"
 def _generate_act1_map(rng: random.Random) -> list[ROOM_TYPE]:
     """Generate a sequence of rooms for Act 1.
 
-    Based on STS map structure: 15 rooms total.
+    Based on real game logs: 17 rooms total, boss on floor 17.
     Simulates path choice by varying encounter types — the real game has
     branching paths where players can dodge hard encounters.
     """
@@ -534,15 +534,19 @@ def _generate_act1_map(rng: random.Random) -> list[ROOM_TYPE]:
     # Floor 10: rest site
     rooms.append("rest")
 
-    # Floor 11-13: normal + elite (tougher section)
-    late_rooms = ["normal", "elite", rng.choice(["normal", "event"])]
+    # Floor 11-14: normal + elite (tougher section, +1 room vs old map)
+    late_rooms = ["normal", "elite", rng.choice(["normal", "event"]),
+                  rng.choice(["event", "shop"])]
     rng.shuffle(late_rooms)
     rooms.extend(late_rooms)
 
-    # Floor 14: rest
+    # Floor 15: event or shop (breathing room before boss)
+    rooms.append(rng.choice(["event", "shop"]))
+
+    # Floor 16: rest (pre-boss)
     rooms.append("rest")
 
-    # Floor 15: boss
+    # Floor 17: boss
     rooms.append("boss")
 
     return rooms
@@ -551,6 +555,7 @@ def _generate_act1_map(rng: random.Random) -> list[ROOM_TYPE]:
 def _generate_act1_map_with_choices(rng: random.Random) -> list:
     """Generate Act 1 map with player-facing choices at some floors.
 
+    Based on real game logs: 17 rooms total, boss on floor 17.
     Returns a list where each entry is either a single room type string
     (forced) or a list of 2-3 room type strings (player chooses).
     """
@@ -568,15 +573,18 @@ def _generate_act1_map_with_choices(rng: random.Random) -> list:
     # Floor 10: forced rest
     rooms.append("rest")
 
-    # Floor 11-13: harder choices
+    # Floor 11-14: harder choices (+1 room vs old map)
     late_pool = ["normal", "elite", "event", "rest"]
-    for _ in range(3):
+    for _ in range(4):
         rooms.append(rng.sample(late_pool, k=2))
 
-    # Floor 14: forced rest
+    # Floor 15: event or shop
+    rooms.append(rng.sample(["event", "shop"], k=2))
+
+    # Floor 16: forced rest (pre-boss)
     rooms.append("rest")
 
-    # Floor 15: forced boss
+    # Floor 17: forced boss
     rooms.append("boss")
 
     return rooms

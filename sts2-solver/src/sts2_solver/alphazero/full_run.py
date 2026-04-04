@@ -67,6 +67,7 @@ from .self_play import (
     OPTION_REST, OPTION_SMITH, OPTION_SHOP_REMOVE, OPTION_SHOP_BUY,
     OPTION_SHOP_LEAVE, ROOM_TYPE_TO_OPTION,
 )
+from ..effects import discard_card_from_hand
 from .state_tensor import encode_state, encode_actions
 
 
@@ -134,7 +135,7 @@ def mcts_combat(
             state_tensors = encode_state(state, vocabs, config)
             action_card_ids, action_features, action_mask = encode_actions(actions, state, vocabs, config)
 
-            action, policy = mcts.search(
+            action, policy, _root_value = mcts.search(
                 state, num_simulations=mcts_simulations,
                 temperature=temperature,
             )
@@ -152,7 +153,17 @@ def mcts_combat(
             if action.action_type == "end_turn":
                 break
 
-            if action.action_type == "use_potion":
+            if action.action_type == "choose_card":
+                # Resolve pending choice (discard, etc.) — doesn't count as a card play
+                if action.choice_idx is not None and state.pending_choice is not None:
+                    pc = state.pending_choice
+                    if pc.choice_type == "discard_from_hand":
+                        if action.choice_idx < len(state.player.hand):
+                            discard_card_from_hand(state, action.choice_idx)
+                        pc.chosen_so_far.append(action.choice_idx)
+                        if len(pc.chosen_so_far) >= pc.num_choices:
+                            state.pending_choice = None
+            elif action.action_type == "use_potion":
                 from ..combat_engine import use_potion as _use_potion
                 if action.potion_idx is not None:
                     _use_potion(state, action.potion_idx)
@@ -332,6 +343,8 @@ def play_full_run(
     deck_change_samples: list = []
     option_samples: list = []
     combat_samples_by_floor: dict[int, list[TrainingSample]] = {}
+    combat_hp_data: dict[int, tuple[int, int, int]] = {}  # floor -> (hp_before, hp_after, potions_used)
+    boss_floors: set[int] = set()
     combat_log: list[dict] = []
     combats_won = 0
     combats_fought = 0
@@ -379,6 +392,7 @@ def play_full_run(
             if enc_id is None:
                 continue
 
+            potions_before = len([p for p in potions if p])
             samples, outcome, turns, hp_after, potions = mcts_combat(
                 deck=deck, player_hp=hp, player_max_hp=max_hp,
                 player_max_energy=max_energy, encounter_id=enc_id,
@@ -386,9 +400,14 @@ def play_full_run(
                 rng=rng, mcts_simulations=mcts_simulations,
                 temperature=temperature, potions=potions,
             )
+            potions_after = len([p for p in potions if p])
+            potions_used = max(0, potions_before - potions_after)
 
             combats_fought += 1
             combat_samples_by_floor[floor_num] = samples
+            combat_hp_data[floor_num] = (hp, hp_after, potions_used)
+            if room_type == "boss":
+                boss_floors.add(floor_num)
             all_samples.extend(samples)
 
             combat_log.append({
@@ -401,7 +420,9 @@ def play_full_run(
                 # Assign values: run died here
                 _assign_run_values(combat_samples_by_floor, floor_reached,
                                    len(room_sequence), 0, max_hp,
-                                   deck_change_samples, option_samples)
+                                   deck_change_samples, option_samples,
+                                   combat_hp_data=combat_hp_data,
+                                   boss_floors=boss_floors)
                 return FullRunResult(
                     outcome="lose", floor_reached=floor_reached,
                     final_hp=0, max_hp=max_hp,
@@ -436,7 +457,9 @@ def play_full_run(
             if room_type == "boss":
                 _assign_run_values(combat_samples_by_floor, floor_reached,
                                    len(room_sequence), hp, max_hp,
-                                   deck_change_samples, option_samples)
+                                   deck_change_samples, option_samples,
+                                   combat_hp_data=combat_hp_data,
+                                   boss_floors=boss_floors)
                 return FullRunResult(
                     outcome="win", floor_reached=floor_reached,
                     final_hp=hp, max_hp=max_hp,
@@ -600,7 +623,9 @@ def play_full_run(
     # Completed all floors without boss (shouldn't happen normally)
     _assign_run_values(combat_samples_by_floor, floor_reached,
                        len(room_sequence), hp, max_hp,
-                       deck_change_samples, option_samples)
+                       deck_change_samples, option_samples,
+                       combat_hp_data=combat_hp_data,
+                       boss_floors=boss_floors)
     return FullRunResult(
         outcome="lose", floor_reached=floor_reached,
         final_hp=hp, max_hp=max_hp,
@@ -619,31 +644,80 @@ def _assign_run_values(
     max_hp: int,
     deck_change_samples: list | None = None,
     option_samples: list | None = None,
+    combat_hp_data: dict[int, tuple[int, int, int]] | None = None,
+    boss_floors: set[int] | None = None,
 ) -> None:
-    """Assign training values to all samples based on run outcome.
+    """Assign training values blending per-combat HP conservation with run outcome.
 
-    Combat samples from later combats get values closer to the actual outcome.
-    Deck change and option samples all get the run-level value.
+    Each combat gets a dense local signal based on how efficiently it was played
+    (HP retained, potions conserved), blended with the sparse run-level outcome.
+    This teaches the network that winning a combat at 5 HP is worse than at 40 HP.
+
+    Boss fights are treated differently: HP conservation doesn't matter (HP resets
+    next act), only winning and potion conservation count.
     """
+    # --- Run-level value (sparse, based on overall outcome) ---
     base = floor_reached / max(1, total_floors)
     hp_bonus = final_hp / max(1, max_hp) * 0.3
     run_value = base + hp_bonus - 0.5  # [-0.5, +0.8]
     run_value = max(-1.0, min(1.0, run_value))
 
-    # Discount: earlier combats get values closer to 0 (less certain)
-    discount = 0.95
+    # --- Per-combat values (dense, based on HP conservation) ---
+    if combat_hp_data is None:
+        combat_hp_data = {}
+    if boss_floors is None:
+        boss_floors = set()
+
+    discount = 0.95       # run-level: earlier combats get less certain values
+    turn_discount = 0.99  # within-combat temporal discount
     sorted_floors = sorted(combat_samples_by_floor.keys(), reverse=True)
 
-    turn_discount = 0.99  # within-combat temporal discount
     for i, floor in enumerate(sorted_floors):
-        floor_value = run_value * (discount ** i)
+        # Run-level contribution (discounted by distance from end)
+        run_component = run_value * (discount ** i)
+
+        is_boss = floor in boss_floors
+
+        if is_boss:
+            # Boss fights: only winning matters, HP conservation is irrelevant
+            # (HP resets in the next act). Reward winning and potion conservation.
+            if floor in combat_hp_data:
+                hp_before, hp_after, potions_used = combat_hp_data[floor]
+                if hp_after <= 0:
+                    # Lost the boss fight — strong negative signal
+                    combat_value = -1.0
+                else:
+                    # Won the boss fight — strong positive, small potion penalty
+                    potion_penalty = potions_used * 0.15
+                    combat_value = 1.0 - potion_penalty
+                    combat_value = max(0.0, combat_value)
+            else:
+                combat_value = 0.0
+
+            # Boss: weight toward win/lose outcome, less run-level blend
+            blended = 0.7 * combat_value + 0.3 * run_component
+        else:
+            # Non-boss: HP conservation matters for surviving the run
+            if floor in combat_hp_data:
+                hp_before, hp_after, potions_used = combat_hp_data[floor]
+                if hp_before <= 0:
+                    combat_value = -1.0
+                else:
+                    hp_retained = hp_after / max(1, hp_before)
+                    damage_fraction = (hp_before - hp_after) / max(1, max_hp)
+                    potion_penalty = potions_used * 0.1
+                    combat_value = hp_retained - damage_fraction * 0.5 - potion_penalty
+                    combat_value = max(-1.0, min(1.0, combat_value))
+            else:
+                combat_value = 0.0
+
+            blended = 0.5 * combat_value + 0.5 * run_component
+
         floor_samples = combat_samples_by_floor[floor]
-        # Later samples within the combat get values closer to floor_value,
-        # earlier samples are discounted toward 0 (more uncertain)
         n = len(floor_samples)
         for j, sample in enumerate(floor_samples):
             turns_from_end = n - 1 - j
-            sample.value = floor_value * (turn_discount ** turns_from_end)
+            sample.value = blended * (turn_discount ** turns_from_end)
 
     # Deck change and option samples get the full run value
     if deck_change_samples:

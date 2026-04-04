@@ -32,7 +32,7 @@ from .effects import (
     add_card_to_discard,
     add_card_to_hand,
 )
-from .models import Card, CombatState
+from .models import Card, CombatState, PendingChoice
 
 if TYPE_CHECKING:
     from .data_loader import CardDB
@@ -389,12 +389,12 @@ def _acrobatics(card: Card, card_db: CardDB | None) -> CardEffect:
 
     def effect(state: CombatState, target_idx: int | None = None) -> None:
         draw_cards(state, draw_count)
-        # Discard the worst card (lowest value heuristic: highest-cost non-power)
         if state.player.hand:
-            # Simple: discard last drawn card (solver will explore orderings)
-            worst = len(state.player.hand) - 1
-            discarded = state.player.hand.pop(worst)
-            state.player.discard_pile.append(discarded)
+            state.pending_choice = PendingChoice(
+                choice_type="discard_from_hand",
+                num_choices=1,
+                source_card_id="ACROBATICS",
+            )
     return effect
 
 
@@ -444,8 +444,43 @@ def _dagger_throw(card: Card, card_db: CardDB | None) -> CardEffect:
             deal_damage(state, target_idx, dmg)
         draw_cards(state, 1)
         if state.player.hand:
-            discarded = state.player.hand.pop(-1)
-            state.player.discard_pile.append(discarded)
+            state.pending_choice = PendingChoice(
+                choice_type="discard_from_hand",
+                num_choices=1,
+                source_card_id="DAGGER_THROW",
+            )
+    return effect
+
+
+@register("SURVIVOR")
+def _survivor(card: Card, card_db: CardDB | None) -> CardEffect:
+    """Gain 8(11) Block. Discard 1 card."""
+    blk = 8 if not card.upgraded else 11
+
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        gain_block(state, blk)
+        if state.player.hand:
+            state.pending_choice = PendingChoice(
+                choice_type="discard_from_hand",
+                num_choices=1,
+                source_card_id="SURVIVOR",
+            )
+    return effect
+
+
+@register("PREPARED")
+def _prepared(card: Card, card_db: CardDB | None) -> CardEffect:
+    """Draw 1(2) card(s). Discard 1 card."""
+    draw_count = 1 if not card.upgraded else 2
+
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        draw_cards(state, draw_count)
+        if state.player.hand:
+            state.pending_choice = PendingChoice(
+                choice_type="discard_from_hand",
+                num_choices=1,
+                source_card_id="PREPARED",
+            )
     return effect
 
 

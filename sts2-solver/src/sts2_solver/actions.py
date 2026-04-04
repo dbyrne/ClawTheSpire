@@ -17,16 +17,19 @@ if TYPE_CHECKING:
 class Action:
     """A single action the player can take."""
 
-    action_type: str  # "play_card", "end_turn", or "use_potion"
+    action_type: str  # "play_card", "end_turn", "use_potion", or "choose_card"
     card_idx: int | None = None
     target_idx: int | None = None
     potion_idx: int | None = None  # slot index for use_potion
+    choice_idx: int | None = None  # index into choice candidates (hand/pile)
 
     def __repr__(self) -> str:
         if self.action_type == "end_turn":
             return "EndTurn"
         if self.action_type == "use_potion":
             return f"Potion({self.potion_idx})"
+        if self.action_type == "choose_card":
+            return f"Choose({self.choice_idx})"
         if self.target_idx is not None:
             return f"Play({self.card_idx}->enemy{self.target_idx})"
         return f"Play({self.card_idx})"
@@ -40,7 +43,14 @@ def enumerate_actions(state: CombatState) -> list[Action]:
 
     Returns a list of Action objects. Always includes END_TURN.
     For targeted cards, one Action per valid target is generated.
+
+    If a pending_choice is set, returns only choose_card actions —
+    no card plays or end_turn until the choice is resolved.
     """
+    # Pending choice takes priority — only choice actions are legal
+    if state.pending_choice is not None:
+        return _enumerate_choice_actions(state)
+
     actions: list[Action] = []
 
     # Deduplicate: if multiple identical cards in hand, only generate
@@ -73,4 +83,51 @@ def enumerate_actions(state: CombatState) -> list[Action]:
         actions.append(Action("use_potion", potion_idx=i))
 
     actions.append(END_TURN)
+    return actions
+
+
+def _enumerate_choice_actions(state: CombatState) -> list[Action]:
+    """Enumerate choose_card actions for a pending choice.
+
+    Deduplicates by card identity (same card ID + upgraded = equivalent choice).
+    """
+    pc = state.pending_choice
+    if pc is None:
+        return []
+
+    actions: list[Action] = []
+    seen: set[tuple[str, bool]] = set()
+
+    if pc.choice_type == "discard_from_hand":
+        for i, card in enumerate(state.player.hand):
+            if pc.valid_indices is not None and i not in pc.valid_indices:
+                continue
+            if i in pc.chosen_so_far:
+                continue
+            dedup_key = (card.id, card.upgraded)
+            if dedup_key in seen:
+                continue
+            seen.add(dedup_key)
+            actions.append(Action("choose_card", choice_idx=i))
+
+    elif pc.choice_type == "choose_from_discard":
+        for i, card in enumerate(state.player.discard_pile):
+            if pc.valid_indices is not None and i not in pc.valid_indices:
+                continue
+            dedup_key = (card.id, card.upgraded)
+            if dedup_key in seen:
+                continue
+            seen.add(dedup_key)
+            actions.append(Action("choose_card", choice_idx=i))
+
+    elif pc.choice_type == "choose_from_hand":
+        for i, card in enumerate(state.player.hand):
+            if pc.valid_indices is not None and i not in pc.valid_indices:
+                continue
+            dedup_key = (card.id, card.upgraded)
+            if dedup_key in seen:
+                continue
+            seen.add(dedup_key)
+            actions.append(Action("choose_card", choice_idx=i))
+
     return actions

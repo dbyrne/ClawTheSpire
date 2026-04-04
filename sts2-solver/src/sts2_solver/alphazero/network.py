@@ -3,20 +3,27 @@
 Architecture:
     State encoder (shared trunk):
         - Card embeddings (learned, 32-dim per card ID)
-        - Hand: set of card features → self-attention → mean pool → 32-dim
-        - Piles (draw/discard/exhaust): sum of card embeddings → 32-dim each
-        - Player: scalar features (HP, block, energy, powers)
-        - Enemies: per-slot features (HP, block, intent, powers) × max_enemies
-        - Relics: sum of relic embeddings
-        - Concatenated → MLP trunk → 256-dim hidden state
+        - Hand: card embed (32) + stats (15) → self-attention → mean pool → 32-dim
+        - Piles (draw/discard/exhaust): mean card embeddings → project → 32-dim each
+        - Player: scalar features (HP, block, energy) + power embeddings
+        - Enemies: per-slot features → linear projection → 32-dim × max_enemies
+        - Relics: mean embeddings (8-dim)
+        - Scalars: floor, turn, gold, deck_size, pending_choice, choice_type
+        - Concatenated → MLP trunk (residual + LayerNorm) → 256-dim hidden state
 
     Value head:
-        hidden → MLP → scalar (tanh, win probability in [-1, 1])
+        hidden → Linear(256→64) → ReLU → Linear(64→1) (unbounded, no tanh)
 
     Policy head (action embedding similarity):
-        - Encode each legal action as: card_embed + target_onehot + end_turn_flag
+        - Encode each legal action as: card_embed + features (target/flags)
         - Score = dot(hidden_projected, action_embed)
-        - Softmax over legal actions → policy distribution
+        - Supports play_card, end_turn, use_potion, and choose_card actions
+
+    Deck evaluation head:
+        hidden + card_embed → Linear(288→64) → ReLU → Linear(64→1)
+
+    Option evaluation head:
+        hidden + option_type_embed + card_embed → Linear(304→64) → ReLU → Linear(64→1)
 """
 
 from __future__ import annotations
@@ -122,18 +129,10 @@ class STS2Network(nn.Module):
         self.pile_project = nn.Linear(cfg.card_embed_dim, cfg.pile_feature_dim)
 
         # --- Enemy encoder ---
-        self.enemy_project = nn.Linear(cfg.enemy_feature_dim, 32)
+        self.enemy_project = nn.Linear(cfg.enemy_feature_dim, cfg.enemy_projected_dim)
 
         # --- Trunk MLP ---
-        trunk_input_dim = (
-            cfg.card_embed_dim          # hand
-            + cfg.pile_feature_dim * 3  # draw, discard, exhaust
-            + cfg.player_feature_dim    # player scalars
-            + 32 * cfg.max_enemies      # enemies
-            + cfg.relic_embed_dim       # relics
-            + cfg.max_potions * cfg.potion_feature_dim  # potions
-            + 4                         # floor, turn, gold, deck_size
-        )
+        trunk_input_dim = cfg.state_dim
         # Trunk with residual connection + layer norm for stable training
         self.trunk_in = nn.Linear(trunk_input_dim, 256)
         self.trunk_hidden = nn.Linear(256, 256)
@@ -151,8 +150,8 @@ class STS2Network(nn.Module):
 
         # --- Policy head ---
         # Actions are encoded as: learned card embedding + feature vector (target/flags)
-        # action_feat_dim = max_enemies+1 (target) + 5 (potion type) + 2 (flags)
-        action_feat_dim = cfg.max_enemies + 1 + 5 + 2
+        # action_feat_dim = max_enemies+1 (target) + 5 (potion type) + 3 (flags: end_turn, use_potion, choose_card)
+        action_feat_dim = cfg.action_feat_dim
         policy_action_dim = cfg.card_embed_dim + action_feat_dim
         self.policy_project = nn.Linear(256, policy_action_dim)
         self.action_project = nn.Linear(policy_action_dim, policy_action_dim)
@@ -171,9 +170,9 @@ class STS2Network(nn.Module):
         # Unified head for non-combat decisions (rest/map/shop).
         # Scores each available option by combining trunk hidden state with
         # an option type embedding and an optional card embedding.
-        self.option_type_embed = nn.Embedding(16, 16, padding_idx=0)
+        self.option_type_embed = nn.Embedding(cfg.num_option_types, cfg.option_type_embed_dim, padding_idx=0)
         self.option_eval_head = nn.Sequential(
-            nn.Linear(256 + 16 + cfg.card_embed_dim, 64),
+            nn.Linear(256 + cfg.option_type_embed_dim + cfg.card_embed_dim, 64),
             nn.ReLU(),
             nn.Linear(64, 1),
         )
@@ -237,8 +236,8 @@ class STS2Network(nn.Module):
 
         # Concatenate enemy scalars with their power features
         enemy_full = torch.cat([enemy_scalars, e_pow_flat], dim=-1)  # (batch, max_enemies, enemy_feature_dim)
-        enemy_vecs = self.enemy_project(enemy_full)         # (batch, max_enemies, 32)
-        enemy_flat = enemy_vecs.reshape(batch, cfg.max_enemies * 32)
+        enemy_vecs = self.enemy_project(enemy_full)         # (batch, max_enemies, enemy_projected_dim)
+        enemy_flat = enemy_vecs.reshape(batch, cfg.max_enemies * cfg.enemy_projected_dim)
 
         # Relics: mean embeddings (#6 — normalize by count)
         relic_embeds = self.relic_embed(relic_ids)  # (batch, max_relics, 8)

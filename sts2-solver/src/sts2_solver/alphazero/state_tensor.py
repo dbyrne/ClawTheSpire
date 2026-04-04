@@ -47,7 +47,7 @@ def encode_state(
     # Pad to max
     while len(hand_card_ids) < cfg.hand_max_size:
         hand_card_ids.append(PAD_IDX)
-        hand_features.append([0.0] * 15)  # 15 = stats vector size
+        hand_features.append([0.0] * cfg.card_stats_dim)
 
     hand_mask = [False] * hand_size + [True] * (cfg.hand_max_size - hand_size)
 
@@ -140,11 +140,25 @@ def encode_state(
             potion_features.extend([0.0] * cfg.potion_feature_dim)
 
     # --- Scalars ---
+    # Pending choice context: lets the trunk know whether we're in a
+    # normal play state or resolving a discard/choice sub-decision.
+    CHOICE_TYPE_MAP = {
+        "discard_from_hand": 0.33,
+        "choose_from_discard": 0.67,
+        "choose_from_hand": 1.0,
+    }
+    has_pending = 1.0 if state.pending_choice is not None else 0.0
+    choice_type = CHOICE_TYPE_MAP.get(
+        state.pending_choice.choice_type if state.pending_choice else "", 0.0
+    )
+
     scalars = [
         state.floor / 50.0,
         state.turn / 20.0,
         state.gold / 300.0,
         len(state.player.draw_pile) / 30.0,
+        has_pending,
+        choice_type,
     ]
 
     return {
@@ -184,11 +198,11 @@ def encode_actions(
         action_features: (1, max_actions, action_feat_dim) — target/flags
         action_mask: (1, max_actions) — True for invalid/padded slots
 
-    action_feat_dim = max_enemies + 1 (target one-hot) + 5 (potion type) + 2 (flags)
+    action_feat_dim = max_enemies + 1 (target one-hot) + 5 (potion type) + 3 (flags)
     """
     cfg = config or EncoderConfig()
-    # Feature dims: target_onehot(max_enemies+1) + potion_type(5) + is_end_turn(1) + is_use_potion(1)
-    feat_dim = cfg.max_enemies + 1 + 5 + 2
+    # Feature dims: target_onehot(max_enemies+1) + potion_type(5) + is_end_turn(1) + is_use_potion(1) + is_choose_card(1)
+    feat_dim = cfg.max_enemies + 1 + 5 + 3
 
     card_ids = []
     features = []
@@ -197,9 +211,9 @@ def encode_actions(
         cid = 0  # PAD = no card
 
         if action.action_type == "end_turn":
-            vec[-2] = 1.0  # is_end_turn
+            vec[-3] = 1.0  # is_end_turn
         elif action.action_type == "use_potion":
-            vec[-1] = 1.0  # is_use_potion
+            vec[-2] = 1.0  # is_use_potion
             # Potion type one-hot (after target slots)
             pot_offset = cfg.max_enemies + 1
             if action.potion_idx is not None and action.potion_idx < len(state.player.potions):
@@ -210,6 +224,25 @@ def encode_actions(
                     elif pot.get("strength"): vec[pot_offset + 2] = 1.0
                     elif pot.get("damage_all"): vec[pot_offset + 3] = 1.0
                     elif pot.get("enemy_weak"): vec[pot_offset + 4] = 1.0
+        elif action.action_type == "choose_card":
+            vec[-1] = 1.0  # is_choose_card
+            # Use the card being chosen as the action's identity
+            pc = state.pending_choice
+            if pc and pc.choice_type == "discard_from_hand":
+                if action.choice_idx is not None and action.choice_idx < len(state.player.hand):
+                    card = state.player.hand[action.choice_idx]
+                    base_id = card.id.rstrip("+")
+                    cid = vocabs.cards.get(base_id)
+            elif pc and pc.choice_type == "choose_from_discard":
+                if action.choice_idx is not None and action.choice_idx < len(state.player.discard_pile):
+                    card = state.player.discard_pile[action.choice_idx]
+                    base_id = card.id.rstrip("+")
+                    cid = vocabs.cards.get(base_id)
+            elif pc and pc.choice_type == "choose_from_hand":
+                if action.choice_idx is not None and action.choice_idx < len(state.player.hand):
+                    card = state.player.hand[action.choice_idx]
+                    base_id = card.id.rstrip("+")
+                    cid = vocabs.cards.get(base_id)
         else:
             # Card play — pass vocab ID for learned embedding lookup
             if action.card_idx is not None and action.card_idx < len(state.player.hand):
