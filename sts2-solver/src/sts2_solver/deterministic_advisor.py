@@ -32,6 +32,8 @@ class Decision:
     action: str
     option_index: int | None
     reasoning: str
+    network_value: float | None = None
+    head_scores: dict | None = None
 
 
 # ---------------------------------------------------------------------------

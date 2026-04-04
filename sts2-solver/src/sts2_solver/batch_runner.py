@@ -19,8 +19,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import subprocess
-import sys
 import time
 from pathlib import Path
 
@@ -28,7 +26,6 @@ from .runner import Runner, _load_env_from_mcp_json, DEFAULT_CHARACTER
 
 CONFIG_PATH = Path(__file__).resolve().parents[3] / "sts2_config.json"
 LOGS_ROOT = Path(__file__).resolve().parents[3] / "logs"
-DASHBOARD_SCRIPT = Path(__file__).resolve().parents[3] / "dashboard" / "update_data.py"
 
 
 def load_config() -> dict:
@@ -38,7 +35,6 @@ def load_config() -> dict:
         "character": DEFAULT_CHARACTER,
         "model": "qwen3:8b",
         "poll_interval": 1.0,
-        "deploy_dashboard": True,
     }
     try:
         with open(CONFIG_PATH, encoding="utf-8") as f:
@@ -49,19 +45,6 @@ def load_config() -> dict:
     except json.JSONDecodeError as e:
         print(f"[warn] Config parse error: {e}, using defaults")
     return defaults
-
-
-def update_dashboard(deploy: bool = True) -> None:
-    """Run the dashboard update script."""
-    if not DASHBOARD_SCRIPT.exists():
-        return
-    try:
-        args = [sys.executable, str(DASHBOARD_SCRIPT)]
-        if deploy:
-            args.append("--deploy")
-        subprocess.run(args, timeout=60, capture_output=True)
-    except Exception as e:
-        print(f"  [warn] Dashboard update failed: {e}")
 
 
 def run_one_game(cfg: dict, game_num: int) -> dict | None:
@@ -84,6 +67,7 @@ def run_one_game(cfg: dict, game_num: int) -> dict | None:
             poll_interval=cfg["poll_interval"],
             character=cfg["character"],
             logs_dir=logs_dir,
+            gen=f"gen{gen}",
         )
         runner.run()
         if getattr(runner, "_checkpoint_name", None):
@@ -164,12 +148,6 @@ def main():
         result = run_one_game(cfg, game_num)
         if result:
             results.append(result)
-
-            # Update dashboard
-            deploy = cfg.get("deploy_dashboard", True)
-            print("  Updating dashboard...", end=" ", flush=True)
-            update_dashboard(deploy=deploy)
-            print("done")
 
         if args.once:
             break

@@ -80,10 +80,14 @@ class RunLogger:
         source: str,
         latency_ms: float | None = None,
         user_prompt: str | None = None,
+        network_value: float | None = None,
+        head_scores: dict | None = None,
     ) -> None:
         """Log a strategic or auto decision.
 
         If user_prompt is provided, it's included for training data extraction.
+        network_value is the network's win expectancy (-1 to +1) at decision time.
+        head_scores contains option_eval or deck_eval head outputs for all candidates.
         """
         self.ensure_run(game_state)
         self._emit_diffs(game_state)
@@ -99,6 +103,10 @@ class RunLogger:
             event["latency_ms"] = round(latency_ms, 1)
         if user_prompt is not None:
             event["user_prompt"] = user_prompt
+        if network_value is not None:
+            event["network_value"] = round(network_value, 4)
+        if head_scores is not None:
+            event["head_scores"] = head_scores
 
         # Include map state on map decisions so we capture the position
         # and available nodes at each navigation choice
@@ -139,6 +147,7 @@ class RunLogger:
         solve_ms: float,
         game_state: dict | None = None,
         targets_chosen: list[int | None] | None = None,
+        network_value: float | None = None,
     ) -> None:
         """Log a single combat turn's solver output.
 
@@ -148,6 +157,9 @@ class RunLogger:
 
         targets_chosen is a parallel list to cards_played: for each card,
         the enemy index it targeted (None for untargeted cards).
+
+        network_value is the MCTS root value (win expectancy, -1 to +1)
+        from the start of the turn.
         """
         self._combat_turn += 1
 
@@ -165,6 +177,8 @@ class RunLogger:
         }
         if targets_chosen is not None:
             event["targets_chosen"] = targets_chosen
+        if network_value is not None:
+            event["network_value"] = round(network_value, 4)
 
         self._emit(event)
 

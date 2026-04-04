@@ -1,0 +1,275 @@
+@import "tailwindcss";
+
+@theme inline {
+  /* ── Backgrounds — deep space black ── */
+  --color-void: #06070e;
+  --color-abyss: #0b0d18;
+  --color-obsidian: #101325;
+  --color-slate: #171b32;
+  --color-surface: #1e2340;
+
+  /* ── Borders ── */
+  --color-rune: #252a4a;
+  --color-rune-light: #353c6a;
+  --color-rune-bright: #4a5490;
+
+  /* ── Accent: Blood (HP / danger) ── */
+  --color-blood: #ff2255;
+  --color-blood-bright: #ff5588;
+  --color-blood-glow: #ff3366;
+
+  /* ── Accent: Ember (gold / primary) ── */
+  --color-ember: #ffaa00;
+  --color-ember-dim: #dd8800;
+  --color-ember-bright: #ffcc44;
+
+  /* ── Accent: Arcane (network value / data) — electric cyan ── */
+  --color-arcane: #00ddff;
+  --color-arcane-bright: #44eeff;
+  --color-arcane-dim: #00aadd;
+
+  /* ── Accent: Verdant (wins / positive) — neon green ── */
+  --color-verdant: #00ff88;
+  --color-verdant-bright: #44ffaa;
+
+  /* ── Accent: Mystic (purple) — hot violet ── */
+  --color-mystic: #bb66ff;
+  --color-mystic-dim: #9933ff;
+
+  /* ── Combat highlight ── */
+  --color-combat-bg: rgba(255, 34, 85, 0.12);
+
+  /* ── Text — crisp and bright ── */
+  --color-bone: #eeeef5;
+  --color-bone-dim: #9999bb;
+  --color-bone-faint: #666688;
+
+  /* ── Fonts ── */
+  --font-display: var(--font-orbitron);
+  --font-serif: var(--font-rajdhani);
+  --font-mono: var(--font-jetbrains);
+}
+
+/* ═══════════════════════════════════════════
+   Base
+   ═══════════════════════════════════════════ */
+
+body {
+  background: var(--color-void);
+  color: var(--color-bone);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ═══════════════════════════════════════════
+   Keyframes
+   ═══════════════════════════════════════════ */
+
+@keyframes pulse-glow {
+  0%, 100% { opacity: 1; box-shadow: 0 0 12px var(--color-blood-bright), 0 0 32px rgba(255,34,85,0.4); }
+  50% { opacity: 0.5; box-shadow: 0 0 6px var(--color-blood-bright), 0 0 16px rgba(255,34,85,0.2); }
+}
+
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes gauge-glow {
+  0%, 100% { filter: drop-shadow(0 0 10px rgba(0,221,255,0.5)); }
+  50% { filter: drop-shadow(0 0 22px rgba(0,221,255,0.8)); }
+}
+
+@keyframes neon-pulse {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 1; }
+}
+
+@keyframes scan-line {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(100%); }
+}
+
+@keyframes border-glow {
+  0%, 100% { border-color: rgba(0,221,255,0.3); box-shadow: 0 0 8px rgba(0,221,255,0.1), inset 0 0 8px rgba(0,221,255,0.05); }
+  50% { border-color: rgba(0,221,255,0.5); box-shadow: 0 0 16px rgba(0,221,255,0.2), inset 0 0 16px rgba(0,221,255,0.08); }
+}
+
+/* ═══════════════════════════════════════════
+   Panels — neon-bordered cards
+   ═══════════════════════════════════════════ */
+
+.arcane-panel {
+  position: relative;
+  background: linear-gradient(180deg, rgba(16,19,37,0.95) 0%, rgba(11,13,24,0.98) 100%);
+  border: 1.5px solid var(--color-rune-light);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.arcane-panel::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent 0%, var(--color-arcane-dim) 20%, var(--color-arcane) 50%, var(--color-arcane-dim) 80%, transparent 100%);
+  opacity: 0.8;
+}
+
+.arcane-glow {
+  animation: border-glow 4s ease-in-out infinite;
+  box-shadow:
+    0 0 12px rgba(0,221,255,0.12),
+    inset 0 1px 0 rgba(0,221,255,0.1);
+}
+
+.arcane-hero {
+  border-color: var(--color-arcane-dim);
+  box-shadow:
+    0 0 20px rgba(0,221,255,0.15),
+    inset 0 0 30px rgba(0,221,255,0.03);
+}
+
+.arcane-hero::before {
+  opacity: 1;
+  height: 3px;
+  background: linear-gradient(90deg, var(--color-mystic-dim) 0%, var(--color-arcane) 35%, var(--color-verdant) 65%, var(--color-ember) 100%);
+}
+
+/* ═══════════════════════════════════════════
+   Stat Cards — glowing blocks
+   ═══════════════════════════════════════════ */
+
+.stat-block {
+  position: relative;
+  background: linear-gradient(180deg, rgba(30,35,64,0.8) 0%, rgba(16,19,37,0.9) 100%);
+  border: 1.5px solid var(--color-rune);
+  border-radius: 4px;
+  transition: border-color 0.3s, box-shadow 0.3s;
+}
+
+.stat-block:hover {
+  border-color: var(--color-arcane-dim);
+  box-shadow: 0 0 12px rgba(0,221,255,0.15);
+}
+
+.stat-block::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--color-arcane-dim), transparent);
+  opacity: 0.6;
+}
+
+/* ═══════════════════════════════════════════
+   HP Bar — neon red
+   ═══════════════════════════════════════════ */
+
+.hp-bar-track {
+  height: 14px;
+  background: rgba(255,34,85,0.08);
+  border: 1px solid rgba(255,34,85,0.3);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.hp-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--color-blood) 0%, var(--color-blood-bright) 100%);
+  border-radius: 2px;
+  transition: width 0.6s ease;
+  box-shadow: 0 0 16px rgba(255,34,85,0.5), inset 0 1px 0 rgba(255,255,255,0.15);
+}
+
+/* ═══════════════════════════════════════════
+   Live Pulse — hot pink
+   ═══════════════════════════════════════════ */
+
+.live-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--color-blood-bright);
+  animation: pulse-glow 1.5s ease-in-out infinite;
+}
+
+/* ═══════════════════════════════════════════
+   Gauge
+   ═══════════════════════════════════════════ */
+
+.gauge-arc {
+  transition: stroke-dashoffset 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.gauge-glow {
+  animation: gauge-glow 3s ease-in-out infinite;
+}
+
+/* ═══════════════════════════════════════════
+   Scrollbar
+   ═══════════════════════════════════════════ */
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--color-abyss); }
+::-webkit-scrollbar-thumb { background: var(--color-rune-bright); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--color-arcane-dim); }
+
+/* ═══════════════════════════════════════════
+   Recharts Overrides
+   ═══════════════════════════════════════════ */
+
+.recharts-cartesian-grid-horizontal line,
+.recharts-cartesian-grid-vertical line {
+  stroke: rgba(37,42,74,0.6) !important;
+}
+
+.recharts-tooltip-wrapper {
+  z-index: 100 !important;
+}
+
+/* ═══════════════════════════════════════════
+   Animation Utilities
+   ═══════════════════════════════════════════ */
+
+.animate-in {
+  animation: fade-in-up 0.4s ease-out both;
+}
+
+.stagger-1 { animation-delay: 0.05s; }
+.stagger-2 { animation-delay: 0.1s; }
+.stagger-3 { animation-delay: 0.15s; }
+
+/* ═══════════════════════════════════════════
+   Decorative Dividers — neon line
+   ═══════════════════════════════════════════ */
+
+.rune-divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent 0%, var(--color-arcane-dim) 30%, var(--color-arcane) 50%, var(--color-arcane-dim) 70%, transparent 100%);
+  opacity: 0.4;
+}
+
+/* ═══════════════════════════════════════════
+   Neon text glow utility
+   ═══════════════════════════════════════════ */
+
+.text-glow-cyan {
+  text-shadow: 0 0 10px rgba(0,221,255,0.5), 0 0 30px rgba(0,221,255,0.2);
+}
+
+.text-glow-pink {
+  text-shadow: 0 0 10px rgba(255,34,85,0.5), 0 0 30px rgba(255,34,85,0.2);
+}
+
+.text-glow-green {
+  text-shadow: 0 0 10px rgba(0,255,136,0.5), 0 0 30px rgba(0,255,136,0.2);
+}
+
+.text-glow-amber {
+  text-shadow: 0 0 10px rgba(255,170,0,0.5), 0 0 30px rgba(255,170,0,0.2);
+}

@@ -2,877 +2,480 @@
   "runs": [
     {
       "run_number": 1,
-      "floor": 17,
-      "gen": "gen1",
-      "model": "unknown",
-      "run_id": "J9PXKHDENN",
-      "character": "The Ironclad"
+      "floor": 7,
+      "gen": "gen10",
+      "checkpoint": "gen_0010.pt",
+      "run_id": "0TX61LPCGZ",
+      "character": "The Silent"
     },
     {
       "run_number": 2,
-      "floor": 17,
-      "gen": "gen1",
-      "model": "unknown",
-      "run_id": "KD9H6V335Z",
-      "character": "The Ironclad"
+      "floor": 8,
+      "gen": "gen10",
+      "checkpoint": "gen_0020.pt",
+      "run_id": "5U9GT3UH81",
+      "character": "The Silent"
     },
     {
       "run_number": 3,
-      "floor": 12,
-      "gen": "gen1",
-      "model": "unknown",
-      "run_id": "B6CWJBGYDD",
-      "character": "The Ironclad"
+      "floor": 8,
+      "gen": "gen10",
+      "checkpoint": "gen_0100.pt",
+      "run_id": "95PDWGCNJ6",
+      "character": "The Silent"
     },
     {
       "run_number": 4,
       "floor": 17,
-      "gen": "gen1",
-      "model": "unknown",
-      "run_id": "M5P30B21SF",
-      "character": "The Ironclad"
+      "gen": "gen10",
+      "checkpoint": "gen_0100.pt",
+      "run_id": "GX3FHABC5P",
+      "character": "The Silent"
     },
     {
       "run_number": 5,
-      "floor": 17,
-      "gen": "gen1",
-      "model": "unknown",
-      "run_id": "GRPSTET0VP",
-      "character": "The Ironclad"
+      "floor": 8,
+      "gen": "gen10",
+      "checkpoint": "gen_0020.pt",
+      "run_id": "P1QSHG2233",
+      "character": "The Silent"
     },
     {
       "run_number": 6,
-      "floor": 8,
-      "gen": "gen1",
-      "model": "unknown",
-      "run_id": "MU97QFTXDP",
-      "character": "The Ironclad"
+      "floor": 6,
+      "gen": "gen10",
+      "checkpoint": "gen_0040.pt",
+      "run_id": "C6NZ7ENYZS",
+      "character": "The Silent"
     },
     {
       "run_number": 7,
-      "floor": 5,
-      "gen": "gen1",
-      "model": "unknown",
-      "run_id": "5N7G1K38TC",
-      "character": "The Ironclad"
+      "floor": 9,
+      "gen": "gen10",
+      "checkpoint": "gen_0060.pt",
+      "run_id": "KY12CZZ091",
+      "character": "The Silent"
     },
     {
       "run_number": 8,
       "floor": 5,
-      "gen": "gen1",
-      "model": "unknown",
-      "run_id": "U8TXMAYJS0",
-      "character": "The Ironclad"
+      "gen": "gen10",
+      "checkpoint": "gen_0070.pt",
+      "run_id": "S6R4ELS7LD",
+      "character": "The Silent"
     },
     {
       "run_number": 9,
-      "floor": 11,
-      "gen": "gen1",
-      "model": "unknown",
-      "run_id": "UVSKW7PY6Q",
-      "character": "The Ironclad"
+      "floor": 5,
+      "gen": "gen10",
+      "checkpoint": "gen_0090.pt",
+      "run_id": "Z6RBWX0SX3",
+      "character": "The Silent"
     },
     {
       "run_number": 10,
       "floor": 7,
-      "gen": "gen1",
-      "model": "unknown",
-      "run_id": "DM0862GA9G",
-      "character": "The Ironclad"
+      "gen": "gen10",
+      "checkpoint": "gen_0100.pt",
+      "run_id": "L65KVMK5TT",
+      "character": "The Silent"
     },
     {
       "run_number": 11,
-      "floor": 17,
-      "gen": "gen1",
-      "model": "unknown",
-      "run_id": "VUMPM4FAVD",
-      "character": "The Ironclad"
+      "floor": 7,
+      "gen": "gen10",
+      "checkpoint": "gen_0110.pt",
+      "run_id": "ZKMUUKN7P0",
+      "character": "The Silent"
     },
     {
       "run_number": 12,
-      "floor": 11,
-      "gen": "gen1",
-      "model": "unknown",
-      "run_id": "93FV6SX8R4",
-      "character": "The Ironclad"
+      "floor": 6,
+      "gen": "gen10",
+      "checkpoint": "gen_0120.pt",
+      "run_id": "7DWZU77ZNV",
+      "character": "The Silent"
     },
     {
       "run_number": 13,
-      "floor": 17,
-      "gen": "gen1",
-      "model": "unknown",
-      "run_id": "YZ53K119R4",
-      "character": "The Ironclad"
+      "floor": 6,
+      "gen": "gen10",
+      "checkpoint": "gen_0140.pt",
+      "run_id": "PVVW1SRT42",
+      "character": "The Silent"
     },
     {
       "run_number": 14,
-      "floor": 8,
-      "gen": "gen1",
-      "model": "unknown",
-      "run_id": "VNW7PYB0M8",
-      "character": "The Ironclad"
+      "floor": 9,
+      "gen": "gen10",
+      "checkpoint": "gen_0150.pt",
+      "run_id": "LZ6RRF9D4Y",
+      "character": "The Silent"
     },
     {
       "run_number": 15,
-      "floor": 17,
-      "gen": "gen1",
-      "model": "unknown",
-      "run_id": "RMQ0BC0ELD",
-      "character": "The Ironclad"
+      "floor": 8,
+      "gen": "gen10",
+      "checkpoint": "gen_0160.pt",
+      "run_id": "9997WQTQK1",
+      "character": "The Silent"
     },
     {
       "run_number": 16,
-      "floor": 15,
-      "gen": "gen1",
-      "model": "unknown",
-      "run_id": "E7KRH8Z96X",
-      "character": "The Ironclad"
+      "floor": 9,
+      "gen": "gen10",
+      "checkpoint": "gen_0180.pt",
+      "run_id": "8SZPFJ1A6P",
+      "character": "The Silent"
     },
     {
       "run_number": 17,
-      "floor": 17,
-      "gen": "gen1",
-      "model": "unknown",
-      "run_id": "9QKSBDKWJP",
-      "character": "The Ironclad"
+      "floor": 12,
+      "gen": "gen10",
+      "checkpoint": "gen_0190.pt",
+      "run_id": "HUHEDFV9S0",
+      "character": "The Silent"
     },
     {
       "run_number": 18,
-      "floor": 11,
-      "gen": "gen1",
-      "model": "unknown",
-      "run_id": "5S7KWP6EU8",
-      "character": "The Ironclad"
+      "floor": 7,
+      "gen": "gen10",
+      "checkpoint": "gen_0200.pt",
+      "run_id": "2CY7M4HJ7Z",
+      "character": "The Silent"
     },
     {
       "run_number": 19,
-      "floor": 17,
-      "gen": "gen1",
-      "model": "unknown",
-      "run_id": "32XE22Q9N1",
-      "character": "The Ironclad"
+      "floor": 6,
+      "gen": "gen10",
+      "checkpoint": "gen_0220.pt",
+      "run_id": "TE7XH4PSHA",
+      "character": "The Silent"
     },
     {
       "run_number": 20,
-      "floor": 8,
-      "gen": "gen1",
-      "model": "unknown",
-      "run_id": "RBYEJXHBXN",
-      "character": "The Ironclad"
+      "floor": 6,
+      "gen": "gen10",
+      "checkpoint": "gen_0230.pt",
+      "run_id": "5NF6YDELU1",
+      "character": "The Silent"
     },
     {
       "run_number": 21,
-      "floor": 6,
-      "gen": "gen1",
-      "model": "unknown",
-      "run_id": "UJAM6UXJ6Y",
-      "character": "The Ironclad"
+      "floor": 7,
+      "gen": "gen10",
+      "checkpoint": "gen_0240.pt",
+      "run_id": "UY9SJWGN97",
+      "character": "The Silent"
     },
     {
       "run_number": 22,
-      "floor": 15,
-      "gen": "gen1",
-      "model": "unknown",
-      "run_id": "2WSLNRQ1V9",
-      "character": "The Ironclad"
+      "floor": 13,
+      "gen": "gen10",
+      "checkpoint": "gen_0250.pt",
+      "run_id": "GNNGHQEKQV",
+      "character": "The Silent"
     },
     {
       "run_number": 23,
-      "floor": 9,
-      "gen": "gen1",
-      "model": "unknown",
-      "run_id": "X62UMHT7VE",
-      "character": "The Ironclad"
+      "floor": 6,
+      "gen": "gen10",
+      "checkpoint": "gen_0270.pt",
+      "run_id": "N6XFC5NXZT",
+      "character": "The Silent"
     },
     {
       "run_number": 24,
       "floor": 6,
-      "gen": "gen1",
-      "model": "unknown",
-      "run_id": "Q83YYSL049",
-      "character": "The Ironclad"
+      "gen": "gen10",
+      "checkpoint": "gen_0270.pt",
+      "run_id": "9CSPRKHBVC",
+      "character": "The Silent"
     },
     {
       "run_number": 25,
       "floor": 9,
-      "gen": "gen1",
-      "model": "unknown",
-      "run_id": "3Y4M257USC",
-      "character": "The Ironclad"
+      "gen": "gen10",
+      "checkpoint": "gen_0280.pt",
+      "run_id": "THFKJQCDGV",
+      "character": "The Silent"
     },
     {
       "run_number": 26,
-      "floor": 9,
-      "gen": "gen1",
-      "model": "unknown",
-      "run_id": "VMDNZZKQJM",
-      "character": "The Ironclad"
+      "floor": 7,
+      "gen": "gen10",
+      "checkpoint": "gen_0300.pt",
+      "run_id": "UNNS6ABMZA",
+      "character": "The Silent"
     },
     {
       "run_number": 27,
-      "floor": 17,
-      "gen": "gen1",
-      "model": "unknown",
-      "run_id": "QMPX988CLT",
-      "character": "The Ironclad"
+      "floor": 8,
+      "gen": "gen10",
+      "checkpoint": "gen_0300.pt",
+      "run_id": "XHFACF5EKH",
+      "character": "The Silent"
     },
     {
       "run_number": 28,
       "floor": 17,
-      "gen": "gen1",
-      "model": "unknown",
-      "run_id": "7DRWE9CYA6",
-      "character": "The Ironclad"
+      "gen": "gen10",
+      "checkpoint": "gen_0310.pt",
+      "run_id": "053SF0RS3D",
+      "character": "The Silent"
     },
     {
       "run_number": 29,
-      "floor": 13,
-      "gen": "gen2",
-      "model": "unknown",
-      "run_id": "FFHX4FM02S",
-      "character": "The Ironclad"
+      "floor": 14,
+      "gen": "gen10",
+      "checkpoint": "gen_0330.pt",
+      "run_id": "CEWK4M8NPA",
+      "character": "The Silent"
     },
     {
       "run_number": 30,
-      "floor": 7,
-      "gen": "gen2",
-      "model": "unknown",
-      "run_id": "SFZGTSKTYG",
-      "character": "The Ironclad"
+      "floor": 6,
+      "gen": "gen10",
+      "checkpoint": "gen_0350.pt",
+      "run_id": "W0WB85Z1ZN",
+      "character": "The Silent"
     },
     {
       "run_number": 31,
-      "floor": 13,
-      "gen": "gen2",
-      "model": "unknown",
-      "run_id": "MTADPSTRJ2",
-      "character": "The Ironclad"
+      "floor": 17,
+      "gen": "gen10",
+      "checkpoint": "gen_0360.pt",
+      "run_id": "M564J0VNYR",
+      "character": "The Silent"
     },
     {
       "run_number": 32,
-      "floor": 2,
-      "gen": "gen2",
-      "model": "unknown",
-      "run_id": "MPNBZSXPTH",
-      "character": "The Ironclad"
+      "floor": 7,
+      "gen": "gen10",
+      "checkpoint": "gen_0370.pt",
+      "run_id": "QYHJES5A7E",
+      "character": "The Silent"
     },
     {
       "run_number": 33,
-      "floor": 11,
-      "gen": "gen2",
-      "model": "unknown",
-      "run_id": "1YZKPCR5Y1",
-      "character": "The Ironclad"
+      "floor": 15,
+      "gen": "gen10",
+      "checkpoint": "gen_0380.pt",
+      "run_id": "VGA7TFGLLS",
+      "character": "The Silent"
     },
     {
       "run_number": 34,
-      "floor": 8,
-      "gen": "gen3",
-      "model": "unknown",
-      "run_id": "6BFFGNEURP",
-      "character": "The Ironclad"
+      "floor": 11,
+      "gen": "gen10",
+      "checkpoint": "gen_0400.pt",
+      "run_id": "8AKZL91NAB",
+      "character": "The Silent"
     },
     {
       "run_number": 35,
-      "floor": 17,
-      "gen": "gen3",
-      "model": "unknown",
-      "run_id": "QY0G8SCNU9",
-      "character": "The Ironclad"
+      "floor": 5,
+      "gen": "gen10",
+      "checkpoint": "gen_0410.pt",
+      "run_id": "XEHF8MEC9E",
+      "character": "The Silent"
     },
     {
       "run_number": 36,
-      "floor": 13,
-      "gen": "gen3",
-      "model": "unknown",
-      "run_id": "1J8GKSG8QK",
-      "character": "The Ironclad"
+      "floor": 5,
+      "gen": "gen10",
+      "checkpoint": "gen_0420.pt",
+      "run_id": "UEMLP9WX64",
+      "character": "The Silent"
     },
     {
       "run_number": 37,
-      "floor": 7,
-      "gen": "gen4",
-      "model": "gpt-4o-mini",
-      "run_id": "HPFY323ZAC",
-      "character": "The Ironclad"
+      "floor": 17,
+      "gen": "gen10",
+      "checkpoint": "gen_0420.pt",
+      "run_id": "8KA9JZW1MA",
+      "character": "The Silent"
     },
     {
       "run_number": 38,
-      "floor": 12,
-      "gen": "gen4",
-      "model": "gpt-4o-mini",
-      "run_id": "N2HK0E54AC",
-      "character": "The Ironclad"
+      "floor": 14,
+      "gen": "gen11",
+      "checkpoint": "gen_0010.pt",
+      "run_id": "TRL3C4GLD3",
+      "character": "The Silent"
     },
     {
       "run_number": 39,
-      "floor": 13,
-      "gen": "gen4",
-      "model": "gpt-4o-mini",
-      "run_id": "Y8URBSPM55",
-      "character": "The Ironclad"
+      "floor": 15,
+      "gen": "gen11",
+      "checkpoint": "gen_0030.pt",
+      "run_id": "D6VLMKASWR",
+      "character": "The Silent"
     },
     {
       "run_number": 40,
-      "floor": 24,
-      "gen": "gen5",
-      "model": "gpt-4o-mini",
-      "run_id": "GELTZQFJXA",
-      "character": "The Ironclad"
+      "floor": 7,
+      "gen": "gen11",
+      "checkpoint": "gen_0040.pt",
+      "run_id": "D7Z31C84Z7",
+      "character": "The Silent"
     },
     {
       "run_number": 41,
-      "floor": 11,
-      "gen": "gen5",
-      "model": "gpt-4o-mini",
-      "run_id": "QSL4LVJAGK",
-      "character": "The Ironclad"
+      "floor": 6,
+      "gen": "gen11",
+      "checkpoint": "gen_0050.pt",
+      "run_id": "DQ35NXKKQM",
+      "character": "The Silent"
     },
     {
       "run_number": 42,
-      "floor": 13,
-      "gen": "gen5",
-      "model": "gpt-4o-mini",
-      "run_id": "AR2C9JC4E2",
-      "character": "The Ironclad"
+      "floor": 5,
+      "gen": "gen11",
+      "checkpoint": "gen_0060.pt",
+      "run_id": "4T6GH4QBY7",
+      "character": "The Silent"
     },
     {
       "run_number": 43,
-      "floor": 6,
-      "gen": "gen5",
-      "model": "qwen3:8b",
-      "run_id": "SN1EUTC6TA",
-      "character": "The Ironclad"
+      "floor": 8,
+      "gen": "gen11",
+      "checkpoint": "gen_0070.pt",
+      "run_id": "DS9K1PMWJF",
+      "character": "The Silent"
     },
     {
       "run_number": 44,
-      "floor": 11,
-      "gen": "gen5",
-      "model": "qwen3:8b",
-      "run_id": "BWGEV6BQHL",
-      "character": "The Ironclad"
+      "floor": 5,
+      "gen": "gen11",
+      "checkpoint": "gen_0080.pt",
+      "run_id": "4ZR2GLCNHQ",
+      "character": "The Silent"
     },
     {
       "run_number": 45,
-      "floor": 11,
-      "gen": "gen5",
-      "model": "qwen3:8b",
-      "run_id": "1UR6LLW3LS",
-      "character": "The Ironclad"
+      "floor": 6,
+      "gen": "gen12",
+      "checkpoint": "gen_0010.pt",
+      "run_id": "MX24VF481Q",
+      "character": "The Silent"
     },
     {
       "run_number": 46,
-      "floor": 17,
-      "gen": "gen5",
-      "model": "qwen3:8b",
-      "run_id": "LYA7S68KSV",
-      "character": "The Ironclad"
+      "floor": 12,
+      "gen": "gen12",
+      "checkpoint": "gen_0020.pt",
+      "run_id": "T9FGEGTE6F",
+      "character": "The Silent"
     },
     {
       "run_number": 47,
-      "floor": 6,
-      "gen": "gen5",
-      "model": "qwen3:8b",
-      "run_id": "3B54F08LA2",
-      "character": "The Ironclad"
+      "floor": 7,
+      "gen": "gen12",
+      "checkpoint": "gen_0030.pt",
+      "run_id": "X4BFS1QW1E",
+      "character": "The Silent"
     },
     {
       "run_number": 48,
-      "floor": 17,
-      "gen": "gen5",
-      "model": "qwen3:8b",
-      "run_id": "C7MCWYCFWM",
-      "character": "The Ironclad"
+      "floor": 6,
+      "gen": "gen12",
+      "checkpoint": "gen_0040.pt",
+      "run_id": "6VJBUVUWXL",
+      "character": "The Silent"
     },
     {
       "run_number": 49,
-      "floor": 17,
-      "gen": "gen5",
-      "model": "qwen3:8b",
-      "run_id": "6EMQCZAJAZ",
-      "character": "The Ironclad"
+      "floor": 11,
+      "gen": "gen12",
+      "checkpoint": "gen_0050.pt",
+      "run_id": "5GBU08RP0X",
+      "character": "The Silent"
     },
     {
       "run_number": 50,
       "floor": 6,
-      "gen": "gen5",
-      "model": "qwen3:8b",
-      "run_id": "XVAK9N9R48",
-      "character": "The Ironclad"
+      "gen": "gen12",
+      "checkpoint": "gen_0060.pt",
+      "run_id": "LQ4KG9AQ7H",
+      "character": "The Silent"
     },
     {
       "run_number": 51,
-      "floor": 17,
-      "gen": "gen5",
-      "model": "qwen3:8b",
-      "run_id": "WU8WG1QZR1",
-      "character": "The Ironclad"
+      "floor": 6,
+      "gen": "gen12",
+      "checkpoint": "gen_0070.pt",
+      "run_id": "SMJVVDP7TJ",
+      "character": "The Silent"
     },
     {
       "run_number": 52,
-      "floor": 17,
-      "gen": "gen6",
-      "model": "qwen3:8b",
-      "run_id": "Q40GH7AGS2",
-      "character": "The Ironclad"
+      "floor": 15,
+      "gen": "gen12",
+      "checkpoint": "gen_0080.pt",
+      "run_id": "ZDZCAYS34Z",
+      "character": "The Silent"
     },
     {
       "run_number": 53,
-      "floor": 17,
-      "gen": "gen6",
-      "model": "qwen3:8b",
-      "run_id": "LYFL16XPLW",
-      "character": "The Ironclad"
+      "floor": 12,
+      "gen": "gen12",
+      "checkpoint": "gen_0110.pt",
+      "run_id": "BF3VUSHS7Y",
+      "character": "The Silent"
     },
     {
       "run_number": 54,
-      "floor": 6,
-      "gen": "gen6",
-      "model": "qwen3:8b",
-      "run_id": "G4HQ9M2K4H",
-      "character": "The Ironclad"
+      "floor": 7,
+      "gen": "gen12",
+      "checkpoint": "gen_0130.pt",
+      "run_id": "5UHP6V06P2",
+      "character": "The Silent"
     },
     {
       "run_number": 55,
-      "floor": 6,
-      "gen": "gen6",
-      "model": "qwen3:8b",
-      "run_id": "3XN2QDEBZE",
-      "character": "The Ironclad"
+      "floor": 13,
+      "gen": "gen12",
+      "checkpoint": "gen_0140.pt",
+      "run_id": "ME3PAVNCA5",
+      "character": "The Silent"
     },
     {
       "run_number": 56,
       "floor": 8,
-      "gen": "gen6",
-      "model": "qwen3:8b",
-      "run_id": "4T80XKN4R0",
-      "character": "The Ironclad"
+      "gen": "gen12",
+      "checkpoint": "gen_0150.pt",
+      "run_id": "JC64FMM6N4",
+      "character": "The Silent"
     },
     {
       "run_number": 57,
-      "floor": 14,
-      "gen": "gen6",
-      "model": "qwen3:8b",
-      "run_id": "99GSN58WTC",
-      "character": "The Ironclad"
+      "floor": 7,
+      "gen": "gen12",
+      "checkpoint": "gen_0160.pt",
+      "run_id": "M1Z8ABFW5R",
+      "character": "The Silent"
     },
     {
       "run_number": 58,
-      "floor": 9,
-      "gen": "gen6",
-      "model": "qwen3:8b",
-      "run_id": "XKVPBYE2F2",
-      "character": "The Ironclad"
+      "floor": 12,
+      "gen": "gen12",
+      "checkpoint": "gen_0170.pt",
+      "run_id": "47EVWYV9Y6",
+      "character": "The Silent"
     },
     {
       "run_number": 59,
-      "floor": 9,
-      "gen": "gen6",
-      "model": "qwen3:8b",
-      "run_id": "AFPWGAMJAX",
-      "character": "The Ironclad"
-    },
-    {
-      "run_number": 60,
       "floor": 8,
-      "gen": "gen6",
-      "model": "qwen3:8b",
-      "run_id": "Q90D6TAVQJ",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 61,
-      "floor": 12,
-      "gen": "gen6",
-      "model": "qwen3:8b",
-      "run_id": "CR2VBYZ5TG",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 62,
-      "floor": 12,
-      "gen": "gen6",
-      "model": "qwen3:8b",
-      "run_id": "AP70W2PRM6",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 63,
-      "floor": 17,
-      "gen": "gen6",
-      "model": "qwen3:8b",
-      "run_id": "8QH5ZZ64G9",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 64,
-      "floor": 12,
-      "gen": "gen6",
-      "model": "qwen3:8b",
-      "run_id": "JGWYPQEG12",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 65,
-      "floor": 7,
-      "gen": "gen6",
-      "model": "qwen3:8b",
-      "run_id": "AQW2NLHNRX",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 66,
-      "floor": 17,
-      "gen": "gen6",
-      "model": "qwen3:8b",
-      "run_id": "HXNYCBHPPZ",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 67,
-      "floor": 17,
-      "gen": "gen6",
-      "model": "qwen3:8b",
-      "run_id": "YHCSUPBS9Q",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 68,
-      "floor": 17,
-      "gen": "gen6",
-      "model": "qwen3:8b",
-      "run_id": "HZFF66EG0R",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 69,
-      "floor": 17,
-      "gen": "gen6",
-      "model": "qwen3:8b",
-      "run_id": "D8PH2FBMN9",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 70,
-      "floor": 7,
-      "gen": "gen6",
-      "model": "qwen3:8b",
-      "run_id": "4KHPP8VGQ9",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 71,
-      "floor": 15,
-      "gen": "gen6",
-      "model": "qwen3:8b",
-      "run_id": "5CEJLY0HQX",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 72,
-      "floor": 15,
-      "gen": "gen6",
-      "model": "qwen3:8b",
-      "run_id": "B70DCG3RQM",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 73,
-      "floor": 15,
-      "gen": "gen6",
-      "model": "qwen3:8b",
-      "run_id": "DTQTHWQL8F",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 74,
-      "floor": 7,
-      "gen": "gen6",
-      "model": "qwen3:8b",
-      "run_id": "RM0HSQ5ZU6",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 75,
-      "floor": 14,
-      "gen": "gen6",
-      "model": "qwen3:8b",
-      "run_id": "GHS0R56EAQ",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 76,
-      "floor": 11,
-      "gen": "gen6",
-      "model": "qwen3:8b",
-      "run_id": "CF4XQVFB46",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 77,
-      "floor": 7,
-      "gen": "gen6",
-      "model": "qwen3:8b",
-      "run_id": "WKJ1KGNSRA",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 78,
-      "floor": 7,
-      "gen": "gen6",
-      "model": "qwen3:8b",
-      "run_id": "6HVE06M6NH",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 79,
-      "floor": 17,
-      "gen": "gen6",
-      "model": "qwen3:8b",
-      "run_id": "NBT4REH9GW",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 80,
-      "floor": 6,
-      "gen": "gen6",
-      "model": "qwen3:8b",
-      "run_id": "0CAHXN3YLN",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 81,
-      "floor": 8,
-      "gen": "gen6",
-      "model": "qwen3:8b",
-      "run_id": "2DVBCDR0E6",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 82,
-      "floor": 6,
-      "gen": "gen6",
-      "model": "qwen3:8b",
-      "run_id": "FY2ABQH924",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 83,
-      "floor": 7,
-      "gen": "gen6",
-      "model": "qwen3:8b",
-      "run_id": "JFCAPKH3WD",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 84,
-      "floor": 8,
-      "gen": "gen6",
-      "model": "qwen3:8b",
-      "run_id": "URWS31MRV8",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 85,
-      "floor": 14,
-      "gen": "gen6",
-      "model": "qwen3:8b",
-      "run_id": "NXL3YQPWKM",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 86,
-      "floor": 9,
-      "gen": "gen6",
-      "model": "qwen3:8b",
-      "run_id": "QFRBNU45T2",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 87,
-      "floor": 9,
-      "gen": "gen6",
-      "model": "qwen3:8b",
-      "run_id": "MMX1VYHVG2",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 88,
-      "floor": 5,
-      "gen": "gen6",
-      "model": "qwen3:8b",
-      "run_id": "4SYPAQPCEM",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 89,
-      "floor": 7,
-      "gen": "gen6",
-      "model": "qwen3:8b",
-      "run_id": "YN690YRW4J",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 90,
-      "floor": 6,
-      "gen": "gen6",
-      "model": "qwen3:8b",
-      "run_id": "D8K04ZAFBQ",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 91,
-      "floor": 6,
-      "gen": "gen6",
-      "model": "qwen3:8b",
-      "run_id": "6A90S9DA66",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 92,
-      "floor": 22,
-      "gen": "gen6",
-      "model": "qwen3:8b",
-      "run_id": "1DRY85SWNC",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 93,
-      "floor": 7,
-      "gen": "gen7",
-      "model": "qwen3:8b",
-      "run_id": "W3J2BMZHXG",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 94,
-      "floor": 17,
-      "gen": "gen7",
-      "model": "qwen3:8b",
-      "run_id": "2N7RD7GWFR",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 95,
-      "floor": 9,
-      "gen": "gen7",
-      "model": "qwen3:8b",
-      "run_id": "NX9SCLBFGE",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 96,
-      "floor": 15,
-      "gen": "gen7",
-      "model": "qwen3:8b",
-      "run_id": "EFNQSED8Z8",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 97,
-      "floor": 8,
-      "gen": "gen7",
-      "model": "qwen3:8b",
-      "run_id": "A0JGRG7XS1",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 98,
-      "floor": 8,
-      "gen": "gen7",
-      "model": "qwen3:8b",
-      "run_id": "LVMY79K89J",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 99,
-      "floor": 6,
-      "gen": "gen7",
-      "model": "qwen3:8b",
-      "run_id": "1GRBDS6V92",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 100,
-      "floor": 6,
-      "gen": "gen7",
-      "model": "qwen3:8b",
-      "run_id": "Z9UAYL78EP",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 101,
-      "floor": 14,
-      "gen": "gen7",
-      "model": "qwen3:8b",
-      "run_id": "K85SF7Q3AM",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 102,
-      "floor": 7,
-      "gen": "gen7",
-      "model": "qwen3:8b",
-      "run_id": "NP2KB7YF0Y",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 103,
-      "floor": 9,
-      "gen": "gen7",
-      "model": "qwen3:8b",
-      "run_id": "YWDV56JC8M",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 104,
-      "floor": 11,
-      "gen": "gen7",
-      "model": "qwen3:8b",
-      "run_id": "PGW7VLTKN6",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 105,
-      "floor": 8,
-      "gen": "gen7",
-      "model": "qwen3:8b",
-      "run_id": "TZBY09ZUE5",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 106,
-      "floor": 8,
-      "gen": "gen7",
-      "model": "qwen3:8b",
-      "run_id": "QCPCHGXUN8",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 107,
-      "floor": 23,
-      "gen": "gen8",
-      "model": "qwen3:8b",
-      "run_id": "Q6FEXAK531",
-      "character": "The Silent"
-    },
-    {
-      "run_number": 108,
-      "floor": 5,
-      "gen": "gen8",
-      "model": "qwen3:8b",
-      "run_id": "B6HP2HBFHD",
+      "gen": "gen12",
+      "checkpoint": "gen_0180.pt",
+      "run_id": "VP51KDWDF8",
       "character": "The Silent"
     }
   ],
   "gen_boundaries": {
-    "gen1": 28,
-    "gen2": 33,
-    "gen3": 36,
-    "gen4": 39,
-    "gen5": 51,
-    "gen6": 92,
-    "gen7": 106,
-    "gen8": 108
+    "gen10": 37,
+    "gen11": 44,
+    "gen12": 59
   }
 }

@@ -71,11 +71,13 @@ class Runner:
         poll_interval: float = 1.0,
         character: str = DEFAULT_CHARACTER,
         logs_dir: str | Path | None = None,
+        gen: str | None = None,
     ):
         self.step_mode = step_mode
         self.dry_run = dry_run
         self.poll_interval = poll_interval
         self.character = character
+        self._gen_name = gen
 
         self.console = Console()
         self.client = GameClient()
@@ -83,6 +85,12 @@ class Runner:
         self.game_data = None
         self.advisor = None
         self.logger = RunLogger(logs_dir=Path(logs_dir) if logs_dir else None)
+
+        # Structured event store (SQLite + Supabase + WebSocket)
+        from .run_store import RunStore
+        from .event_server import get_event_server
+        self.store = RunStore(event_server=get_event_server())
+        self._store_run_started = False
 
         self.game_state: dict | None = None
         self.turn_count = 0
@@ -342,6 +350,22 @@ class Runner:
 
         self.logger.ensure_run(self.game_state)
 
+        # Start a store run if we haven't yet for this run_id
+        if not self._store_run_started:
+            run = self.game_state.get("run") or {}
+            run_id = self.game_state.get("run_id") or run.get("run_id")
+            if run_id:
+                self.store.start_run(
+                    run_id=run_id,
+                    character=run.get("character", self.character),
+                    checkpoint=getattr(self, "_checkpoint_name", None),
+                    gen=getattr(self, "_gen_name", None),
+                    hp=run.get("current_hp"),
+                    max_hp=run.get("max_hp"),
+                )
+                self._store_run_started = True
+                self._store_run_id = run_id
+
         screen = self.game_state.get("screen", "")
 
         # Reset card reward tracking when we leave the reward screen
@@ -366,6 +390,14 @@ class Runner:
             if stuck_duration > 60:
                 self._log_action("[red]Stuck for >60s on deck select — forcing run end[/red]")
                 self.logger.log_run_end(self.game_state, "stuck")
+                if self._store_run_started:
+                    run = self.game_state.get("run") or {}
+                    self.store.end_run(
+                        self._store_run_id, outcome="stuck",
+                        floor=run.get("floor", 0),
+                        hp=run.get("current_hp"), max_hp=run.get("max_hp"),
+                    )
+                    self._store_run_started = False
                 return True  # Signal run is finished
 
         in_combat = (
@@ -738,6 +770,14 @@ class Runner:
             self.logger.log_combat_start(gs)
             self._combat_move_indices = {}
 
+            if self._store_run_started:
+                run = gs.get("run") or {}
+                self.store.log_combat_start(
+                    self._store_run_id, floor=run.get("floor", 0),
+                    hp=player.get("current_hp", 0), max_hp=player.get("max_hp", 0),
+                    enemies=[e.get("name", "?") for e in enemies],
+                )
+
         # Potions are now handled by MCTS as part of the action space —
         # the network decides when to use potions during the play loop.
 
@@ -754,6 +794,7 @@ class Runner:
         total_states = 0
         total_solve_ms = 0.0
         best_score = 0.0
+        turn_root_value: float | None = None  # first MCTS value of the turn
         max_cards = 12  # safety cap to prevent infinite loops
 
         while len(cards_played) < max_cards:
@@ -763,13 +804,15 @@ class Runner:
                                           move_indices=self._combat_move_indices)
                 hand = list(sim_state.player.hand)
                 t0 = time.perf_counter()
-                first_action, policy = self._mcts.search(
+                first_action, policy, root_value = self._mcts.search(
                     sim_state, num_simulations=200, temperature=0,
                 )
                 solve_ms = (time.perf_counter() - t0) * 1000
                 total_states += 200
                 total_solve_ms += solve_ms
                 best_score = max(policy) if policy else 0
+                if turn_root_value is None:
+                    turn_root_value = root_value
             except Exception as e:
                 self._log_action(f"[red]MCTS error: {e}[/red]")
                 import traceback
@@ -933,7 +976,22 @@ class Runner:
             states_evaluated=total_states,
             solve_ms=total_solve_ms,
             game_state=turn_start_gs,
+            network_value=turn_root_value,
         )
+
+        if self._store_run_started:
+            run_data = (turn_start_gs.get("run") or {})
+            combat_data = (turn_start_gs.get("combat") or {})
+            player_data = combat_data.get("player") or {}
+            self.store.log_combat_turn(
+                self._store_run_id,
+                floor=run_data.get("floor", 0),
+                turn=turn,
+                hp=player_data.get("current_hp", 0),
+                max_hp=player_data.get("max_hp", 0),
+                cards_played=cards_played,
+                network_value=turn_root_value,
+            )
 
         self.turn_count += 1
 
@@ -954,6 +1012,15 @@ class Runner:
                 if all_dead:
                     self._log_action("[bold green]Combat won![/bold green]")
                     self.logger.log_combat_end(post, "win")
+                    if self._store_run_started:
+                        post_run = post.get("run") or {}
+                        self.store.log_combat_end(
+                            self._store_run_id,
+                            floor=post_run.get("floor", 0),
+                            hp=post_run.get("current_hp", 0),
+                            max_hp=post_run.get("max_hp", 0),
+                            outcome="win", turns=self.turn_count,
+                        )
         except Exception:
             pass
 
@@ -1456,17 +1523,30 @@ class Runner:
 
             with torch.no_grad():
                 best_idx, scores = network.pick_best_option(hidden, opt_types, opt_cards)
+                nv = network.value_head(hidden).item()
+
+            # Build labeled scores for telemetry
+            option_labels = ["Rest"]
+            for di in upgrade_deck_indices:
+                option_labels.append(f"Smith {deck[di].name}")
+            hs = {
+                "head": "option_eval",
+                "chosen": best_idx,
+                "options": [{"label": lbl, "score": round(s, 4)} for lbl, s in zip(option_labels, scores)],
+            }
 
             if best_idx == 0:
                 return Decision("choose_rest_option",
                                 game_rest_idx if game_rest_idx is not None else 0,
-                                f"Network: rest (score={scores[0]:.2f})")
+                                f"Network: rest (score={scores[0]:.2f})",
+                                network_value=nv, head_scores=hs)
             else:
                 card_di = upgrade_deck_indices[best_idx - 1]
                 card_name = deck[card_di].name
                 return Decision("choose_rest_option",
                                 game_upgrade_idx if game_upgrade_idx is not None else 1,
-                                f"Network: upgrade {card_name} (score={scores[best_idx]:.2f})")
+                                f"Network: upgrade {card_name} (score={scores[best_idx]:.2f})",
+                                network_value=nv, head_scores=hs)
         except Exception as e:
             self._log_action(f"  [dim]Network rest failed ({e}), falling back[/dim]")
             return None
@@ -1517,10 +1597,21 @@ class Runner:
 
             with torch.no_grad():
                 best_idx, scores = network.pick_best_option(hidden, opt_types, opt_cards)
+                nv = network.value_head(hidden).item()
+
+            # Build labeled scores for telemetry
+            _OPT_NAMES = {v: k for k, v in ROOM_TYPE_TO_OPTION.items()}
+            option_labels = [f"{_OPT_NAMES.get(ot, '?')} (node {ni})" for ot, ni in zip(opt_types, node_indices)]
+            hs = {
+                "head": "option_eval",
+                "chosen": best_idx,
+                "options": [{"label": lbl, "score": round(s, 4)} for lbl, s in zip(option_labels, scores)],
+            }
 
             chosen_node = node_indices[best_idx]
             return Decision("choose_map_node", chosen_node,
-                            f"Network: node {chosen_node} (score={scores[best_idx]:.2f})")
+                            f"Network: node {chosen_node} (score={scores[best_idx]:.2f})",
+                            network_value=nv, head_scores=hs)
         except Exception as e:
             self._log_action(f"  [dim]Network map failed ({e}), falling back[/dim]")
             return None
@@ -1577,10 +1668,20 @@ class Runner:
 
             with torch.no_grad():
                 best_idx, scores = network.pick_best_option(hidden, opt_types, opt_cards)
+                nv = network.value_head(hidden).item()
+
+            # Build labeled scores for telemetry
+            option_labels = [sa[2] for sa in shop_actions]
+            hs = {
+                "head": "option_eval",
+                "chosen": best_idx,
+                "options": [{"label": lbl, "score": round(s, 4)} for lbl, s in zip(option_labels, scores)],
+            }
 
             action_name, opt_idx, reason = shop_actions[best_idx]
             return Decision(action_name, opt_idx,
-                            f"Network: {reason} (score={scores[best_idx]:.2f})")
+                            f"Network: {reason} (score={scores[best_idx]:.2f})",
+                            network_value=nv, head_scores=hs)
         except Exception as e:
             self._log_action(f"  [dim]Network shop failed ({e}), falling back[/dim]")
             return None
@@ -1637,9 +1738,20 @@ class Runner:
 
             chosen_idx = card_indices[best]
             card_name = cards[best].get("name", "?")
+            nv = network.value_head(hidden).item()
             action = "remove" if is_remove else "upgrade"
+
+            # Build labeled scores for telemetry
+            option_labels = [c.get("name", "?") for c in cards[:len(scores_list)]]
+            hs = {
+                "head": "deck_eval",
+                "chosen": best,
+                "options": [{"label": lbl, "score": round(s, 4)} for lbl, s in zip(option_labels, scores_list)],
+            }
+
             return Decision("select_deck_card", chosen_idx,
-                            f"Network: {action} {card_name} (score={scores_list[best]:.2f})")
+                            f"Network: {action} {card_name} (score={scores_list[best]:.2f})",
+                            network_value=nv, head_scores=hs)
         except Exception as e:
             self._log_action(f"  [dim]Network deck_select failed ({e}), falling back[/dim]")
             return None
@@ -1697,7 +1809,21 @@ class Runner:
                     "option_index": decision.option_index,
                     "reasoning": decision.reasoning,
                 },
-                source="deterministic",
+                source="network" if decision.network_value is not None else "deterministic",
+                network_value=decision.network_value,
+                head_scores=decision.head_scores,
+            )
+
+        if self._store_run_started:
+            self.store.log_decision(
+                self._store_run_id,
+                floor=run.get("floor", 0),
+                hp=run.get("current_hp", 0),
+                max_hp=run.get("max_hp", 0),
+                screen_type=screen_type,
+                choice=decision.reasoning,
+                network_value=decision.network_value,
+                head_scores=decision.head_scores,
             )
 
         # Execute
@@ -1891,12 +2017,30 @@ class Runner:
             )
             self.logger.log_combat_end(gs, "win")
             self.logger.log_run_end(gs, "victory")
+            result = "victory"
         else:
             self._log_action(
                 f"[bold red]DEFEAT[/bold red] Floor {floor} | HP {hp}"
             )
             self.logger.log_combat_end(gs, "defeat")
             self.logger.log_run_end(gs, "defeat")
+            result = "defeat"
+
+        if self._store_run_started:
+            self.store.log_combat_end(
+                self._store_run_id,
+                floor=floor if isinstance(floor, int) else 0,
+                hp=hp, max_hp=run.get("max_hp", 0),
+                outcome="win" if result == "victory" else "defeat",
+                turns=self.turn_count,
+            )
+            self.store.end_run(
+                self._store_run_id, outcome=result,
+                floor=floor if isinstance(floor, int) else 0,
+                hp=hp, max_hp=run.get("max_hp"),
+            )
+            self.store.flush()
+            self._store_run_started = False
 
         self._log_action(
             f"Turns: {self.turn_count} | Actions: {self.action_count}"

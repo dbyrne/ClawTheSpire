@@ -7,3 +7,12 @@ __pycache__/
 *.egg-info/
 sim_results*.csv
 game_log.md
+.claude/
+alphazero_progress.json
+sts2-solver/training*.log
+.env
+.env.local
+supabase/.temp/
+runs.db
+runs.db-wal
+runs.db-shm
