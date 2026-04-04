@@ -731,38 +731,10 @@ class Runner:
             self.logger.log_combat_start(gs)
             self._combat_move_indices = {}
 
-        # Use potions before solving (may use multiple in one turn)
-        potions_used = 0
-        while potions_used < 3 and not self.dry_run:
-            potion_use = self._should_use_potion(gs)
-            if not potion_use:
-                break
-            slot, target = potion_use
-            pot_name = "potion"
-            for p in (gs.get("run") or {}).get("potions", []):
-                if p.get("index") == slot:
-                    pot_name = p.get("name", "potion")
-                    break
-            self._log_action(f"  [magenta]Using {pot_name} (slot {slot})[/magenta]")
-            try:
-                self._execute_with_retry(
-                    "use_potion", option_index=slot, target_index=target,
-                )
-                potions_used += 1
-                time.sleep(0.5)
-                # Re-fetch state after potion use
-                gs = self.client.get_state()
-                self.game_state = gs
-                combat = gs.get("combat") or {}
-                player = combat.get("player") or {}
-                enemies = combat.get("enemies") or []
-                if "play_card" not in gs.get("available_actions", []):
-                    return
-            except Exception as e:
-                self._log_action(f"  [yellow]Potion use failed: {e}[/yellow]")
-                break
+        # Potions are now handled by MCTS as part of the action space —
+        # the network decides when to use potions during the play loop.
 
-        # Snapshot the pre-play state for combat logging (after potions, before cards)
+        # Snapshot the pre-play state for combat logging
         turn_start_gs = gs
 
         # Solve-one-play-re-solve loop: play one card at a time from fresh
@@ -809,6 +781,48 @@ class Runner:
                     f"MCTS: end turn ({solve_ms:.0f}ms)"
                 )
                 break
+
+            # Handle potion usage from MCTS
+            if first_action.action_type == "use_potion":
+                pot_name = "potion"
+                potions_raw = (gs.get("run") or {}).get("potions", [])
+                for p in potions_raw:
+                    if p.get("index") == first_action.potion_idx:
+                        pot_name = p.get("name", "potion")
+                        break
+                label = f"Use {pot_name} (slot {first_action.potion_idx})"
+                cards_played.append(label)
+                targets_chosen.append(first_action.target_idx)
+
+                if not self.dry_run:
+                    mcp_action = action_to_mcp(first_action)
+                    try:
+                        self._execute_with_retry(
+                            mcp_action["action"],
+                            option_index=mcp_action.get("option_index"),
+                            target_index=mcp_action.get("target_index"),
+                        )
+                        self._log_action(f"  [magenta]>[/magenta] {label}")
+                        self.action_count += 1
+                    except Exception as e:
+                        self._log_action(f"  [red]X {label}: {e}[/red]")
+                        break
+
+                    self._refresh()
+                    self._wait_for_ready()
+                    try:
+                        gs = self.client.get_state()
+                        self.game_state = gs
+                    except Exception:
+                        break
+
+                    actions = gs.get("available_actions", [])
+                    if "play_card" not in actions:
+                        break
+                    combat = gs.get("combat") or {}
+                    player = combat.get("player") or {}
+                    enemies = combat.get("enemies") or []
+                continue
 
             # Resolve card name and target for logging
             if first_action.card_idx is not None and first_action.card_idx < len(hand):

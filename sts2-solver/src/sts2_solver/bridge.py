@@ -65,12 +65,43 @@ def state_from_mcp(raw: dict, card_db: CardDB,
     # Predict future enemy intents from move tables
     annotate_predictions(enemies, turns=2, move_indices=move_indices)
 
+    # Parse potions from run state
+    potions_raw = run.get("potions") or []
+    potions = []
+    for p in potions_raw:
+        if not p.get("occupied"):
+            potions.append({})
+            continue
+        name = (p.get("name") or "").lower()
+        desc = (p.get("description") or "").lower()
+        pot: dict = {"name": p.get("name", "?")}
+        # Classify by keywords (matches simulator POTION_TYPES)
+        if any(k in name for k in ("blood", "heal", "fairy", "fruit", "regen")):
+            pot["heal"] = 20
+        elif any(k in name for k in ("block", "ghost", "shield", "iron", "armor")):
+            pot["block"] = 12
+        elif "strength" in name or "flex" in name:
+            pot["strength"] = 2
+        elif any(k in name for k in ("fire", "explosive", "attack")):
+            pot["damage_all"] = 20
+        elif "weak" in name or "fear" in name:
+            pot["enemy_weak"] = 3
+        else:
+            # Unknown potion — skip (empty slot from network's perspective)
+            potions.append({})
+            continue
+        potions.append(pot)
+    player.potions = potions
+
+    gold = run.get("gold", 0)
+
     return CombatState(
         player=player,
         enemies=enemies,
         turn=raw.get("turn", 1),
         relics=relic_ids,
         floor=floor,
+        gold=gold,
     )
 
 
@@ -78,10 +109,16 @@ def action_to_mcp(action: Action) -> dict:
     """Convert a solver Action to MCP act() parameters.
 
     Returns:
-        Dict with 'action', 'card_index', and optionally 'target_index'.
+        Dict with 'action' and relevant indices.
     """
     if action.action_type == "end_turn":
         return {"action": "end_turn"}
+
+    if action.action_type == "use_potion":
+        result = {"action": "use_potion", "option_index": action.potion_idx}
+        if action.target_idx is not None:
+            result["target_index"] = action.target_idx
+        return result
 
     result = {
         "action": "play_card",
