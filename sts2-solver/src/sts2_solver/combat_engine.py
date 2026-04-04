@@ -129,6 +129,62 @@ def play_card(
             and state.attacks_played_this_turn == 3):
         state.player.hand.append(card)
 
+    # --- Relic triggers on card play ---
+    relics = state.relics
+
+    # Pen Nib: every 10th attack deals double damage (approximated as +Strength)
+    # (Complex to implement precisely — skip for now)
+
+    # Kunai: every 3 attacks, gain 1 Dexterity
+    if "KUNAI" in relics and card.card_type == CardType.ATTACK:
+        count = state.player.powers.get("_kunai_count", 0) + 1
+        if count >= 3:
+            state.player.powers["Dexterity"] = state.player.powers.get("Dexterity", 0) + 1
+            count = 0
+        state.player.powers["_kunai_count"] = count
+
+    # Ornamental Fan: every 3 attacks, gain 4 Block
+    if "ORNAMENTAL_FAN" in relics and card.card_type == CardType.ATTACK:
+        count = state.player.powers.get("_fan_count", 0) + 1
+        if count >= 3:
+            state.player.block += calculate_block_gain(4, state)
+            count = 0
+        state.player.powers["_fan_count"] = count
+
+    # Nunchaku: every 10 attacks, gain 1 Energy
+    if "NUNCHAKU" in relics and card.card_type == CardType.ATTACK:
+        count = state.player.powers.get("_nunchaku_count", 0) + 1
+        if count >= 10:
+            state.player.energy += 1
+            count = 0
+        state.player.powers["_nunchaku_count"] = count
+
+    # Letter Opener: every 3 Skills, deal 5 damage to ALL enemies
+    if "LETTER_OPENER" in relics and card.card_type == CardType.SKILL:
+        count = state.player.powers.get("_letter_opener_count", 0) + 1
+        if count >= 3:
+            for enemy in state.enemies:
+                if enemy.is_alive:
+                    dmg = 5
+                    if enemy.block > 0:
+                        if dmg >= enemy.block:
+                            dmg -= enemy.block
+                            enemy.block = 0
+                        else:
+                            enemy.block -= dmg
+                            dmg = 0
+                    enemy.hp -= dmg
+            count = 0
+        state.player.powers["_letter_opener_count"] = count
+
+    # Shuriken: every 3 attacks, gain 1 Strength
+    if "SHURIKEN" in relics and card.card_type == CardType.ATTACK:
+        count = state.player.powers.get("_shuriken_count", 0) + 1
+        if count >= 3:
+            state.player.powers["Strength"] = state.player.powers.get("Strength", 0) + 1
+            count = 0
+        state.player.powers["_shuriken_count"] = count
+
     # --- Move card to appropriate zone ---
     _move_card_after_play(state, card)
 
@@ -202,6 +258,57 @@ def _on_exhaust(state: CombatState) -> None:
 # Turn lifecycle
 # ---------------------------------------------------------------------------
 
+def start_combat(state: CombatState) -> None:
+    """Apply one-time start-of-combat relic effects. Call before first start_turn()."""
+    relics = state.relics
+
+    # Anchor: start combat with 10 Block
+    if "ANCHOR" in relics:
+        state.player.block += 10
+
+    # Blood Vial: heal 2 HP
+    if "BLOOD_VIAL" in relics:
+        state.player.hp = min(state.player.hp + 2, state.player.max_hp)
+
+    # Bronze Scales: start with 3 Thorns
+    if "BRONZE_SCALES" in relics:
+        state.player.powers["Thorns"] = state.player.powers.get("Thorns", 0) + 3
+
+    # Bag of Marbles: apply 1 Vulnerable to ALL enemies
+    if "BAG_OF_MARBLES" in relics:
+        for enemy in state.enemies:
+            if enemy.is_alive:
+                enemy.powers["Vulnerable"] = enemy.powers.get("Vulnerable", 0) + 1
+
+    # Festive Popper: deal 9 damage to ALL enemies
+    if "FESTIVE_POPPER" in relics:
+        for enemy in state.enemies:
+            if enemy.is_alive:
+                dmg = 9
+                if enemy.block > 0:
+                    if dmg >= enemy.block:
+                        dmg -= enemy.block
+                        enemy.block = 0
+                    else:
+                        enemy.block -= dmg
+                        dmg = 0
+                enemy.hp -= dmg
+
+    # Lantern: gain 1 Energy on turn 1
+    if "LANTERN" in relics:
+        state.player.energy += 1
+
+    # Oddly Smooth Stone: gain 1 Dexterity
+    if "ODDLY_SMOOTH_STONE" in relics:
+        state.player.powers["Dexterity"] = state.player.powers.get("Dexterity", 0) + 1
+
+    # Strike Dummy: gain 1 Strength for each Strike in deck
+    if "STRIKE_DUMMY" in relics:
+        strikes = sum(1 for c in state.player.draw_pile if "Strike" in c.name or "Strike" in getattr(c, 'tags', set()))
+        if strikes > 0:
+            state.player.powers["Strength"] = state.player.powers.get("Strength", 0) + strikes
+
+
 def start_turn(state: CombatState) -> None:
     """Begin a new player turn. Mutates state in place."""
     state.turn += 1
@@ -225,6 +332,25 @@ def start_turn(state: CombatState) -> None:
 
     # Start-of-turn power ticks
     _tick_start_of_turn_powers(state)
+
+    # --- Start-of-turn relic effects ---
+    relics = state.relics
+
+    # Ring of the Snake: draw 2 extra on turn 1
+    if "RING_OF_THE_SNAKE" in relics and state.turn == 1:
+        draw_cards(state, 2)
+
+    # Bag of Preparation: draw 2 extra on turn 1
+    if "BAG_OF_PREPARATION" in relics and state.turn == 1:
+        draw_cards(state, 2)
+
+    # Art of War: if no attacks last turn, +1 energy (tracked via power)
+    if "ART_OF_WAR" in relics and state.turn > 1:
+        if state.player.powers.get("_art_of_war_eligible", 0) > 0:
+            state.player.energy += 1
+        state.player.powers.pop("_art_of_war_eligible", None)
+
+    # Nunchaku: tracked via _nunchaku_count power (triggers in play_card)
 
     # Clear turn-duration powers from previous turn
     for power_name in ("Rage", "OneTwoPunch"):
@@ -260,9 +386,20 @@ def end_turn(state: CombatState) -> None:
         effect_fn(state, alive[0])
         state.player.discard_pile.append(card)
 
-    # Cloak Clasp relic: gain 1 Block per card in hand at end of turn
+    # --- End-of-turn relic effects ---
+
+    # Cloak Clasp: gain 1 Block per card in hand
     if "CLOAK_CLASP" in state.relics:
         state.player.block += len(state.player.hand)
+
+    # Art of War: track if no attacks were played (checked next start_turn)
+    if "ART_OF_WAR" in state.relics:
+        if state.attacks_played_this_turn == 0:
+            state.player.powers["_art_of_war_eligible"] = 1
+
+    # Ornamental Fan: reset per-turn counter (count is in play_card)
+    # Kunai: reset per-turn counter
+    # (These use _fan_count and _kunai_count powers, reset at turn start already via clear)
 
     # Infection cards: deal 3 damage per Infection in hand at end of turn
     for card in state.player.hand:
@@ -414,6 +551,24 @@ def _tick_end_of_turn_powers(state: CombatState) -> None:
             state.player.powers[debuff] -= 1
             if state.player.powers[debuff] <= 0:
                 del state.player.powers[debuff]
+
+
+def end_combat_relics(state: CombatState) -> None:
+    """Apply end-of-combat relic effects (healing, etc.). Call after combat ends."""
+    relics = state.relics
+
+    # Burning Blood (Ironclad starter): heal 6 HP
+    if "BURNING_BLOOD" in relics:
+        state.player.hp = min(state.player.hp + 6, state.player.max_hp)
+
+    # Black Blood (Ironclad upgrade): heal 12 HP
+    if "BLACK_BLOOD" in relics:
+        state.player.hp = min(state.player.hp + 12, state.player.max_hp)
+
+    # Meat on the Bone: if HP <= 50%, heal 12
+    if "MEAT_ON_THE_BONE" in relics:
+        if state.player.hp <= state.player.max_hp // 2:
+            state.player.hp = min(state.player.hp + 12, state.player.max_hp)
 
 
 def tick_enemy_powers(state: CombatState) -> None:

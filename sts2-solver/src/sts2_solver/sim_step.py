@@ -17,10 +17,12 @@ from dataclasses import dataclass
 from .actions import Action, END_TURN, enumerate_actions
 from .combat_engine import (
     can_play_card,
+    end_combat_relics,
     end_turn,
     is_combat_over,
     play_card,
     resolve_enemy_intents,
+    start_combat,
     start_turn,
     tick_enemy_powers,
     use_potion,

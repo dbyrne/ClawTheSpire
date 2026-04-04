@@ -23,10 +23,12 @@ import torch
 from ..actions import Action, END_TURN, enumerate_actions
 from ..combat_engine import (
     can_play_card,
+    end_combat_relics,
     end_turn,
     is_combat_over,
     play_card,
     resolve_enemy_intents,
+    start_combat,
     start_turn,
     tick_enemy_powers,
 )
@@ -72,6 +74,20 @@ from .self_play import (
 from ..effects import discard_card_from_hand
 from .state_tensor import encode_state, encode_actions
 
+# Relics that can drop from elites (effects implemented in combat_engine.py)
+ELITE_RELIC_POOL = [
+    "ANCHOR", "BLOOD_VIAL", "BAG_OF_PREPARATION", "BRONZE_SCALES",
+    "BAG_OF_MARBLES", "FESTIVE_POPPER", "LANTERN", "ODDLY_SMOOTH_STONE",
+    "STRIKE_DUMMY", "CLOAK_CLASP", "ART_OF_WAR", "MEAT_ON_THE_BONE",
+    "KUNAI", "ORNAMENTAL_FAN", "NUNCHAKU", "LETTER_OPENER", "SHURIKEN",
+]
+
+# Character starter relics
+STARTER_RELICS = {
+    "SILENT": "RING_OF_THE_SNAKE",
+    "IRONCLAD": "BURNING_BLOOD",
+}
+
 
 # ---------------------------------------------------------------------------
 # MCTS-based combat within a full run
@@ -92,6 +108,7 @@ def mcts_combat(
     temperature: float = 1.0,
     max_turns: int = 30,
     potions: list[dict] | None = None,
+    relics: frozenset[str] | None = None,
 ) -> tuple[list[TrainingSample], str, int, int, list[dict]]:
     """Run one combat using MCTS. Returns (samples, outcome, turns, hp_after, remaining_potions)."""
     _ensure_data_loaded()
@@ -116,7 +133,8 @@ def mcts_combat(
         draw_pile=draw_pile,
         potions=[dict(p) for p in (potions or [])],
     )
-    state = CombatState(player=player, enemies=enemies)
+    state = CombatState(player=player, enemies=enemies, relics=relics or frozenset())
+    start_combat(state)
     samples: list[TrainingSample] = []
     outcome = None
 
@@ -341,6 +359,12 @@ def play_full_run(
     act_data = _ACTS_BY_ID.get("OVERGROWTH", {})
     room_sequence = _generate_act1_map_with_choices(rng)
 
+    # Starter relic
+    relics: set[str] = set()
+    starter_relic = STARTER_RELICS.get(character)
+    if starter_relic:
+        relics.add(starter_relic)
+
     # Run state
     all_samples: list[TrainingSample] = []
     deck_change_samples: list = []
@@ -367,7 +391,7 @@ def play_full_run(
                 network = mcts.network
                 player = PlayerState(hp=hp, max_hp=max_hp, energy=3, max_energy=3,
                                      draw_pile=list(deck))
-                dummy = CombatState(player=player, enemies=[], floor=floor_num, gold=gold)
+                dummy = CombatState(player=player, enemies=[], floor=floor_num, gold=gold, relics=frozenset(relics))
                 st = encode_state(dummy, vocabs, config)
                 st = {k: v.to(mcts.device) for k, v in st.items()}
 
@@ -402,6 +426,7 @@ def play_full_run(
                 card_db=card_db, mcts=mcts, vocabs=vocabs, config=config,
                 rng=rng, mcts_simulations=mcts_simulations,
                 temperature=temperature, potions=potions,
+                relics=frozenset(relics),
             )
             potions_after = len([p for p in potions if p])
             potions_used = max(0, potions_before - potions_after)
@@ -436,15 +461,27 @@ def play_full_run(
                 )
 
             combats_won += 1
-            hp = hp_after
 
-            # Post-combat: gold, healing, card reward
+            # End-of-combat relic effects (healing etc.)
+            # Build a temporary state to apply relic effects
+            _post_player = PlayerState(hp=hp_after, max_hp=max_hp, energy=0, max_energy=0)
+            _post_state = CombatState(player=_post_player, enemies=[], relics=frozenset(relics))
+            end_combat_relics(_post_state)
+            hp = _post_state.player.hp
+
+            # Post-combat: gold, potions, card/relic rewards
             gold_range = GOLD_REWARDS.get(room_type, (10, 20))
             gold += rng.randint(*gold_range)
 
             if rng.random() < POTION_DROP_CHANCE and len(potions) < POTION_SLOTS:
                 pot = rng.choice(POTION_TYPES)
                 potions.append(dict(pot))
+
+            # Elite relic drop
+            if room_type == "elite":
+                available = [r for r in ELITE_RELIC_POOL if r not in relics]
+                if available:
+                    relics.add(rng.choice(available))
 
             if room_type != "boss":
                 offered = _offer_card_rewards(pools, deck)
@@ -478,7 +515,7 @@ def play_full_run(
                 network = mcts.network
                 player = PlayerState(hp=hp, max_hp=max_hp, energy=3, max_energy=3,
                                      draw_pile=list(deck))
-                dummy = CombatState(player=player, enemies=[], floor=floor_num, gold=gold)
+                dummy = CombatState(player=player, enemies=[], floor=floor_num, gold=gold, relics=frozenset(relics))
                 st = encode_state(dummy, vocabs, config)
                 st = {k: v.to(mcts.device) for k, v in st.items()}
 
