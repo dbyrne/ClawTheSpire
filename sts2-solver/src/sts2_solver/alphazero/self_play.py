@@ -33,6 +33,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim import Adam
+from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from ..actions import Action, END_TURN, enumerate_actions
 from ..combat_engine import (
@@ -456,6 +457,7 @@ def train_worker(
     config = EncoderConfig()
     network = STS2Network(vocabs, config)
     optimizer = Adam(network.parameters(), lr=lr)
+    scheduler = CosineAnnealingLR(optimizer, T_max=num_generations, eta_min=1e-5)
     replay_buffer = ReplayBuffer(capacity=50_000)
     deck_buffer = ReplayBuffer(capacity=10_000)
     option_buffer = ReplayBuffer(capacity=10_000)
@@ -555,6 +557,7 @@ def train_worker(
                     option_samples=option_batch,
                     device="cpu",
                 )
+            scheduler.step()
 
         gen_elapsed = time.time() - gen_t0
         total_elapsed = time.time() - t_start
@@ -576,6 +579,7 @@ def train_worker(
             "option_loss": round(o_loss, 4),
             "deck_buffer_size": len(deck_buffer),
             "option_buffer_size": len(option_buffer),
+            "lr": round(scheduler.get_last_lr()[0], 6),
             "mcts_sims": mcts_simulations,
             "games_per_gen": games_per_generation,
             "elapsed": f"{hours}:{mins:02d}:{secs:02d}",
@@ -588,10 +592,11 @@ def train_worker(
 
         # Console output (minimal for headless)
         win_pct = total_wins / max(1, total_games) * 100
+        cur_lr = scheduler.get_last_lr()[0]
         print(
             f"Gen {gen:4d} | games={total_games} win={win_pct:.0f}% | "
             f"loss={total_loss:.3f} (v={v_loss:.3f} p={p_loss:.3f} d={d_loss:.3f} o={o_loss:.3f}) | "
-            f"{gen_elapsed:.1f}s",
+            f"lr={cur_lr:.1e} | {gen_elapsed:.1f}s",
             flush=True,
         )
 
@@ -660,6 +665,7 @@ def train_monitor(progress_file: str | None = None, refresh_rate: float = 1.0):
         st.add_row("Option Loss", f"{stats.get('option_loss', 0):.4f}")
         st.add_row("", "")
         st.add_row("Buffers", f"combat={stats.get('buffer_size', 0):,}  deck={stats.get('deck_buffer_size', 0):,}  option={stats.get('option_buffer_size', 0):,}")
+        st.add_row("Learning Rate", f"{stats.get('lr', 0):.1e}")
         st.add_row("Sims/Move", str(stats.get("mcts_sims", "?")))
         st.add_row("Gen Time", f"{stats.get('gen_time', 0):.1f}s")
         st.add_row("Elapsed", stats.get("elapsed", "0:00"))
