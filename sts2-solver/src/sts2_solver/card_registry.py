@@ -526,6 +526,33 @@ def _burst(card: Card, card_db: CardDB | None) -> CardEffect:
     return effect
 
 
+@register("SEEKER_STRIKE")
+def _seeker_strike(card: Card, card_db: CardDB | None) -> CardEffect:
+    """Deal 6(9) damage. Choose 1 of 3 from Draw Pile to add to Hand."""
+    dmg = 6 if not card.upgraded else 9
+
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        if target_idx is not None:
+            deal_damage(state, target_idx, dmg)
+        # Simplified: draw 1 card (real game shows 3 choices, player picks 1)
+        draw_cards(state, 1)
+    return effect
+
+
+@register("PREDATOR")
+def _predator(card: Card, card_db: CardDB | None) -> CardEffect:
+    """Deal 15(20) damage. Next turn, draw 2(3) cards."""
+    dmg = 15 if not card.upgraded else 20
+    extra_draw = 2 if not card.upgraded else 3
+
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        if target_idx is not None:
+            deal_damage(state, target_idx, dmg)
+        # Track extra draw for next turn via power
+        apply_power_to_player(state, "_predator_draw", extra_draw)
+    return effect
+
+
 @register("STORM_OF_STEEL")
 def _storm_of_steel(card: Card, card_db: CardDB | None) -> CardEffect:
     """Discard hand. Add 1 Shiv per card discarded."""

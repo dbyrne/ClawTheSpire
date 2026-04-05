@@ -373,6 +373,11 @@ def start_turn(state: CombatState) -> None:
             draw_cards(state, 3)
         state.player.powers.pop("_pocketwatch_eligible", None)
 
+    # Predator: draw extra cards this turn (set by Predator card last turn)
+    predator_draw = state.player.powers.pop("_predator_draw", 0)
+    if predator_draw > 0:
+        draw_cards(state, predator_draw)
+
     # Nunchaku: tracked via _nunchaku_count power (triggers in play_card)
 
     # Clear turn-duration powers from previous turn
