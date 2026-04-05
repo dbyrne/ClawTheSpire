@@ -95,6 +95,9 @@ class Runner:
         self.turn_count = 0
         self.action_count = 0
         self._combat_logged = False  # True after combat_start is logged, reset on combat_end
+        self._turn_cards_played = None  # Accumulates cards across mid-turn re-entries
+        self._turn_targets_chosen = None
+        self._turn_start_gs = None
 
         # AlphaZero MCTS (initialized lazily after card_db is loaded)
         self._mcts: AlphaZeroMCTS | None = None
@@ -845,8 +848,7 @@ class Runner:
         # Potions are now handled by MCTS as part of the action space —
         # the network decides when to use potions during the play loop.
 
-        # Snapshot the pre-play state for combat logging
-        turn_start_gs = gs
+        # turn_start_gs is set on first entry (see accumulation block below)
 
         # MCTS with hybrid evaluation: network policy priors guide the
         # search, hand-crafted evaluator scores within-turn states for
@@ -854,8 +856,15 @@ class Runner:
         # multi-turn strategic context.
         from .bridge import action_to_mcp
 
-        cards_played: list[str] = []
-        targets_chosen: list[int | None] = []
+        # Accumulate across re-entries (discard prompts break the play loop
+        # and re-enter _handle_combat; we merge cards from the same turn).
+        if not hasattr(self, '_turn_cards_played') or self._turn_cards_played is None:
+            self._turn_cards_played = []
+            self._turn_targets_chosen = []
+            self._turn_start_gs = gs
+        cards_played = self._turn_cards_played
+        targets_chosen = self._turn_targets_chosen
+        turn_start_gs = self._turn_start_gs
         total_states = 0
         total_solve_ms = 0.0
         best_score = 0.0
@@ -1027,17 +1036,23 @@ class Runner:
                     self._combat_move_indices[key] = idx
 
         # End turn if we're still in combat
+        turn_ended = False
         if not self.dry_run and "end_turn" in gs.get("available_actions", []):
             self._wait_for_ready()
             try:
                 self._execute_with_retry("end_turn")
                 self._log_action("  [green]>[/green] End Turn")
                 self.action_count += 1
+                turn_ended = True
             except Exception as e:
                 self._log_action(f"  [red]X End Turn: {e}[/red]")
 
+        # Only log complete turns (not mid-turn breaks from discard prompts).
+        # Mid-turn snapshots are useless for validation and cause false mismatches.
+        if not turn_ended and not self.dry_run:
+            return
+
         # Capture hand after all plays (before end turn resolves)
-        # Enhancement #2: hand_after lets the validator verify draw effects
         post_play_hand = None
         try:
             post_combat = (gs.get("combat") or {})
@@ -1062,6 +1077,11 @@ class Runner:
             network_value=turn_root_value,
             hand_after=post_play_hand,
         )
+
+        # Reset accumulator for next turn
+        self._turn_cards_played = None
+        self._turn_targets_chosen = None
+        self._turn_start_gs = None
 
         if self._store_run_started:
             run_data = (turn_start_gs.get("run") or {})

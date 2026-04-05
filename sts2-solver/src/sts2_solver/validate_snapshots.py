@@ -949,19 +949,24 @@ def validate_run(run: RunReplay, card_db: CardDB) -> tuple[list[TurnValidation],
             next_turn = snapshot_turns[i + 1]
             next_snap = next_turn.snapshot
 
-            # Skip if next snapshot is mid-turn (captured during a discard
-            # prompt after Survivor/Acrobatics). Detected by: block > 0 at
-            # what should be turn start (block is cleared at start of turn
-            # unless Barricade is active).
+            # Skip mid-turn snapshots (legacy: runner used to log partial turns
+            # when discard prompts interrupted the play loop). Detected by
+            # block > 0 or energy < 3 at what should be turn start.
             has_barricade = next_snap.player_powers.get("Barricade", 0) > 0
-            if next_snap.player_block > 0 and next_snap.turn > 1 and not has_barricade:
+            is_mid_turn = False
+            if next_snap.turn > 1:
+                if next_snap.player_block > 0 and not has_barricade:
+                    is_mid_turn = True
+                elif next_snap.player_energy < 3:
+                    is_mid_turn = True
+            if is_mid_turn:
                 results.append(TurnValidation(
                     combat_idx=combat_idx,
                     turn=snap.turn,
                     cards_played=turn.cards_played,
                     mismatches=[],
                     skipped=True,
-                    skip_reason="next snapshot is mid-turn (block > 0 at turn start)",
+                    skip_reason="next snapshot is mid-turn (energy/block indicate cards already played)",
                 ))
                 continue
 
