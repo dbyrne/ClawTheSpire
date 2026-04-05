@@ -17,6 +17,7 @@ from sts2_solver.combat_engine import (
     start_turn,
     end_turn,
     resolve_enemy_intents,
+    tick_enemy_powers,
     can_play_card,
     effective_cost,
     is_combat_over,
@@ -236,8 +237,10 @@ class TestTurnLifecycle:
         state = _make_state([])
         state.enemies[0].powers["Vulnerable"] = 2
         end_turn(state)
+        tick_enemy_powers(state)
         assert state.enemies[0].powers["Vulnerable"] == 1
         end_turn(state)
+        tick_enemy_powers(state)
         assert "Vulnerable" not in state.enemies[0].powers
 
     def test_combat_over_win(self):
