@@ -95,6 +95,7 @@ class Runner:
         self.game_state: dict | None = None
         self.turn_count = 0
         self.action_count = 0
+        self._combat_logged = False  # True after combat_start is logged, reset on combat_end
 
         # AlphaZero MCTS (initialized lazily after card_db is loaded)
         self._mcts: AlphaZeroMCTS | None = None
@@ -758,8 +759,10 @@ class Runner:
             f"[red]Combat T{turn}[/red] | vs {enemy_str}"
         )
 
-        if turn == 1 or (isinstance(turn, int) and turn <= 1):
-            # Wait briefly for enemy intents to be revealed by the game
+        if not self._combat_logged:
+            # First entry into this combat — log combat_start once.
+            # After deck_select screens (Survivor discard), the game may
+            # re-enter _handle_combat with turn=1, but we don't re-log.
             time.sleep(0.5)
             gs = self.client.get_state()
             self.game_state = gs
@@ -768,6 +771,7 @@ class Runner:
             enemies = combat.get("enemies") or []
 
             self.logger.log_combat_start(gs)
+            self._combat_logged = True
             self._combat_move_indices = {}
 
             if self._store_run_started:
@@ -1028,6 +1032,7 @@ class Runner:
                 if all_dead:
                     self._log_action("[bold green]Combat won![/bold green]")
                     self.logger.log_combat_end(post, "win")
+                    self._combat_logged = False
                     if self._store_run_started:
                         post_run = post.get("run") or {}
                         self.store.log_combat_end(
@@ -2032,6 +2037,7 @@ class Runner:
                 f"[bold green]VICTORY![/bold green] Floor {floor} | HP {hp}"
             )
             self.logger.log_combat_end(gs, "win")
+            self._combat_logged = False
             self.logger.log_run_end(gs, "victory")
             result = "victory"
         else:
@@ -2039,6 +2045,7 @@ class Runner:
                 f"[bold red]DEFEAT[/bold red] Floor {floor} | HP {hp}"
             )
             self.logger.log_combat_end(gs, "defeat")
+            self._combat_logged = False
             self.logger.log_run_end(gs, "defeat")
             result = "defeat"
 
