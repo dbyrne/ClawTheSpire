@@ -1376,17 +1376,20 @@ class Runner:
                     f"prompt: {sel.get('prompt', '?')!r}"
                 )
 
-        # For finished events with only a "Proceed" option, auto-handle
+        # For finished events or events with only one unlocked option, auto-handle
         if screen_type == "event" and "choose_event_option" in actions:
             event = gs.get("event") or {}
             options = event.get("options") or []
+            unlocked = [(i, o) for i, o in enumerate(options) if not o.get("locked")]
             if event.get("finished") or (
                 len(options) == 1 and options[0].get("proceed")
-            ):
-                self._log_action("  [dim]auto: choose_event_option(0) — proceed[/dim]")
+            ) or len(unlocked) == 1:
+                pick_idx = unlocked[0][0] if unlocked else 0
+                label = unlocked[0][1].get("label", "proceed") if unlocked else "proceed"
+                self._log_action(f"  [dim]auto: choose_event_option({pick_idx}) — {label}[/dim]")
                 if not self.dry_run:
                     try:
-                        self._execute_with_retry("choose_event_option", option_index=0)
+                        self._execute_with_retry("choose_event_option", option_index=pick_idx)
                         self.action_count += 1
                     except Exception as e:
                         self._log_action(f"  [red]Failed: {e}[/red]")
