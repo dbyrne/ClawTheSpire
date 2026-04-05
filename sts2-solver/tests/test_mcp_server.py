@@ -87,75 +87,6 @@ def _combat_game_state(hand=None, enemy_hp=20, player_hp=70, turn=1):
 
 
 # ---------------------------------------------------------------------------
-# solve_combat
-# ---------------------------------------------------------------------------
-
-
-class TestSolveCombat:
-    def test_dry_run_returns_actions(self):
-        state = _combat_game_state(enemy_hp=5)
-        result = mcp_mod.solve_combat(
-            raw_state=json.dumps(state), execute=False
-        )
-        assert "MCP actions" in result
-        assert "play_card" in result
-
-    def test_not_in_combat(self):
-        state = _combat_game_state()
-        state["screen"] = "MAP"
-        result = mcp_mod.solve_combat(raw_state=json.dumps(state))
-        assert "Not in combat" in result
-
-    def test_no_playable_cards(self):
-        state = _combat_game_state()
-        state["available_actions"] = ["end_turn"]
-        result = mcp_mod.solve_combat(raw_state=json.dumps(state))
-        assert "No cards can be played" in result
-
-    def test_invalid_json(self):
-        result = mcp_mod.solve_combat(raw_state="not json {{{")
-        assert "Error" in result
-
-    def test_fetches_state_when_none(self):
-        state = _combat_game_state(enemy_hp=5)
-        mock_client = MagicMock()
-        mock_client.get_state.return_value = state
-        mcp_mod._game_client = mock_client
-
-        result = mcp_mod.solve_combat(raw_state=None, execute=False)
-        mock_client.get_state.assert_called_once()
-        assert "Score" in result
-
-    def test_connection_error(self):
-        mock_client = MagicMock()
-        mock_client.get_state.side_effect = ConnectionError("refused")
-        mcp_mod._game_client = mock_client
-
-        result = mcp_mod.solve_combat(raw_state=None, execute=False)
-        assert "Cannot connect" in result
-
-    def test_execute_calls_client(self):
-        state = _combat_game_state(enemy_hp=5)
-        mock_client = MagicMock()
-        mock_client.get_state.return_value = state
-        mock_client.execute_action.return_value = {"status": "completed"}
-        mcp_mod._game_client = mock_client
-
-        result = mcp_mod.solve_combat(raw_state=json.dumps(state), execute=True)
-        # Should have called execute_action at least once (play_card + end_turn)
-        assert mock_client.execute_action.called
-
-    def test_solver_finds_lethal(self):
-        state = _combat_game_state(enemy_hp=5)
-        result = mcp_mod.solve_combat(
-            raw_state=json.dumps(state), execute=False
-        )
-        assert "Score" in result
-        # Strike does 6 damage, enemy has 5 HP — should find lethal
-        assert "play_card" in result
-
-
-# ---------------------------------------------------------------------------
 # advise_strategy
 # ---------------------------------------------------------------------------
 
@@ -181,11 +112,6 @@ class TestAdviseStrategy:
             raw_state=json.dumps(state), execute=False
         )
         assert "proceed" in result.lower()
-
-    def test_combat_screen_rejected(self):
-        state = _combat_game_state()
-        result = mcp_mod.advise_strategy(raw_state=json.dumps(state))
-        assert "solve_combat" in result
 
     def test_connection_error(self):
         mock_client = MagicMock()

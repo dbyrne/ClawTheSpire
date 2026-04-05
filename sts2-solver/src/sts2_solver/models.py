@@ -114,6 +114,7 @@ class CombatState:
     cards_played_this_turn: int = 0
     attacks_played_this_turn: int = 0
     cards_drawn_this_turn: int = 0  # Total draw effects triggered (for scoring)
+    discards_this_turn: int = 0  # Cards discarded by card effects this turn
     last_x_cost: int = 0  # Energy spent on the most recent X-cost card
     relics: frozenset[str] = field(default_factory=frozenset)  # Relic IDs held
     floor: int = 0  # Current floor number (for scaling bonuses)

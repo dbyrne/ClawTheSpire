@@ -30,6 +30,7 @@ class RunLogger:
         self.game_version: str | None = None
         self.metadata: dict[str, Any] = {}  # Extra fields for run_start (model, etc.)
         self._file = None
+        self._path: Path | None = None
         self._run_id: str | None = None
         self._prev_state: dict | None = None
         self._turn_start_hp: int | None = None
@@ -252,23 +253,9 @@ class RunLogger:
         for e in enemies_raw:
             if not e.get("is_alive", True):
                 continue
+            from .bridge import parse_intents
             intents = e.get("intents") or []
-            # Parse intents the same way bridge.py does
-            intent_type = None
-            intent_damage = None
-            intent_hits = 1
-            intent_block = None
-            for intent in intents:
-                it = intent.get("intent_type", "")
-                if it == "Attack":
-                    intent_type = "Attack"
-                    intent_damage = intent.get("damage")
-                    intent_hits = intent.get("hits", 1)
-                elif it == "Defend":
-                    intent_type = intent_type or "Defend"
-                    intent_block = intent.get("block")
-                elif it in ("Buff", "Debuff", "StatusCard"):
-                    intent_type = intent_type or it
+            intent_type, intent_damage, intent_hits, intent_block = parse_intents(intents)
 
             entry = {
                 "name": e.get("name", "?"),
@@ -469,6 +456,7 @@ class RunLogger:
         existing = sorted(self.logs_dir.glob(f"run_{run_id}_*.jsonl"))
         if existing:
             path = existing[-1]  # Use the most recent one
+            self._path = path
             self._file = open(path, "a", encoding="utf-8")
             # Emit a resume marker instead of full run_start
             run = game_state.get("run") or {}
@@ -488,6 +476,7 @@ class RunLogger:
         else:
             ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
             path = self.logs_dir / f"run_{run_id}_{ts}.jsonl"
+            self._path = path
             self._file = open(path, "a", encoding="utf-8")
 
             run = game_state.get("run") or {}
@@ -608,13 +597,19 @@ def _pile_size(game_state: dict, pile: str) -> int:
     return size
 
 
+def _card_display_name(card: dict) -> str:
+    """Get display name (with + for upgraded) from a card dict."""
+    name = card.get("name") or card.get("card_id", "?")
+    if card.get("upgraded"):
+        name += "+"
+    return name
+
+
 def _deck_counts(deck: list[dict]) -> dict[str, int]:
     """Build {card_name: count} from a deck list."""
     counts: dict[str, int] = {}
     for card in deck:
-        name = card.get("name") or card.get("card_id", "?")
-        if card.get("upgraded"):
-            name += "+"
+        name = _card_display_name(card)
         counts[name] = counts.get(name, 0) + 1
     return counts
 
@@ -630,10 +625,4 @@ def _potion_slots(potions: list[dict]) -> dict[int, str | None]:
 
 def _summarize_deck_list(deck: list[dict]) -> list[str]:
     """Return a compact list of card names (with + for upgraded)."""
-    result = []
-    for card in deck:
-        name = card.get("name") or card.get("card_id", "?")
-        if card.get("upgraded"):
-            name += "+"
-        result.append(name)
-    return sorted(result)
+    return sorted(_card_display_name(card) for card in deck)

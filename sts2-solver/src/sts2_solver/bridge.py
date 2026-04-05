@@ -7,6 +7,8 @@ MCP-compatible action parameters.
 
 from __future__ import annotations
 
+import random
+
 from .actions import Action
 from .data_loader import CardDB
 from .enemy_predict import annotate_predictions
@@ -42,12 +44,26 @@ def state_from_mcp(raw: dict, card_db: CardDB,
     # Build hand from runtime card data (has computed values)
     player.hand = [_card_from_runtime(c, card_db) for c in hand_raw]
 
-    # Build draw/discard piles from run data if available
-    run = raw.get("run") or {}
-    # Note: runtime pile data may not have full card objects, just summaries.
-    # For single-turn solving, we mainly need the hand. Piles matter for
-    # draw effects and multi-turn lookahead.
-    # The raw state has draw/discard as card objects in combat view sometimes.
+    # Build draw/discard/exhaust piles from game state.
+    # The game provides card names per pile. We resolve them to Card objects
+    # and shuffle the draw pile — we know *what's* in it but not the order.
+    # This lets MCTS simulate draw effects and multi-turn lookahead.
+    from .run_logger import _parse_pile
+    for pile_name, attr in [("draw", "draw_pile"), ("discard", "discard_pile"),
+                            ("exhaust", "exhaust_pile")]:
+        _, card_names = _parse_pile(raw, pile_name)
+        pile_cards: list[Card] = []
+        for name in card_names:
+            base = name.rstrip("+")
+            upgraded = name.endswith("+")
+            card = card_db.get_by_name(base, upgraded=upgraded)
+            if card is None:
+                card = card_db.get_by_name(base)
+            if card is not None:
+                pile_cards.append(card)
+        if attr == "draw_pile":
+            random.shuffle(pile_cards)  # Unknown order — randomize for MCTS
+        setattr(player, attr, pile_cards)
 
     # Build enemies
     enemies = [_enemy_from_runtime(e) for e in enemies_raw]
@@ -169,12 +185,13 @@ def _card_from_runtime(raw: dict, card_db: CardDB) -> Card:
         damage = dynamic.get("Damage", card.damage)
         block = dynamic.get("Block", card.block)
 
-        # Return a copy with runtime values if they differ
-        if damage != card.damage or block != card.block:
+        # Return a copy with runtime values if they differ from DB
+        runtime_cost = raw.get("energy_cost", card.cost)
+        if damage != card.damage or block != card.block or runtime_cost != card.cost:
             return Card(
                 id=card.id,
                 name=card.name,
-                cost=raw.get("energy_cost", card.cost),
+                cost=runtime_cost,
                 card_type=card.card_type,
                 target=card.target,
                 upgraded=upgraded,
@@ -229,10 +246,11 @@ def _card_from_runtime(raw: dict, card_db: CardDB) -> Card:
     )
 
 
-def _enemy_from_runtime(raw: dict) -> EnemyState:
-    """Build an EnemyState from runtime combat enemy data."""
-    # Parse intents
-    intents = raw.get("intents", [])
+def parse_intents(intents: list[dict]) -> tuple[str | None, int | None, int, int | None]:
+    """Parse a list of intent dicts into (type, damage, hits, block).
+
+    Used by bridge, run_logger, and runner to unify intent parsing.
+    """
     intent_type = None
     intent_damage = None
     intent_hits = 1
@@ -249,6 +267,14 @@ def _enemy_from_runtime(raw: dict) -> EnemyState:
             intent_block = intent.get("block")
         elif it in ("Buff", "Debuff", "StatusCard"):
             intent_type = intent_type or it
+
+    return intent_type, intent_damage, intent_hits, intent_block
+
+
+def _enemy_from_runtime(raw: dict) -> EnemyState:
+    """Build an EnemyState from runtime combat enemy data."""
+    intent_type, intent_damage, intent_hits, intent_block = parse_intents(
+        raw.get("intents", []))
 
     return EnemyState(
         id=raw.get("enemy_id", ""),

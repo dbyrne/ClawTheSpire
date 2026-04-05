@@ -1,23 +1,17 @@
-"""Act 1 run simulator — pure algorithmic, no LLMs.
+"""Act 1 run simulator — shared infrastructure for self-play and training.
 
-Simulates complete Act 1 (Overgrowth) runs using:
-- Existing combat engine + solver for card play optimization
-- Probabilistic enemy AI derived from monster data
+Provides:
+- Enemy spawning, AI, and intent management
 - Card reward pools with rarity weighting
-- Rest sites, events, and a simple map model
-
-Usage:
-    python -m sts2_solver.simulator --runs 1000 --character ironclad
+- Rest sites, events, shop, and map generation
+- run_act1() loop with pluggable RunStrategy
 """
 
 from __future__ import annotations
 
-import argparse
-import csv
 import json
 import math
 import random
-import statistics
 import sys
 import time
 from copy import deepcopy
@@ -26,6 +20,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from .combat_engine import (
+    _enemy_attacks_player,
     can_play_card,
     end_combat_relics,
     end_turn,
@@ -35,12 +30,10 @@ from .combat_engine import (
     start_turn,
     tick_enemy_powers,
 )
-from .config import EVALUATOR, CARD_TIERS, STRATEGY
+from .config import CARD_TIERS, STRATEGY
 from .constants import CardType, TargetType
 from .data_loader import CardDB, load_cards, DEFAULT_DATA_DIR
-from .evaluator import evaluate_turn
 from .models import Card, CombatState, EnemyState, PlayerState
-from .solver import solve_turn
 
 
 # ---------------------------------------------------------------------------
@@ -103,189 +96,201 @@ def _normalize_card_id(raw_id: str) -> str:
 # Enemies cycle through their moves, which produces realistic patterns.
 
 ENEMY_MOVE_TABLES: dict[str, list[dict]] = {
-    # --- Weak encounters ---
-    "NIBBIT": [
-        {"type": "Attack", "damage": 12, "hits": 1},       # Butt
-        {"type": "Attack", "damage": 6, "hits": 2},         # Slice x2
-        {"type": "Buff", "self_strength": 2, "self_block": 5},  # Hiss
-    ],
-    "SHRINKER_BEETLE": [
-        {"type": "Debuff", "player_shrink": 1},                   # Shrinker (applies -1 Strength via Shrink)
-        {"type": "Attack", "damage": 7, "hits": 1},          # Chomp
-        {"type": "Attack", "damage": 13, "hits": 1},         # Stomp
-    ],
-    "FUZZY_WURM_CRAWLER": [
-        {"type": "Debuff", "player_frail": 1, "damage": 4},  # Acid Goop (debuff+damage)
-        {"type": "Attack", "damage": 4, "hits": 1},          # Acid Goop
-        {"type": "Buff", "self_strength": 3},                 # Inhale (charge up)
-    ],
+    # Fallback cycling tables for enemies without enough log data for
+    # a data-driven profile (enemy_profiles.json).  Profiles are checked
+    # first — entries here only matter for enemies NOT in the profile file.
+    #
+    # Currently: only bosses with < 2 observed combats.
 
-    # --- Normal encounters ---
-    "FLYCONID": [
-        {"type": "Debuff", "player_vulnerable": 2},                             # Weakening Spores (no dmg)
-        {"type": "Attack", "damage": 8, "hits": 1, "player_frail": 2},       # Frail Spores + dmg
-        {"type": "Attack", "damage": 11, "hits": 1},                          # Smash
-    ],
-    "FOGMOG": [
-        {"type": "Buff"},                                                   # Illusory Spores (summons Eye)
-        {"type": "Attack", "damage": 8, "hits": 1, "self_strength": 1},   # Thwack (dmg + gain 1 STR)
-        {"type": "Attack", "damage": 14, "hits": 1},                      # Headbutt
-    ],
-    "EYE_WITH_TEETH": [
-        {"type": "StatusCard"},                                            # Distract (adds 3 Dazed)
-    ],
-    "CUBEX_CONSTRUCT": [
-        {"type": "Buff", "self_strength": 2},                # Charge Up
-        {"type": "Attack", "damage": 5, "hits": 2},          # Repeater x2
-        {"type": "Attack", "damage": 5, "hits": 3},          # Repeater x3
-        {"type": "Attack", "damage": 7, "hits": 1},          # Expel Blast
-        {"type": "Defend", "block": 12},                      # Submerge
-    ],
-    "MAWLER": [
-        {"type": "Attack", "damage": 14, "hits": 1},         # Rip and Tear
-        {"type": "Buff", "self_strength": 3},                 # Roar
-        {"type": "Attack", "damage": 4, "hits": 3},          # Claw x3
-    ],
-    "VINE_SHAMBLER": [
-        {"type": "Attack", "damage": 6, "hits": 2},                               # Swipe x2
-        {"type": "Attack", "damage": 8, "hits": 1, "player_tangled": 2},          # Grasping Vines (2 turns)
-        {"type": "Attack", "damage": 16, "hits": 1},                              # Chomp
-    ],
-    "SLITHERING_STRANGLER": [
-        {"type": "Debuff", "player_constrict": 3, "self_block": 5},   # Constrict (+ block)
-        {"type": "Attack", "damage": 7, "hits": 1, "self_block": 5},  # Thwack (dmg + block)
-        {"type": "Attack", "damage": 12, "hits": 1},                  # Lash
-    ],
-    "SNAPPING_JAXFRUIT": [
-        {"type": "Attack", "damage": 3, "hits": 1, "self_strength": 2},  # Energy Orb (dmg + gain 2 STR)
-    ],
-    "INKLET": [
-        {"type": "Attack", "damage": 3, "hits": 1},          # Jab
-        {"type": "Attack", "damage": 2, "hits": 3},          # Whirlwind x3
-        {"type": "Attack", "damage": 10, "hits": 1},         # Piercing Gaze
-    ],
-
-    # Slimes — debuffs are single-turn applications
-    "LEAF_SLIME_M": [
-        {"type": "Attack", "damage": 8, "hits": 1},          # Clump Shot
-        {"type": "Attack", "damage": 8, "hits": 1},          # Clump Shot again
-        {"type": "Debuff", "player_frail": 1},                # Sticky Shot
-    ],
-    "LEAF_SLIME_S": [
-        {"type": "Attack", "damage": 3, "hits": 1},          # Butt
-        {"type": "Attack", "damage": 3, "hits": 1},          # Butt again
-        {"type": "Debuff", "player_weak": 1},                 # Goop
-    ],
-    "TWIG_SLIME_M": [
-        {"type": "Attack", "damage": 11, "hits": 1},         # Clump Shot
-        {"type": "Attack", "damage": 11, "hits": 1},         # Clump Shot again
-        {"type": "Debuff", "player_vulnerable": 1},           # Sticky Shot
-    ],
-    "TWIG_SLIME_S": [
-        {"type": "Attack", "damage": 4, "hits": 1},          # Butt
-    ],
-
-    # Ruby Raiders
-    "ASSASSIN_RUBY_RAIDER": [
-        {"type": "Attack", "damage": 11, "hits": 1},         # Killshot
-    ],
-    "AXE_RUBY_RAIDER": [
-        {"type": "Attack", "damage": 5, "hits": 1, "self_block": 5},  # Swing (dmg + block)
-        {"type": "Attack", "damage": 5, "hits": 1, "self_block": 5},  # Swing (repeats)
-        {"type": "Attack", "damage": 12, "hits": 1, "self_block": 5}, # Big Swing (+ block)
-    ],
-    "BRUTE_RUBY_RAIDER": [
-        {"type": "Attack", "damage": 7, "hits": 1},           # Beat
-        {"type": "Buff", "self_strength": 3},                  # Clap (gain 3 STR)
-    ],
-    "CROSSBOW_RUBY_RAIDER": [
-        {"type": "Defend"},                                             # Reload (no block)
-        {"type": "Attack", "damage": 14, "hits": 1, "self_block": 3},  # Fire! (+ block)
-    ],
-    "TRACKER_RUBY_RAIDER": [
-        {"type": "Debuff", "player_frail": 2},                # Track (applies 2 Frail)
-        {"type": "Attack", "damage": 1, "hits": 8},           # Unleash the Hounds (1x8)
-    ],
-
-    # --- Elites ---
-    "BYGONE_EFFIGY": [
-        {"type": "Buff"},                                     # Initial Sleep (skip)
-        {"type": "Buff", "self_strength": 5},                 # Wake (big buff)
-        {"type": "Buff", "self_strength": 2},                 # Sleep (gaining power)
-        {"type": "Attack", "damage": 15, "hits": 3},         # Slashes x3
-    ],
-    "BYRDONIS": [
-        {"type": "Attack", "damage": 3, "hits": 4},          # Peck x4
-        {"type": "Attack", "damage": 16, "hits": 1},         # Swoop
-    ],
-    "PHROG_PARASITE": [
-        {"type": "Debuff", "player_frail": 2, "player_weak": 2},  # Infect
-        {"type": "Attack", "damage": 4, "hits": 4},               # Lash x4
-    ],
-
-    # --- Bosses ---
+    # --- Bosses (insufficient log data for profiles) ---
     "CEREMONIAL_BEAST": [
-        {"type": "Buff", "self_strength": 3, "self_block": 10},    # Beast Cry (buff+block)
-        {"type": "Attack", "damage": 18, "hits": 1},               # Plow
-        {"type": "Debuff", "player_vulnerable": 2, "player_weak": 2},  # Stun
-        {"type": "Attack", "damage": 15, "hits": 2},               # Stomp x2
-        {"type": "Attack", "damage": 17, "hits": 1},               # Crush
-        {"type": "Buff", "self_strength": 4, "self_block": 15},    # Beast Cry (stronger)
+        {"type": "Buff", "self_strength": 3, "self_block": 10},
+        {"type": "Attack", "damage": 18, "hits": 1},
+        {"type": "Attack", "damage": 18, "hits": 1},
+        {"type": "Attack", "damage": 18, "hits": 1},
+        {"type": "Attack", "damage": 18, "hits": 1},
+        {"type": "Attack", "damage": 18, "hits": 1},
     ],
     "VANTOM": [
-        {"type": "Attack", "damage": 7, "hits": 2},                # Ink Blot x2
-        {"type": "Attack", "damage": 6, "hits": 3},                # Inky Lance x3
-        {"type": "Buff", "self_strength": 4},                       # Prepare
-        {"type": "Attack", "damage": 27, "hits": 1},               # Dismember
-    ],
-    "KIN_FOLLOWER": [
-        {"type": "Attack", "damage": 5, "hits": 2},                # Quick Slash x2
-        {"type": "Attack", "damage": 2, "hits": 4},                # Boomerang x4
-        {"type": "Buff", "all_strength": 2},                       # Power Dance (buffs team)
-    ],
-    "KIN_PRIEST": [
-        {"type": "Debuff", "player_frail": 2, "damage": 8},       # Orb Of Frailty
-        {"type": "Debuff", "player_weak": 2, "damage": 8},        # Orb Of Weakness
-        {"type": "Attack", "damage": 3, "hits": 5},                # Beam x5
-        {"type": "Buff", "all_strength": 3},                       # Ritual (buffs team)
+        {"type": "Attack", "damage": 7, "hits": 1},
+        {"type": "Attack", "damage": 7, "hits": 1},
+        {"type": "Attack", "damage": 6, "hits": 2},
+        {"type": "Attack", "damage": 6, "hits": 2},
+        {"type": "Attack", "damage": 27, "hits": 1},
+        {"type": "Buff", "self_strength": 4},
     ],
 }
+
+# ---------------------------------------------------------------------------
+# Data-driven enemy profiles (generated by build_enemy_profiles.py)
+# ---------------------------------------------------------------------------
+
+_ENEMY_PROFILES: dict[str, dict] | None = None
+
+
+def _load_enemy_profiles() -> dict[str, dict]:
+    """Load enemy profiles from JSON file (cached)."""
+    global _ENEMY_PROFILES
+    if _ENEMY_PROFILES is not None:
+        return _ENEMY_PROFILES
+
+    profile_path = Path(__file__).resolve().parent / "enemy_profiles.json"
+    if profile_path.exists():
+        import json as _json
+        with open(profile_path, encoding="utf-8") as f:
+            _ENEMY_PROFILES = _json.load(f)
+    else:
+        _ENEMY_PROFILES = {}
+    return _ENEMY_PROFILES
+
+
+def _intent_key(intent: dict) -> str:
+    """Create a hashable key for an intent (matches build_enemy_profiles)."""
+    t = str(intent.get("type", "?"))
+    d = intent.get("damage")
+    h = intent.get("hits", 1)
+    if d is not None:
+        return f"{t}_{d}x{h}" if h and h > 1 else f"{t}_{d}"
+    return t
 
 
 @dataclass
 class EnemyAI:
-    """Tracks move cycling for a single enemy instance."""
+    """Tracks move selection for a single enemy instance.
+
+    Supports three modes:
+    - **Profile-based** (hybrid): plays a fixed opening sequence, then
+      uses transition-based weighted random selection.  Profiles are
+      generated from game logs by ``build_enemy_profiles.py``.
+    - **Deterministic cycling**: ``move_table`` is cycled in order.
+    - **Fallback**: raises RuntimeError if nothing matches.
+    """
     monster_id: str
     move_table: list[dict]
     move_index: int = 0
+    # Profile-based fields
+    _profile: dict | None = None
+    _last_key: str = "_start"
 
     def pick_intent(self) -> dict:
-        """Return the next intent dict.
+        """Return the next intent dict."""
+        if self._profile is not None:
+            return self._pick_from_profile()
 
-        Cycles through the hand-coded move table. For enemies without
-        a table, falls back to generic data-driven resolution.
-        """
         if not self.move_table:
-            return {"type": "Attack", "damage": 8, "hits": 1}
+            raise RuntimeError(
+                f"EnemyAI for {self.monster_id!r} has no move table or profile"
+            )
 
         move = self.move_table[self.move_index % len(self.move_table)]
         self.move_index += 1
         return dict(move)  # Copy so caller can mutate
 
+    def _pick_from_profile(self) -> dict:
+        """Pick intent using profile: fixed opening then weighted random."""
+        import random as _rng
+        profile = self._profile
+        fixed = profile.get("fixed_opening", [])
+        moves = profile.get("moves", {})
+
+        # Fixed opening phase
+        if self.move_index < len(fixed):
+            intent = dict(fixed[self.move_index])
+            self.move_index += 1
+            self._last_key = _intent_key(intent)
+            return intent
+
+        # Weighted random phase
+        if self.move_index == len(fixed):
+            # First random move — use start_weights
+            weights = profile.get("start_weights", {})
+        else:
+            # Subsequent — use transition from last move
+            transitions = profile.get("transitions", {})
+            weights = transitions.get(self._last_key, {})
+            if not weights:
+                weights = profile.get("start_weights", {})
+
+        self.move_index += 1
+
+        if not weights:
+            # No random phase data — cycle the fixed opening instead.
+            # This happens with low-sample profiles where all observed
+            # moves fit in the fixed sequence.
+            if fixed:
+                cycle_idx = (self.move_index - 1) % len(fixed)
+                intent = dict(fixed[cycle_idx])
+                self._last_key = _intent_key(intent)
+                return intent
+            raise RuntimeError(
+                f"EnemyAI for {self.monster_id!r}: no weights for "
+                f"state={self._last_key!r} at move_index={self.move_index}"
+            )
+
+        # Weighted random selection
+        keys = list(weights.keys())
+        probs = [weights[k] for k in keys]
+        total = sum(probs)
+        r = _rng.random() * total
+        cumulative = 0.0
+        chosen_key = keys[-1]
+        for k, p in zip(keys, probs):
+            cumulative += p
+            if r <= cumulative:
+                chosen_key = k
+                break
+
+        self._last_key = chosen_key
+        if chosen_key not in moves:
+            raise RuntimeError(
+                f"EnemyAI for {self.monster_id!r}: weighted selection chose "
+                f"{chosen_key!r} but it's not in moves dict. "
+                f"Available: {list(moves.keys())}"
+            )
+        intent = dict(moves[chosen_key])
+        return intent
+
+
+# Aliases for enemies whose encounter data ID differs from their in-game name.
+# Maps encounter_data_id -> canonical_id (used in profiles and move tables).
+_ENEMY_ID_ALIASES: dict[str, str] = {
+    "ASSASSIN_RUBY_RAIDER": "ASSASSIN_RAIDER",
+    "AXE_RUBY_RAIDER": "AXE_RAIDER",
+    "BRUTE_RUBY_RAIDER": "BRUTE_RAIDER",
+    "CROSSBOW_RUBY_RAIDER": "CROSSBOW_RAIDER",
+    "TRACKER_RUBY_RAIDER": "TRACKER_RAIDER",
+}
+
 
 def _create_enemy_ai(monster_id: str) -> EnemyAI:
-    """Create an EnemyAI for a monster from data."""
+    """Create an EnemyAI for a monster from data.
+
+    Raises RuntimeError if no profile, move table, or monster data exists
+    for the given ID. Silent fallbacks hide bugs — fail loudly instead.
+    """
     _ensure_data_loaded()
 
-    # Use hand-coded table if available
-    if monster_id in ENEMY_MOVE_TABLES:
+    # Resolve aliases (e.g. ASSASSIN_RUBY_RAIDER -> ASSASSIN_RAIDER)
+    canonical = _ENEMY_ID_ALIASES.get(monster_id, monster_id)
+
+    # Use data-driven profile if available
+    profiles = _load_enemy_profiles()
+    if canonical in profiles:
         return EnemyAI(
-            monster_id=monster_id,
-            move_table=ENEMY_MOVE_TABLES[monster_id],
+            monster_id=canonical,
+            move_table=[],
+            _profile=profiles[canonical],
+        )
+
+    # Use hand-coded cycling table if available
+    if canonical in ENEMY_MOVE_TABLES:
+        return EnemyAI(
+            monster_id=canonical,
+            move_table=ENEMY_MOVE_TABLES[canonical],
         )
 
     # Fallback: build a simple table from monsters.json
-    monster = _MONSTERS_BY_ID.get(monster_id, {})
+    monster = _MONSTERS_BY_ID.get(canonical, {}) or _MONSTERS_BY_ID.get(monster_id, {})
     damage_values = monster.get("damage_values") or {}
     moves = monster.get("moves", [])
 
@@ -297,13 +302,21 @@ def _create_enemy_ai(monster_id: str) -> EnemyAI:
         if damage is not None:
             table.append({"type": "Attack", "damage": damage, "hits": 1})
         else:
-            # Unknown move — assume light buff
             table.append({"type": "Buff", "self_strength": 1})
 
     if not table:
-        table = [{"type": "Attack", "damage": 8, "hits": 1}]
+        raise RuntimeError(
+            f"No move data for enemy {monster_id!r} (canonical={canonical!r}). "
+            f"Add a profile via build_enemy_profiles, a move table in "
+            f"ENEMY_MOVE_TABLES, or an alias in _ENEMY_ID_ALIASES."
+        )
 
-    return EnemyAI(monster_id=monster_id, move_table=table)
+    import logging as _log
+    _log.getLogger(__name__).warning(
+        "Enemy %s using auto-generated move table from monsters.json — "
+        "add a profile or hand-coded table for accuracy", canonical)
+
+    return EnemyAI(monster_id=canonical, move_table=table)
 
 
 def _match_damage(move_name: str, move_id: str, damage_values: dict) -> int | None:
@@ -513,80 +526,154 @@ def _pick_card_reward(offered: list[Card], deck: list[Card]) -> Card | None:
 ROOM_TYPE = str  # "weak", "normal", "elite", "rest", "event", "boss", "shop"
 
 
-def _generate_act1_map(rng: random.Random) -> list[ROOM_TYPE]:
-    """Generate a sequence of rooms for Act 1.
-
-    Based on real game logs: 17 rooms total, boss on floor 17.
-    Simulates path choice by varying encounter types — the real game has
-    branching paths where players can dodge hard encounters.
-    """
-    rooms: list[ROOM_TYPE] = []
-
-    # Floor 1-3: weak encounters (easy early game)
-    rooms.append("weak")
-    rooms.append("weak")
-    rooms.append("weak")
-
-    # Floor 4-9: mix of normal, event, shop, treasure (mid-act)
-    mid_rooms = ["normal", "normal", "normal", "event", "treasure", "shop"]
-    rng.shuffle(mid_rooms)
-    rooms.extend(mid_rooms)
-
-    # Floor 10: rest site
-    rooms.append("rest")
-
-    # Floor 11-14: normal + elite (tougher section, +1 room vs old map)
-    late_rooms = ["normal", "elite", rng.choice(["normal", "event"]),
-                  rng.choice(["event", "shop"])]
-    rng.shuffle(late_rooms)
-    rooms.extend(late_rooms)
-
-    # Floor 15: event or shop (breathing room before boss)
-    rooms.append(rng.choice(["event", "shop"]))
-
-    # Floor 16: rest (pre-boss)
-    rooms.append("rest")
-
-    # Floor 17: boss
-    rooms.append("boss")
-
-    return rooms
-
-
 def _generate_act1_map_with_choices(rng: random.Random) -> list:
-    """Generate Act 1 map with player-facing choices at some floors.
+    """Generate Act 1 map from real game data or synthetic fallback.
 
-    Based on real game logs: 17 rooms total, boss on floor 17.
+    Tries to load a real map from the map pool (built by build_map_pool.py).
+    If available, walks the map graph row by row, presenting reachable node
+    types as choices. Otherwise falls back to synthetic generation.
+
     Returns a list where each entry is either a single room type string
     (forced) or a list of 2-3 room type strings (player chooses).
     """
+    real_map = _pick_real_map(rng)
+    if real_map is not None:
+        return _walk_real_map(real_map, rng)
+
+    # Synthetic fallback (used only if no map_pool.json exists)
     rooms: list = []
-
-    # Floor 1-3: forced weak
     rooms.extend(["weak", "weak", "weak"])
-
-    # Floor 4-9: each offers 2-3 choices from the mid-act pool
     mid_pool = ["normal", "event", "shop", "elite", "treasure"]
     for _ in range(6):
         k = rng.choice([2, 3])
         rooms.append(rng.sample(mid_pool, k=k))
-
-    # Floor 10: forced rest
     rooms.append("rest")
-
-    # Floor 11-14: harder choices (+1 room vs old map)
     late_pool = ["normal", "elite", "event", "rest"]
     for _ in range(4):
         rooms.append(rng.sample(late_pool, k=2))
-
-    # Floor 15: event or shop
     rooms.append(rng.sample(["event", "shop"], k=2))
-
-    # Floor 16: forced rest (pre-boss)
     rooms.append("rest")
-
-    # Floor 17: forced boss
     rooms.append("boss")
+    return rooms
+
+
+# Node type → sim room type.  "Monster" is split into weak/normal by row.
+_NODE_TYPE_MAP = {
+    "Monster": "normal",  # overridden to "weak" for early rows
+    "Elite": "elite",
+    "Boss": "boss",
+    "Unknown": "event",
+    "RestSite": "rest",
+    "Shop": "shop",
+    "Treasure": "treasure",
+    "Ancient": "event",  # Neow event
+}
+
+# Rows below this threshold map Monster → "weak" instead of "normal"
+_WEAK_ROW_THRESHOLD = 4
+
+
+_MAP_POOL: list[dict] | None = None
+
+
+def _pick_real_map(rng: random.Random) -> dict | None:
+    """Load a random map from the pool (cached)."""
+    global _MAP_POOL
+    if _MAP_POOL is None:
+        pool_path = Path(__file__).resolve().parent / "map_pool.json"
+        if pool_path.exists():
+            import json as _json
+            with open(pool_path, encoding="utf-8") as f:
+                _MAP_POOL = _json.load(f)
+        else:
+            _MAP_POOL = []
+    if not _MAP_POOL:
+        return None
+    return rng.choice(_MAP_POOL)
+
+
+def _walk_real_map(map_data: dict, rng: random.Random) -> list:
+    """Convert a real map graph into a room sequence with choices.
+
+    Walks from the start node (row 0) to the boss, presenting
+    reachable children at each step as room type choices.
+    """
+    nodes = map_data["nodes"]
+    by_pos: dict[tuple[int, int], dict] = {}
+    for n in nodes:
+        by_pos[(n["row"], n["col"])] = n
+
+    # Find start node (row 0)
+    start = next((n for n in nodes if n["row"] == 0), None)
+    if not start:
+        return ["boss"]  # degenerate
+
+    rooms: list = []
+    current_nodes = [start]
+
+    # Include the Ancient/Neow node as floor 1 (event) so the room
+    # sequence has 17 entries and floor numbering matches the real game.
+    rooms.append("event")
+
+    # Advance to row 1 children
+    children_set: set[tuple[int, int]] = set()
+    for n in current_nodes:
+        for c in n.get("children", []):
+            children_set.add((c["row"], c["col"]))
+    if children_set:
+        current_nodes = [by_pos[pos] for pos in children_set if pos in by_pos]
+
+    while current_nodes:
+        # Convert current reachable nodes to room types
+        row = current_nodes[0]["row"]
+        choices: list[str] = []
+        choice_nodes: list[dict] = []
+        for n in current_nodes:
+            nt = n.get("node_type", "Monster")
+            rt = _NODE_TYPE_MAP.get(nt, "normal")
+            if nt == "Monster" and row < _WEAK_ROW_THRESHOLD:
+                rt = "weak"
+            choices.append(rt)
+            choice_nodes.append(n)
+
+        if len(choices) == 1:
+            rooms.append(choices[0])
+            chosen_node = choice_nodes[0]
+        else:
+            # Deduplicate choice labels but keep node mapping
+            # Present unique room types as choices; if multiple nodes
+            # share a type, one is picked randomly after the strategy chooses.
+            unique_types = list(dict.fromkeys(choices))
+            if len(unique_types) == 1:
+                rooms.append(unique_types[0])
+                chosen_node = rng.choice(choice_nodes)
+            else:
+                rooms.append(unique_types)
+                # The actual node selection happens at play time via
+                # pick_map_path — we store enough info to resolve it.
+                # For now, pre-select a random node per type.
+                chosen_node = None  # Resolved below
+
+        # Advance to children of the chosen node(s)
+        if chosen_node is not None:
+            # Single choice or forced — advance from this node
+            children_set = set()
+            for c in chosen_node.get("children", []):
+                children_set.add((c["row"], c["col"]))
+        else:
+            # Multiple choices — we don't know which the strategy will pick.
+            # Collect ALL possible next nodes (union of all children).
+            # This is an approximation: in reality the strategy picks one
+            # path, but for the room sequence we need to commit now.
+            # Pick a random node from each type bucket.
+            children_set = set()
+            for n in choice_nodes:
+                for c in n.get("children", []):
+                    children_set.add((c["row"], c["col"]))
+
+        if not children_set:
+            break
+        current_nodes = [by_pos[pos] for pos in children_set if pos in by_pos]
 
     return rooms
 
@@ -651,183 +738,8 @@ POTION_TYPES = [
 
 
 # ---------------------------------------------------------------------------
-# Combat simulation
+# Enemy intent management
 # ---------------------------------------------------------------------------
-
-MAX_COMBAT_TURNS = 30  # Safety cap
-
-
-@dataclass
-class CombatResult:
-    outcome: str  # "win" or "lose"
-    turns: int
-    hp_before: int
-    hp_after: int
-    encounter_id: str
-    gold_earned: int = 0
-
-
-def simulate_combat(
-    deck: list[Card],
-    player_hp: int,
-    player_max_hp: int,
-    player_max_energy: int,
-    encounter_id: str,
-    card_db: CardDB,
-    rng: random.Random,
-    potions: list[dict] | None = None,
-    solver_time_limit_ms: float = 500.0,
-) -> tuple[CombatResult, list[dict]]:
-    """Run a full combat from start to finish using the solver.
-
-    Returns (CombatResult, remaining_potions).
-    """
-    _ensure_data_loaded()
-    enc = _ENCOUNTERS_BY_ID.get(encounter_id, {})
-    monster_list = enc.get("monsters", [])
-    potions = list(potions) if potions else []
-
-    # Spawn enemies
-    enemies: list[EnemyState] = []
-    enemy_ais: list[EnemyAI] = []
-    for m in monster_list:
-        mid = m["id"]
-        enemy = _spawn_enemy(mid)
-        enemies.append(enemy)
-        enemy_ais.append(_create_enemy_ai(mid))
-
-    if not enemies:
-        return CombatResult("win", 0, player_hp, player_hp, encounter_id), potions
-
-    # Build player state
-    draw_pile = list(deck)
-    rng.shuffle(draw_pile)
-
-    player = PlayerState(
-        hp=player_hp,
-        max_hp=player_max_hp,
-        energy=player_max_energy,
-        max_energy=player_max_energy,
-        draw_pile=draw_pile,
-    )
-
-    state = CombatState(player=player, enemies=enemies)
-
-    hp_before = player_hp
-
-    # Use pre-combat potions (strength, block on turn 1)
-    potions = _use_precombat_potions(state, potions)
-
-    # Set initial enemy intents
-    _set_enemy_intents(state, enemy_ais)
-
-    for turn_num in range(1, MAX_COMBAT_TURNS + 1):
-        # Start player turn
-        start_turn(state)
-
-        # Check combat over (enemy might have died from start-of-turn effects)
-        result = is_combat_over(state)
-        if result:
-            return CombatResult(
-                result, turn_num, hp_before,
-                max(0, state.player.hp), encounter_id,
-            ), potions
-
-        # Emergency potion use: heal if HP critically low
-        if state.player.hp < state.player.max_hp * 0.25:
-            potions = _use_emergency_potion(state, potions)
-
-        # Solve: find best card play sequence
-        solve_result = solve_turn(
-            state, card_db=card_db,
-            time_limit_ms=solver_time_limit_ms,
-        )
-
-        # Execute the solver's chosen actions
-        for action in solve_result.actions:
-            if action.action_type == "end_turn":
-                break
-            if action.card_idx is not None:
-                try:
-                    play_card(state, action.card_idx,
-                              target_idx=action.target_idx, card_db=card_db)
-                except (IndexError, ValueError):
-                    break
-
-            result = is_combat_over(state)
-            if result:
-                return CombatResult(
-                    result, turn_num, hp_before,
-                    max(0, state.player.hp), encounter_id,
-                ), potions
-
-        # End player turn
-        end_turn(state)
-
-        # Resolve enemy intents (damage to player)
-        resolve_enemy_intents(state)
-        # Apply buff/debuff effects from the move tables
-        _resolve_sim_intents(state, enemy_ais)
-        # Tick enemy debuffs/poison AFTER intents resolve
-        tick_enemy_powers(state)
-
-        result = is_combat_over(state)
-        if result:
-            return CombatResult(
-                result, turn_num, hp_before,
-                max(0, state.player.hp), encounter_id,
-            ), potions
-
-        # Set new enemy intents for next turn
-        _set_enemy_intents(state, enemy_ais)
-
-    # Ran out of turns — treat as loss
-    return CombatResult("lose", MAX_COMBAT_TURNS, hp_before,
-                        max(0, state.player.hp), encounter_id), potions
-
-
-def _use_precombat_potions(
-    state: CombatState, potions: list[dict],
-) -> list[dict]:
-    """Use offensive potions at combat start (Strength, Fire, Weak)."""
-    remaining = []
-    for pot in potions:
-        used = False
-        if pot.get("strength"):
-            state.player.powers["Strength"] = (
-                state.player.powers.get("Strength", 0) + pot["strength"]
-            )
-            used = True
-        elif pot.get("damage_all"):
-            for e in state.enemies:
-                if e.is_alive:
-                    e.hp -= pot["damage_all"]
-            used = True
-        elif pot.get("enemy_weak"):
-            for e in state.enemies:
-                if e.is_alive:
-                    e.powers["Weak"] = e.powers.get("Weak", 0) + pot["enemy_weak"]
-            used = True
-        if not used:
-            remaining.append(pot)
-    return remaining
-
-
-def _use_emergency_potion(
-    state: CombatState, potions: list[dict],
-) -> list[dict]:
-    """Use a healing potion if available."""
-    remaining = []
-    healed = False
-    for pot in potions:
-        if pot.get("heal") and not healed:
-            state.player.hp = min(
-                state.player.hp + pot["heal"], state.player.max_hp
-            )
-            healed = True
-        else:
-            remaining.append(pot)
-    return remaining
 
 
 def _set_enemy_intents(state: CombatState, ais: list[EnemyAI]) -> None:
@@ -907,6 +819,11 @@ def _resolve_sim_intents(state: CombatState, ais: list[EnemyAI]) -> None:
                 state.player.powers.get("Tangled", 0)
                 + intent["player_tangled"]
             )
+
+        # Debuff intents with damage (e.g. Fuzzy Wurm Crawler Acid Goop,
+        # Kin Priest orbs) — resolve_enemy_intents only handles Attack type.
+        if intent.get("type") == "Debuff" and intent.get("damage"):
+            _enemy_attacks_player(state, enemy)
 
         ai._pending_intent = None
 
@@ -1228,6 +1145,16 @@ ELITE_RELIC_POOL = [
     "GAME_PIECE", "POCKETWATCH",
 ]
 
+
+def _grant_random_relic(relics: set, rng) -> bool:
+    """Grant a random elite relic not already owned. Returns True if granted."""
+    available = [r for r in ELITE_RELIC_POOL if r not in relics]
+    if available:
+        relics.add(rng.choice(available))
+        return True
+    return False
+
+
 # Character starter relics
 STARTER_RELICS = {
     "SILENT": "RING_OF_THE_SNAKE",
@@ -1321,104 +1248,16 @@ class RunResult:
     _boss_floors: set = field(default_factory=set)
 
 
-class HeuristicStrategy:
-    """Strategy that uses the heuristic solver for combat and algorithmic card picks."""
-
-    def __init__(self, card_db: CardDB, solver_time_limit_ms: float = 200.0):
-        self.card_db = card_db
-        self.solver_time_limit_ms = solver_time_limit_ms
-
-    def fight_combat(self, deck, hp, max_hp, max_energy, encounter_id, card_db,
-                     rng, potions, relics):
-        combat_result, remaining_potions = simulate_combat(
-            deck=deck, player_hp=hp, player_max_hp=max_hp,
-            player_max_energy=max_energy, encounter_id=encounter_id,
-            card_db=card_db, rng=rng, potions=potions,
-            solver_time_limit_ms=self.solver_time_limit_ms,
-        )
-        return StrategyCombatResult(
-            outcome=combat_result.outcome,
-            turns=combat_result.turns,
-            hp_after=combat_result.hp_after,
-            potions_after=remaining_potions,
-            samples=[],
-        )
-
-    def pick_card_reward(self, offered, deck, hp, max_hp, floor, card_db, pools):
-        pick = _pick_card_reward(offered, deck)
-        return (pick, None)
-
-    def rest_or_smith(self, hp, max_hp, deck, card_db, rng, floor, gold, relics):
-        decision = _rest_site_decision(hp, max_hp, deck, card_db, rng)
-        if decision["action"] == "rest":
-            action_dict = {"action": "rest", "hp_delta": decision["hp_delta"]}
-        else:
-            idx = decision["upgrade_card_idx"]
-            upgraded = None
-            if idx is not None and idx < len(deck):
-                upgraded = card_db.get_upgraded(deck[idx].id)
-            action_dict = {"action": "smith", "card_idx": idx, "upgraded_card": upgraded}
-        return (action_dict, [])
-
-    def shop_decisions(self, deck, hp, max_hp, gold, potions, relics, floor,
-                       card_db, pools, rng):
-        shop_result = _simulate_shop(deck, gold, card_db, pools, rng)
-        return ShopResult(
-            gold_spent=-shop_result["gold_delta"],
-            cards_added=shop_result.get("cards_added", []),
-            cards_removed=sorted(shop_result.get("cards_removed", []), reverse=True),
-            potions_added=[],
-            samples=[],
-        )
-
-    def pick_map_path(self, choices, deck, hp, max_hp, gold, floor, relics):
-        import random as _random
-        idx = _random.Random().randint(0, len(choices) - 1)
-        return (idx, [])
-
-    def pick_neow_bonus(self, deck, relics, gold, card_db, pools, rng):
-        neow_bonus = rng.choice(["remove_strike", "gain_relic", "upgrade_card",
-                                 "gain_gold", "transform"])
-        if neow_bonus == "remove_strike":
-            strikes = [i for i, c in enumerate(deck) if "Strike" in c.name]
-            if strikes:
-                deck.pop(rng.choice(strikes))
-        elif neow_bonus == "gain_relic":
-            available = [r for r in ELITE_RELIC_POOL if r not in relics]
-            if available:
-                relics.add(rng.choice(available))
-        elif neow_bonus == "upgrade_card":
-            upgradeable = [(i, c) for i, c in enumerate(deck)
-                           if not c.upgraded and c.card_type.value not in ("Status", "Curse")]
-            if upgradeable:
-                idx, card = rng.choice(upgradeable)
-                up = card_db.get_upgraded(card.id)
-                if up:
-                    deck[idx] = up
-        elif neow_bonus == "gain_gold":
-            return 100
-        elif neow_bonus == "transform":
-            strikes = [i for i, c in enumerate(deck) if "Strike" in c.name]
-            for _ in range(min(2, len(strikes))):
-                if strikes:
-                    idx = strikes.pop(rng.randrange(len(strikes)))
-                    offered = _offer_card_rewards(pools, deck, 1)
-                    if offered:
-                        deck[idx] = offered[0]
-        return 0
-
-
 def run_act1(
     strategy: RunStrategy,
     character: str = "SILENT",
     seed: int | None = None,
     card_db: CardDB | None = None,
-    use_choice_map: bool = True,
 ) -> RunResult:
     """Shared Act 1 run loop with pluggable strategy.
 
     Args:
-        strategy: A RunStrategy implementation (HeuristicStrategy or MCTSStrategy).
+        strategy: A RunStrategy implementation (e.g., MCTSStrategy).
         character: Character ID (e.g., "SILENT", "IRONCLAD").
         seed: Random seed for reproducibility.
         card_db: Pre-loaded card database. Loaded if None.
@@ -1468,10 +1307,7 @@ def run_act1(
 
     # Act data + map
     act_data = _ACTS_BY_ID.get("OVERGROWTH", {})
-    if use_choice_map:
-        room_sequence = _generate_act1_map_with_choices(rng)
-    else:
-        room_sequence = _generate_act1_map(rng)
+    room_sequence = _generate_act1_map_with_choices(rng)
 
     # Starter relic
     relics: set[str] = set()
@@ -1479,9 +1315,8 @@ def run_act1(
     if starter_relic:
         relics.add(starter_relic)
 
-    # Neow starting bonus
-    gold_delta = strategy.pick_neow_bonus(deck, relics, gold, card_db, pools, rng)
-    gold += gold_delta
+    # Neow is handled as the floor-1 event in the room sequence
+    # (no separate pick_neow_bonus call needed).
 
     # Run state
     result = RunResult(run_id=0, outcome="lose", floor_reached=0,
@@ -1566,9 +1401,7 @@ def run_act1(
 
             # Elite relic drop
             if room_type == "elite":
-                available = [r for r in ELITE_RELIC_POOL if r not in relics]
-                if available:
-                    relics.add(rng.choice(available))
+                _grant_random_relic(relics, rng)
 
             # Card reward (not for boss)
             if room_type != "boss":
@@ -1609,9 +1442,7 @@ def run_act1(
         elif room_type == "treasure":
             gold += rng.randint(50, 100)
             if rng.random() < 0.25:
-                available = [r for r in ELITE_RELIC_POOL if r not in relics]
-                if available:
-                    relics.add(rng.choice(available))
+                _grant_random_relic(relics, rng)
 
         elif room_type == "event":
             if event_idx < len(events_list):
@@ -1632,9 +1463,7 @@ def run_act1(
                 # Relic gains from events
                 for relic_tag in changes.get("relics_gained", []):
                     if relic_tag == "_random":
-                        available = [r for r in ELITE_RELIC_POOL if r not in relics]
-                        if available:
-                            relics.add(rng.choice(available))
+                        _grant_random_relic(relics, rng)
                     else:
                         relics.add(relic_tag)
                 result.events_visited += 1
@@ -1662,250 +1491,3 @@ def run_act1(
     return result
 
 
-def simulate_act1(
-    run_id: int = 0,
-    character: str = "IRONCLAD",
-    seed: int | None = None,
-    solver_time_limit_ms: float = 200.0,
-    verbose: bool = False,
-) -> RunResult:
-    """Simulate a complete Act 1 (Overgrowth) run.
-
-    Thin wrapper around run_act1() using HeuristicStrategy.
-    """
-    t0 = time.perf_counter()
-    card_db = load_cards()
-    strategy = HeuristicStrategy(card_db=card_db, solver_time_limit_ms=solver_time_limit_ms)
-    result = run_act1(strategy, character=character, seed=seed, card_db=card_db,
-                      use_choice_map=False)
-    result.run_id = run_id
-    result.elapsed_ms = (time.perf_counter() - t0) * 1000
-    return result
-
-
-# ---------------------------------------------------------------------------
-# Batch runner and statistics
-# ---------------------------------------------------------------------------
-
-@dataclass
-class BatchStats:
-    """Aggregated statistics from many runs."""
-    total_runs: int
-    wins: int
-    losses: int
-    win_rate: float
-    avg_floor: float
-    median_floor: float
-    avg_final_hp: float
-    avg_deck_size: float
-    avg_combats_won: float
-    avg_turns_per_combat: float
-    avg_run_time_ms: float
-    total_time_s: float
-    # Death encounter frequency
-    death_encounters: dict[str, int]
-    # Card pick frequency
-    card_picks: dict[str, int]
-    # Floor reached histogram
-    floor_histogram: dict[int, int]
-    # Per-run results for CSV export
-    runs: list[RunResult]
-
-
-def run_batch(
-    num_runs: int = 100,
-    character: str = "IRONCLAD",
-    base_seed: int | None = None,
-    solver_time_limit_ms: float = 200.0,
-    verbose: bool = False,
-    progress: bool = True,
-) -> BatchStats:
-    """Run multiple simulations and collect statistics."""
-    t0 = time.perf_counter()
-    results: list[RunResult] = []
-
-    for i in range(num_runs):
-        seed = (base_seed + i) if base_seed is not None else None
-        r = simulate_act1(
-            run_id=i,
-            character=character,
-            seed=seed,
-            solver_time_limit_ms=solver_time_limit_ms,
-            verbose=verbose,
-        )
-        results.append(r)
-
-        if progress and (i + 1) % max(1, num_runs // 20) == 0:
-            wins = sum(1 for r in results if r.outcome == "win")
-            elapsed = time.perf_counter() - t0
-            rate = (i + 1) / elapsed if elapsed > 0 else 0
-            print(f"  [{i+1}/{num_runs}] Win rate: {wins}/{i+1} "
-                  f"({100*wins/(i+1):.1f}%) | {rate:.1f} runs/sec")
-
-    # Aggregate
-    wins = sum(1 for r in results if r.outcome == "win")
-    floors = [r.floor_reached for r in results]
-    final_hps = [r.final_hp for r in results]
-    deck_sizes = [r.deck_size for r in results]
-    combats_won = [r.combats_won for r in results]
-    total_turns = [r.total_turns for r in results]
-    combats_fought = [r.combats_fought for r in results]
-
-    avg_turns_per = (
-        sum(total_turns) / sum(combats_fought)
-        if sum(combats_fought) > 0 else 0
-    )
-
-    # Death encounters
-    death_enc: dict[str, int] = {}
-    for r in results:
-        if r.death_encounter:
-            death_enc[r.death_encounter] = death_enc.get(r.death_encounter, 0) + 1
-
-    # Card picks
-    card_picks: dict[str, int] = {}
-    for r in results:
-        for name in r.cards_picked:
-            card_picks[name] = card_picks.get(name, 0) + 1
-
-    # Floor histogram
-    floor_hist: dict[int, int] = {}
-    for f in floors:
-        floor_hist[f] = floor_hist.get(f, 0) + 1
-
-    total_time = time.perf_counter() - t0
-
-    return BatchStats(
-        total_runs=num_runs,
-        wins=wins,
-        losses=num_runs - wins,
-        win_rate=wins / num_runs if num_runs > 0 else 0,
-        avg_floor=statistics.mean(floors) if floors else 0,
-        median_floor=statistics.median(floors) if floors else 0,
-        avg_final_hp=statistics.mean(final_hps) if final_hps else 0,
-        avg_deck_size=statistics.mean(deck_sizes) if deck_sizes else 0,
-        avg_combats_won=statistics.mean(combats_won) if combats_won else 0,
-        avg_turns_per_combat=avg_turns_per,
-        avg_run_time_ms=statistics.mean([r.elapsed_ms for r in results]),
-        total_time_s=total_time,
-        death_encounters=death_enc,
-        card_picks=card_picks,
-        floor_histogram=floor_hist,
-        runs=results,
-    )
-
-
-def print_stats(stats: BatchStats) -> None:
-    """Print a formatted summary of batch statistics."""
-    print("\n" + "=" * 60)
-    print(f"  ACT 1 SIMULATION RESULTS  ({stats.total_runs} runs)")
-    print("=" * 60)
-
-    print(f"\n  Win rate:              {stats.wins}/{stats.total_runs} "
-          f"({100*stats.win_rate:.1f}%)")
-    print(f"  Avg floor reached:     {stats.avg_floor:.1f}")
-    print(f"  Median floor reached:  {stats.median_floor:.0f}")
-    print(f"  Avg final HP:          {stats.avg_final_hp:.1f}")
-    print(f"  Avg deck size:         {stats.avg_deck_size:.1f}")
-    print(f"  Avg combats won:       {stats.avg_combats_won:.1f}")
-    print(f"  Avg turns/combat:      {stats.avg_turns_per_combat:.1f}")
-    print(f"  Avg run time:          {stats.avg_run_time_ms:.0f}ms")
-    print(f"  Total time:            {stats.total_time_s:.1f}s")
-
-    if stats.death_encounters:
-        print(f"\n  Deaths by encounter:")
-        sorted_deaths = sorted(stats.death_encounters.items(),
-                               key=lambda x: x[1], reverse=True)
-        for enc, count in sorted_deaths[:10]:
-            pct = 100 * count / stats.losses if stats.losses > 0 else 0
-            print(f"    {enc:40s} {count:4d} ({pct:.1f}%)")
-
-    if stats.card_picks:
-        print(f"\n  Most picked cards:")
-        sorted_picks = sorted(stats.card_picks.items(),
-                              key=lambda x: x[1], reverse=True)
-        for name, count in sorted_picks[:15]:
-            print(f"    {name:30s} {count:4d}")
-
-    if stats.floor_histogram:
-        print(f"\n  Floor reached histogram:")
-        for floor in sorted(stats.floor_histogram.keys()):
-            count = stats.floor_histogram[floor]
-            bar = "#" * (count * 40 // stats.total_runs)
-            print(f"    Floor {floor:2d}: {count:4d} {bar}")
-
-    print()
-
-
-def export_csv(stats: BatchStats, path: str) -> None:
-    """Export per-run results to CSV."""
-    with open(path, "w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow([
-            "run_id", "outcome", "floor_reached", "final_hp", "max_hp",
-            "gold", "deck_size", "combats_won", "combats_fought",
-            "total_turns", "death_encounter", "cards_picked",
-            "cards_skipped", "events_visited", "rests_taken",
-            "upgrades_done", "elapsed_ms",
-        ])
-        for r in stats.runs:
-            writer.writerow([
-                r.run_id, r.outcome, r.floor_reached, r.final_hp, r.max_hp,
-                r.gold, r.deck_size, r.combats_won, r.combats_fought,
-                r.total_turns, r.death_encounter or "",
-                "|".join(r.cards_picked), r.cards_skipped,
-                r.events_visited, r.rests_taken, r.upgrades_done,
-                f"{r.elapsed_ms:.1f}",
-            ])
-    print(f"Exported {len(stats.runs)} runs to {path}")
-
-
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
-
-def main():
-    parser = argparse.ArgumentParser(
-        description="STS2 Act 1 Simulator — pure algorithmic strategy testing"
-    )
-    parser.add_argument("--runs", type=int, default=100,
-                        help="Number of runs to simulate (default: 100)")
-    parser.add_argument("--character", type=str, default="IRONCLAD",
-                        help="Character ID (default: IRONCLAD)")
-    parser.add_argument("--seed", type=int, default=None,
-                        help="Base random seed (default: random)")
-    parser.add_argument("--solver-time", type=float, default=200.0,
-                        help="Solver time limit per turn in ms (default: 200)")
-    parser.add_argument("--csv", type=str, default=None,
-                        help="Export results to CSV file")
-    parser.add_argument("--verbose", action="store_true",
-                        help="Print per-floor progress")
-    parser.add_argument("--no-progress", action="store_true",
-                        help="Suppress progress bar")
-    args = parser.parse_args()
-
-    print(f"STS2 Act 1 Simulator")
-    print(f"  Character: {args.character}")
-    print(f"  Runs: {args.runs}")
-    print(f"  Solver time limit: {args.solver_time}ms/turn")
-    if args.seed is not None:
-        print(f"  Base seed: {args.seed}")
-    print()
-
-    stats = run_batch(
-        num_runs=args.runs,
-        character=args.character,
-        base_seed=args.seed,
-        solver_time_limit_ms=args.solver_time,
-        verbose=args.verbose,
-        progress=not args.no_progress,
-    )
-
-    print_stats(stats)
-
-    if args.csv:
-        export_csv(stats, args.csv)
-
-
-if __name__ == "__main__":
-    main()

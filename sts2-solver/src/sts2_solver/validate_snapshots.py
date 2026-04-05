@@ -148,29 +148,63 @@ def state_from_snapshot(
         hand=hand,
     )
 
-    # Populate draw pile from deck. We know pile sizes from the snapshot
-    # but not which specific cards are in which pile. Put non-hand cards
-    # into draw pile (needed for mid-turn draw effects like Acrobatics).
-    # The pile size checks in compare_states handle validation.
-    if deck:
+    # Populate draw and discard piles from snapshot pile contents (if
+    # logged) or from the deck list.  We need both piles so that shuffles
+    # during the simulated turn work correctly (e.g. Pendulum triggers).
+    if snapshot.draw_pile:
+        # Use logged pile contents — exact card names available
+        for card_name in snapshot.draw_pile:
+            base = card_name.rstrip("+")
+            upgraded = card_name.endswith("+")
+            card = _find_card(base, None, upgraded, card_db)
+            if card is None:
+                card = _find_card(base, None, False, card_db)
+            if card is None:
+                card = _make_fallback_card(base, 1, upgraded)
+            player.draw_pile.append(card)
+        for card_name in (snapshot.discard_pile or []):
+            base = card_name.rstrip("+")
+            upgraded = card_name.endswith("+")
+            card = _find_card(base, None, upgraded, card_db)
+            if card is None:
+                card = _find_card(base, None, False, card_db)
+            if card is None:
+                card = _make_fallback_card(base, 1, upgraded)
+            player.discard_pile.append(card)
+        for card_name in (snapshot.exhaust_pile or []):
+            base = card_name.rstrip("+")
+            upgraded = card_name.endswith("+")
+            card = _find_card(base, None, upgraded, card_db)
+            if card is None:
+                card = _find_card(base, None, False, card_db)
+            if card is None:
+                card = _make_fallback_card(base, 1, upgraded)
+            player.exhaust_pile.append(card)
+    elif deck:
+        # Fallback: distribute deck cards across draw and discard by size
         from collections import Counter
         hand_names = [c.get("name", "") for c in snapshot.hand]
         hand_counts = Counter(hand_names)
         deck_counts = Counter(d.rstrip("+") for d in deck)
 
         target_draw = snapshot.draw_pile_size
+        remaining_cards: list[Card] = []
         for card_name, count in deck_counts.items():
             n_remaining = count - hand_counts.get(card_name, 0)
+            is_upgraded = any(d.endswith("+") and d.rstrip("+") == card_name for d in deck)
             for _ in range(max(0, n_remaining)):
-                if len(player.draw_pile) >= target_draw:
-                    break  # Don't overfill draw pile
-                is_upgraded = any(d.endswith("+") and d.rstrip("+") == card_name for d in deck)
                 card = _find_card(card_name, None, is_upgraded, card_db)
                 if card is None:
                     card = _find_card(card_name, None, False, card_db)
                 if card is None:
                     card = _make_fallback_card(card_name, 1, False)
-                player.draw_pile.append(card)
+                if len(player.draw_pile) < target_draw:
+                    player.draw_pile.append(card)
+                else:
+                    remaining_cards.append(card)
+        # Put overflow into discard pile (up to snapshot size)
+        for card in remaining_cards[:snapshot.discard_pile_size]:
+            player.discard_pile.append(card)
 
     # Build enemies
     enemies: list[EnemyState] = []
@@ -323,6 +357,62 @@ def _resolve_pending_choices(
             break
 
 
+def _apply_potion(state: CombatState, potion_str: str) -> None:
+    """Apply potion effects during combat replay.
+
+    Potion strings look like "Use Fire Potion (slot 0)".
+    """
+    import re
+    name_match = re.match(r"Use (.+?) \(slot \d+\)", potion_str)
+    if not name_match:
+        return
+    potion_name = name_match.group(1).lower()
+
+    alive = [e for e in state.enemies if e.is_alive]
+    if not alive:
+        return
+
+    if "fire potion" in potion_name:
+        # 20 damage to first alive enemy (target unknown, use first)
+        target = alive[0]
+        dmg = 20
+        if state.player.powers.get("Vulnerable", 0) > 0:
+            pass  # Vulnerable is on player, not relevant for potion damage
+        if target.block > 0:
+            if dmg >= target.block:
+                dmg -= target.block
+                target.block = 0
+            else:
+                target.block -= dmg
+                dmg = 0
+        target.hp -= dmg
+    elif "explosive ampoule" in potion_name:
+        # 10 damage to ALL enemies
+        for target in alive:
+            dmg = 10
+            if target.block > 0:
+                if dmg >= target.block:
+                    dmg -= target.block
+                    target.block = 0
+                else:
+                    target.block -= dmg
+                    dmg = 0
+            target.hp -= dmg
+    elif "weak potion" in potion_name:
+        # 3 Weak to first alive enemy
+        target = alive[0]
+        target.powers["Weak"] = target.powers.get("Weak", 0) + 3
+    elif "flex potion" in potion_name:
+        # Gain 5 Strength this turn
+        state.player.powers["Strength"] = state.player.powers.get("Strength", 0) + 5
+    elif "block potion" in potion_name:
+        # Gain 12 Block
+        state.player.block += 12
+    elif "attack potion" in potion_name:
+        # Adds a random attack card to hand — can't simulate, skip
+        pass
+
+
 def simulate_turn(
     state: CombatState,
     cards_played: list[str],
@@ -341,6 +431,11 @@ def simulate_turn(
     s = deepcopy(state)
 
     for card_idx_in_seq, card_name in enumerate(cards_played):
+        # Handle potion usage (logged as "Use X Potion (slot N)")
+        if card_name.startswith("Use ") and "otion" in card_name:
+            _apply_potion(s, card_name)
+            continue
+
         # Find card in hand by name, preferring upgrade match
         match_idx = None
         normalized = card_name.rstrip("+")
@@ -504,6 +599,57 @@ def _apply_move_table_effects(state: CombatState) -> None:
             state.player.powers["Vulnerable"] = (
                 state.player.powers.get("Vulnerable", 0) + matched["player_vulnerable"]
             )
+        if matched.get("player_shrink"):
+            state.player.powers["Shrink"] = (
+                state.player.powers.get("Shrink", 0) - matched["player_shrink"]
+            )
+        if matched.get("player_constrict"):
+            state.player.powers["Constrict"] = (
+                state.player.powers.get("Constrict", 0) + matched["player_constrict"]
+            )
+        if matched.get("player_tangled"):
+            state.player.powers["Tangled"] = (
+                state.player.powers.get("Tangled", 0) + matched["player_tangled"]
+            )
+
+        # Debuff intents with damage — resolve_enemy_intents only handles
+        # Attack type, so Debuff+damage moves (e.g. Fuzzy Wurm Crawler's
+        # Acid Goop) need damage applied here.
+        if matched["type"] == "Debuff" and matched.get("damage"):
+            raw = matched["damage"] + enemy.powers.get("Strength", 0)
+            if raw < 0:
+                raw = 0
+            if enemy.powers.get("Weak", 0) > 0:
+                raw = int(raw * 0.75)
+            if state.player.powers.get("Vulnerable", 0) > 0:
+                raw = int(raw * 1.5)
+            if state.player.block > 0:
+                if raw >= state.player.block:
+                    raw -= state.player.block
+                    state.player.block = 0
+                else:
+                    state.player.block -= raw
+                    raw = 0
+            state.player.hp -= raw
+
+        # Fogmog summons Eye With Teeth on its Buff move
+        if enemy.id == "FOGMOG" and matched["type"] == "Buff":
+            # Only summon if not already present
+            has_eye = any(
+                e.id == "EYE_WITH_TEETH" and e.is_alive
+                for e in state.enemies
+            )
+            if not has_eye:
+                eye = EnemyState(
+                    id="EYE_WITH_TEETH",
+                    name="Eye With Teeth",
+                    hp=6, max_hp=6,
+                    block=0,
+                    intent_type="StatusCard",
+                    intent_damage=None,
+                    intent_hits=1,
+                )
+                state.enemies.append(eye)
 
 
 # ---------------------------------------------------------------------------
@@ -788,8 +934,24 @@ def validate_run(run: RunReplay, card_db: CardDB) -> tuple[list[TurnValidation],
             turn = snapshot_turns[i]
             snap = turn.snapshot
 
-            # Skip mid-turn Survivor splits
-            if snap.turn > 1 and snap.player_energy < 3 and snap.player_block > 0:
+            # Skip mid-turn Survivor splits.
+            # A mid-turn split occurs when Survivor/Acrobatics triggers a
+            # discard selection, creating an extra snapshot mid-turn.
+            # Detect by: only Survivor/Acrobatics played in this snapshot,
+            # or the previous snapshot only played Survivor/Acrobatics
+            # (making this the continuation snapshot).
+            _split_cards = {"Survivor", "Survivor+", "Acrobatics", "Acrobatics+"}
+            _is_split = (snap.turn > 1
+                         and set(turn.cards_played) <= _split_cards
+                         and len(turn.cards_played) <= 1)
+            if i > 0:
+                prev_turn = snapshot_turns[i - 1]
+                _prev_is_split = (set(prev_turn.cards_played) <= _split_cards
+                                  and len(prev_turn.cards_played) <= 1)
+            else:
+                _prev_is_split = False
+
+            if _is_split:
                 results.append(TurnValidation(
                     combat_idx=combat_idx,
                     turn=snap.turn,
@@ -815,7 +977,11 @@ def validate_run(run: RunReplay, card_db: CardDB) -> tuple[list[TurnValidation],
             next_turn = snapshot_turns[i + 1]
             next_snap = next_turn.snapshot
 
-            if next_snap.turn > 1 and next_snap.player_energy < 3 and next_snap.player_block > 0:
+            # Skip if next snapshot is a mid-turn split (can't compare against it)
+            _next_is_split = (next_snap.turn > 1
+                              and set(next_turn.cards_played) <= _split_cards
+                              and len(next_turn.cards_played) <= 1)
+            if _next_is_split:
                 results.append(TurnValidation(
                     combat_idx=combat_idx,
                     turn=snap.turn,
@@ -823,6 +989,18 @@ def validate_run(run: RunReplay, card_db: CardDB) -> tuple[list[TurnValidation],
                     mismatches=[],
                     skipped=True,
                     skip_reason="next snapshot is mid-turn split",
+                ))
+                continue
+
+            # Also skip if this is a continuation after a split (prev only played Survivor)
+            if _prev_is_split:
+                results.append(TurnValidation(
+                    combat_idx=combat_idx,
+                    turn=snap.turn,
+                    cards_played=turn.cards_played,
+                    mismatches=[],
+                    skipped=True,
+                    skip_reason="continuation after mid-turn split",
                 ))
                 continue
 
@@ -883,8 +1061,45 @@ def validate_run(run: RunReplay, card_db: CardDB) -> tuple[list[TurnValidation],
                             )
                         state.player.hand.append(card)
 
-                # Remaining pile cards go back to draw pile
-                state.player.draw_pile = all_pile
+                # Reconstruct piles from snapshot contents when available,
+                # creating any cards not found in the carried-forward pile.
+                if snap.draw_pile or snap.discard_pile:
+                    state.player.draw_pile = []
+                    state.player.discard_pile = []
+                    for card_name in snap.draw_pile:
+                        base = card_name.rstrip("+")
+                        upgraded = card_name.endswith("+")
+                        # Try to pull from carried-forward pile first
+                        found = False
+                        for j, pc in enumerate(all_pile):
+                            if pc.name == base and pc.upgraded == upgraded:
+                                state.player.draw_pile.append(all_pile.pop(j))
+                                found = True
+                                break
+                        if not found:
+                            card = _find_card(base, None, upgraded, card_db)
+                            if card is None:
+                                card = _make_fallback_card(base, 1, upgraded)
+                            state.player.draw_pile.append(card)
+                    for card_name in (snap.discard_pile or []):
+                        base = card_name.rstrip("+")
+                        upgraded = card_name.endswith("+")
+                        found = False
+                        for j, pc in enumerate(all_pile):
+                            if pc.name == base and pc.upgraded == upgraded:
+                                state.player.discard_pile.append(all_pile.pop(j))
+                                found = True
+                                break
+                        if not found:
+                            card = _find_card(base, None, upgraded, card_db)
+                            if card is None:
+                                card = _make_fallback_card(base, 1, upgraded)
+                            state.player.discard_pile.append(card)
+                else:
+                    # Fallback: split by size
+                    target_draw = snap.draw_pile_size
+                    state.player.draw_pile = all_pile[:target_draw]
+                    state.player.discard_pile = all_pile[target_draw:]
 
                 # Rebuild enemies from snapshot (ground truth for HP/block/intents)
                 state.enemies = []
@@ -1070,8 +1285,8 @@ def print_report(report: SnapshotValidationReport) -> None:
 
 def main(logs_dir: Path | None = None) -> SnapshotValidationReport:
     """Run full snapshot validation pipeline."""
-    if logs_dir is None:
-        logs_dir = Path(__file__).resolve().parents[3] / "logs" / "gen9"
+    from .validate import _resolve_logs_dir
+    logs_dir = _resolve_logs_dir(logs_dir)
 
     log.info("Loading card database...")
     card_db = load_cards()

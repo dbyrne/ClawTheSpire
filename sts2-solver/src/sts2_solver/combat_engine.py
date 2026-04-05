@@ -8,8 +8,10 @@ from typing import TYPE_CHECKING
 
 from .constants import CardType, TargetType
 from .effects import (
+    apply_block,
     draw_cards,
     gain_block,
+    get_alive_enemies,
     calculate_block_gain,
     deal_damage,
     add_card_to_hand,
@@ -21,18 +23,22 @@ if TYPE_CHECKING:
     from .data_loader import CardDB
 
 
+def _tick_counted_relic(
+    state: CombatState, counter_key: str, threshold: int, callback
+) -> None:
+    """Increment a relic counter and fire callback when threshold reached."""
+    count = state.player.powers.get(counter_key, 0) + 1
+    if count >= threshold:
+        callback()
+        count = 0
+    state.player.powers[counter_key] = count
+
+
 def _raw_damage_to_enemy(enemy: EnemyState, damage: int) -> None:
     """Deal flat damage to an enemy, respecting block. No Strength/Weak/Vulnerable."""
     if not enemy.is_alive:
         return
-    dmg = damage
-    if enemy.block > 0:
-        if dmg >= enemy.block:
-            dmg -= enemy.block
-            enemy.block = 0
-        else:
-            enemy.block -= dmg
-            dmg = 0
+    dmg = apply_block(enemy, damage)
     enemy.hp -= dmg
 
 
@@ -124,6 +130,12 @@ def play_card(
         state.attacks_played_this_turn += 1
 
     # --- Pre-effect triggers ---
+    # Afterimage: gain block whenever any card is played.
+    # This block is NOT affected by Frail (power trigger, not card block).
+    afterimage = state.player.powers.get("Afterimage", 0)
+    if afterimage > 0:
+        state.player.block += afterimage
+
     # Rage: gain block when playing an Attack
     if card.card_type == CardType.ATTACK:
         rage_amount = state.player.powers.get("Rage", 0)
@@ -147,50 +159,31 @@ def play_card(
     # --- Relic triggers on card play ---
     relics = state.relics
 
-    # Kunai: every 3 attacks, gain 1 Dexterity
-    if "KUNAI" in relics and card.card_type == CardType.ATTACK:
-        count = state.player.powers.get("_kunai_count", 0) + 1
-        if count >= 3:
-            state.player.powers["Dexterity"] = state.player.powers.get("Dexterity", 0) + 1
-            count = 0
-        state.player.powers["_kunai_count"] = count
-
-    # Ornamental Fan: every 3 attacks, gain 4 Block
-    if "ORNAMENTAL_FAN" in relics and card.card_type == CardType.ATTACK:
-        count = state.player.powers.get("_fan_count", 0) + 1
-        if count >= 3:
-            state.player.block += calculate_block_gain(4, state)
-            count = 0
-        state.player.powers["_fan_count"] = count
-
-    # Nunchaku: every 10 attacks, gain 1 Energy
-    if "NUNCHAKU" in relics and card.card_type == CardType.ATTACK:
-        count = state.player.powers.get("_nunchaku_count", 0) + 1
-        if count >= 10:
-            state.player.energy += 1
-            count = 0
-        state.player.powers["_nunchaku_count"] = count
+    # Counted relic triggers (attack-based)
+    if card.card_type == CardType.ATTACK:
+        if "KUNAI" in relics:
+            def _kunai(): state.player.powers["Dexterity"] = state.player.powers.get("Dexterity", 0) + 1
+            _tick_counted_relic(state, "_kunai_count", 3, _kunai)
+        if "ORNAMENTAL_FAN" in relics:
+            def _fan(): state.player.block += calculate_block_gain(4, state)
+            _tick_counted_relic(state, "_fan_count", 3, _fan)
+        if "NUNCHAKU" in relics:
+            def _nunchaku(): state.player.energy += 1
+            _tick_counted_relic(state, "_nunchaku_count", 10, _nunchaku)
+        if "SHURIKEN" in relics:
+            def _shuriken(): state.player.powers["Strength"] = state.player.powers.get("Strength", 0) + 1
+            _tick_counted_relic(state, "_shuriken_count", 3, _shuriken)
 
     # Letter Opener: every 3 Skills, deal 5 damage to ALL enemies
-    if "LETTER_OPENER" in relics and card.card_type == CardType.SKILL:
-        count = state.player.powers.get("_letter_opener_count", 0) + 1
-        if count >= 3:
+    if card.card_type == CardType.SKILL and "LETTER_OPENER" in relics:
+        def _opener():
             for enemy in state.enemies:
                 _raw_damage_to_enemy(enemy, 5)
-            count = 0
-        state.player.powers["_letter_opener_count"] = count
+        _tick_counted_relic(state, "_letter_opener_count", 3, _opener)
 
     # Game Piece: draw 1 card when a Power is played
     if "GAME_PIECE" in relics and card.card_type == CardType.POWER:
         draw_cards(state, 1)
-
-    # Shuriken: every 3 attacks, gain 1 Strength
-    if "SHURIKEN" in relics and card.card_type == CardType.ATTACK:
-        count = state.player.powers.get("_shuriken_count", 0) + 1
-        if count >= 3:
-            state.player.powers["Strength"] = state.player.powers.get("Strength", 0) + 1
-            count = 0
-        state.player.powers["_shuriken_count"] = count
 
     # --- Move card to appropriate zone ---
     _move_card_after_play(state, card)
@@ -215,14 +208,7 @@ def use_potion(state: CombatState, potion_idx: int) -> None:
     elif pot.get("damage_all"):
         for e in state.enemies:
             if e.is_alive:
-                dmg = pot["damage_all"]
-                if e.block > 0:
-                    if dmg >= e.block:
-                        dmg -= e.block
-                        e.block = 0
-                    else:
-                        e.block -= dmg
-                        dmg = 0
+                dmg = apply_block(e, pot["damage_all"])
                 e.hp -= dmg
     elif pot.get("enemy_weak"):
         for e in state.enemies:
@@ -325,6 +311,7 @@ def start_turn(state: CombatState) -> None:
     state.turn += 1
     state.cards_played_this_turn = 0
     state.attacks_played_this_turn = 0
+    state.discards_this_turn = 0
 
     # Reset energy
     state.player.energy = state.player.max_energy
@@ -382,6 +369,23 @@ def start_turn(state: CombatState) -> None:
     if "Unmovable" in state.player.powers:
         state.player.powers["Unmovable_used"] = 0
 
+    # Thrumming Hatchet: return to hand at start of next turn
+    if state.player.powers.pop("_thrumming_hatchet", 0) > 0:
+        stash = getattr(state, '_thrumming_stash', [])
+        for card in stash:
+            # Remove from discard pile (where _move_card_after_play put it)
+            for j, d in enumerate(state.player.discard_pile):
+                if d is card:
+                    state.player.discard_pile.pop(j)
+                    break
+            state.player.hand.append(card)
+        if hasattr(state, '_thrumming_stash'):
+            state._thrumming_stash = []
+
+    # Chandelier: gain 3 energy every 3rd turn
+    if "CHANDELIER" in relics and state.turn % 3 == 0:
+        state.player.energy += 3
+
     # Draw cards
     draw_cards(state, 5)
 
@@ -398,7 +402,7 @@ def end_turn(state: CombatState) -> None:
         attacks = [c for c in state.player.hand if c.card_type == CardType.ATTACK]
         if not attacks:
             break
-        alive = [i for i, e in enumerate(state.enemies) if e.is_alive]
+        alive = get_alive_enemies(state)
         if not alive:
             break
         card = attacks[0]  # deterministic for solver
@@ -513,14 +517,7 @@ def _enemy_attacks_player(state: CombatState, enemy: EnemyState) -> None:
             raw *= 2
 
         # Apply block
-        if state.player.block > 0:
-            if raw >= state.player.block:
-                raw -= state.player.block
-                state.player.block = 0
-            else:
-                state.player.block -= raw
-                raw = 0
-
+        raw = apply_block(state.player, raw)
         state.player.hp -= raw
 
         # Thorns on player: enemy takes damage per hit

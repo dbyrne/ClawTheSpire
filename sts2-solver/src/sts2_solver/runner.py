@@ -46,7 +46,6 @@ from .data_loader import load_cards
 from .game_client import GameClient
 from .game_data import load_game_data
 from .run_logger import RunLogger
-from .solver import solve_turn, format_solution
 from .alphazero.encoding import build_vocabs_from_card_db, EncoderConfig
 from .alphazero.network import STS2Network
 from .alphazero.mcts import MCTS as AlphaZeroMCTS
@@ -110,6 +109,9 @@ class Runner:
         self._screen_repeat_count: int = 0  # Same-screen repeat counter
         self._combat_move_indices: dict[tuple[int, str], int] = {}  # Enemy move cycle tracking
 
+        # Decision routing counters — tracks how each screen_type was resolved
+        self._decision_routing: dict[str, dict[str, int]] = {}  # {screen_type: {source: count}}
+
         # TUI state
         self._status_text = "[dim]Starting...[/dim]"
         self._solver_text = "[dim]No combat yet[/dim]"
@@ -158,6 +160,80 @@ class Runner:
 
     def _log_action(self, msg: str) -> None:
         self._log.append(msg)
+
+    def _track_decision(self, screen_type: str, source: str) -> None:
+        """Track decision routing for end-of-run summary."""
+        by_source = self._decision_routing.setdefault(screen_type, {})
+        by_source[source] = by_source.get(source, 0) + 1
+
+    def _emit_routing_summary(self, outcome: str, floor) -> None:
+        """Log decision routing summary to JSONL and TUI at end of run.
+
+        Shows how each decision type was routed (network vs deterministic
+        vs auto vs advisor) so we can immediately spot when the network
+        is being bypassed for decisions it should be handling.
+        """
+        # Also scan JSONL for advisor decisions (logged by advisor, not runner)
+        routing = {}
+        for st, sources in self._decision_routing.items():
+            routing[st] = dict(sources)
+
+        log_path = getattr(self.logger, '_path', None)
+        if log_path and log_path.exists():
+            import json as _json
+            try:
+                with open(log_path, encoding="utf-8") as f:
+                    for line in f:
+                        try:
+                            ev = _json.loads(line)
+                        except Exception:
+                            continue
+                        if ev.get("type") == "decision" and ev.get("source") == "advisor":
+                            st = ev.get("screen_type", "unknown")
+                            by_source = routing.setdefault(st, {})
+                            by_source["advisor"] = by_source.get("advisor", 0) + 1
+            except Exception:
+                pass
+
+        if not routing:
+            return
+
+        # Expected network-handled types (should NOT be "auto" or "deterministic")
+        expected_network = {"card_reward", "map", "rest", "shop", "deck_select"}
+
+        # Build summary lines
+        lines = []
+        warnings = []
+        for st in sorted(routing):
+            parts = [f"{src}={n}" for src, n in sorted(routing[st].items())]
+            lines.append(f"  {st}: {', '.join(parts)}")
+            # Flag if a network-expected type was resolved without the network
+            if st in expected_network:
+                non_net = sum(n for src, n in routing[st].items() if src != "network")
+                net = routing[st].get("network", 0)
+                if non_net > 0 and net == 0:
+                    warnings.append(f"  ⚠ {st}: ALL decisions bypassed network ({non_net}x {', '.join(s for s in routing[st] if s != 'network')})")
+                elif non_net > 0:
+                    warnings.append(f"  ⚠ {st}: {non_net}/{net + non_net} bypassed network")
+
+        # Log to TUI
+        self._log_action("[bold]Decision routing:[/bold]")
+        for line in lines:
+            self._log_action(f"[dim]{line}[/dim]")
+        for w in warnings:
+            self._log_action(f"[yellow]{w}[/yellow]")
+
+        # Log to JSONL
+        self.logger._emit({
+            "type": "decision_routing",
+            "outcome": outcome,
+            "floor": floor,
+            "routing": routing,
+            "warnings": [w.strip().lstrip("⚠ ") for w in warnings],
+        })
+
+        # Reset for next run
+        self._decision_routing = {}
 
     def _update_status(self) -> None:
         gs = self.game_state
@@ -290,22 +366,6 @@ class Runner:
             finally:
                 self._live = None
                 self.logger.close()
-                self._update_dashboard()
-
-    def _update_dashboard(self) -> None:
-        """Rebuild data.json and deploy to Vercel after a run."""
-        script = Path(__file__).resolve().parents[3] / "dashboard" / "update_data.py"
-        if not script.exists():
-            return
-        try:
-            import subprocess, sys
-            subprocess.run(
-                [sys.executable, str(script), "--deploy"],
-                timeout=60,
-                capture_output=True,
-            )
-        except Exception:
-            pass
 
     # ------------------------------------------------------------------
     # Main tick
@@ -788,9 +848,10 @@ class Runner:
         # Snapshot the pre-play state for combat logging
         turn_start_gs = gs
 
-        # Solve-one-play-re-solve loop: play one card at a time from fresh
-        # game state. This accounts for relic triggers, energy generation,
-        # card cost changes, and other effects the simulator doesn't model.
+        # MCTS with hybrid evaluation: network policy priors guide the
+        # search, hand-crafted evaluator scores within-turn states for
+        # correct damage/block tradeoffs, network value head adds
+        # multi-turn strategic context.
         from .bridge import action_to_mcp
 
         cards_played: list[str] = []
@@ -798,8 +859,8 @@ class Runner:
         total_states = 0
         total_solve_ms = 0.0
         best_score = 0.0
-        turn_root_value: float | None = None  # first MCTS value of the turn
-        max_cards = 12  # safety cap to prevent infinite loops
+        turn_root_value: float | None = None
+        max_cards = 12
 
         while len(cards_played) < max_cards:
             # Build combat state and run MCTS
@@ -900,6 +961,16 @@ class Runner:
 
             # Execute the single card play
             mcp_action = action_to_mcp(first_action)
+            if self.logger:
+                self.logger._emit({
+                    "type": "mcts_play",
+                    "card_idx": first_action.card_idx,
+                    "target_idx": first_action.target_idx,
+                    "card_name": label,
+                    "hand": [c.name for c in hand],
+                    "policy": [round(p, 4) for p in policy[:5]],
+                    "value": round(root_value, 4),
+                })
             try:
                 self._execute_with_retry(
                     mcp_action["action"],
@@ -948,16 +1019,9 @@ class Runner:
                     (self._combat_move_indices[key] + 1) % len(table)
                 )
             else:
+                from .bridge import parse_intents
                 intents = e_raw.get("intents", [])
-                it, idmg, ihits = None, None, 1
-                for intent in intents:
-                    itype = intent.get("intent_type", "")
-                    if itype == "Attack":
-                        it = "Attack"
-                        idmg = intent.get("damage")
-                        ihits = intent.get("hits", 1)
-                    elif itype in ("Defend", "Buff", "Debuff", "StatusCard"):
-                        it = it or itype
+                it, idmg, ihits, _ = parse_intents(intents)
                 idx = _match_move_index(eid, it, idmg, ihits)
                 if idx is not None:
                     self._combat_move_indices[key] = idx
@@ -1042,6 +1106,10 @@ class Runner:
                             max_hp=post_run.get("max_hp", 0),
                             outcome="win", turns=self.turn_count,
                         )
+                    # Intercept the reward screen before it auto-resolves.
+                    # Poll rapidly for claim_reward to appear so we can
+                    # claim the card reward individually for network eval.
+                    self._intercept_card_reward()
         except Exception:
             pass
 
@@ -1070,131 +1138,93 @@ class Runner:
                     self._log_action(f"  [red]Failed to discard potion: {e}[/red]")
             return
 
-        # Reward screen: collect_rewards_and_proceed auto-picks the first
-        # card reward — NEVER use it when an unhandled card choice exists.
-        # Instead, claim the card reward item to open the selection screen,
-        # then let the advisor choose or skip.
+        # Reward screen handling.
+        # Card rewards are intercepted by _intercept_card_reward() right
+        # after combat ends (before the game auto-resolves).  By the time
+        # we reach this tick, the card selection screen should already be
+        # open (choose_reward_card / skip_reward_cards), or the card was
+        # already handled and we just need to collect remaining rewards.
         #
-        # IMPORTANT: collect_rewards_and_proceed also auto-claims skipped card
-        # rewards. After a skip, we must claim non-card rewards individually
-        # first, then proceed only when no card rewards remain claimable.
-        if "collect_rewards_and_proceed" in actions and screen_type != "card_reward":
+        # If choose_reward_card is available, route to the network.
+        # Otherwise, claim remaining non-card rewards one at a time,
+        # then proceed.
+        if "choose_reward_card" in actions or "skip_reward_cards" in actions:
+            screen_type = "card_reward"
+            # Fall through to network handler below
+
+        elif "claim_reward" in actions:
+            # Claim next reward item (gold, potion, relic — card was
+            # already handled by the intercept or this is a non-card reward)
             reward = gs.get("reward") or {}
             if not reward:
                 reward = (gs.get("agent_view") or {}).get("reward") or {}
-
-            # Also check agent_view reward for pending_card_choice
-            agent_reward = (gs.get("agent_view") or {}).get("reward") or {}
-
-            has_card_choice = (
-                reward.get("pending_card_choice")
-                or agent_reward.get("pending_card_choice")
-                or "choose_reward_card" in actions
-                or "skip_reward_cards" in actions
-            )
-
-            # Check reward items for card-type rewards.
-            # Raw state: reward_type="Card"; agent_view: line="card: ...".
             reward_items = reward.get("rewards") or []
             if not reward_items:
-                reward_items = agent_reward.get("rewards") or []
-            has_card_reward_item = any(
-                self._is_card_reward_item(item)
-                for item in reward_items
-                if item.get("claimable", True)
-            )
+                reward_items = ((gs.get("agent_view") or {}).get("reward") or {}).get("rewards") or []
 
-            # If reward data is empty but we just arrived at the reward screen,
-            # wait for the data to populate before auto-proceeding.
-            if not reward_items and not has_card_choice and "claim_reward" in actions:
-                return  # Let next tick re-check once reward data is populated
-
-            # Debug: log reward detection state
-            if "claim_reward" in actions:
-                self._log_action(
-                    f"  [dim]reward check: items={len(reward_items)} "
-                    f"card_choice={has_card_choice} card_item={has_card_reward_item}[/dim]"
-                )
-
-            # If we already handled the card choice this reward screen,
-            # claim non-card rewards individually to avoid collect_rewards_and_proceed
-            # which auto-grabs the first card (even after skip_reward_cards).
-            if self._card_reward_handled:
-                self._card_reward_handled = False
-                if "claim_reward" in actions:
-                    # Claim first non-card reward item
-                    for item in reward_items:
-                        if not self._is_card_reward_item(item) and item.get("claimable", True):
-                            idx = item.get("index", item.get("i"))
-                            if idx is not None:
-                                self._log_action(f"  [dim]auto: claim_reward({idx}) — non-card[/dim]")
-                                if not self.dry_run:
-                                    try:
-                                        self._execute_with_retry("claim_reward", option_index=idx)
-                                        self.action_count += 1
-                                    except Exception:
-                                        pass
-                                return
-                # No non-card rewards left, or no claim_reward action.
-                # Try proceed first (doesn't auto-claim), fall back to
-                # collect_rewards_and_proceed only if proceed isn't available.
-                if "proceed" in actions:
-                    self._log_action("  [dim]auto: proceed (post-skip)[/dim]")
-                    if not self.dry_run:
-                        try:
-                            self._execute_with_retry("proceed")
-                            self.action_count += 1
-                        except Exception:
-                            pass
-                elif "collect_rewards_and_proceed" in actions:
-                    self._log_action("  [dim]auto: collect_rewards_and_proceed (post-skip)[/dim]")
-                    if not self.dry_run:
-                        try:
-                            self._execute_with_retry("collect_rewards_and_proceed")
-                            self.action_count += 1
-                        except Exception:
-                            pass
-                return
-
-            if has_card_choice or has_card_reward_item:
-                if "choose_reward_card" in actions or "skip_reward_cards" in actions:
-                    # Card selection screen is open — let advisor handle it
-                    screen_type = "card_reward"
-                    # Fall through to LLM decision below
-                elif has_card_reward_item and "claim_reward" in actions:
-                    # Open the card selection screen by claiming the card reward
-                    card_reward_idx = None
-                    for item in reward_items:
-                        if self._is_card_reward_item(item) and item.get("claimable", True):
-                            card_reward_idx = item.get("index", item.get("i"))
-                            break
-                    if card_reward_idx is not None:
-                        self._log_action(f"  [cyan]Opening card reward (index {card_reward_idx})...[/cyan]")
+            for item in reward_items:
+                if item.get("claimable", True):
+                    idx = item.get("index", item.get("i"))
+                    if idx is not None:
+                        rtype = str(item.get("reward_type", item.get("line", ""))).split(":")[0]
+                        self._log_action(f"  [dim]auto: claim_reward({idx}) — {rtype}[/dim]")
                         if not self.dry_run:
                             try:
-                                self._execute_with_retry("claim_reward", option_index=card_reward_idx)
-                                time.sleep(1.0)  # Wait for card data to populate
-                            except Exception as e:
-                                self._log_action(f"  [red]Failed to open card reward: {e}[/red]")
-                    return
-                else:
-                    # Not ready yet — return and let next tick handle it
-                    return
-            else:
-                # No card choice pending — safe to auto-proceed
-                self._log_action("  [dim]auto: collect_rewards_and_proceed[/dim]")
+                                self._execute_with_retry("claim_reward", option_index=idx)
+                                self.action_count += 1
+                            except Exception:
+                                pass
+                        return
+            # Nothing left to claim — wait for proceed or collect
+            if "proceed" in actions:
+                self._log_action("  [dim]auto: proceed (rewards done)[/dim]")
                 if not self.dry_run:
                     try:
-                        self._execute_with_retry("collect_rewards_and_proceed")
+                        self._execute_with_retry("proceed")
                         self.action_count += 1
-                    except Exception as e:
-                        self._log_action(f"  [red]Auto-action failed: {e}[/red]")
-                self.logger.log_decision(
-                    game_state=gs, screen_type="auto", options=actions,
-                    choice={"action": "collect_rewards_and_proceed", "option_index": None},
-                    source="auto",
+                    except Exception:
+                        pass
+            return
+
+        elif "collect_rewards_and_proceed" in actions and screen_type != "card_reward":
+            # Check if there's an unclaimed card reward — if so, the
+            # intercept failed and we should NOT silently auto-claim.
+            raw_screen = gs.get("screen", "").upper()
+            if "REWARD" in raw_screen:
+                reward = gs.get("reward") or {}
+                reward_items = reward.get("rewards") or []
+                has_card = any(
+                    self._is_card_reward_item(item)
+                    for item in reward_items
+                    if item.get("claimable", True)
                 )
-                return
+                if has_card:
+                    self._log_action(
+                        "[bold red]ERROR: collect_rewards_and_proceed would "
+                        "bypass network card selection! Intercept failed.[/bold red]"
+                    )
+                    self.logger._emit({"type": "reward_bypass_error",
+                        "actions": actions, "reward_items": reward_items[:5],
+                        "screen": raw_screen})
+                    raise RuntimeError(
+                        "Card reward would be auto-claimed, bypassing network. "
+                        "The reward intercept did not catch this reward screen."
+                    )
+
+            self._log_action("  [dim]auto: collect_rewards_and_proceed[/dim]")
+            if not self.dry_run:
+                try:
+                    self._execute_with_retry("collect_rewards_and_proceed")
+                    self.action_count += 1
+                except Exception as e:
+                    self._log_action(f"  [red]Auto-action failed: {e}[/red]")
+            self._track_decision("reward", "auto")
+            self.logger.log_decision(
+                game_state=gs, screen_type="auto", options=actions,
+                choice={"action": "collect_rewards_and_proceed", "option_index": None},
+                source="auto",
+            )
+            return
 
         # Auto-actions — but prioritize shop opening over proceed
         if screen_type == "auto":
@@ -1214,6 +1244,7 @@ class Runner:
                             self.action_count += 1
                         except Exception as e:
                             self._log_action(f"  [red]Auto-action failed: {e}[/red]")
+                    self._track_decision("auto", "auto")
                     self.logger.log_decision(
                         game_state=gs, screen_type="auto", options=actions,
                         choice={"action": action, "option_index": None},
@@ -1236,29 +1267,36 @@ class Runner:
         if screen_type == "card_reward" and "select_deck_card" in actions:
             sel = gs.get("selection") or {}
             if sel.get("kind") == "deck_card_select":
-                self._log_action("  [dim]auto: select_deck_card(0) — dismiss card preview overlay[/dim]")
-                if not self.dry_run:
-                    try:
-                        self._execute_with_retry("select_deck_card", option_index=0)
-                    except Exception:
-                        pass
-                return
+                # Only auto-dismiss if choose_reward_card is also available,
+                # meaning this is truly an overlay on top of the card picker.
+                # If select_deck_card is the only action, it's a real card
+                # selection — route to the network like any deck_select.
+                if "choose_reward_card" in actions:
+                    self._log_action("  [dim]auto: select_deck_card(0) — dismiss card preview overlay[/dim]")
+                    if not self.dry_run:
+                        try:
+                            self._execute_with_retry("select_deck_card", option_index=0)
+                        except Exception:
+                            pass
+                    return
+                else:
+                    self._handle_deck_select(gs)
+                    return
 
         # Multi-select deck screens (e.g. "Choose 2 cards to Add/Remove"):
         # select_deck_card: check if this is a real decision or an
         # informational overlay (e.g. Havoc showing "Draw 3 cards")
         if screen_type == "deck_select":
-            # If we already tried and failed on this screen, skip it
             if self._deck_select_stuck:
                 self._log_action("  [dim]Skipping stuck deck_select screen[/dim]")
                 return
 
             sel = gs.get("selection") or {}
-            prompt = strip_markup(sel.get("prompt") or "").lower()
+            kind = (sel.get("kind") or "").lower()
+            can_confirm = sel.get("confirm", False)
 
-            # "Confirm" screens (e.g. Armaments "Confirm Card to Upgrade"):
-            # A card was already selected — just re-select index 0 to confirm.
-            if "confirm" in prompt:
+            # Confirm screens — card already selected, just confirm
+            if can_confirm:
                 self._log_action(f"  [dim]auto: select_deck_card(0) — confirm[/dim]")
                 if not self.dry_run:
                     try:
@@ -1267,75 +1305,56 @@ class Runner:
                         pass
                 return
 
-            # Mid-combat card selections (Havoc "put on top of Draw Pile",
-            # "Choose a card to Exhaust", etc.): pick the first non-essential
-            # card quickly instead of calling the LLM.
-            _COMBAT_SELECT_KW = (
-                "draw pile", "exhaust", "discard pile", "put on top",
-            )
-            is_combat_select = any(kw in prompt for kw in _COMBAT_SELECT_KW)
+            # Route by kind (structured field from game mod).
+            # For combat_hand selections, use the prompt to determine
+            # whether to pick the worst card (discard/exhaust) or best
+            # card (copy/duplicate).
+            prompt = strip_markup(sel.get("prompt") or "").lower()
 
-            # Decision keywords that need advisor input (non-combat only)
-            is_decision = not is_combat_select and any(kw in prompt for kw in (
-                "choose", "remove", "upgrade", "transform", "add", "select",
-            ))
-
-            if is_combat_select:
-                # Try network-based discard selection first
-                net_decision = self._az_decide_combat_discard(gs, sel)
-                if net_decision is not None:
-                    pick_idx = net_decision.option_index
-                    self._log_action(f"  [blue]{net_decision.reasoning}[/blue]")
-                    if self.logger:
-                        self.logger.log_decision(
-                            game_state=gs, screen_type="deck_select",
-                            options=["select_deck_card"],
-                            choice={"action": "select_deck_card",
-                                    "option_index": pick_idx,
-                                    "reasoning": net_decision.reasoning},
-                            source="network",
-                            network_value=net_decision.network_value,
-                            head_scores=net_decision.head_scores,
-                        )
-                else:
-                    # Fallback: deterministic pick — avoid key card
-                    from .config import CHARACTER_CONFIG, detect_character
-                    _char = detect_character(gs)
-                    _key = CHARACTER_CONFIG.get(_char, {}).get("key_card", "Bash").lower()
-                    cards = sel.get("cards", [])
-                    pick_idx = 0
-                    for card in cards:
-                        name = (card.get("name") or "").lower()
-                        if _key not in name:
-                            pick_idx = card.get("index", card.get("i", 0))
-                            break
-                    self._log_action(f"  [dim]auto: select_deck_card({pick_idx}) — combat select[/dim]")
-                    if self.logger:
-                        self.logger.log_decision(
-                            game_state=gs, screen_type="deck_select",
-                            options=["select_deck_card"],
-                            choice={"action": "select_deck_card",
-                                    "option_index": pick_idx,
-                                    "reasoning": "deterministic fallback"},
-                            source="deterministic",
-                        )
+            if kind.startswith("combat_hand"):
+                pick_worst = any(kw in prompt for kw in (
+                    "discard", "exhaust", "put on top", "draw pile",
+                ))
+                net_decision = self._az_decide_combat_discard(
+                    gs, sel, pick_worst=pick_worst)
+                if net_decision is None:
+                    raise RuntimeError(
+                        f"Network combat select returned None — "
+                        f"kind={kind!r} prompt={prompt!r} "
+                        f"cards: {[c.get('name') for c in sel.get('cards', [])]}"
+                    )
+                pick_idx = net_decision.option_index
+                self._log_action(f"  [blue]{net_decision.reasoning}[/blue]")
+                self._track_decision("deck_select", "network")
+                if self.logger:
+                    self.logger.log_decision(
+                        game_state=gs, screen_type="deck_select",
+                        options=["select_deck_card"],
+                        choice={"action": "select_deck_card",
+                                "option_index": pick_idx,
+                                "reasoning": net_decision.reasoning},
+                        source="network",
+                        network_value=net_decision.network_value,
+                        head_scores=net_decision.head_scores,
+                    )
                 if not self.dry_run:
                     try:
                         self._execute_with_retry("select_deck_card", option_index=pick_idx)
                     except Exception:
                         pass
                 return
-            elif is_decision:
+
+            elif kind in ("deck_upgrade_select", "deck_transform_select",
+                          "deck_enchant_select", "choose_card_select",
+                          "deck_card_select"):
                 self._handle_deck_select(gs)
+                return
+
             else:
-                # Informational overlay — auto-select first card to dismiss
-                self._log_action(f"  [dim]auto: select_deck_card (overlay)[/dim]")
-                if not self.dry_run:
-                    try:
-                        self._execute_with_retry("select_deck_card", option_index=0)
-                    except Exception:
-                        pass
-            return
+                raise RuntimeError(
+                    f"Unknown deck_select kind: {kind!r} — "
+                    f"prompt: {sel.get('prompt', '?')!r}"
+                )
 
         # For finished events with only a "Proceed" option, auto-handle
         if screen_type == "event" and "choose_event_option" in actions:
@@ -1442,8 +1461,19 @@ class Runner:
                 )
                 return
 
+        # Deterministic fallback — only for screen types that have no
+        # network handler (currently just boss_relic).  For types that DO
+        # have a network handler, reaching here means the network crashed
+        # (which now raises), so this is dead code for those types.
         handler = _DETERMINISTIC_HANDLERS.get(screen_type)
         if handler:
+            if screen_type in _NETWORK_HANDLERS:
+                # Should never reach here — network handler should have
+                # either returned a decision or raised.
+                raise RuntimeError(
+                    f"Deterministic fallback reached for '{screen_type}' — "
+                    f"network handler should have handled this"
+                )
             decision = handler()
             self._execute_deterministic(
                 gs, decision, screen_type, actions, run,
@@ -1455,29 +1485,18 @@ class Runner:
             result_str = self.advisor.advise(gs, execute=not self.dry_run)
         except Exception as e:
             self._log_action(f"[red]Advisor error: {e}[/red]")
-            return
+            raise
 
-        # If the advisor recommended an invalid/failed action, fall back to a safe default
+        # If the advisor recommended an invalid/failed action, error out
         if "not available" in result_str or "FAILED" in result_str:
-            self._log_action(f"  [yellow]Invalid action — falling back[/yellow]")
-            _FALLBACKS = [
-                ("choose_event_option", 0),
-                ("proceed", None),
-                ("confirm_modal", None),
-                ("dismiss_modal", None),
-            ]
-            for fb_action, fb_idx in _FALLBACKS:
-                if fb_action not in actions:
-                    continue
-                if not self.dry_run:
-                    try:
-                        self._execute_with_retry(fb_action, option_index=fb_idx)
-                    except Exception:
-                        pass
-                self._log_action(f"  [dim]auto: {fb_action}({fb_idx}) (fallback)[/dim]")
-                self.action_count += 1
-                return
-            return
+            self._log_action(
+                f"[bold red]Advisor returned invalid action for "
+                f"{screen_type}: {result_str[:100]}[/bold red]"
+            )
+            raise RuntimeError(
+                f"Advisor returned invalid action for {screen_type}: "
+                f"{result_str[:200]}"
+            )
 
         # Update advisor panel
         self._advisor_text = (
@@ -1532,11 +1551,21 @@ class Runner:
 
         return st, hidden, hp, max_hp, gold, floor, deck_cards
 
-    def _az_decide_combat_discard(self, gs: dict, sel: dict) -> "Decision | None":
-        """Use network to pick which card to discard mid-combat (Survivor, etc.).
+    def _az_decide_combat_discard(self, gs: dict, sel: dict,
+                                    pick_worst: bool = True) -> "Decision | None":
+        """Use network to pick a card mid-combat (Survivor, Acrobatics, etc.).
 
-        Scores each card with OPTION_SHOP_REMOVE (lower = better to discard).
-        Returns None to fall back to deterministic if network isn't available.
+        This is a WORKAROUND using OPTION_SHOP_REMOVE to score hand cards.
+        The option head was trained for "how good is removing this card from
+        the deck permanently?" — higher score = better removal target =
+        LESS valuable card.
+
+        pick_worst=True: discard/exhaust — pick the LEAST valuable card
+            to throw away. High OPTION_SHOP_REMOVE score = less valuable
+            = good discard target. Use MAX score.
+        pick_worst=False: copy/duplicate — pick the MOST valuable card.
+            Low OPTION_SHOP_REMOVE score = more valuable = good copy
+            target. Use MIN score.
         """
         import torch
         from .deterministic_advisor import Decision
@@ -1574,10 +1603,18 @@ class Runner:
                 return None
 
             with torch.no_grad():
-                # Pick the LOWEST-scored card (worst to keep = best to discard)
                 _, scores = network.pick_best_option(
                     hidden, opt_types, opt_cards)
-                best_idx = min(range(len(scores)), key=lambda i: scores[i])
+                if pick_worst:
+                    # High score = "removing is good" = card is less valuable
+                    # = good discard target. Pick MAX.
+                    best_idx = max(range(len(scores)), key=lambda i: scores[i])
+                    verb = "discard"
+                else:
+                    # Low score = "removing is bad" = card is more valuable
+                    # = good copy/duplicate target. Pick MIN.
+                    best_idx = min(range(len(scores)), key=lambda i: scores[i])
+                    verb = "select"
 
             chosen_idx = game_indices[best_idx]
             card_name = option_labels[best_idx]
@@ -1591,7 +1628,7 @@ class Runner:
             }
 
             return Decision("select_deck_card", chosen_idx,
-                            f"Network: discard {card_name} (score={scores[best_idx]:.2f})",
+                            f"Network: {verb} {card_name} (score={scores[best_idx]:.2f})",
                             network_value=nv, head_scores=hs)
         except Exception as e:
             self._log_action(f"  [dim]Network combat discard failed ({e})[/dim]")
@@ -1661,8 +1698,8 @@ class Runner:
                                 f"Network: upgrade {card_name} (score={scores[best_idx]:.2f})",
                                 network_value=nv, head_scores=hs)
         except Exception as e:
-            self._log_action(f"  [dim]Network rest failed ({e}), falling back[/dim]")
-            return None
+            self._log_action(f"  [red]Network rest FAILED: {e}[/red]")
+            raise
 
     def _az_decide_map(self, gs: dict) -> "Decision | None":
         """Use network to score map node types and pick the best."""
@@ -1726,8 +1763,8 @@ class Runner:
                             f"Network: node {chosen_node} (score={scores[best_idx]:.2f})",
                             network_value=nv, head_scores=hs)
         except Exception as e:
-            self._log_action(f"  [dim]Network map failed ({e}), falling back[/dim]")
-            return None
+            self._log_action(f"  [red]Network map FAILED: {e}[/red]")
+            raise
 
     def _az_decide_shop(self, gs: dict) -> "Decision | None":
         """Use network for one shop action (remove/buy/leave)."""
@@ -1796,8 +1833,8 @@ class Runner:
                             f"Network: {reason} (score={scores[best_idx]:.2f})",
                             network_value=nv, head_scores=hs)
         except Exception as e:
-            self._log_action(f"  [dim]Network shop failed ({e}), falling back[/dim]")
-            return None
+            self._log_action(f"  [red]Network shop FAILED: {e}[/red]")
+            raise
 
     def _az_decide_card_reward(self, gs: dict) -> "Decision | None":
         """Use network option head to pick a card reward (or skip)."""
@@ -1810,17 +1847,19 @@ class Runner:
             network = self._mcts.network
             vocabs = self._mcts_vocabs
 
-            # Get offered cards from the game state
-            combat = gs.get("combat") or {}
-            rewards = gs.get("card_rewards") or gs.get("rewards") or []
-            # Also check agent_view for card reward data
-            av = (gs.get("agent_view") or {}).get("combat") or {}
-            if not rewards:
-                rewards = av.get("card_rewards") or []
-            if not rewards:
-                # Try to find cards in available actions context
-                sel = gs.get("selection") or {}
-                rewards = sel.get("cards") or []
+            # Get offered cards from the game state.
+            # Raw state: reward.card_options (on NCardRewardSelectionScreen)
+            # Agent view: reward.cards (transformed by BuildAgentRewardPayload)
+            reward_data = gs.get("reward") or {}
+            av_reward = (gs.get("agent_view") or {}).get("reward") or {}
+            rewards = (
+                reward_data.get("card_options")
+                or av_reward.get("cards")
+                or gs.get("card_rewards")
+                or gs.get("rewards")
+                or (gs.get("selection") or {}).get("cards")
+                or []
+            )
 
             if not rewards:
                 return None
@@ -1861,19 +1900,28 @@ class Runner:
                 # Pick a card
                 chosen_idx = game_indices[best_idx]
                 card_name = option_labels[best_idx]
+                self._card_reward_handled = True
                 return Decision("choose_reward_card", chosen_idx,
                                 f"Network: take {card_name} (score={scores[best_idx]:.2f})",
                                 network_value=nv, head_scores=hs)
             else:
-                # Skip
-                return Decision("proceed", None,
+                # Skip — use skip_reward_cards (card selection screen)
+                self._card_reward_handled = True
+                return Decision(skip_action, None,
                                 f"Network: skip (score={scores[best_idx]:.2f})",
                                 network_value=nv, head_scores=hs)
         except Exception as e:
-            self._log_action(f"  [dim]Network card_reward failed ({e}), falling back[/dim]")
-            return None
+            self._log_action(f"  [red]Network card_reward FAILED: {e}[/red]")
+            raise
 
     def _az_decide_deck_select(self, gs: dict) -> "Decision | None":
+        """Use network option head for deck card selection (add/remove/upgrade).
+
+        For ALL operation types, the option head scores "how good is this
+        action?" — pick_best_option (max score) is always correct.
+        Do NOT invert scores for removal — the network was trained with
+        max score = best removal target.
+        """
         """Use network option head for card selection (removal/upgrade/transform)."""
         import torch
         from .deterministic_advisor import Decision
@@ -1885,14 +1933,21 @@ class Runner:
             vocabs = self._mcts_vocabs
 
             sel = gs.get("selection") or {}
-            prompt = (sel.get("prompt") or "").lower()
+            kind = (sel.get("kind") or "").lower()
             cards = sel.get("cards", [])
 
             if not cards:
                 return None
 
-            is_remove = "remove" in prompt or "transform" in prompt
-            is_upgrade = "upgrade" in prompt
+            # Use kind + prompt to determine operation type
+            prompt_text = strip_markup(sel.get("prompt") or "").lower()
+            is_upgrade = kind in ("deck_upgrade_select", "combat_hand_upgrade_select",
+                                  "deck_enchant_select")
+            is_remove_prompt = "remove" in prompt_text or "destroy" in prompt_text
+            is_add_prompt = ("add" in prompt_text
+                             or ("choose" in prompt_text and not is_remove_prompt))
+            is_add = not is_upgrade and not is_remove_prompt and is_add_prompt
+            is_remove = not is_upgrade and not is_add
 
             # Build options for the unified option head
             opt_types = []
@@ -1905,12 +1960,12 @@ class Runner:
                 name = card_info.get("name", "?")
                 idx = card_info.get("index", len(opt_types))
 
-                if is_remove:
-                    opt_types.append(OPTION_SHOP_REMOVE)
-                elif is_upgrade:
+                if is_upgrade:
                     opt_types.append(OPTION_SMITH)
-                else:
+                elif is_add:
                     opt_types.append(OPTION_CARD_REWARD)
+                else:
+                    opt_types.append(OPTION_SHOP_REMOVE)
 
                 opt_cards.append(vocabs.cards.get(card_id.rstrip("+")))
                 card_indices.append(idx)
@@ -1920,20 +1975,17 @@ class Runner:
                 return None
 
             with torch.no_grad():
-                if is_remove:
-                    # Remove: pick lowest-scored card
-                    best_idx, scores = network.pick_best_option(
-                        hidden, opt_types, opt_cards)
-                    # Invert: we want the card that hurts the deck least to remove
-                    best_idx = min(range(len(scores)), key=lambda i: scores[i])
-                else:
-                    best_idx, scores = network.pick_best_option(
-                        hidden, opt_types, opt_cards)
+                # For all operation types (remove, upgrade, add), the option
+                # head scores "how good is this action?" — highest = best.
+                # No inversion needed: the network was trained with
+                # pick_best_option (max score) for OPTION_SHOP_REMOVE too.
+                best_idx, scores = network.pick_best_option(
+                    hidden, opt_types, opt_cards)
 
             chosen_idx = card_indices[best_idx]
             card_name = option_labels[best_idx]
             nv = network.value_head(hidden).item()
-            action = "remove" if is_remove else "upgrade"
+            action = "upgrade" if is_upgrade else ("add" if is_add else "remove")
 
             hs = {
                 "head": "option_eval",
@@ -1945,8 +1997,8 @@ class Runner:
                             f"Network: {action} {card_name} (score={scores[best_idx]:.2f})",
                             network_value=nv, head_scores=hs)
         except Exception as e:
-            self._log_action(f"  [dim]Network deck_select failed ({e}), falling back[/dim]")
-            return None
+            self._log_action(f"  [red]Network deck_select FAILED: {e}[/red]")
+            raise
 
     # ------------------------------------------------------------------
     # Deterministic decision execution
@@ -1980,6 +2032,10 @@ class Runner:
             }
             fb = _FALLBACKS.get(screen_type)
             if fb and fb[0] in actions:
+                self._log_action(
+                    f"  [bold yellow]WARNING: Using fallback {fb[0]}({fb[1]}) "
+                    f"for {screen_type} — network/deterministic action was unavailable[/bold yellow]"
+                )
                 decision = Decision(fb[0], fb[1], "fallback")
             else:
                 return
@@ -1991,6 +2047,9 @@ class Runner:
             f" — {decision.reasoning}[/blue]"
         )
 
+        source = "network" if decision.network_value is not None else "deterministic"
+        self._track_decision(screen_type, source)
+
         if self.logger:
             self.logger.log_decision(
                 game_state=gs,
@@ -2001,7 +2060,7 @@ class Runner:
                     "option_index": decision.option_index,
                     "reasoning": decision.reasoning,
                 },
-                source="network" if decision.network_value is not None else "deterministic",
+                source=source,
                 network_value=decision.network_value,
                 head_scores=decision.head_scores,
             )
@@ -2035,11 +2094,13 @@ class Runner:
             self._shop_visited = True
 
         # Update advisor panel
+        source_label = "network" if decision.network_value is not None else "deterministic"
+        source_color = "blue" if decision.network_value is not None else "green"
         self._advisor_text = (
             f"[bold]{screen_type.upper()}[/bold] | "
             f"Floor {run.get('floor', '?')} | "
             f"HP {run.get('current_hp', '?')}/{run.get('max_hp', '?')}\n\n"
-            f"[green]\\[deterministic][/green] {decision.action}"
+            f"[{source_color}]\\[{source_label}][/{source_color}] {decision.action}"
             f"{f' (idx={decision.option_index})' if decision.option_index is not None else ''}\n"
             f"{decision.reasoning}"
         )
@@ -2239,6 +2300,9 @@ class Runner:
         self._log_action(
             f"Turns: {self.turn_count} | Actions: {self.action_count}"
         )
+
+        # Emit decision routing summary so we can spot network bypasses
+        self._emit_routing_summary(result, floor)
         self._refresh()
 
         # Return to main menu so the next run can start
@@ -2250,6 +2314,179 @@ class Runner:
                 time.sleep(2.0)
             except Exception:
                 pass
+
+    # ------------------------------------------------------------------
+    # Reward interception
+    # ------------------------------------------------------------------
+
+    def _intercept_card_reward(self) -> None:
+        """Poll rapidly after combat win to catch the reward screen.
+
+        The game auto-resolves rewards within a few hundred ms, so we poll
+        at 100ms to catch claim_reward before it disappears.  We claim
+        non-card rewards (gold, potion, relic) immediately, then open the
+        card reward selection screen so the next tick can route it through
+        the network.
+        """
+        deadline = time.monotonic() + 5.0
+        poll_interval = 0.1
+        polls = 0
+
+        while time.monotonic() < deadline:
+            time.sleep(poll_interval)
+            polls += 1
+            try:
+                gs = self.client.get_state()
+            except Exception:
+                return
+
+            screen = gs.get("screen", "").upper()
+            actions = gs.get("available_actions", [])
+
+            # Log every poll for debugging
+            if polls <= 3 or "claim_reward" in actions:
+                self._log_action(
+                    f"  [dim]reward poll #{polls}: screen={screen} actions={actions[:4]}[/dim]"
+                )
+                self.logger._emit({"type": "reward_intercept_poll",
+                    "poll": polls, "screen": screen,
+                    "actions": actions[:5]})
+
+            # Already on card selection screen — done, let tick handle it
+            if "choose_reward_card" in actions or "skip_reward_cards" in actions:
+                self._log_action("  [green]Card selection screen detected[/green]")
+                return
+
+            # Left the reward screen entirely — missed it
+            if "REWARD" not in screen and screen not in ("", "COMBAT"):
+                self._log_action(f"  [yellow]Left reward screen (screen={screen}), missed intercept after {polls} polls[/yellow]")
+                self.logger._emit({"type": "reward_intercept_miss",
+                    "polls": polls, "final_screen": screen,
+                    "final_actions": actions[:5]})
+                return
+
+            if "claim_reward" not in actions:
+                continue
+
+            # claim_reward available — claim items one at a time
+            reward = gs.get("reward") or {}
+            reward_items = reward.get("rewards") or []
+
+            # Debug: log what reward items look like
+            self.logger._emit({"type": "reward_items_debug",
+                "items": reward_items[:6],
+                "reward_keys": list(reward.keys())})
+
+            # Claim non-card rewards first (gold, potion, relic)
+            for item in reward_items:
+                if not item.get("claimable", True):
+                    continue
+                if self._is_card_reward_item(item):
+                    continue  # Save card for last
+                idx = item.get("index", item.get("i"))
+                if idx is not None:
+                    rtype = str(item.get("reward_type", "")).lower()
+                    self._log_action(f"  [dim]auto: claim_reward({idx}) — {rtype}[/dim]")
+                    if not self.dry_run:
+                        try:
+                            self._execute_with_retry("claim_reward", option_index=idx)
+                        except Exception:
+                            pass
+                    time.sleep(0.2)
+
+            # Now claim the card reward to open the selection screen
+            # Re-poll since indices may have shifted after claiming
+            try:
+                gs = self.client.get_state()
+            except Exception:
+                return
+            post_screen = gs.get("screen", "").upper()
+            post_actions = gs.get("available_actions", [])
+            reward = gs.get("reward") or {}
+            reward_items = reward.get("rewards") or []
+
+            # Check if card selection opened (claiming Gold/Potion can
+            # trigger the card selection automatically)
+            if "choose_reward_card" in post_actions or "skip_reward_cards" in post_actions:
+                # Handle card reward RIGHT HERE — don't return to the
+                # main tick loop because the game will auto-resolve the
+                # card selection within a second or two.
+                self._log_action("  [green]Card selection opened — evaluating with network[/green]")
+                self.game_state = gs  # Update for _az_decide_card_reward
+                decision = self._az_decide_card_reward(gs)
+                if decision is not None:
+                    self._log_action(f"  [blue]{decision.reasoning}[/blue]")
+                    self._track_decision("card_reward", "network")
+                    if self.logger:
+                        self.logger.log_decision(
+                            game_state=gs, screen_type="card_reward",
+                            options=post_actions,
+                            choice={"action": decision.action,
+                                    "option_index": decision.option_index,
+                                    "reasoning": decision.reasoning},
+                            source="network",
+                            network_value=decision.network_value,
+                            head_scores=decision.head_scores,
+                        )
+                    if not self.dry_run:
+                        try:
+                            self._execute_with_retry(
+                                decision.action,
+                                option_index=decision.option_index,
+                            )
+                        except Exception as e:
+                            self._log_action(f"  [red]Card reward action failed: {e}[/red]")
+                    self._card_reward_handled = True
+                return
+
+            # Card selection didn't open — try claiming it explicitly
+            for item in reward_items:
+                if self._is_card_reward_item(item) and item.get("claimable", True):
+                    idx = item.get("index", item.get("i"))
+                    if idx is not None:
+                        self._log_action(f"  [cyan]Opening card reward (index {idx})...[/cyan]")
+                        if not self.dry_run:
+                            try:
+                                self._execute_with_retry("claim_reward", option_index=idx)
+                                time.sleep(0.5)
+                            except Exception as e:
+                                self._log_action(f"  [red]Failed: {e}[/red]")
+                        # Re-poll and handle card selection immediately
+                        try:
+                            gs2 = self.client.get_state()
+                            actions2 = gs2.get("available_actions", [])
+                            if "choose_reward_card" in actions2 or "skip_reward_cards" in actions2:
+                                self.game_state = gs2
+                                decision = self._az_decide_card_reward(gs2)
+                                if decision is not None:
+                                    self._log_action(f"  [blue]{decision.reasoning}[/blue]")
+                                    self._track_decision("card_reward", "network")
+                                    if self.logger:
+                                        self.logger.log_decision(
+                                            game_state=gs2, screen_type="card_reward",
+                                            options=actions2,
+                                            choice={"action": decision.action,
+                                                    "option_index": decision.option_index,
+                                                    "reasoning": decision.reasoning},
+                                            source="network",
+                                            network_value=decision.network_value,
+                                            head_scores=decision.head_scores,
+                                        )
+                                    if not self.dry_run:
+                                        try:
+                                            self._execute_with_retry(
+                                                decision.action,
+                                                option_index=decision.option_index,
+                                            )
+                                        except Exception as e:
+                                            self._log_action(f"  [red]Failed: {e}[/red]")
+                                    self._card_reward_handled = True
+                        except Exception:
+                            pass
+                    return
+
+            self._log_action(f"  [yellow]No card reward found after claiming non-card items[/yellow]")
+            return
 
     # ------------------------------------------------------------------
     # Action execution with retry

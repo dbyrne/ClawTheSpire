@@ -37,16 +37,8 @@ def _parse_powers_applied(raw: list[dict] | None) -> tuple[tuple[str, int], ...]
     return tuple((p["power"], p["amount"]) for p in raw)
 
 
-def _parse_keywords(raw: list[str] | None) -> frozenset[str]:
-    if not raw:
-        return frozenset()
-    return frozenset(raw)
-
-
-def _parse_tags(raw: list[str] | None) -> frozenset[str]:
-    if not raw:
-        return frozenset()
-    return frozenset(raw)
+def _parse_frozenset(raw: list[str] | None) -> frozenset[str]:
+    return frozenset(raw) if raw else frozenset()
 
 
 def _parse_spawns(raw: list[dict] | None) -> tuple[str, ...]:
@@ -91,8 +83,8 @@ def _card_from_json(raw: dict) -> Card:
         cards_draw=raw.get("cards_draw") or 0,
         energy_gain=raw.get("energy_gain") or 0,
         hp_loss=raw.get("hp_loss") or 0,
-        keywords=_parse_keywords(raw.get("keywords")),
-        tags=_parse_tags(raw.get("tags")),
+        keywords=_parse_frozenset(raw.get("keywords")),
+        tags=_parse_frozenset(raw.get("tags")),
         spawns_cards=_parse_spawns(raw.get("spawns_cards")),
         is_x_cost=bool(raw.get("is_x_cost")),
     )
@@ -211,6 +203,20 @@ class CardDB:
 
     def get_upgraded(self, card_id: str) -> Card | None:
         return self._cards.get(f"{card_id}+")
+
+    def get_by_name(self, name: str, upgraded: bool = False) -> Card | None:
+        """Look up a card by display name (e.g. 'Strike', 'Defend+')."""
+        base = name.rstrip("+")
+        want_upgraded = upgraded or name.endswith("+")
+        # First pass: exact name + upgrade match
+        for card in self._cards.values():
+            if card.name == base and card.upgraded == want_upgraded:
+                return card
+        # Second pass: name match ignoring upgrade
+        for card in self._cards.values():
+            if card.name == base and not card.upgraded:
+                return card
+        return None
 
     def all_cards(self) -> list[Card]:
         return list(self._cards.values())

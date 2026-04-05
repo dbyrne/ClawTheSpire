@@ -6,15 +6,33 @@ import math
 import random
 from typing import TYPE_CHECKING, Callable
 
-from .constants import CardType, CardZone, TargetType
-from .models import Card, CombatState, EnemyState
-
-if TYPE_CHECKING:
-    pass
+from .constants import CardType, TargetType
+from .models import Card, CombatState, EnemyState, PlayerState
 
 # Type alias for card effect functions.
 # target_idx is the chosen enemy index (None for Self-target cards).
 CardEffect = Callable[[CombatState, int | None], None]
+
+
+# ---------------------------------------------------------------------------
+# Shared utilities
+# ---------------------------------------------------------------------------
+
+def apply_block(entity: PlayerState | EnemyState, damage: int) -> int:
+    """Subtract block from damage. Mutates entity.block, returns remaining damage."""
+    if entity.block > 0:
+        if damage >= entity.block:
+            damage -= entity.block
+            entity.block = 0
+        else:
+            entity.block -= damage
+            damage = 0
+    return damage
+
+
+def get_alive_enemies(state: CombatState) -> list[int]:
+    """Return indices of all living enemies."""
+    return [i for i, e in enumerate(state.enemies) if e.is_alive]
 
 
 # ---------------------------------------------------------------------------
@@ -99,13 +117,7 @@ def deal_damage(state: CombatState, target_idx: int, base_damage: int, hits: int
         if enemy.powers.get("Slow", 0) > 0 and per_hit > 0:
             slow_mult = 1.0 + 0.1 * max(0, state.cards_played_this_turn - 1)
             per_hit = math.floor(per_hit * slow_mult)
-        if enemy.block > 0:
-            if per_hit >= enemy.block:
-                per_hit -= enemy.block
-                enemy.block = 0
-            else:
-                enemy.block -= per_hit
-                per_hit = 0
+        per_hit = apply_block(enemy, per_hit)
         # Slippery: caps damage to 1 per hit while stacks remain
         slippery = enemy.powers.get("Slippery", 0)
         if slippery > 0 and per_hit > 0:
@@ -171,24 +183,22 @@ def draw_cards(state: CombatState, count: int) -> None:
             state.player.draw_pile = list(state.player.discard_pile)
             random.shuffle(state.player.draw_pile)
             state.player.discard_pile.clear()
+            # Pendulum: draw an extra card whenever draw pile shuffles
+            if "PENDULUM" in state.relics and state.player.draw_pile:
+                extra = state.player.draw_pile.pop()
+                state.player.hand.append(extra)
         if state.player.draw_pile:
             card = state.player.draw_pile.pop()
             # Hellraiser: Strikes drawn are auto-played
             if (state.player.powers.get("Hellraiser", 0) > 0
                     and ("Strike" in card.tags or "Strike" in card.name)):
-                alive = [i for i, e in enumerate(state.enemies) if e.is_alive]
+                alive = get_alive_enemies(state)
                 if alive:
                     target = alive[0]  # deterministic for solver
                     per_hit = calculate_attack_damage(
                         card.damage or 0, state, state.enemies[target]
                     )
-                    if state.enemies[target].block > 0:
-                        if per_hit >= state.enemies[target].block:
-                            per_hit -= state.enemies[target].block
-                            state.enemies[target].block = 0
-                        else:
-                            state.enemies[target].block -= per_hit
-                            per_hit = 0
+                    per_hit = apply_block(state.enemies[target], per_hit)
                     state.enemies[target].hp -= per_hit
                 state.player.discard_pile.append(card)
             else:
@@ -239,6 +249,7 @@ def discard_card_from_hand(state: CombatState, card_idx: int) -> Card:
     """
     card = state.player.hand.pop(card_idx)
     state.player.discard_pile.append(card)
+    state.discards_this_turn += 1
     _on_discard_from_hand(state, card)
     return card
 
@@ -280,12 +291,27 @@ def _trigger_sly_effect(state: CombatState, card: Card) -> None:
 
     elif card_id == "RICOCHET":
         # Deal 3 damage to random enemy 4 times (4 damage upgraded)
-        alive = [i for i, e in enumerate(state.enemies) if e.is_alive]
+        alive = get_alive_enemies(state)
         if alive:
             dmg = 3 if not card.upgraded else 4
             for _ in range(4):
                 idx = random.choice(alive)
                 deal_damage(state, idx, dmg, 1)
+
+
+# ---------------------------------------------------------------------------
+# Bulk hand operations
+# ---------------------------------------------------------------------------
+
+def discard_entire_hand(state: CombatState) -> int:
+    """Discard all cards in hand (backwards for index safety). Fires Sly triggers.
+
+    Returns the number of cards discarded.
+    """
+    hand_size = len(state.player.hand)
+    for i in range(hand_size - 1, -1, -1):
+        discard_card_from_hand(state, i)
+    return hand_size
 
 
 # ---------------------------------------------------------------------------
@@ -314,7 +340,7 @@ def generate_card_effect(card: Card) -> CardEffect:
                 deal_damage_all(state, card.damage, card.hit_count)
             elif card.target == TargetType.RANDOM_ENEMY:
                 # Pick random living enemy per hit
-                alive = [i for i, e in enumerate(state.enemies) if e.is_alive]
+                alive = get_alive_enemies(state)
                 if alive:
                     for _ in range(card.hit_count):
                         idx = random.choice(alive)

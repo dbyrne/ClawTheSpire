@@ -14,19 +14,15 @@ import traceback
 from fastmcp import FastMCP
 
 from .advisor import StrategicAdvisor
-from .bridge import state_from_mcp, actions_to_mcp_sequence
 from .data_loader import load_cards, CardDB
 from .game_client import GameClient
 from .game_data import GameDataDB, load_game_data
 from .run_logger import RunLogger
-from .solver import solve_turn, format_solution
 
 mcp = FastMCP(
     name="sts2-solver",
     instructions=(
-        "Combat solver for Slay the Spire 2. "
-        "Call solve_combat during combat to get optimal card play sequences. "
-        "The solver evaluates all legal play orderings and returns the best one. "
+        "Strategic advisor for Slay the Spire 2. "
         "Call advise_strategy for non-combat decisions (card rewards, map, events, "
         "shop, rest sites, boss relics). It uses GPT-4o-mini for strategic reasoning."
     ),
@@ -78,148 +74,6 @@ def _get_logger() -> RunLogger:
         except Exception:
             pass  # Game may not be running yet
     return _logger
-
-
-@mcp.tool()
-def solve_combat(raw_state: str | None = None, execute: bool = True) -> str:
-    """Find the optimal card play sequence for the current combat turn.
-
-    If raw_state is not provided, fetches the current state from the game API.
-    If raw_state is provided, it should be a JSON string of the game state
-    (from get_raw_game_state or GET /state).
-
-    Args:
-        raw_state: Optional JSON game state. If omitted, fetches live state.
-        execute: If True (default), plays the cards directly via the game API
-                 and returns a summary. If False, returns the action sequence
-                 without executing (dry-run mode).
-    """
-    card_db = _get_card_db()
-    client = _get_client()
-
-    try:
-        if raw_state:
-            game_state = json.loads(raw_state) if isinstance(raw_state, str) else raw_state
-        else:
-            game_state = client.get_state()
-    except ConnectionError as e:
-        return f"Error: Cannot connect to game API. Is the game running? ({e})"
-    except json.JSONDecodeError as e:
-        return f"Error: Invalid JSON state: {e}"
-
-    # Check we're in combat
-    screen = game_state.get("screen", "")
-    if "COMBAT" not in screen.upper():
-        return f"Not in combat (screen={screen}). Solver only works during combat."
-
-    # Check there are actions available
-    actions = game_state.get("available_actions", [])
-    if "play_card" not in actions:
-        return "No cards can be played right now (not player's turn or no playable cards)."
-
-    logger = _get_logger()
-    logger.ensure_run(game_state)
-
-    # Log combat start on first turn
-    turn = game_state.get("turn", 0)
-    if turn <= 1:
-        logger.log_combat_start(game_state)
-
-    try:
-        state = state_from_mcp(game_state, card_db)
-    except Exception as e:
-        return f"Error converting game state: {e}\n{traceback.format_exc()}"
-
-    # Solve
-    import time as _time
-    _t0 = _time.perf_counter()
-    from .config import detect_character
-    result = solve_turn(state, card_db=card_db, character=detect_character(game_state))
-    solve_ms = (_time.perf_counter() - _t0) * 1000
-    mcp_actions = actions_to_mcp_sequence(result.actions)
-
-    # Log solver turn — simulate hand mutations to resolve card names
-    cards_played = []
-    log_hand = list(state.player.hand)
-    targets_chosen: list[int | None] = []
-    for a in result.actions:
-        if a.card_idx is not None and a.card_idx < len(log_hand):
-            card = log_hand[a.card_idx]
-            cards_played.append(f"{card.name}+" if card.upgraded else card.name)
-            targets_chosen.append(a.target_idx)
-            log_hand.pop(a.card_idx)
-    logger.log_combat_turn(
-        cards_played=cards_played,
-        targets_chosen=targets_chosen,
-        score=result.score,
-        states_evaluated=result.states_evaluated,
-        solve_ms=solve_ms,
-        game_state=game_state,
-    )
-
-    # Format the solution header
-    lines = [format_solution(result, state), ""]
-
-    if not execute:
-        # Dry-run: return action dicts for manual execution
-        lines.append("MCP actions to execute:")
-        for i, action in enumerate(mcp_actions, 1):
-            lines.append(f"  {i}. {json.dumps(action)}")
-        return "\n".join(lines)
-
-    # Execute each action against the game API
-    lines.append("Executing:")
-    hand = list(state.player.hand)
-    for i, (solver_action, mcp_action) in enumerate(
-        zip(result.actions, mcp_actions), 1
-    ):
-        # Log what we're doing
-        if solver_action.action_type == "end_turn":
-            label = "End Turn"
-        else:
-            card = hand[solver_action.card_idx]
-            target = f" -> enemy {solver_action.target_idx}" if solver_action.target_idx is not None else ""
-            label = f"{card.name}{target}"
-            hand.pop(solver_action.card_idx)
-
-        try:
-            client.execute_action(
-                mcp_action["action"],
-                card_index=mcp_action.get("card_index"),
-                target_index=mcp_action.get("target_index"),
-            )
-            lines.append(f"  {i}. {label} ✓")
-        except Exception as e:
-            lines.append(f"  {i}. {label} ✗ {e}")
-            lines.append("Stopped execution due to error.")
-            break
-
-    # Fetch post-combat state for summary
-    try:
-        post_state = client.get_state()
-        post_combat = post_state.get("combat") or {}
-        post_player = post_combat.get("player") or {}
-        post_screen = post_state.get("screen", "")
-
-        hp = post_player.get("current_hp", "?")
-        block = post_player.get("block", 0)
-
-        enemies_alive = []
-        for e in post_combat.get("enemies", []):
-            if e.get("current_hp", 0) > 0:
-                enemies_alive.append(f"{e.get('name', '?')} {e['current_hp']}hp")
-
-        lines.append("")
-        if "COMBAT" not in post_screen.upper() or not enemies_alive:
-            lines.append(f"Combat won! HP: {hp}")
-            logger.log_combat_end(post_state, "win")
-        else:
-            lines.append(f"Turn ended. HP: {hp}, Block: {block}")
-            lines.append(f"Enemies remaining: {', '.join(enemies_alive)}")
-    except Exception:
-        pass  # Non-critical, solver already did its job
-
-    return "\n".join(lines)
 
 
 @mcp.tool()
