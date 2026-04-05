@@ -245,10 +245,10 @@ def _move_card_after_play(state: CombatState, card: Card) -> None:
 
     if should_exhaust:
         # Powers go to the power zone, not the exhaust pile (STS2 behavior).
-        # Token-rarity cards (Shiv, Giant Rock) vanish entirely.
-        # All other Exhaust cards go to the exhaust pile.
+        # Giant Rock tokens vanish entirely.
+        # All other Exhaust cards (including Shivs) go to the exhaust pile.
         is_power = card.card_type == CardType.POWER
-        is_token = card.id in ("SHIV", "GIANT_ROCK")
+        is_token = card.id in ("GIANT_ROCK",)
         if is_power or is_token:
             _on_exhaust(state)  # Still trigger exhaust effects
         else:
@@ -458,8 +458,8 @@ def end_turn(state: CombatState) -> None:
         if card.retain or i in wlp_retained:
             remaining.append(card)
         elif card.ethereal:
-            # Ethereal cards exhaust at end of turn. Token cards vanish.
-            is_token = card.id in ("SHIV", "GIANT_ROCK")
+            # Ethereal cards exhaust at end of turn. Giant Rock vanishes.
+            is_token = card.id in ("GIANT_ROCK",)
             if not is_token:
                 state.player.exhaust_pile.append(card)
             _on_exhaust(state)
