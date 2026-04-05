@@ -67,6 +67,11 @@ def can_play_card(state: CombatState, card_idx: int) -> bool:
     # Velvet Choker: can only play 6 cards per turn
     if state.player.powers.get("Velvet Choker", 0) > 0 and state.cards_played_this_turn >= 6:
         return False
+    # Smoggy: can only play 1 Skill per turn (applied by Living Fog)
+    if (card.card_type == CardType.SKILL
+            and state.player.powers.get("Smoggy", 0) > 0
+            and state.player.powers.get("_skills_played", 0) >= 1):
+        return False
     return True
 
 
@@ -128,6 +133,8 @@ def play_card(
     state.cards_played_this_turn += 1
     if card.card_type == CardType.ATTACK:
         state.attacks_played_this_turn += 1
+    if card.card_type == CardType.SKILL:
+        state.player.powers["_skills_played"] = state.player.powers.get("_skills_played", 0) + 1
 
     # --- Pre-effect triggers ---
     # Afterimage: gain block whenever any card is played.
@@ -320,6 +327,7 @@ def start_turn(state: CombatState) -> None:
     state.cards_played_this_turn = 0
     state.attacks_played_this_turn = 0
     state.discards_this_turn = 0
+    state.player.powers.pop("_skills_played", None)
 
     # Reset energy
     state.player.energy = state.player.max_energy
