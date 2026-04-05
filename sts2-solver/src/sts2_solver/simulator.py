@@ -99,8 +99,16 @@ ENEMY_MOVE_TABLES: dict[str, list[dict]] = {
     # Fallback cycling tables for enemies without enough log data for
     # a data-driven profile (enemy_profiles.json).  Profiles are checked
     # first — entries here only matter for enemies NOT in the profile file.
-    #
-    # Currently: only bosses with < 2 observed combats.
+
+    # --- Living Fog: attacks every turn, spawns Gas Bomb every other turn ---
+    "LIVING_FOG": [
+        {"type": "Attack", "damage": 5, "hits": 1, "player_smoggy": 1},
+        {"type": "Attack", "damage": 8, "hits": 1, "spawn_minion": "GAS_BOMB"},
+    ],
+    # Gas Bomb: minion that does nothing (explodes on death — handled elsewhere)
+    "GAS_BOMB": [
+        {"type": "Buff"},
+    ],
 
     # --- Bosses (insufficient log data for profiles) ---
     "CEREMONIAL_BEAST": [
@@ -819,6 +827,8 @@ def _resolve_sim_intents(state: CombatState, ais: list[EnemyAI]) -> None:
                 state.player.powers.get("Tangled", 0)
                 + intent["player_tangled"]
             )
+        if intent.get("player_smoggy"):
+            state.player.powers["Smoggy"] = 1
 
         # Debuff intents with damage (e.g. Fuzzy Wurm Crawler Acid Goop,
         # Kin Priest orbs) — resolve_enemy_intents only handles Attack type.
