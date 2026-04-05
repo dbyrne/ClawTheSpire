@@ -535,11 +535,13 @@ class RunLogger:
 def _parse_pile(game_state: dict, pile: str) -> tuple[int, list[str]]:
     """Get card pile size and card names from agent_view or combat dict.
 
-    The C# mod exposes piles under agent_view.{run,combat}.piles.{draw,discard,exhaust}
-    as grouped card stack arrays. Each entry has a ``line`` field like
-    "2x Strike (1) — Deal 6 damage." We parse the count and card name.
+    The C# mod exposes piles as grouped card stacks. Entries can be:
+    - dict with "line" field: "2x Strike (1) — Deal 6 damage."
+    - string: "Strike*2 [1⚡]—Deal 6 damage." or "Defend [1⚡]—Gain 5 Block."
 
-    Returns (total_count, card_names_list).
+    The *N suffix means N copies of that card in the pile.
+
+    Returns (total_count, card_names_list) with names expanded per copy.
     """
     import re
 
@@ -555,21 +557,43 @@ def _parse_pile(game_state: dict, pile: str) -> tuple[int, list[str]]:
             for entry in pile_data:
                 if isinstance(entry, dict):
                     line = entry.get("line", "")
-                    # Parse "2x Card Name (1) — desc" or "Card Name (0) — desc"
-                    m = re.match(r"(?:(\d+)x\s)?(.+?)(?:\s*\(\d+\))?\s*[—–-]", line)
-                    if m:
-                        count = int(m.group(1)) if m.group(1) else 1
-                        name = m.group(2).strip()
-                        total += count
-                        names.extend([name] * count)
-                    else:
-                        # Fallback: just count
-                        m2 = re.match(r"(\d+)x\s", line)
-                        total += int(m2.group(1)) if m2 else 1
-                        names.append(line.split("(")[0].strip())
+                elif isinstance(entry, str):
+                    line = entry
                 else:
                     total += 1
                     names.append(str(entry))
+                    continue
+
+                # Parse formats:
+                #   "CardName*N [cost...]—desc"  (N copies)
+                #   "CardName [cost...]—desc"    (1 copy)
+                #   "Nx CardName (cost) — desc"  (old format)
+                name = None
+                count = 1
+
+                # Try *N suffix: "Strike*2 [1⚡]—Deal 6 damage."
+                m = re.match(r"(.+?)\*(\d+)\s*[\[（]", line)
+                if m:
+                    name = m.group(1).strip()
+                    count = int(m.group(2))
+                else:
+                    # Try no multiplier: "Defend [1⚡]—Gain 5 Block."
+                    m = re.match(r"(.+?)\s*[\[（]", line)
+                    if m:
+                        name = m.group(1).strip()
+                    else:
+                        # Try Nx prefix: "2x Strike (1) — desc"
+                        m = re.match(r"(?:(\d+)x\s)?(.+?)(?:\s*\(\d+\))?\s*[—–-]", line)
+                        if m:
+                            count = int(m.group(1)) if m.group(1) else 1
+                            name = m.group(2).strip()
+
+                if name:
+                    total += count
+                    names.extend([name] * count)
+                else:
+                    total += 1
+                    names.append(line.split("[")[0].split("(")[0].strip())
             return total, names
 
     # Fallback: combat dict might have {pile}_pile as a list

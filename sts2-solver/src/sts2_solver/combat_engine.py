@@ -248,10 +248,10 @@ def _move_card_after_play(state: CombatState, card: Card) -> None:
 
     if should_exhaust:
         # Powers go to the power zone, not the exhaust pile (STS2 behavior).
-        # Giant Rock and Slimed vanish entirely (removed from game).
-        # All other Exhaust cards (including Shivs) go to the exhaust pile.
+        # Giant Rock vanishes entirely (removed from game).
+        # All other Exhaust cards (Shivs, Slimed, etc.) go to the exhaust pile.
         is_power = card.card_type == CardType.POWER
-        is_token = card.id in ("GIANT_ROCK", "SLIMED")
+        is_token = card.id in ("GIANT_ROCK",)
         if is_power or is_token:
             _on_exhaust(state)  # Still trigger exhaust effects
         else:
