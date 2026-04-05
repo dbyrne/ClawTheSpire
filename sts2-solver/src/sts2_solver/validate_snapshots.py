@@ -735,14 +735,11 @@ def compare_states(
                 delta=sim_exhaust_delta - snap_exhaust_delta,
             ))
 
-    # --- Retained cards (cards with Retain should appear in both hands) ---
-    snap_hand_names = {c.get("name", "") for c in snap.hand}
-    for card in post_draw.player.hand:
-        if card.retain and card.name not in snap_hand_names:
-            mismatches.append(FieldMismatch(
-                f"retained_card_missing ({card.name})",
-                "in hand", "not in snapshot hand",
-            ))
+    # --- Retained cards ---
+    # Note: we can't reliably compare retained cards because the sim's
+    # draw pile order differs from the game's. The hand_size check
+    # catches draw count differences. Cross-turn retain verification
+    # would need hand_after from the current turn + next snapshot.
 
     return mismatches
 

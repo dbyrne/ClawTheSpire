@@ -526,6 +526,19 @@ def _burst(card: Card, card_db: CardDB | None) -> CardEffect:
     return effect
 
 
+@register("RESTLESSNESS")
+def _restlessness(card: Card, card_db: CardDB | None) -> CardEffect:
+    """If hand is empty, draw 2(3) cards and gain 2 energy. Retain."""
+    draw_count = 2 if not card.upgraded else 3
+
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        # Only triggers when hand is empty (this card was the last card played)
+        if not state.player.hand:
+            draw_cards(state, draw_count)
+            gain_energy(state, 2)
+    return effect
+
+
 @register("SEEKER_STRIKE")
 def _seeker_strike(card: Card, card_db: CardDB | None) -> CardEffect:
     """Deal 6(9) damage. Choose 1 of 3 from Draw Pile to add to Hand."""
