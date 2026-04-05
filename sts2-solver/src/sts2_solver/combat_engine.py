@@ -177,6 +177,10 @@ def play_card(
             count = 0
         state.player.powers["_letter_opener_count"] = count
 
+    # Game Piece: draw 1 card when a Power is played
+    if "GAME_PIECE" in relics and card.card_type == CardType.POWER:
+        draw_cards(state, 1)
+
     # Shuriken: every 3 attacks, gain 1 Strength
     if "SHURIKEN" in relics and card.card_type == CardType.ATTACK:
         count = state.player.powers.get("_shuriken_count", 0) + 1
@@ -362,6 +366,12 @@ def start_turn(state: CombatState) -> None:
             state.player.energy += 1
         state.player.powers.pop("_art_of_war_eligible", None)
 
+    # Pocketwatch: if played 3 or fewer cards last turn, draw 3 extra
+    if "POCKETWATCH" in relics and state.turn > 1:
+        if state.player.powers.get("_pocketwatch_eligible", 0) > 0:
+            draw_cards(state, 3)
+        state.player.powers.pop("_pocketwatch_eligible", None)
+
     # Nunchaku: tracked via _nunchaku_count power (triggers in play_card)
 
     # Clear turn-duration powers from previous turn
@@ -408,6 +418,11 @@ def end_turn(state: CombatState) -> None:
     if "ART_OF_WAR" in state.relics:
         if state.attacks_played_this_turn == 0:
             state.player.powers["_art_of_war_eligible"] = 1
+
+    # Pocketwatch: track if 3 or fewer cards played (checked next start_turn)
+    if "POCKETWATCH" in state.relics:
+        if state.cards_played_this_turn <= 3:
+            state.player.powers["_pocketwatch_eligible"] = 1
 
     # Ornamental Fan: reset per-turn counter (count is in play_card)
     # Kunai: reset per-turn counter
