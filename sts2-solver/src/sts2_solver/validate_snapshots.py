@@ -934,34 +934,6 @@ def validate_run(run: RunReplay, card_db: CardDB) -> tuple[list[TurnValidation],
             turn = snapshot_turns[i]
             snap = turn.snapshot
 
-            # Skip mid-turn Survivor splits.
-            # A mid-turn split occurs when Survivor/Acrobatics triggers a
-            # discard selection, creating an extra snapshot mid-turn.
-            # Detect by: only Survivor/Acrobatics played in this snapshot,
-            # or the previous snapshot only played Survivor/Acrobatics
-            # (making this the continuation snapshot).
-            _split_cards = {"Survivor", "Survivor+", "Acrobatics", "Acrobatics+"}
-            _is_split = (snap.turn > 1
-                         and set(turn.cards_played) <= _split_cards
-                         and len(turn.cards_played) <= 1)
-            if i > 0:
-                prev_turn = snapshot_turns[i - 1]
-                _prev_is_split = (set(prev_turn.cards_played) <= _split_cards
-                                  and len(prev_turn.cards_played) <= 1)
-            else:
-                _prev_is_split = False
-
-            if _is_split:
-                results.append(TurnValidation(
-                    combat_idx=combat_idx,
-                    turn=snap.turn,
-                    cards_played=turn.cards_played,
-                    mismatches=[],
-                    skipped=True,
-                    skip_reason="mid-turn split (Survivor)",
-                ))
-                continue
-
             # Need next snapshot to compare against
             if i + 1 >= len(snapshot_turns):
                 results.append(TurnValidation(
@@ -977,30 +949,19 @@ def validate_run(run: RunReplay, card_db: CardDB) -> tuple[list[TurnValidation],
             next_turn = snapshot_turns[i + 1]
             next_snap = next_turn.snapshot
 
-            # Skip if next snapshot is a mid-turn split (can't compare against it)
-            _next_is_split = (next_snap.turn > 1
-                              and set(next_turn.cards_played) <= _split_cards
-                              and len(next_turn.cards_played) <= 1)
-            if _next_is_split:
+            # Skip if next snapshot is mid-turn (captured during a discard
+            # prompt after Survivor/Acrobatics). Detected by: block > 0 at
+            # what should be turn start (block is cleared at start of turn
+            # unless Barricade is active).
+            has_barricade = next_snap.player_powers.get("Barricade", 0) > 0
+            if next_snap.player_block > 0 and next_snap.turn > 1 and not has_barricade:
                 results.append(TurnValidation(
                     combat_idx=combat_idx,
                     turn=snap.turn,
                     cards_played=turn.cards_played,
                     mismatches=[],
                     skipped=True,
-                    skip_reason="next snapshot is mid-turn split",
-                ))
-                continue
-
-            # Also skip if this is a continuation after a split (prev only played Survivor)
-            if _prev_is_split:
-                results.append(TurnValidation(
-                    combat_idx=combat_idx,
-                    turn=snap.turn,
-                    cards_played=turn.cards_played,
-                    mismatches=[],
-                    skipped=True,
-                    skip_reason="continuation after mid-turn split",
+                    skip_reason="next snapshot is mid-turn (block > 0 at turn start)",
                 ))
                 continue
 

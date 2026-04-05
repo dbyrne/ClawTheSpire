@@ -117,6 +117,12 @@ def deal_damage(state: CombatState, target_idx: int, base_damage: int, hits: int
         if enemy.powers.get("Slow", 0) > 0 and per_hit > 0:
             slow_mult = 1.0 + 0.1 * max(0, state.cards_played_this_turn - 1)
             per_hit = math.floor(per_hit * slow_mult)
+        # Skittish: enemy gains block equal to stacks on first hit each turn
+        skittish = enemy.powers.get("Skittish", 0)
+        if skittish > 0 and not enemy.powers.get("_skittish_triggered"):
+            enemy.block += skittish
+            enemy.powers["_skittish_triggered"] = 1
+
         per_hit = apply_block(enemy, per_hit)
         # Slippery: caps damage to 1 per hit while stacks remain
         slippery = enemy.powers.get("Slippery", 0)

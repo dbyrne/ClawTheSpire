@@ -324,9 +324,10 @@ def start_turn(state: CombatState) -> None:
     if state.player.powers.get("Barricade", 0) <= 0:
         state.player.block = 0
 
-    # Remove enemy block
+    # Remove enemy block and reset per-turn triggers
     for enemy in state.enemies:
         enemy.block = 0
+        enemy.powers.pop("_skittish_triggered", None)
 
     # Start-of-turn power ticks
     _tick_start_of_turn_powers(state)
