@@ -1,5 +1,5 @@
 {
-  "gen": 28,
+  "gen": 29,
   "character": "Silent",
   "model": "qwen3:14b",
   "poll_interval": 1.0
