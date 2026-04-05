@@ -119,7 +119,11 @@ class RunLogger:
         self._emit(event)
 
     def log_combat_start(self, game_state: dict) -> None:
-        """Log the beginning of a combat encounter."""
+        """Log the beginning of a combat encounter.
+
+        Includes the full deck list so the validator can reconstruct
+        exact pile contents (accounting for cards added mid-run).
+        """
         self.ensure_run(game_state)
         combat = game_state.get("combat") or {}
         enemies = combat.get("enemies") or []
@@ -133,10 +137,22 @@ class RunLogger:
         ]
 
         run = game_state.get("run") or {}
+        # Enhancement #4: deck contents at combat start
+        deck_cards = []
+        for c in run.get("deck", []):
+            if isinstance(c, dict):
+                name = c.get("name") or c.get("card_id", "?")
+                if c.get("upgraded"):
+                    name += "+"
+                deck_cards.append(name)
+            elif isinstance(c, str):
+                deck_cards.append(c)
+
         self._emit({
             "type": "combat_start",
             "floor": run.get("floor"),
             "enemies": self._combat_enemies,
+            "deck": deck_cards,
         })
 
     def log_combat_turn(
@@ -148,6 +164,8 @@ class RunLogger:
         game_state: dict | None = None,
         targets_chosen: list[int | None] | None = None,
         network_value: float | None = None,
+        discards: list[str] | None = None,
+        hand_after: list[str] | None = None,
     ) -> None:
         """Log a single combat turn's solver output.
 
@@ -160,6 +178,12 @@ class RunLogger:
 
         network_value is the MCTS root value (win expectancy, -1 to +1)
         from the start of the turn.
+
+        discards is a list of card names discarded during the turn
+        (from Survivor, Acrobatics, etc. pending choice resolution).
+
+        hand_after is the list of card names remaining in hand after
+        all cards are played but before end of turn.
         """
         self._combat_turn += 1
 
@@ -179,6 +203,10 @@ class RunLogger:
             event["targets_chosen"] = targets_chosen
         if network_value is not None:
             event["network_value"] = round(network_value, 4)
+        if discards is not None:
+            event["discards"] = discards
+        if hand_after is not None:
+            event["hand_after"] = hand_after
 
         self._emit(event)
 

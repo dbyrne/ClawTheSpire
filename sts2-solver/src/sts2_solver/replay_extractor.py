@@ -56,6 +56,7 @@ class CombatTurn:
     targets_chosen: list[int | None] = field(default_factory=list)  # Per-card target indices
     snapshot: CombatSnapshot | None = None  # Present if enhanced logging enabled
     discard_choices: list[str] = field(default_factory=list)  # Card names discarded (from deck_select events)
+    hand_after: list[str] | None = None  # Hand contents after all plays (before end turn)
 
 
 @dataclass
@@ -185,6 +186,10 @@ def extract_run(path: Path) -> RunReplay | None:
             combat_turns = []
             pending_snapshot = None
             combat_hp_before = 0  # will be set by combat_end
+            # Enhancement #4: use deck from combat_start if available
+            combat_deck = event.get("deck")
+            if combat_deck:
+                current_deck = combat_deck
 
         # Combat snapshot (enhanced logging) — arrives just before combat_turn
         if etype == "combat_snapshot" and in_combat:
@@ -219,6 +224,8 @@ def extract_run(path: Path) -> RunReplay | None:
                 ts=event.get("ts", ""),
                 targets_chosen=list(event.get("targets_chosen", [])),
                 snapshot=pending_snapshot,
+                discard_choices=list(event.get("discards", [])),
+                hand_after=event.get("hand_after"),
             ))
             pending_snapshot = None
 

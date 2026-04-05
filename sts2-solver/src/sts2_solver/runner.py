@@ -968,6 +968,21 @@ class Runner:
             except Exception as e:
                 self._log_action(f"  [red]X End Turn: {e}[/red]")
 
+        # Capture hand after all plays (before end turn resolves)
+        # Enhancement #2: hand_after lets the validator verify draw effects
+        post_play_hand = None
+        try:
+            post_combat = (gs.get("combat") or {})
+            post_hand_raw = post_combat.get("hand") or []
+            post_play_hand = []
+            for c in post_hand_raw:
+                name = c.get("name") or c.get("card_id", "?")
+                if c.get("upgraded"):
+                    name += "+"
+                post_play_hand.append(name)
+        except Exception:
+            pass
+
         # Log the full turn (pass pre-play state for combat snapshot)
         self.logger.log_combat_turn(
             cards_played=cards_played,
@@ -977,6 +992,7 @@ class Runner:
             solve_ms=total_solve_ms,
             game_state=turn_start_gs,
             network_value=turn_root_value,
+            hand_after=post_play_hand,
         )
 
         if self._store_run_started:
