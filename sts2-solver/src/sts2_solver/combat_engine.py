@@ -438,10 +438,23 @@ def end_turn(state: CombatState) -> None:
     if constrict > 0:
         state.player.hp -= constrict
 
-    # Discard hand (except Retain)
+    # Well-Laid Plans: retain up to N cards (N = power stacks)
+    # Heuristic: keep the highest-cost card(s) that aren't already Retain.
+    # A proper implementation would expose this as a pending choice for MCTS.
+    wlp_stacks = state.player.powers.get("Well-Laid Plans", 0)
+    wlp_retained: set[int] = set()
+    if wlp_stacks > 0:
+        # Score cards by cost (higher = more valuable to retain)
+        candidates = [(i, c) for i, c in enumerate(state.player.hand)
+                      if not c.retain and c.card_type != CardType.STATUS]
+        candidates.sort(key=lambda x: x[1].cost, reverse=True)
+        for idx, card in candidates[:wlp_stacks]:
+            wlp_retained.add(idx)
+
+    # Discard hand (except Retain keyword and Well-Laid Plans retained)
     remaining = []
-    for card in state.player.hand:
-        if card.retain:
+    for i, card in enumerate(state.player.hand):
+        if card.retain or i in wlp_retained:
             remaining.append(card)
         elif card.ethereal:
             # Ethereal cards exhaust at end of turn. Token cards vanish.

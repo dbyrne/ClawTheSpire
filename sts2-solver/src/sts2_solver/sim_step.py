@@ -140,12 +140,18 @@ def _post_resolve(state: CombatState, pc, card_db: CardDB | None = None) -> None
     """Run post-resolution effects after all choices are made."""
     source = pc.source_card_id.rstrip("+")
 
-    if source == "HIDDEN_DAGGERS":
-        # After discarding 2 cards, add 2 Shivs to hand
+    if source.startswith("HIDDEN_DAGGERS"):
+        # After discards, add Shivs to hand (count encoded in source_card_id)
+        shiv_count = 2
+        if ":" in source:
+            try:
+                shiv_count = int(source.split(":")[1])
+            except ValueError:
+                pass
         if card_db:
             shiv = card_db.get("SHIV")
             if shiv:
-                for _ in range(2):
+                for _ in range(shiv_count):
                     state.player.hand.append(shiv)
 
 

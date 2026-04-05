@@ -526,6 +526,66 @@ def _burst(card: Card, card_db: CardDB | None) -> CardEffect:
     return effect
 
 
+@register("STORM_OF_STEEL")
+def _storm_of_steel(card: Card, card_db: CardDB | None) -> CardEffect:
+    """Discard hand. Add 1 Shiv per card discarded."""
+    from .effects import discard_card_from_hand as _discard
+
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        hand_size = len(state.player.hand)
+        for i in range(hand_size - 1, -1, -1):
+            _discard(state, i)
+        # Add Shivs equal to cards discarded
+        for _ in range(hand_size):
+            add_card_to_hand(state, _make_shiv())
+    return effect
+
+
+@register("SHADOW_STEP")
+def _shadow_step(card: Card, card_db: CardDB | None) -> CardEffect:
+    """Discard hand. Next turn, Attacks deal double damage."""
+    from .effects import discard_card_from_hand as _discard
+
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        hand_size = len(state.player.hand)
+        for i in range(hand_size - 1, -1, -1):
+            _discard(state, i)
+        apply_power_to_player(state, "Double Damage", 1)
+    return effect
+
+
+@register("HIDDEN_DAGGERS")
+def _hidden_daggers(card: Card, card_db: CardDB | None) -> CardEffect:
+    """Discard 2 cards. Add 2(3) Shivs to hand."""
+    shiv_count = 2 if not card.upgraded else 3
+
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        if len(state.player.hand) >= 2:
+            state.pending_choice = PendingChoice(
+                choice_type="discard_from_hand",
+                num_choices=2,
+                source_card_id=f"HIDDEN_DAGGERS:{shiv_count}",
+            )
+        elif len(state.player.hand) == 1:
+            state.pending_choice = PendingChoice(
+                choice_type="discard_from_hand",
+                num_choices=1,
+                source_card_id=f"HIDDEN_DAGGERS:{shiv_count}",
+            )
+        # Shivs are added in _post_resolve() after discards complete
+    return effect
+
+
+@register("WELL_LAID_PLANS")
+def _well_laid_plans(card: Card, card_db: CardDB | None) -> CardEffect:
+    """At end of turn, Retain up to 1(2) card(s)."""
+    stacks = 1 if not card.upgraded else 2
+
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        apply_power_to_player(state, "Well-Laid Plans", stacks)
+    return effect
+
+
 @register("ACCURACY")
 def _accuracy(card: Card, card_db: CardDB | None) -> CardEffect:
     """Shivs deal 4(6) additional damage."""
