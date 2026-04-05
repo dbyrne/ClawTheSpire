@@ -91,6 +91,52 @@ def _normalize_card_id(raw_id: str) -> str:
 # Hand-coded intent data for Act 1 (Overgrowth) enemies.
 # Format: list of (intent_type, damage, hits, block, buff_effects)
 # buff_effects: dict of effects to apply, e.g. {"self_strength": 2}
+# ---------------------------------------------------------------------------
+# Underdocks gauntlet wave pool (observed from game logs)
+# ---------------------------------------------------------------------------
+# Normal/weak Underdocks encounters are gauntlets: killing all enemies in a
+# wave spawns a new random wave.  Bosses and elites are NOT gauntlets.
+
+UNDERDOCKS_WAVE_POOL: list[list[str]] = [
+    ["SLUDGE_SPINNER"],
+    ["CORPSE_SLUG", "CORPSE_SLUG"],
+    ["SEAPUNK"],
+    ["NIBBIT"],
+    ["FUZZY_WURM_CRAWLER"],
+    ["LEAF_SLIME_M", "TWIG_SLIME_S"],
+    ["FLYCONID", "SNAPPING_JAXFRUIT"],
+    ["LIVING_FOG"],
+    ["TOADPOLE", "TOADPOLE"],
+    ["TERROR_EEL"],
+    ["WRIGGLER", "WRIGGLER", "WRIGGLER", "WRIGGLER"],
+    ["EYE_WITH_TEETH", "FOGMOG"],
+    ["SHRINKER_BEETLE"],
+    ["BYGONE_EFFIGY"],
+    ["CALCIFIED_CULTIST", "DAMP_CULTIST"],
+    ["SKULKING_COLONY"],
+    ["PUNCH_CONSTRUCT"],
+    ["TWO_TAILED_RAT", "TWO_TAILED_RAT"],
+    ["SEWER_CLAM"],
+    ["VINE_SHAMBLER"],
+    ["MAWLER"],
+    ["HAUNTED_SHIP"],
+    ["FOSSIL_STALKER"],
+]
+
+
+def is_gauntlet_encounter(encounter_id: str) -> bool:
+    """Check if an encounter is an Underdocks gauntlet (multi-wave)."""
+    _ensure_data_loaded()
+    enc = _ENCOUNTERS_BY_ID.get(encounter_id, {})
+    if enc.get("act") != "Underdocks":
+        return False
+    room_type = (enc.get("room_type") or "").lower()
+    return room_type == "monster"
+
+
+# ---------------------------------------------------------------------------
+# Enemy move tables (fallback for enemies without profiles)
+# ---------------------------------------------------------------------------
 #
 # Derived from monsters.json move lists + damage tables + STS conventions.
 # Enemies cycle through their moves, which produces realistic patterns.
@@ -1352,7 +1398,9 @@ class ShopResult:
 class RunStrategy(Protocol):
     def fight_combat(self, deck: list, hp: int, max_hp: int, max_energy: int,
                      encounter_id: str, card_db, rng, potions: list[dict],
-                     relics: frozenset[str]) -> StrategyCombatResult: ...
+                     relics: frozenset[str],
+                     gauntlet_waves: int = 0,
+                     wave_pool: list[list[str]] | None = None) -> StrategyCombatResult: ...
 
     def pick_card_reward(self, offered: list, deck: list, hp: int, max_hp: int,
                          floor: int, card_db, pools: dict) -> tuple: ...
@@ -1513,10 +1561,18 @@ def run_act1(
                 continue
 
             potions_before = len([p for p in potions if p])
+            # Underdocks normal/weak encounters are gauntlets with random waves
+            gauntlet_kw = {}
+            if is_gauntlet_encounter(enc_id):
+                gauntlet_kw = {
+                    "gauntlet_waves": rng.randint(2, 5),
+                    "wave_pool": UNDERDOCKS_WAVE_POOL,
+                }
             combat = strategy.fight_combat(
                 deck=deck, hp=hp, max_hp=max_hp, max_energy=max_energy,
                 encounter_id=enc_id, card_db=card_db, rng=rng,
                 potions=potions, relics=frozenset(relics),
+                **gauntlet_kw,
             )
             potions = combat.potions_after
             potions_after = len([p for p in potions if p])

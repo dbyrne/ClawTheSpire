@@ -99,9 +99,17 @@ def mcts_combat(
     max_turns: int = 30,
     potions: list[dict] | None = None,
     relics: frozenset[str] | None = None,
+    gauntlet_waves: int = 0,
+    wave_pool: list[list[str]] | None = None,
 ) -> tuple[list[TrainingSample], str, int, int, list[dict], float]:
-    """Run one combat using MCTS. Returns (samples, outcome, turns, hp_after, remaining_potions, initial_value)."""
+    """Run one combat using MCTS. Returns (samples, outcome, turns, hp_after, remaining_potions, initial_value).
+
+    For Underdocks gauntlet encounters, gauntlet_waves > 0 means spawn that
+    many additional waves after the initial enemies die.
+    """
     _ensure_data_loaded()
+    if gauntlet_waves > 0:
+        max_turns = max(max_turns, 15 + gauntlet_waves * 6)
 
     enc = _ENCOUNTERS_BY_ID.get(encounter_id, {})
     monster_list = enc.get("monsters", [])
@@ -128,6 +136,21 @@ def mcts_combat(
     samples: list[TrainingSample] = []
     initial_value_estimate = 0.0
     outcome = None
+    waves_remaining = gauntlet_waves
+
+    def _spawn_next_wave():
+        """Replace dead enemies with a new random wave."""
+        nonlocal waves_remaining
+        if waves_remaining <= 0 or not wave_pool:
+            return False
+        waves_remaining -= 1
+        wave = rng.choice(wave_pool)
+        state.enemies.clear()
+        enemy_ais.clear()
+        for mid in wave:
+            state.enemies.append(_spawn_enemy(mid))
+            enemy_ais.append(_create_enemy_ai(mid))
+        return True
 
     for turn_num in range(1, max_turns + 1):
         start_turn(state)
@@ -136,6 +159,8 @@ def mcts_combat(
         cards_this_turn = 0
         while cards_this_turn < 12:
             outcome = is_combat_over(state)
+            if outcome == "win" and _spawn_next_wave():
+                outcome = None  # Wave spawned, combat continues
             if outcome:
                 break
 
@@ -188,6 +213,8 @@ def mcts_combat(
                 cards_this_turn += 1
 
             outcome = is_combat_over(state)
+            if outcome == "win" and _spawn_next_wave():
+                outcome = None
             if outcome:
                 break
 
@@ -200,6 +227,8 @@ def mcts_combat(
         tick_enemy_powers(state)
 
         outcome = is_combat_over(state)
+        if outcome == "win" and _spawn_next_wave():
+            outcome = None
         if outcome:
             break
 
@@ -322,7 +351,7 @@ class MCTSStrategy:
         self.temperature = temperature
 
     def fight_combat(self, deck, hp, max_hp, max_energy, encounter_id, card_db,
-                     rng, potions, relics):
+                     rng, potions, relics, gauntlet_waves=0, wave_pool=None):
         samples, outcome, turns, hp_after, remaining_potions, initial_value = mcts_combat(
             deck=deck, player_hp=hp, player_max_hp=max_hp,
             player_max_energy=max_energy, encounter_id=encounter_id,
@@ -331,6 +360,8 @@ class MCTSStrategy:
             mcts_simulations=self.mcts_simulations,
             temperature=self.temperature, potions=potions,
             relics=relics,
+            gauntlet_waves=gauntlet_waves,
+            wave_pool=wave_pool,
         )
         return StrategyCombatResult(
             outcome=outcome,
