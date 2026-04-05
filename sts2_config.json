@@ -1,7 +1,6 @@
 {
-  "gen": 12,
-  "character": "Ironclad",
+  "gen": 28,
+  "character": "Silent",
   "model": "qwen3:14b",
-  "poll_interval": 1.0,
-  "deploy_dashboard": true
+  "poll_interval": 1.0
 }

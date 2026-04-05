@@ -43,7 +43,6 @@ from ..simulator import (
     _create_enemy_ai,
     _set_enemy_intents,
     _resolve_sim_intents,
-    _generate_act1_map,
     _generate_act1_map_with_choices,
     _pick_encounter,
     _build_card_pool,

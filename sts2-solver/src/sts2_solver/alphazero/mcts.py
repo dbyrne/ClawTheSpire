@@ -89,7 +89,14 @@ class Node:
 # ---------------------------------------------------------------------------
 
 class MCTS:
-    """Monte Carlo Tree Search with neural network guidance."""
+    """Monte Carlo Tree Search with neural network guidance.
+
+    Value estimates use end-of-turn state simulation: after expanding a
+    leaf node, the MCTS simulates end_turn + enemy attacks and queries
+    the value head on the resulting state. This ensures the value head
+    sees post-attack HP rather than transient block, preventing it from
+    overvaluing unnecessary blocking plays.
+    """
 
     def __init__(
         self,
@@ -226,10 +233,16 @@ class MCTS:
             node.is_expanded = True
             return 0.0
 
-        # Query network
+        # Query network for policy priors and value.
+        # Policy priors come from the CURRENT (mid-turn) state — they guide
+        # which card to try next.
+        # Value comes from a SIMULATED END-OF-TURN state — this ensures the
+        # value head sees post-enemy-attack HP rather than transient block,
+        # preventing it from overvaluing block plays.
         from .state_tensor import encode_state, encode_actions
 
         with torch.no_grad():
+            # Policy from current state
             state_tensors = encode_state(node.state, self.vocabs, self.config)
             state_tensors = {k: v.to(self.device) for k, v in state_tensors.items()}
 
@@ -242,12 +255,37 @@ class MCTS:
             action_features = action_features.to(self.device)
             action_mask = action_mask.to(self.device)
 
-            value, logits = self.network.forward(hidden, action_card_ids, action_features, action_mask)
+            _, logits = self.network.forward(hidden, action_card_ids, action_features, action_mask)
 
             # Softmax over legal actions
             probs = torch.nn.functional.softmax(logits[0, :len(node.legal_actions)], dim=0)
             probs = probs.cpu().tolist()
-            value = value.item()
+
+            # Value from end-of-turn state (simulate end_turn + enemy attacks).
+            # This ensures the value head sees post-attack HP, not transient
+            # block, preventing overvaluation of unnecessary blocking.
+            from copy import deepcopy as _dc
+            from ..combat_engine import (
+                end_turn as _end_turn,
+                resolve_enemy_intents as _resolve_intents,
+                tick_enemy_powers as _tick_powers,
+                start_turn as _start_turn,
+            )
+            eot = _dc(node.state)
+            _end_turn(eot)
+            _resolve_intents(eot)
+            _tick_powers(eot)
+
+            eot_outcome = is_combat_over(eot)
+            if eot_outcome is not None:
+                value = 1.0 if eot_outcome == "win" else -1.0
+            else:
+                _start_turn(eot)
+                eot_tensors = encode_state(eot, self.vocabs, self.config)
+                eot_tensors = {k: v.to(self.device) for k, v in eot_tensors.items()}
+                eot_hidden = self.network.encode_state(**eot_tensors)
+                # Use value_head directly (no policy needed for evaluation)
+                value = self.network.value_head(eot_hidden).item()
 
         # Create child nodes lazily — state computed on first visit
         for i, action in enumerate(node.legal_actions):

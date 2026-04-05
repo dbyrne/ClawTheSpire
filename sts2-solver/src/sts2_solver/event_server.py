@@ -63,9 +63,19 @@ class _SqliteReader:
         self._db.execute("PRAGMA journal_mode=WAL")
 
     def get_runs(self, limit: int = 500) -> list[dict]:
-        rows = self._db.execute(
-            "SELECT * FROM runs ORDER BY started_at ASC LIMIT ?", (limit,)
-        ).fetchall()
+        # Only return runs from the latest generation
+        latest_gen = self._db.execute(
+            "SELECT gen FROM runs WHERE gen IS NOT NULL ORDER BY started_at DESC LIMIT 1"
+        ).fetchone()
+        if latest_gen:
+            rows = self._db.execute(
+                "SELECT * FROM runs WHERE gen = ? ORDER BY started_at ASC LIMIT ?",
+                (latest_gen["gen"], limit),
+            ).fetchall()
+        else:
+            rows = self._db.execute(
+                "SELECT * FROM runs ORDER BY started_at ASC LIMIT ?", (limit,)
+            ).fetchall()
         return [dict(r) for r in rows]
 
     def get_run(self, run_id: str) -> dict | None:
