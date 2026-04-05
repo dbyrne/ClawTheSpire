@@ -148,17 +148,22 @@ def state_from_snapshot(
         hand=hand,
     )
 
-    # Populate draw pile from deck if available
+    # Populate draw pile from deck. We know pile sizes from the snapshot
+    # but not which specific cards are in which pile. Put non-hand cards
+    # into draw pile (needed for mid-turn draw effects like Acrobatics).
+    # The pile size checks in compare_states handle validation.
     if deck:
-        hand_names = [c.get("name", "") for c in snapshot.hand]
-        # Count cards in hand by name to subtract from deck
         from collections import Counter
+        hand_names = [c.get("name", "") for c in snapshot.hand]
         hand_counts = Counter(hand_names)
         deck_counts = Counter(d.rstrip("+") for d in deck)
-        # Remaining cards go to draw pile (rough approximation)
+
+        target_draw = snapshot.draw_pile_size
         for card_name, count in deck_counts.items():
-            remaining = count - hand_counts.get(card_name, 0)
-            for _ in range(max(0, remaining)):
+            n_remaining = count - hand_counts.get(card_name, 0)
+            for _ in range(max(0, n_remaining)):
+                if len(player.draw_pile) >= target_draw:
+                    break  # Don't overfill draw pile
                 is_upgraded = any(d.endswith("+") and d.rstrip("+") == card_name for d in deck)
                 card = _find_card(card_name, None, is_upgraded, card_db)
                 if card is None:
@@ -535,11 +540,12 @@ def compare_states(
     """Compare simulator output against next turn's snapshot."""
     mismatches: list[FieldMismatch] = []
 
-    # After simulate_turn, the state has gone through end_turn + enemy phase.
-    # The next snapshot is at the START of the next player turn (post-draw).
-    # We can compare: player HP, enemy HP, enemy block, player powers.
-    # We CANNOT compare: player block (cleared at turn start), player energy
-    # (reset), hand (redrawn), pile sizes (reshuffled).
+    # After simulate_turn, the state has gone through end_turn + enemy phase
+    # but NOT start_turn (no draw yet). The next snapshot is post-draw.
+    # We simulate start_turn to compare hand size and pile sizes.
+    from copy import deepcopy
+    post_draw = deepcopy(simulated)
+    start_turn(post_draw)
 
     sim_player = simulated.player
     snap = next_snapshot
@@ -622,6 +628,40 @@ def compare_states(
         mismatches.append(FieldMismatch(
             "enemy_count", len(snap.enemies), len(sim_alive),
         ))
+
+    # --- Hand size (validates draw effects) ---
+    # post_draw has had start_turn() called, so it drew 5 + any relic bonuses.
+    # The snapshot hand is what the real game drew. Sizes should match.
+    snap_hand_size = len(snap.hand)
+    sim_hand_size = len(post_draw.player.hand)
+    if sim_hand_size != snap_hand_size:
+        mismatches.append(FieldMismatch(
+            "hand_size", snap_hand_size, sim_hand_size,
+            delta=sim_hand_size - snap_hand_size,
+        ))
+
+    # --- Pile sizes (validates discard/exhaust/draw tracking) ---
+    sim_draw = len(post_draw.player.draw_pile)
+    sim_discard = len(post_draw.player.discard_pile)
+    sim_exhaust = len(post_draw.player.exhaust_pile)
+    total_sim = sim_hand_size + sim_draw + sim_discard + sim_exhaust
+    total_snap = snap_hand_size + snap.draw_pile_size + snap.discard_pile_size + snap.exhaust_pile_size
+
+    # Exhaust pile size (most stable — cards only enter, never leave)
+    if sim_exhaust != snap.exhaust_pile_size:
+        mismatches.append(FieldMismatch(
+            "exhaust_pile_size", snap.exhaust_pile_size, sim_exhaust,
+            delta=sim_exhaust - snap.exhaust_pile_size,
+        ))
+
+    # --- Retained cards (cards with Retain should appear in both hands) ---
+    snap_hand_names = {c.get("name", "") for c in snap.hand}
+    for card in post_draw.player.hand:
+        if card.retain and card.name not in snap_hand_names:
+            mismatches.append(FieldMismatch(
+                f"retained_card_missing ({card.name})",
+                "in hand", "not in snapshot hand",
+            ))
 
     return mismatches
 
