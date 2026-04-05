@@ -610,6 +610,7 @@ def compare_states(
     simulated: CombatState,
     next_snapshot: CombatSnapshot,
     current_snapshot: CombatSnapshot | None = None,
+    pre_turn_exhaust: int = 0,
 ) -> list[FieldMismatch]:
     """Compare simulator output against next turn's snapshot."""
     mismatches: list[FieldMismatch] = []
@@ -726,9 +727,8 @@ def compare_states(
     # and may not match. If we have the current snapshot, compute deltas.
     if current_snapshot is not None:
         snap_exhaust_delta = snap.exhaust_pile_size - current_snapshot.exhaust_pile_size
-        # sim started from a reconstruction, so compute sim delta from
-        # the number of cards that entered exhaust during simulate_turn + start_turn
-        sim_exhaust_delta = sim_exhaust  # sim starts with 0 exhaust (reconstruction)
+        # Sim delta = current exhaust size - pre-turn exhaust size
+        sim_exhaust_delta = sim_exhaust - pre_turn_exhaust
         if snap_exhaust_delta != sim_exhaust_delta:
             mismatches.append(FieldMismatch(
                 "exhaust_delta", snap_exhaust_delta, sim_exhaust_delta,
@@ -783,22 +783,34 @@ def _validate_combat_shallow(combat) -> CombatValidation:
 
 
 def validate_run(run: RunReplay, card_db: CardDB) -> tuple[list[TurnValidation], list[CombatValidation]]:
-    """Validate all turn transitions and combat-level checks in a run."""
+    """Validate all turn transitions and combat-level checks in a run.
+
+    Uses full combat replay: reconstructs state from the first snapshot,
+    then carries it forward across all turns. This correctly tracks
+    Slimed cards, retained cards, and pile state across turns.
+    """
+    from copy import deepcopy
+
     results: list[TurnValidation] = []
     combat_results: list[CombatValidation] = []
 
     for combat_idx, combat in enumerate(run.combats):
-        # Shallow combat-level checks
         combat_results.append(_validate_combat_shallow(combat))
 
-        # Find consecutive turns that both have snapshots
         snapshot_turns = [t for t in combat.turns if t.snapshot is not None]
+        if not snapshot_turns:
+            continue
+
+        # --- Full combat replay ---
+        # Reconstruct state from FIRST snapshot, then carry forward
+        first_snap = snapshot_turns[0].snapshot
+        state = state_from_snapshot(first_snap, card_db, floor=combat.floor, deck=combat.deck)
 
         for i in range(len(snapshot_turns)):
             turn = snapshot_turns[i]
             snap = turn.snapshot
 
-            # Skip mid-turn Survivor splits (energy < max on non-T1)
+            # Skip mid-turn Survivor splits
             if snap.turn > 1 and snap.player_energy < 3 and snap.player_block > 0:
                 results.append(TurnValidation(
                     combat_idx=combat_idx,
@@ -810,7 +822,7 @@ def validate_run(run: RunReplay, card_db: CardDB) -> tuple[list[TurnValidation],
                 ))
                 continue
 
-            # Need a next snapshot to compare against
+            # Need next snapshot to compare against
             if i + 1 >= len(snapshot_turns):
                 results.append(TurnValidation(
                     combat_idx=combat_idx,
@@ -825,7 +837,6 @@ def validate_run(run: RunReplay, card_db: CardDB) -> tuple[list[TurnValidation],
             next_turn = snapshot_turns[i + 1]
             next_snap = next_turn.snapshot
 
-            # Also skip if the next snapshot is a mid-turn split
             if next_snap.turn > 1 and next_snap.player_energy < 3 and next_snap.player_block > 0:
                 results.append(TurnValidation(
                     combat_idx=combat_idx,
@@ -837,32 +848,104 @@ def validate_run(run: RunReplay, card_db: CardDB) -> tuple[list[TurnValidation],
                 ))
                 continue
 
-            # Reconstruct state and simulate.
-            # For multi-enemy fights, try targeting the enemy with the
-            # largest HP drop in the next snapshot (most damage taken).
             try:
-                state = state_from_snapshot(snap, card_db, floor=combat.floor, deck=combat.deck)
+                # For full replay: re-sync from snapshot each turn to prevent
+                # drift from accumulating. But keep the sim's pile state
+                # (which has Slimed cards from previous turns) by only
+                # overriding the hand and enemy state from the snapshot.
+                #
+                # This hybrid approach: snapshot provides hand + enemy state
+                # (ground truth), sim provides pile contents (tracks Slimed).
+                state.player.hp = snap.player_hp
+                state.player.max_hp = snap.player_max_hp
+                state.player.block = snap.player_block
+                state.player.energy = snap.player_energy
+                state.player.powers = dict(snap.player_powers)
 
-                # Use logged targets and discard choices if available
+                # Rebuild hand from snapshot (ground truth)
+                state.player.hand = []
+                for c in snap.hand:
+                    name = c.get("name", "?")
+                    upgraded = bool(c.get("upgraded", False))
+                    cost = c.get("cost")
+                    card = _find_card(name, cost, upgraded, card_db)
+                    if card is None:
+                        card = _make_fallback_card(name, cost, upgraded)
+                    if cost is not None and cost != card.cost:
+                        card = Card(
+                            id=card.id, name=card.name, cost=cost,
+                            card_type=card.card_type, target=card.target,
+                            upgraded=card.upgraded, damage=card.damage,
+                            block=card.block, hit_count=card.hit_count,
+                            powers_applied=card.powers_applied,
+                            cards_draw=card.cards_draw, energy_gain=card.energy_gain,
+                            hp_loss=card.hp_loss, keywords=card.keywords,
+                            tags=card.tags, spawns_cards=card.spawns_cards,
+                            is_x_cost=card.is_x_cost,
+                        )
+                    state.player.hand.append(card)
+
+                # Rebuild enemies from snapshot (ground truth for HP/block/intents)
+                state.enemies = []
+                for e in snap.enemies:
+                    powers = {}
+                    for p in (e.get("powers") or []):
+                        if isinstance(p, dict):
+                            powers[p["name"]] = p["amount"]
+                    raw_intent_damage = e.get("intent_damage")
+                    enemy_strength = powers.get("Strength", 0)
+                    enemy_weak = powers.get("Weak", 0)
+                    adjusted_damage = raw_intent_damage
+                    if adjusted_damage is not None:
+                        if enemy_weak > 0:
+                            import math
+                            adjusted_damage = math.ceil(adjusted_damage / 0.75)
+                        if enemy_strength > 0:
+                            adjusted_damage = adjusted_damage - enemy_strength
+                    state.enemies.append(EnemyState(
+                        id=e.get("id", ""),
+                        name=e.get("name", "?"),
+                        hp=e.get("hp", 0),
+                        max_hp=e.get("max_hp", 0),
+                        block=e.get("block", 0),
+                        powers=powers,
+                        intent_type=e.get("intent_type"),
+                        intent_damage=adjusted_damage,
+                        intent_hits=e.get("intent_hits", 1),
+                        intent_block=e.get("intent_block"),
+                    ))
+
+                state.turn = snap.turn
+
+                # Simulate this turn using the carried-forward state
                 logged_targets = turn.targets_chosen if turn.targets_chosen else None
                 discards = turn.discard_choices if turn.discard_choices else None
-                alive = [i for i, e in enumerate(state.enemies) if e.is_alive]
+                alive = [j for j, e in enumerate(state.enemies) if e.is_alive]
+
+                sim_state = deepcopy(state)
+                pre_exhaust = len(sim_state.player.exhaust_pile)
                 if logged_targets:
                     simulated = simulate_turn(
-                        state, turn.cards_played, card_db,
+                        sim_state, turn.cards_played, card_db,
                         targets_chosen=logged_targets,
                         discard_choices=discards,
                     )
                 elif len(alive) > 1 and next_snap:
                     best_target = _infer_target(snap, next_snap)
                     simulated = simulate_turn(
-                        state, turn.cards_played, card_db,
+                        sim_state, turn.cards_played, card_db,
                         forced_target=best_target,
                         discard_choices=discards,
                     )
                 else:
-                    simulated = simulate_turn(state, turn.cards_played, card_db,
+                    simulated = simulate_turn(sim_state, turn.cards_played, card_db,
                                               discard_choices=discards)
+
+                # Carry forward the simulated pile state for next turn
+                state.player.draw_pile = simulated.player.draw_pile
+                state.player.discard_pile = simulated.player.discard_pile
+                state.player.exhaust_pile = simulated.player.exhaust_pile
+
             except Exception as e:
                 log.warning(
                     "Simulation error combat %d turn %d: %s",
@@ -876,7 +959,6 @@ def validate_run(run: RunReplay, card_db: CardDB) -> tuple[list[TurnValidation],
                 ))
                 continue
 
-            # Check if combat ended during simulation
             if is_combat_over(simulated):
                 results.append(TurnValidation(
                     combat_idx=combat_idx,
@@ -887,8 +969,8 @@ def validate_run(run: RunReplay, card_db: CardDB) -> tuple[list[TurnValidation],
                 ))
                 continue
 
-            # Compare against next snapshot
-            mismatches = compare_states(simulated, next_snap, current_snapshot=snap)
+            mismatches = compare_states(simulated, next_snap, current_snapshot=snap,
+                                       pre_turn_exhaust=pre_exhaust)
             results.append(TurnValidation(
                 combat_idx=combat_idx,
                 turn=snap.turn,
