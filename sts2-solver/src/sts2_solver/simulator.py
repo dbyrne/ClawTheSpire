@@ -23,10 +23,11 @@ import time
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from .combat_engine import (
     can_play_card,
+    end_combat_relics,
     end_turn,
     is_combat_over,
     play_card,
@@ -1215,6 +1216,76 @@ GOLD_REWARDS = {
 
 
 # ---------------------------------------------------------------------------
+# Shared constants for Act 1 runs
+# ---------------------------------------------------------------------------
+
+# Relics that can drop from elites (effects implemented in combat_engine.py)
+ELITE_RELIC_POOL = [
+    "ANCHOR", "BLOOD_VIAL", "BAG_OF_PREPARATION", "BRONZE_SCALES",
+    "BAG_OF_MARBLES", "FESTIVE_POPPER", "LANTERN", "ODDLY_SMOOTH_STONE",
+    "STRIKE_DUMMY", "CLOAK_CLASP", "ART_OF_WAR", "MEAT_ON_THE_BONE",
+    "KUNAI", "ORNAMENTAL_FAN", "NUNCHAKU", "LETTER_OPENER", "SHURIKEN",
+]
+
+# Character starter relics
+STARTER_RELICS = {
+    "SILENT": "RING_OF_THE_SNAKE",
+    "IRONCLAD": "BURNING_BLOOD",
+}
+
+
+# ---------------------------------------------------------------------------
+# RunStrategy protocol and shared types
+# ---------------------------------------------------------------------------
+
+@dataclass
+class StrategyCombatResult:
+    """Result of a combat, returned by RunStrategy.fight_combat()."""
+    outcome: str  # "win" or "lose"
+    turns: int
+    hp_after: int
+    potions_after: list[dict]
+    samples: list = field(default_factory=list)  # TrainingSamples for MCTS, empty for heuristic
+
+
+@dataclass
+class ShopResult:
+    """Result of shop visit, returned by RunStrategy.shop_decisions()."""
+    gold_spent: int
+    cards_added: list  # Card objects
+    cards_removed: list[int]  # deck indices (sorted descending for safe removal)
+    potions_added: list[dict]
+    samples: list = field(default_factory=list)  # OptionSamples for MCTS
+
+
+class RunStrategy(Protocol):
+    def fight_combat(self, deck: list, hp: int, max_hp: int, max_energy: int,
+                     encounter_id: str, card_db, rng, potions: list[dict],
+                     relics: frozenset[str]) -> StrategyCombatResult: ...
+
+    def pick_card_reward(self, offered: list, deck: list, hp: int, max_hp: int,
+                         floor: int, card_db, pools: dict) -> tuple: ...
+        # Returns (Card | None, sample_or_None)
+
+    def rest_or_smith(self, hp: int, max_hp: int, deck: list, card_db,
+                      rng, floor: int, gold: int, relics: frozenset[str]) -> tuple: ...
+        # Returns (action_dict, list_of_samples)
+        # action_dict: {"action": "rest", "hp_delta": N} or {"action": "smith", "card_idx": i, "upgraded_card": Card}
+
+    def shop_decisions(self, deck: list, hp: int, max_hp: int, gold: int,
+                       potions: list[dict], relics: frozenset[str], floor: int,
+                       card_db, pools: dict, rng) -> ShopResult: ...
+
+    def pick_map_path(self, choices: list[str], deck: list, hp: int, max_hp: int,
+                      gold: int, floor: int, relics: frozenset[str]) -> tuple: ...
+        # Returns (chosen_index, list_of_samples)
+
+    def pick_neow_bonus(self, deck: list, relics: set, gold: int, card_db,
+                        pools: dict, rng) -> int: ...
+        # Mutates deck/relics, returns gold_delta
+
+
+# ---------------------------------------------------------------------------
 # Full Act 1 simulation
 # ---------------------------------------------------------------------------
 
@@ -1239,6 +1310,355 @@ class RunResult:
     upgrades_done: int = 0
     elapsed_ms: float = 0.0
     combat_log: list[dict] = field(default_factory=list)
+    # Training data (populated by MCTS strategy, empty for heuristic)
+    samples: list = field(default_factory=list)
+    deck_samples: list = field(default_factory=list)
+    option_samples: list = field(default_factory=list)
+    # Internal data for post-run value assignment (used by MCTSStrategy)
+    _combat_samples_by_floor: dict = field(default_factory=dict)
+    _combat_hp_data: dict = field(default_factory=dict)
+    _boss_floors: set = field(default_factory=set)
+
+
+class HeuristicStrategy:
+    """Strategy that uses the heuristic solver for combat and algorithmic card picks."""
+
+    def __init__(self, card_db: CardDB, solver_time_limit_ms: float = 200.0):
+        self.card_db = card_db
+        self.solver_time_limit_ms = solver_time_limit_ms
+
+    def fight_combat(self, deck, hp, max_hp, max_energy, encounter_id, card_db,
+                     rng, potions, relics):
+        combat_result, remaining_potions = simulate_combat(
+            deck=deck, player_hp=hp, player_max_hp=max_hp,
+            player_max_energy=max_energy, encounter_id=encounter_id,
+            card_db=card_db, rng=rng, potions=potions,
+            solver_time_limit_ms=self.solver_time_limit_ms,
+        )
+        return StrategyCombatResult(
+            outcome=combat_result.outcome,
+            turns=combat_result.turns,
+            hp_after=combat_result.hp_after,
+            potions_after=remaining_potions,
+            samples=[],
+        )
+
+    def pick_card_reward(self, offered, deck, hp, max_hp, floor, card_db, pools):
+        pick = _pick_card_reward(offered, deck)
+        return (pick, None)
+
+    def rest_or_smith(self, hp, max_hp, deck, card_db, rng, floor, gold, relics):
+        decision = _rest_site_decision(hp, max_hp, deck, card_db, rng)
+        if decision["action"] == "rest":
+            action_dict = {"action": "rest", "hp_delta": decision["hp_delta"]}
+        else:
+            idx = decision["upgrade_card_idx"]
+            upgraded = None
+            if idx is not None and idx < len(deck):
+                upgraded = card_db.get_upgraded(deck[idx].id)
+            action_dict = {"action": "smith", "card_idx": idx, "upgraded_card": upgraded}
+        return (action_dict, [])
+
+    def shop_decisions(self, deck, hp, max_hp, gold, potions, relics, floor,
+                       card_db, pools, rng):
+        shop_result = _simulate_shop(deck, gold, card_db, pools, rng)
+        return ShopResult(
+            gold_spent=-shop_result["gold_delta"],
+            cards_added=shop_result.get("cards_added", []),
+            cards_removed=sorted(shop_result.get("cards_removed", []), reverse=True),
+            potions_added=[],
+            samples=[],
+        )
+
+    def pick_map_path(self, choices, deck, hp, max_hp, gold, floor, relics):
+        import random as _random
+        idx = _random.Random().randint(0, len(choices) - 1)
+        return (idx, [])
+
+    def pick_neow_bonus(self, deck, relics, gold, card_db, pools, rng):
+        neow_bonus = rng.choice(["remove_strike", "gain_relic", "upgrade_card",
+                                 "gain_gold", "transform"])
+        if neow_bonus == "remove_strike":
+            strikes = [i for i, c in enumerate(deck) if "Strike" in c.name]
+            if strikes:
+                deck.pop(rng.choice(strikes))
+        elif neow_bonus == "gain_relic":
+            available = [r for r in ELITE_RELIC_POOL if r not in relics]
+            if available:
+                relics.add(rng.choice(available))
+        elif neow_bonus == "upgrade_card":
+            upgradeable = [(i, c) for i, c in enumerate(deck)
+                           if not c.upgraded and c.card_type.value not in ("Status", "Curse")]
+            if upgradeable:
+                idx, card = rng.choice(upgradeable)
+                up = card_db.get_upgraded(card.id)
+                if up:
+                    deck[idx] = up
+        elif neow_bonus == "gain_gold":
+            return 100
+        elif neow_bonus == "transform":
+            strikes = [i for i, c in enumerate(deck) if "Strike" in c.name]
+            for _ in range(min(2, len(strikes))):
+                if strikes:
+                    idx = strikes.pop(rng.randrange(len(strikes)))
+                    offered = _offer_card_rewards(pools, deck, 1)
+                    if offered:
+                        deck[idx] = offered[0]
+        return 0
+
+
+def run_act1(
+    strategy: RunStrategy,
+    character: str = "SILENT",
+    seed: int | None = None,
+    card_db: CardDB | None = None,
+    use_choice_map: bool = True,
+) -> RunResult:
+    """Shared Act 1 run loop with pluggable strategy.
+
+    Args:
+        strategy: A RunStrategy implementation (HeuristicStrategy or MCTSStrategy).
+        character: Character ID (e.g., "SILENT", "IRONCLAD").
+        seed: Random seed for reproducibility.
+        card_db: Pre-loaded card database. Loaded if None.
+        use_choice_map: If True, use map with branching choices; else fixed map.
+
+    Returns:
+        RunResult with full statistics and optional training data.
+    """
+    rng = random.Random(seed)
+    if seed is not None:
+        random.seed(seed)
+
+    _ensure_data_loaded()
+    if card_db is None:
+        card_db = load_cards()
+
+    # Character setup
+    char_data = _CHARACTERS_BY_ID.get(character, {})
+    hp = char_data.get("starting_hp", 70)
+    max_hp = hp
+    gold = char_data.get("starting_gold", 99)
+    max_energy = char_data.get("max_energy", 3)
+
+    # Build starting deck
+    raw_deck_ids = char_data.get("starting_deck", [])
+    deck: list[Card] = []
+    for raw_id in raw_deck_ids:
+        card_id = _normalize_card_id(raw_id)
+        card = card_db.get(card_id) or card_db.get(raw_id)
+        if card:
+            deck.append(card)
+
+    if not deck:
+        # Fallback: Silent starter
+        for name, count in [("STRIKE_SILENT", 5), ("DEFEND_SILENT", 5),
+                            ("NEUTRALIZE", 1), ("SURVIVOR", 1)]:
+            c = card_db.get(name)
+            if c:
+                deck.extend([c] * count)
+
+    # Card pools
+    char_color = char_data.get("color", "green")
+    color_map = {"red": "ironclad", "green": "silent", "blue": "defect",
+                 "purple": "necrobinder", "yellow": "regent"}
+    card_color = color_map.get(char_color, char_color)
+    pools = _build_card_pool(card_db, card_color)
+
+    # Act data + map
+    act_data = _ACTS_BY_ID.get("OVERGROWTH", {})
+    if use_choice_map:
+        room_sequence = _generate_act1_map_with_choices(rng)
+    else:
+        room_sequence = _generate_act1_map(rng)
+
+    # Starter relic
+    relics: set[str] = set()
+    starter_relic = STARTER_RELICS.get(character)
+    if starter_relic:
+        relics.add(starter_relic)
+
+    # Neow starting bonus
+    gold_delta = strategy.pick_neow_bonus(deck, relics, gold, card_db, pools, rng)
+    gold += gold_delta
+
+    # Run state
+    result = RunResult(run_id=0, outcome="lose", floor_reached=0,
+                       final_hp=hp, max_hp=max_hp, gold=gold,
+                       deck_size=len(deck), combats_won=0, combats_fought=0,
+                       total_turns=0)
+
+    potions: list[dict] = []
+    seen_encounters: set[str] = set()
+    events_list = list(act_data.get("events", []))
+    rng.shuffle(events_list)
+    event_idx = 0
+
+    for floor_num, room_entry in enumerate(room_sequence, 1):
+        result.floor_reached = floor_num
+
+        # Resolve map choice nodes
+        if isinstance(room_entry, list):
+            chosen_idx, map_samples = strategy.pick_map_path(
+                room_entry, deck, hp, max_hp, gold, floor_num, frozenset(relics))
+            result.option_samples.extend(map_samples)
+            room_type = room_entry[chosen_idx]
+        else:
+            room_type = room_entry
+
+        if room_type in ("weak", "normal", "elite", "boss"):
+            enc_id = _pick_encounter(act_data, room_type, rng, seen_encounters)
+            if enc_id is None:
+                continue
+
+            potions_before = len([p for p in potions if p])
+            combat = strategy.fight_combat(
+                deck=deck, hp=hp, max_hp=max_hp, max_energy=max_energy,
+                encounter_id=enc_id, card_db=card_db, rng=rng,
+                potions=potions, relics=frozenset(relics),
+            )
+            potions = combat.potions_after
+            potions_after = len([p for p in potions if p])
+            potions_used = max(0, potions_before - potions_after)
+
+            result.combats_fought += 1
+            result.total_turns += combat.turns
+            result.samples.extend(combat.samples)
+
+            # Track combat data for value assignment
+            result._combat_samples_by_floor[floor_num] = combat.samples
+            result._combat_hp_data[floor_num] = (hp, combat.hp_after, potions_used)
+            if room_type == "boss":
+                result._boss_floors.add(floor_num)
+
+            result.combat_log.append({
+                "floor": floor_num, "encounter": enc_id,
+                "room_type": room_type, "outcome": combat.outcome,
+                "turns": combat.turns, "hp_before": hp, "hp_after": combat.hp_after,
+            })
+
+            if combat.outcome == "lose":
+                result.outcome = "lose"
+                result.death_encounter = enc_id
+                result.final_hp = 0
+                result.max_hp = max_hp
+                result.gold = gold
+                result.deck_size = len(deck)
+                return result
+
+            result.combats_won += 1
+            hp = combat.hp_after
+
+            # End-of-combat relic effects (healing etc.)
+            _post_player = PlayerState(hp=hp, max_hp=max_hp, energy=0, max_energy=0)
+            _post_state = CombatState(player=_post_player, enemies=[], relics=frozenset(relics))
+            end_combat_relics(_post_state)
+            hp = _post_state.player.hp
+
+            # Post-combat: gold, potions
+            gold_range = GOLD_REWARDS.get(room_type, (10, 20))
+            gold += rng.randint(*gold_range)
+
+            if rng.random() < POTION_DROP_CHANCE and len(potions) < POTION_SLOTS:
+                pot = rng.choice(POTION_TYPES)
+                potions.append(dict(pot))
+
+            # Elite relic drop
+            if room_type == "elite":
+                available = [r for r in ELITE_RELIC_POOL if r not in relics]
+                if available:
+                    relics.add(rng.choice(available))
+
+            # Card reward (not for boss)
+            if room_type != "boss":
+                offered = _offer_card_rewards(pools, deck)
+                pick, deck_sample = strategy.pick_card_reward(
+                    offered, deck, hp, max_hp, floor_num, card_db, pools)
+                if pick:
+                    deck.append(pick)
+                    result.cards_picked.append(pick.name)
+                else:
+                    result.cards_skipped += 1
+                if deck_sample:
+                    result.deck_samples.append(deck_sample)
+
+            if room_type == "boss":
+                result.outcome = "win"
+                result.final_hp = hp
+                result.max_hp = max_hp
+                result.gold = gold
+                result.deck_size = len(deck)
+                return result
+
+        elif room_type == "rest":
+            action_dict, rest_samples = strategy.rest_or_smith(
+                hp, max_hp, deck, card_db, rng, floor_num, gold, frozenset(relics))
+            result.option_samples.extend(rest_samples)
+
+            if action_dict["action"] == "rest":
+                hp = min(hp + action_dict["hp_delta"], max_hp)
+                result.rests_taken += 1
+            else:
+                idx = action_dict.get("card_idx")
+                upgraded = action_dict.get("upgraded_card")
+                if idx is not None and idx < len(deck) and upgraded:
+                    deck[idx] = upgraded
+                    result.upgrades_done += 1
+
+        elif room_type == "treasure":
+            gold += rng.randint(50, 100)
+            if rng.random() < 0.25:
+                available = [r for r in ELITE_RELIC_POOL if r not in relics]
+                if available:
+                    relics.add(rng.choice(available))
+
+        elif room_type == "event":
+            if event_idx < len(events_list):
+                eid = events_list[event_idx]
+                event_idx += 1
+            else:
+                eid = rng.choice(events_list) if events_list else None
+            if eid:
+                changes = _simulate_event(eid, deck, hp, max_hp, gold, card_db, rng)
+                hp = max(1, min(hp + changes["hp_delta"], max_hp + changes["max_hp_delta"]))
+                max_hp += changes["max_hp_delta"]
+                gold = max(0, gold + changes["gold_delta"])
+                for idx in sorted(changes["cards_removed"], reverse=True):
+                    if idx < len(deck):
+                        deck.pop(idx)
+                for card in changes["cards_added"]:
+                    deck.append(card)
+                # Relic gains from events
+                for relic_tag in changes.get("relics_gained", []):
+                    if relic_tag == "_random":
+                        available = [r for r in ELITE_RELIC_POOL if r not in relics]
+                        if available:
+                            relics.add(rng.choice(available))
+                    else:
+                        relics.add(relic_tag)
+                result.events_visited += 1
+
+        elif room_type == "shop":
+            shop = strategy.shop_decisions(
+                deck, hp, max_hp, gold, potions, frozenset(relics),
+                floor_num, card_db, pools, rng)
+            result.option_samples.extend(shop.samples)
+            gold -= shop.gold_spent
+            for idx in shop.cards_removed:
+                if idx < len(deck):
+                    deck.pop(idx)
+            for card in shop.cards_added:
+                deck.append(card)
+                result.cards_picked.append(card.name)
+            for pot in shop.potions_added:
+                potions.append(pot)
+
+    # Completed all floors without boss (shouldn't happen normally)
+    result.final_hp = hp
+    result.max_hp = max_hp
+    result.gold = gold
+    result.deck_size = len(deck)
+    return result
 
 
 def simulate_act1(
@@ -1250,229 +1670,14 @@ def simulate_act1(
 ) -> RunResult:
     """Simulate a complete Act 1 (Overgrowth) run.
 
-    Args:
-        run_id: Identifier for this run.
-        character: Character ID (e.g., "IRONCLAD").
-        seed: Random seed for reproducibility.
-        solver_time_limit_ms: Time limit per combat turn solve.
-        verbose: Print progress.
-
-    Returns:
-        RunResult with full statistics.
+    Thin wrapper around run_act1() using HeuristicStrategy.
     """
     t0 = time.perf_counter()
-    rng = random.Random(seed)
-    # Seed the global random too (used by combat engine shuffle)
-    random.seed(seed)
-
-    _ensure_data_loaded()
     card_db = load_cards()
-
-    # Character setup
-    char_data = _CHARACTERS_BY_ID.get(character, {})
-    hp = char_data.get("starting_hp", 80)
-    max_hp = hp
-    gold = char_data.get("starting_gold", 99)
-    max_energy = char_data.get("max_energy", 3)
-
-    # Build starting deck
-    raw_deck_ids = char_data.get("starting_deck", [])
-    deck: list[Card] = []
-    for raw_id in raw_deck_ids:
-        card_id = _normalize_card_id(raw_id)
-        card = card_db.get(card_id)
-        if card:
-            deck.append(card)
-        else:
-            # Try direct lookup
-            card = card_db.get(raw_id)
-            if card:
-                deck.append(card)
-
-    if not deck:
-        # Fallback: hardcode Ironclad starter
-        for _ in range(5):
-            c = card_db.get("STRIKE_IRONCLAD")
-            if c:
-                deck.append(c)
-        for _ in range(4):
-            c = card_db.get("DEFEND_IRONCLAD")
-            if c:
-                deck.append(c)
-        c = card_db.get("BASH")
-        if c:
-            deck.append(c)
-
-    # Card pools for rewards
-    char_color = char_data.get("color", "red")
-    # Map character color names to card color field
-    color_map = {"red": "ironclad", "green": "silent", "blue": "defect",
-                 "purple": "necrobinder", "yellow": "regent"}
-    card_color = color_map.get(char_color, char_color)
-    pools = _build_card_pool(card_db, card_color)
-
-    # Act data
-    act_data = _ACTS_BY_ID.get("OVERGROWTH", {})
-
-    # Generate map
-    room_sequence = _generate_act1_map(rng)
-
-    # Potions
-    potions: list[dict] = []  # Start with no potions (acquired from combat)
-
-    # Run state
-    result = RunResult(run_id=run_id, outcome="lose", floor_reached=0,
-                       final_hp=hp, max_hp=max_hp, gold=gold,
-                       deck_size=len(deck), combats_won=0, combats_fought=0,
-                       total_turns=0)
-
-    seen_encounters: set[str] = set()
-    events_list = list(act_data.get("events", []))
-    rng.shuffle(events_list)
-    event_idx = 0
-
-    for floor_num, room_type in enumerate(room_sequence, 1):
-        result.floor_reached = floor_num
-
-        if verbose:
-            print(f"  Floor {floor_num}: {room_type} (HP: {hp}/{max_hp}, "
-                  f"Gold: {gold}, Deck: {len(deck)})")
-
-        if room_type in ("weak", "normal", "elite", "boss"):
-            # Pick encounter
-            enc_id = _pick_encounter(act_data, room_type, rng, seen_encounters)
-            if enc_id is None:
-                continue
-
-            # Run combat
-            combat, potions = simulate_combat(
-                deck=deck, player_hp=hp, player_max_hp=max_hp,
-                player_max_energy=max_energy, encounter_id=enc_id,
-                card_db=card_db, rng=rng, potions=potions,
-                solver_time_limit_ms=solver_time_limit_ms,
-            )
-            result.combats_fought += 1
-            result.total_turns += combat.turns
-
-            result.combat_log.append({
-                "floor": floor_num,
-                "encounter": enc_id,
-                "room_type": room_type,
-                "outcome": combat.outcome,
-                "turns": combat.turns,
-                "hp_before": combat.hp_before,
-                "hp_after": combat.hp_after,
-            })
-
-            if verbose:
-                print(f"    Combat: {enc_id} -> {combat.outcome} "
-                      f"({combat.turns}T, HP: {combat.hp_before}->{combat.hp_after})")
-
-            if combat.outcome == "lose":
-                result.outcome = "lose"
-                result.death_encounter = enc_id
-                result.final_hp = 0
-                break
-
-            result.combats_won += 1
-            hp = combat.hp_after
-
-            # Gold reward
-            gold_range = GOLD_REWARDS.get(room_type, (10, 20))
-            gold_earned = rng.randint(*gold_range)
-            gold += gold_earned
-
-            # Burning Blood relic: heal 6 HP after combat (Ironclad)
-            if character == "IRONCLAD":
-                hp = min(hp + 6, max_hp)
-
-            # Potion drop
-            if rng.random() < POTION_DROP_CHANCE and len(potions) < POTION_SLOTS:
-                pot = rng.choice(POTION_TYPES)
-                potions.append(dict(pot))
-
-            # Card reward (not for boss — boss gives relic)
-            if room_type != "boss":
-                offered = _offer_card_rewards(pools, deck)
-                pick = _pick_card_reward(offered, deck)
-                if pick:
-                    deck.append(pick)
-                    result.cards_picked.append(pick.name)
-                    if verbose:
-                        print(f"    Picked: {pick.name}")
-                else:
-                    result.cards_skipped += 1
-
-            if room_type == "boss":
-                result.outcome = "win"
-
-        elif room_type == "rest":
-            decision = _rest_site_decision(hp, max_hp, deck, card_db, rng)
-            if decision["action"] == "rest":
-                hp = min(hp + decision["hp_delta"], max_hp)
-                result.rests_taken += 1
-                if verbose:
-                    print(f"    Rest: healed to {hp}/{max_hp}")
-            else:
-                idx = decision["upgrade_card_idx"]
-                if idx is not None and idx < len(deck):
-                    upgraded = card_db.get_upgraded(deck[idx].id)
-                    if upgraded:
-                        old_name = deck[idx].name
-                        deck[idx] = upgraded
-                        result.upgrades_done += 1
-                        if verbose:
-                            print(f"    Smith: upgraded {old_name}")
-
-        elif room_type == "event":
-            if event_idx < len(events_list):
-                eid = events_list[event_idx]
-                event_idx += 1
-            else:
-                eid = rng.choice(events_list) if events_list else None
-
-            if eid:
-                changes = _simulate_event(eid, deck, hp, max_hp, gold,
-                                          card_db, rng)
-                hp = max(1, min(hp + changes["hp_delta"],
-                                max_hp + changes["max_hp_delta"]))
-                max_hp += changes["max_hp_delta"]
-                gold = max(0, gold + changes["gold_delta"])
-
-                # Remove cards (by index, descending to avoid shifting)
-                for idx in sorted(changes["cards_removed"], reverse=True):
-                    if idx < len(deck):
-                        deck.pop(idx)
-
-                # Add cards
-                for card in changes["cards_added"]:
-                    deck.append(card)
-
-                result.events_visited += 1
-                if verbose:
-                    print(f"    Event: {eid} (HP: {hp}/{max_hp})")
-
-        elif room_type == "shop":
-            shop_result = _simulate_shop(deck, gold, card_db, pools, rng)
-            gold += shop_result["gold_delta"]
-
-            # Remove cards (descending index)
-            for idx in sorted(shop_result["cards_removed"], reverse=True):
-                if idx < len(deck):
-                    deck.pop(idx)
-
-            for card in shop_result["cards_added"]:
-                deck.append(card)
-                result.cards_picked.append(card.name)
-
-            if verbose:
-                print(f"    Shop: gold now {gold}")
-
-    # Finalize
-    result.final_hp = hp
-    result.max_hp = max_hp
-    result.gold = gold
-    result.deck_size = len(deck)
+    strategy = HeuristicStrategy(card_db=card_db, solver_time_limit_ms=solver_time_limit_ms)
+    result = run_act1(strategy, character=character, seed=seed, card_db=card_db,
+                      use_choice_map=False)
+    result.run_id = run_id
     result.elapsed_ms = (time.perf_counter() - t0) * 1000
     return result
 
