@@ -982,7 +982,14 @@ def validate_run(run: RunReplay, card_db: CardDB) -> tuple[list[TurnValidation],
                 state.player.max_hp = snap.player_max_hp
                 state.player.block = snap.player_block
                 state.player.energy = snap.player_energy
+                # Merge snapshot powers with internal tracking powers (prefixed
+                # with _) that the sim accumulated across turns. These track
+                # relic counters (_fan_count, _kunai_count, etc.) that aren't
+                # visible in the game snapshot.
+                internal = {k: v for k, v in state.player.powers.items()
+                            if k.startswith("_")}
                 state.player.powers = dict(snap.player_powers)
+                state.player.powers.update(internal)
 
                 # Rebuild hand from snapshot by pulling cards from the sim's
                 # piles. Merge draw + discard (start_turn would reshuffle
