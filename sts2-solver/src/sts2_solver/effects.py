@@ -145,6 +145,14 @@ def deal_damage(state: CombatState, target_idx: int, base_damage: int, hits: int
             if enemy.powers["Slippery"] <= 0:
                 del enemy.powers["Slippery"]
 
+        # Hardened Shell: cap total HP loss per turn
+        shell = enemy.powers.get("Hardened Shell", 0)
+        if shell > 0:
+            taken = enemy.powers.get("_shell_damage_taken", 0)
+            allowed = max(0, shell - taken)
+            per_hit = min(per_hit, allowed)
+            enemy.powers["_shell_damage_taken"] = taken + per_hit
+
         enemy.hp -= per_hit
 
         # Enemy Thorns: player takes damage per hit

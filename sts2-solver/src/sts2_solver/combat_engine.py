@@ -328,14 +328,20 @@ def start_turn(state: CombatState) -> None:
     if berserk > 0:
         state.player.energy += berserk
 
-    # Remove block (unless Barricade)
-    if state.player.powers.get("Barricade", 0) <= 0:
+    # Remove block (unless Barricade or Blur)
+    blur = state.player.powers.get("Blur", 0)
+    if state.player.powers.get("Barricade", 0) <= 0 and blur <= 0:
         state.player.block = 0
+    if blur > 0:
+        state.player.powers["Blur"] = blur - 1
+        if state.player.powers["Blur"] <= 0:
+            del state.player.powers["Blur"]
 
     # Remove enemy block and reset per-turn triggers
     for enemy in state.enemies:
         enemy.block = 0
         enemy.powers.pop("_skittish_triggered", None)
+        enemy.powers.pop("_shell_damage_taken", None)
 
     # Start-of-turn power ticks
     _tick_start_of_turn_powers(state)
@@ -423,6 +429,10 @@ def end_turn(state: CombatState) -> None:
 
     # --- End-of-turn relic effects ---
 
+    # Orichalcum: gain 6 Block if ending turn with 0 Block
+    if "ORICHALCUM" in state.relics and state.player.block == 0:
+        state.player.block += 6
+
     # Cloak Clasp: gain 1 Block per card in hand
     if "CLOAK_CLASP" in state.relics:
         state.player.block += len(state.player.hand)
@@ -450,6 +460,11 @@ def end_turn(state: CombatState) -> None:
     constrict = state.player.powers.get("Constrict", 0)
     if constrict > 0:
         state.player.hp -= constrict
+
+    # Beckon: lose HP for each Beckon card in hand at end of turn
+    for card in state.player.hand:
+        if card.name == "Beckon" or card.id == "BECKON":
+            state.player.hp -= card.hp_loss if card.hp_loss else 6
 
     # Well-Laid Plans: retain up to N cards (N = power stacks)
     # Heuristic: keep the highest-cost card(s) that aren't already Retain.

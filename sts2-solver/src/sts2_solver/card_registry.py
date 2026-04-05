@@ -1005,3 +1005,24 @@ def _purity(card: Card, card_db: CardDB | None) -> CardEffect:
             card_obj = state.player.hand.pop(idx)
             state.player.exhaust_pile.append(card_obj)
     return effect
+
+
+@register("BECKON")
+def _beckon(card: Card, card_db: CardDB | None) -> CardEffect:
+    """Status: at end of turn, if in hand, lose 6 HP. Does nothing on play."""
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        pass  # Damage is applied in end_turn, not on play
+    return effect
+
+
+@register("BLUR")
+def _blur(card: Card, card_db: CardDB | None) -> CardEffect:
+    """Gain 5(8) Block. Block is not removed at the start of your next turn."""
+    blk = 5 if not card.upgraded else 8
+
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        gain_block(state, blk)
+        # Blur effect: retain block for 1 turn (tracked as a counter,
+        # decremented at start of turn in combat_engine)
+        apply_power_to_player(state, "Blur", 1)
+    return effect
