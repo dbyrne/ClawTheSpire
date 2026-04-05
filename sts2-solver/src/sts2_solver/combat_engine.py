@@ -21,6 +21,21 @@ if TYPE_CHECKING:
     from .data_loader import CardDB
 
 
+def _raw_damage_to_enemy(enemy: EnemyState, damage: int) -> None:
+    """Deal flat damage to an enemy, respecting block. No Strength/Weak/Vulnerable."""
+    if not enemy.is_alive:
+        return
+    dmg = damage
+    if enemy.block > 0:
+        if dmg >= enemy.block:
+            dmg -= enemy.block
+            enemy.block = 0
+        else:
+            enemy.block -= dmg
+            dmg = 0
+    enemy.hp -= dmg
+
+
 # ---------------------------------------------------------------------------
 # Card playability
 # ---------------------------------------------------------------------------
@@ -132,9 +147,6 @@ def play_card(
     # --- Relic triggers on card play ---
     relics = state.relics
 
-    # Pen Nib: every 10th attack deals double damage (approximated as +Strength)
-    # (Complex to implement precisely — skip for now)
-
     # Kunai: every 3 attacks, gain 1 Dexterity
     if "KUNAI" in relics and card.card_type == CardType.ATTACK:
         count = state.player.powers.get("_kunai_count", 0) + 1
@@ -164,16 +176,7 @@ def play_card(
         count = state.player.powers.get("_letter_opener_count", 0) + 1
         if count >= 3:
             for enemy in state.enemies:
-                if enemy.is_alive:
-                    dmg = 5
-                    if enemy.block > 0:
-                        if dmg >= enemy.block:
-                            dmg -= enemy.block
-                            enemy.block = 0
-                        else:
-                            enemy.block -= dmg
-                            dmg = 0
-                    enemy.hp -= dmg
+                _raw_damage_to_enemy(enemy, 5)
             count = 0
         state.player.powers["_letter_opener_count"] = count
 
@@ -300,16 +303,7 @@ def start_combat(state: CombatState) -> None:
     # Festive Popper: deal 9 damage to ALL enemies
     if "FESTIVE_POPPER" in relics:
         for enemy in state.enemies:
-            if enemy.is_alive:
-                dmg = 9
-                if enemy.block > 0:
-                    if dmg >= enemy.block:
-                        dmg -= enemy.block
-                        enemy.block = 0
-                    else:
-                        enemy.block -= dmg
-                        dmg = 0
-                enemy.hp -= dmg
+            _raw_damage_to_enemy(enemy, 9)
 
     # Lantern: gain 1 Energy on turn 1
     if "LANTERN" in relics:

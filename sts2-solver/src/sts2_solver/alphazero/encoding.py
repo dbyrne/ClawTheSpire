@@ -145,20 +145,20 @@ class EncoderConfig:
 
     # Set encoder for hand
     hand_attention_heads: int = 2
-    hand_max_size: int = 15  # Max cards in hand (safety margin)
+    hand_max_size: int = 15  # STS2 base draw is 5; with Ring of Snake, Pocketwatch, draw effects can reach ~12
 
-    # Enemy slots
+    # Enemy slots (STS2 encounters have up to 5 enemies, e.g., Slime Pair + spawns)
     max_enemies: int = 5
     enemy_projected_dim: int = 32  # Per-enemy projection output size
 
-    # Relic slots
+    # Relic slots (Act 1 runs typically acquire 2-5 relics; 10 gives headroom for Act 2+)
     max_relics: int = 10
 
-    # Power encoding: top-N powers by name
-    max_player_powers: int = 10
-    max_enemy_powers: int = 6
+    # Power encoding: top-N by absolute amount (Strength 2 vs Poison 60 both tracked)
+    max_player_powers: int = 10  # Silent can stack 5-8 powers in long fights
+    max_enemy_powers: int = 6    # Enemies rarely have more than 3-4 powers
 
-    # Potion slots
+    # Potion slots (STS2 default is 3; Potion Belt relic adds more)
     max_potions: int = 3
     potion_feature_dim: int = 6  # occupied(1) + type one-hot(5): heal/block/str/dmg/weak
 

@@ -28,7 +28,7 @@ from .combat_engine import (
     use_potion,
 )
 from .data_loader import CardDB
-from .effects import discard_card_from_hand, add_card_to_hand
+from .effects import discard_card_from_hand
 from .models import CombatState
 
 
