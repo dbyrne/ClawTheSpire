@@ -1187,6 +1187,7 @@ class StrategyCombatResult:
     hp_after: int
     potions_after: list[dict]
     samples: list = field(default_factory=list)  # TrainingSamples for MCTS, empty for heuristic
+    initial_value: float = 0.0  # Value head estimate at combat start (for trajectory credit)
 
 
 @dataclass
@@ -1258,6 +1259,7 @@ class RunResult:
     # Internal data for post-run value assignment (used by MCTSStrategy)
     _combat_samples_by_floor: dict = field(default_factory=dict)
     _combat_hp_data: dict = field(default_factory=dict)
+    _combat_value_estimates: dict = field(default_factory=dict)  # {floor: initial_value}
     _boss_floors: set = field(default_factory=set)
 
 
@@ -1377,6 +1379,7 @@ def run_act1(
             # Track combat data for value assignment
             result._combat_samples_by_floor[floor_num] = combat.samples
             result._combat_hp_data[floor_num] = (hp, combat.hp_after, potions_used)
+            result._combat_value_estimates[floor_num] = combat.initial_value
             if room_type == "boss":
                 result._boss_floors.add(floor_num)
 

@@ -86,7 +86,8 @@ class OptionSample:
     option_types: list[int]   # Option type indices (see OPTION_* constants)
     option_cards: list[int]   # Card vocab indices (0 when N/A)
     chosen_idx: int           # Which option was picked
-    value: float              # Run outcome value (assigned after run ends)
+    value: float              # Assigned after run ends (trajectory-based)
+    floor: int = 0            # Floor number (for value trajectory credit assignment)
 
 
 # Option type constants (indices into option_type_embed)

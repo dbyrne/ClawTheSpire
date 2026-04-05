@@ -98,8 +98,8 @@ def mcts_combat(
     max_turns: int = 30,
     potions: list[dict] | None = None,
     relics: frozenset[str] | None = None,
-) -> tuple[list[TrainingSample], str, int, int, list[dict]]:
-    """Run one combat using MCTS. Returns (samples, outcome, turns, hp_after, remaining_potions)."""
+) -> tuple[list[TrainingSample], str, int, int, list[dict], float]:
+    """Run one combat using MCTS. Returns (samples, outcome, turns, hp_after, remaining_potions, initial_value)."""
     _ensure_data_loaded()
 
     enc = _ENCOUNTERS_BY_ID.get(encounter_id, {})
@@ -112,7 +112,7 @@ def mcts_combat(
         enemy_ais.append(_create_enemy_ai(mid))
 
     if not enemies:
-        return [], "win", 0, player_hp, potions or []
+        return [], "win", 0, player_hp, potions or [], 0.0
 
     draw_pile = list(deck)
     rng.shuffle(draw_pile)
@@ -125,6 +125,7 @@ def mcts_combat(
     state = CombatState(player=player, enemies=enemies, relics=relics or frozenset())
     start_combat(state)
     samples: list[TrainingSample] = []
+    initial_value_estimate = 0.0
     outcome = None
 
     for turn_num in range(1, max_turns + 1):
@@ -148,6 +149,10 @@ def mcts_combat(
                 state, num_simulations=mcts_simulations,
                 temperature=temperature,
             )
+
+            # Capture value head's initial assessment of this combat
+            if turn_num == 1 and cards_this_turn == 0:
+                initial_value_estimate = _root_value
 
             samples.append(TrainingSample(
                 state_tensors=state_tensors,
@@ -202,7 +207,7 @@ def mcts_combat(
 
     hp_after = max(0, state.player.hp) if outcome == "win" else 0
     remaining_potions = [p for p in state.player.potions if p]
-    return samples, outcome, turn_num, hp_after, remaining_potions
+    return samples, outcome, turn_num, hp_after, remaining_potions, initial_value_estimate
 
 
 # ---------------------------------------------------------------------------
@@ -264,6 +269,7 @@ def _network_pick_card(
             option_cards=opt_cards,
             chosen_idx=best_idx,
             value=0.0,  # Filled after run ends
+            floor=floor,
         )
 
         # Last option is skip
@@ -316,7 +322,7 @@ class MCTSStrategy:
 
     def fight_combat(self, deck, hp, max_hp, max_energy, encounter_id, card_db,
                      rng, potions, relics):
-        samples, outcome, turns, hp_after, remaining_potions = mcts_combat(
+        samples, outcome, turns, hp_after, remaining_potions, initial_value = mcts_combat(
             deck=deck, player_hp=hp, player_max_hp=max_hp,
             player_max_energy=max_energy, encounter_id=encounter_id,
             card_db=card_db, mcts=self.mcts, vocabs=self.vocabs,
@@ -331,6 +337,7 @@ class MCTSStrategy:
             hp_after=hp_after,
             potions_after=remaining_potions,
             samples=samples,
+            initial_value=initial_value,
         )
 
     def pick_card_reward(self, offered, deck, hp, max_hp, floor, card_db, pools):
@@ -370,7 +377,7 @@ class MCTSStrategy:
             sample = OptionSample(
                 state_tensors={k: v.cpu() for k, v in st.items()},
                 option_types=opt_types, option_cards=opt_cards,
-                chosen_idx=best_idx, value=0.0,
+                chosen_idx=best_idx, value=0.0, floor=floor,
             )
 
             if best_idx == 0:
@@ -472,7 +479,7 @@ class MCTSStrategy:
                 samples.append(OptionSample(
                     state_tensors={k: v.cpu() for k, v in st.items()},
                     option_types=opt_types, option_cards=opt_cards,
-                    chosen_idx=best_idx, value=0.0,
+                    chosen_idx=best_idx, value=0.0, floor=floor,
                 ))
 
                 action = actions[best_idx]
@@ -546,7 +553,7 @@ class MCTSStrategy:
             sample = OptionSample(
                 state_tensors={k: v.cpu() for k, v in st.items()},
                 option_types=opt_types, option_cards=opt_cards,
-                chosen_idx=best_idx, value=0.0,
+                chosen_idx=best_idx, value=0.0, floor=floor,
             )
             return (best_idx, [sample])
 
@@ -611,6 +618,7 @@ def play_full_run(
         result.deck_samples, result.option_samples,
         combat_hp_data=result._combat_hp_data,
         boss_floors=result._boss_floors,
+        combat_value_estimates=result._combat_value_estimates,
     )
 
     return FullRunResult(
@@ -633,6 +641,7 @@ def _assign_run_values(
     option_samples: list | None = None,
     combat_hp_data: dict[int, tuple[int, int, int]] | None = None,
     boss_floors: set[int] | None = None,
+    combat_value_estimates: dict[int, float] | None = None,
 ) -> None:
     """Assign training values blending per-combat HP conservation with run outcome.
 
@@ -706,10 +715,39 @@ def _assign_run_values(
             turns_from_end = n - 1 - j
             sample.value = blended * (turn_discount ** turns_from_end)
 
-    # Deck change and option samples get the full run value
-    if deck_change_samples:
-        for sample in deck_change_samples:
+    # --- Non-combat samples: trajectory-based credit assignment ---
+    # Each decision is scored by the value change between the combat before
+    # and after the decision, blended with the run outcome as a regularizer.
+    if combat_value_estimates is None:
+        combat_value_estimates = {}
+
+    combat_floors_sorted = sorted(combat_value_estimates.keys())
+    trajectory_alpha = 0.6  # weight on local value trajectory vs run outcome
+
+    all_option_samples = list(deck_change_samples or []) + list(option_samples or [])
+
+    for sample in all_option_samples:
+        floor = getattr(sample, "floor", 0)
+        if floor == 0 or not combat_floors_sorted:
+            # No floor info (legacy) or no combat data — fall back to run_value
             sample.value = run_value
-    if option_samples:
-        for sample in option_samples:
-            sample.value = run_value
+            continue
+
+        # V_before: value estimate at most recent combat on or before this floor
+        v_before = 0.0
+        for cf in combat_floors_sorted:
+            if cf <= floor:
+                v_before = combat_value_estimates[cf]
+            else:
+                break
+
+        # V_after: value estimate at next combat after this floor
+        v_after = run_value  # fallback if no subsequent combat
+        for cf in combat_floors_sorted:
+            if cf > floor:
+                v_after = combat_value_estimates[cf]
+                break
+
+        delta = v_after - v_before
+        sample.value = trajectory_alpha * delta + (1.0 - trajectory_alpha) * run_value
+        sample.value = max(-1.0, min(1.0, sample.value))
