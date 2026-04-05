@@ -117,13 +117,20 @@ ENEMY_MOVE_TABLES: dict[str, list[dict]] = {
     ],
 
     # --- Bosses (insufficient log data for profiles) ---
+    # Phase 1: Stamp (Plow:150) → Plow (18 dmg + 2 Str) repeating.
+    # Phase 2 (HP <= Plow): Stunned, lose Str, then cycle:
+    #   Beast Cry (Ringing) → Stomp (15 dmg) → Crush (17 dmg + 3 Str)
+    # Phase transition handled via Plow power in combat_engine.
     "CEREMONIAL_BEAST": [
-        {"type": "Buff", "self_strength": 3, "self_block": 10},
-        {"type": "Attack", "damage": 18, "hits": 1},
-        {"type": "Attack", "damage": 18, "hits": 1},
-        {"type": "Attack", "damage": 18, "hits": 1},
-        {"type": "Attack", "damage": 18, "hits": 1},
-        {"type": "Attack", "damage": 18, "hits": 1},
+        {"type": "Buff"},  # Stamp: gain Plow (handled by game state)
+        {"type": "Attack", "damage": 18, "hits": 1, "self_strength": 2},
+        {"type": "Attack", "damage": 18, "hits": 1, "self_strength": 2},
+        {"type": "Attack", "damage": 18, "hits": 1, "self_strength": 2},
+        {"type": "Attack", "damage": 18, "hits": 1, "self_strength": 2},
+        {"type": "Attack", "damage": 18, "hits": 1, "self_strength": 2},
+        {"type": "Attack", "damage": 18, "hits": 1, "self_strength": 2},
+        {"type": "Attack", "damage": 18, "hits": 1, "self_strength": 2},
+        {"type": "Attack", "damage": 18, "hits": 1, "self_strength": 2},
     ],
     "VANTOM": [
         {"type": "Attack", "damage": 7, "hits": 1},

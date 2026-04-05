@@ -160,6 +160,14 @@ def deal_damage(state: CombatState, target_idx: int, base_damage: int, hits: int
         if thorns > 0 and per_hit > 0:
             state.player.hp -= thorns
 
+    # Plow: when HP drops to threshold, become Stunned and lose all Strength
+    plow = enemy.powers.get("Plow", 0)
+    if plow > 0 and enemy.hp <= plow and enemy.is_alive:
+        enemy.powers.pop("Strength", None)
+        enemy.intent_type = None  # Stunned: skip next intent
+        enemy.intent_damage = None
+        enemy.powers.pop("Plow", None)  # One-time trigger
+
     # Check for death triggers
     if not enemy.is_alive:
         _on_enemy_death(state, target_idx)
