@@ -490,48 +490,44 @@ function FloorChart({ data, bestFloor }: { data: FloorPoint[]; bestFloor: number
   }
 
   return (
-    <div className="h-full overflow-x-auto">
-      <div style={{ minWidth: Math.max(400, data.length * 14), height: "100%" }}>
-        <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={data} margin={{ top: 4, right: 8, bottom: 4, left: 90 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="rgba(37,42,74,0.5)" />
-            <XAxis dataKey="index" hide />
-            <YAxis domain={[0, Math.max(bestFloor + 5, 55)]} hide />
+    <ResponsiveContainer width="100%" height="100%">
+      <ComposedChart data={data} margin={{ top: 4, right: 8, bottom: 4, left: 90 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke="rgba(37,42,74,0.5)" />
+        <XAxis dataKey="index" hide />
+        <YAxis domain={[0, Math.max(bestFloor + 5, 55)]} hide />
 
-            <Tooltip
-              content={({ active, payload }) => {
-                if (!active || !payload?.length) return null;
-                const pt = payload[0].payload as FloorPoint;
-                return (
-                  <div className="arcane-panel px-4 py-3 text-sm" style={{ background: "#101325f5", border: "1.5px solid #353c6a" }}>
-                    <div className="text-ember-bright font-bold font-display text-lg text-glow-amber">Floor {pt.floor}</div>
-                    <div className="text-bone-dim mt-1 font-mono">
-                      {pt.character.replace("The ", "")} &middot; {pt.gen ?? "?"}
-                    </div>
-                  </div>
-                );
-              }}
-            />
+        <Tooltip
+          content={({ active, payload }) => {
+            if (!active || !payload?.length) return null;
+            const pt = payload[0].payload as FloorPoint;
+            return (
+              <div className="arcane-panel px-4 py-3 text-sm" style={{ background: "#101325f5", border: "1.5px solid #353c6a" }}>
+                <div className="text-ember-bright font-bold font-display text-lg text-glow-amber">Floor {pt.floor}</div>
+                <div className="text-bone-dim mt-1 font-mono">
+                  {pt.character.replace("The ", "")} &middot; {pt.gen ?? "?"}
+                </div>
+              </div>
+            );
+          }}
+        />
 
-            {ACT_BOSSES.map((act) => (
-              <ReferenceLine
-                key={act.floor}
-                y={act.floor}
-                stroke="rgba(255,170,0,0.3)"
-                strokeDasharray="6 4"
-                label={{ value: act.label, position: "left", fill: "#ffaa00", fontSize: 13, fontFamily: "var(--font-display)" }}
-              />
-            ))}
+        {ACT_BOSSES.map((act) => (
+          <ReferenceLine
+            key={act.floor}
+            y={act.floor}
+            stroke="rgba(255,170,0,0.3)"
+            strokeDasharray="6 4"
+            label={{ value: act.label, position: "left", fill: "#ffaa00", fontSize: 13, fontFamily: "var(--font-display)" }}
+          />
+        ))}
 
-            <Bar dataKey="floor" radius={[2, 2, 0, 0]} isAnimationActive={false}>
-              {data.map((entry, i) => (
-                <Cell key={i} fill={entry.fill + "80"} stroke={entry.fill} strokeWidth={0.5} />
-              ))}
-            </Bar>
-          </ComposedChart>
-        </ResponsiveContainer>
-      </div>
-    </div>
+        <Bar dataKey="floor" radius={[2, 2, 0, 0]} isAnimationActive={false} maxBarSize={20}>
+          {data.map((entry, i) => (
+            <Cell key={i} fill={entry.fill + "80"} stroke={entry.fill} strokeWidth={0.5} />
+          ))}
+        </Bar>
+      </ComposedChart>
+    </ResponsiveContainer>
   );
 }
 
