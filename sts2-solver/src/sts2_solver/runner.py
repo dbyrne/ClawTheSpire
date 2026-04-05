@@ -1397,6 +1397,7 @@ class Runner:
             "rest": self._az_decide_rest,
             "map": self._az_decide_map,
             "shop": self._az_decide_shop,
+            "card_reward": self._az_decide_card_reward,
         }
         _DETERMINISTIC_HANDLERS = {
             "rest": lambda: decide_rest(gs),
@@ -1707,10 +1708,85 @@ class Runner:
             self._log_action(f"  [dim]Network shop failed ({e}), falling back[/dim]")
             return None
 
-    def _az_decide_deck_select(self, gs: dict) -> "Decision | None":
-        """Use network deck_eval_head for card removal/upgrade/transform."""
+    def _az_decide_card_reward(self, gs: dict) -> "Decision | None":
+        """Use network option head to pick a card reward (or skip)."""
         import torch
         from .deterministic_advisor import Decision
+        from .alphazero.self_play import OPTION_CARD_REWARD, OPTION_CARD_SKIP
+
+        try:
+            st, hidden, hp, max_hp, gold, floor, deck = self._az_run_state_tensors(gs)
+            network = self._mcts.network
+            vocabs = self._mcts_vocabs
+
+            # Get offered cards from the game state
+            combat = gs.get("combat") or {}
+            rewards = gs.get("card_rewards") or gs.get("rewards") or []
+            # Also check agent_view for card reward data
+            av = (gs.get("agent_view") or {}).get("combat") or {}
+            if not rewards:
+                rewards = av.get("card_rewards") or []
+            if not rewards:
+                # Try to find cards in available actions context
+                sel = gs.get("selection") or {}
+                rewards = sel.get("cards") or []
+
+            if not rewards:
+                return None
+
+            # Build option types and card IDs
+            opt_types = []
+            opt_cards = []
+            option_labels = []
+            game_indices = []
+
+            for card_info in rewards:
+                name = card_info.get("name") or card_info.get("card_id", "?")
+                card_id = (card_info.get("card_id") or name).rstrip("+")
+                idx = card_info.get("index", len(opt_types))
+                opt_types.append(OPTION_CARD_REWARD)
+                opt_cards.append(vocabs.cards.get(card_id))
+                option_labels.append(name)
+                game_indices.append(idx)
+
+            # Add skip option
+            opt_types.append(OPTION_CARD_SKIP)
+            opt_cards.append(0)
+            option_labels.append("Skip")
+            game_indices.append(None)
+
+            with torch.no_grad():
+                best_idx, scores = network.pick_best_option(
+                    hidden, opt_types, opt_cards)
+
+            nv = network.value_head(hidden).item()
+            hs = {
+                "head": "option_eval",
+                "chosen": best_idx,
+                "options": [{"label": lbl, "score": round(s, 4)} for lbl, s in zip(option_labels, scores)],
+            }
+
+            if best_idx < len(rewards):
+                # Pick a card
+                chosen_idx = game_indices[best_idx]
+                card_name = option_labels[best_idx]
+                return Decision("choose_reward_card", chosen_idx,
+                                f"Network: take {card_name} (score={scores[best_idx]:.2f})",
+                                network_value=nv, head_scores=hs)
+            else:
+                # Skip
+                return Decision("proceed", None,
+                                f"Network: skip (score={scores[best_idx]:.2f})",
+                                network_value=nv, head_scores=hs)
+        except Exception as e:
+            self._log_action(f"  [dim]Network card_reward failed ({e}), falling back[/dim]")
+            return None
+
+    def _az_decide_deck_select(self, gs: dict) -> "Decision | None":
+        """Use network option head for card selection (removal/upgrade/transform)."""
+        import torch
+        from .deterministic_advisor import Decision
+        from .alphazero.self_play import OPTION_SHOP_REMOVE, OPTION_SMITH, OPTION_CARD_REWARD
 
         try:
             st, hidden, hp, max_hp, gold, floor, deck = self._az_run_state_tensors(gs)
@@ -1727,51 +1803,55 @@ class Runner:
             is_remove = "remove" in prompt or "transform" in prompt
             is_upgrade = "upgrade" in prompt
 
-            # Build card IDs for evaluation
-            card_ids = []
-            card_indices = []  # game option indices
+            # Build options for the unified option head
+            opt_types = []
+            opt_cards = []
+            card_indices = []
+            option_labels = []
+
             for card_info in cards:
                 card_id = card_info.get("card_id") or card_info.get("id", "")
-                idx = card_info.get("index", len(card_ids))
+                name = card_info.get("name", "?")
+                idx = card_info.get("index", len(opt_types))
 
-                if is_upgrade:
-                    # Score the upgraded version
-                    up_id = card_id.rstrip("+") + "+"
-                    card_ids.append(vocabs.cards.get(up_id.rstrip("+")))
+                if is_remove:
+                    opt_types.append(OPTION_SHOP_REMOVE)
+                elif is_upgrade:
+                    opt_types.append(OPTION_SMITH)
                 else:
-                    card_ids.append(vocabs.cards.get(card_id.rstrip("+")))
-                card_indices.append(idx)
+                    opt_types.append(OPTION_CARD_REWARD)
 
-            if not card_ids:
+                opt_cards.append(vocabs.cards.get(card_id.rstrip("+")))
+                card_indices.append(idx)
+                option_labels.append(name)
+
+            if not opt_types:
                 return None
 
             with torch.no_grad():
-                ids_t = torch.tensor([card_ids], dtype=torch.long)
-                scores = network.evaluate_deck_change(hidden, ids_t)
-                scores_list = scores[0].tolist()
+                if is_remove:
+                    # Remove: pick lowest-scored card
+                    best_idx, scores = network.pick_best_option(
+                        hidden, opt_types, opt_cards)
+                    # Invert: we want the card that hurts the deck least to remove
+                    best_idx = min(range(len(scores)), key=lambda i: scores[i])
+                else:
+                    best_idx, scores = network.pick_best_option(
+                        hidden, opt_types, opt_cards)
 
-            if is_remove:
-                # Remove: pick lowest-scored card
-                best = min(range(len(scores_list)), key=lambda i: scores_list[i])
-            else:
-                # Upgrade: pick highest-scored card
-                best = max(range(len(scores_list)), key=lambda i: scores_list[i])
-
-            chosen_idx = card_indices[best]
-            card_name = cards[best].get("name", "?")
+            chosen_idx = card_indices[best_idx]
+            card_name = option_labels[best_idx]
             nv = network.value_head(hidden).item()
             action = "remove" if is_remove else "upgrade"
 
-            # Build labeled scores for telemetry
-            option_labels = [c.get("name", "?") for c in cards[:len(scores_list)]]
             hs = {
-                "head": "deck_eval",
-                "chosen": best,
-                "options": [{"label": lbl, "score": round(s, 4)} for lbl, s in zip(option_labels, scores_list)],
+                "head": "option_eval",
+                "chosen": best_idx,
+                "options": [{"label": lbl, "score": round(s, 4)} for lbl, s in zip(option_labels, scores)],
             }
 
             return Decision("select_deck_card", chosen_idx,
-                            f"Network: {action} {card_name} (score={scores_list[best]:.2f})",
+                            f"Network: {action} {card_name} (score={scores[best_idx]:.2f})",
                             network_value=nv, head_scores=hs)
         except Exception as e:
             self._log_action(f"  [dim]Network deck_select failed ({e}), falling back[/dim]")
