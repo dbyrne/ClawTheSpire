@@ -100,14 +100,20 @@ ENEMY_MOVE_TABLES: dict[str, list[dict]] = {
     # a data-driven profile (enemy_profiles.json).  Profiles are checked
     # first — entries here only matter for enemies NOT in the profile file.
 
-    # --- Living Fog: attacks every turn, spawns Gas Bomb every other turn ---
+    # --- Living Fog: Advanced Gas → (Bloat, Super Gas Blast) alternating ---
+    # Advanced Gas: 8 dmg + Smoggy. Bloat: 5 dmg + spawn Gas Bombs.
+    # Super Gas Blast: 8 dmg. Bloat spawns increasing counts (1,2,3...).
     "LIVING_FOG": [
-        {"type": "Attack", "damage": 5, "hits": 1, "player_smoggy": 1},
-        {"type": "Attack", "damage": 8, "hits": 1, "spawn_minion": "GAS_BOMB"},
+        {"type": "Attack", "damage": 8, "hits": 1, "player_smoggy": 1},
+        {"type": "Attack", "damage": 5, "hits": 1, "spawn_minion": "GAS_BOMB"},
+        {"type": "Attack", "damage": 8, "hits": 1},
+        {"type": "Attack", "damage": 5, "hits": 1, "spawn_minion": "GAS_BOMB"},
+        {"type": "Attack", "damage": 8, "hits": 1},
+        {"type": "Attack", "damage": 5, "hits": 1, "spawn_minion": "GAS_BOMB"},
     ],
-    # Gas Bomb: minion that does nothing (explodes on death — handled elsewhere)
+    # Gas Bomb: explodes for 8 damage and dies every turn
     "GAS_BOMB": [
-        {"type": "Buff"},
+        {"type": "Attack", "damage": 8, "hits": 1},
     ],
 
     # --- Bosses (insufficient log data for profiles) ---
@@ -835,18 +841,26 @@ def _resolve_sim_intents(state: CombatState, ais: list[EnemyAI]) -> None:
         if intent.get("type") == "Debuff" and intent.get("damage"):
             _enemy_attacks_player(state, enemy)
 
+        # Gas Bomb: self-destructs after attacking (Explode move)
+        if enemy.id == "GAS_BOMB" and enemy.is_alive:
+            enemy.hp = 0
+
         # Spawn minions (e.g. Living Fog spawns Gas Bombs)
+        # Spawn count increases each use (Living Fog Bloat: 1, 2, 3...)
         spawn_id = intent.get("spawn_minion")
         if spawn_id:
-            try:
-                minion = _spawn_enemy(spawn_id)
-            except Exception:
-                minion = EnemyState(
-                    id=spawn_id, name=spawn_id.replace("_", " ").title(),
-                    hp=10, max_hp=10)
-            minion.powers["Minion"] = 1
-            state.enemies.append(minion)
-            ais.append(_create_enemy_ai(spawn_id))
+            spawn_count = getattr(ai, '_spawn_count', 0) + 1
+            ai._spawn_count = spawn_count
+            for _ in range(spawn_count):
+                try:
+                    minion = _spawn_enemy(spawn_id)
+                except Exception:
+                    minion = EnemyState(
+                        id=spawn_id, name=spawn_id.replace("_", " ").title(),
+                        hp=10, max_hp=10)
+                minion.powers["Minion"] = 1
+                state.enemies.append(minion)
+                ais.append(_create_enemy_ai(spawn_id))
 
         ai._pending_intent = None
 
