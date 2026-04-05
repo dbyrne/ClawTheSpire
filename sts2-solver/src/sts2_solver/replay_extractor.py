@@ -42,6 +42,9 @@ class CombatSnapshot:
     exhaust_pile_size: int
     relics: list[str]
     available_actions: list[str] = field(default_factory=list)
+    draw_pile: list[str] = field(default_factory=list)     # Card names (if logged)
+    discard_pile: list[str] = field(default_factory=list)   # Card names (if logged)
+    exhaust_pile: list[str] = field(default_factory=list)   # Card names (if logged)
 
 
 @dataclass
@@ -222,6 +225,9 @@ def extract_run(path: Path) -> RunReplay | None:
                 exhaust_pile_size=event.get("exhaust_pile_size", 0),
                 relics=list(event.get("relics") or []),
                 available_actions=list(event.get("available_actions") or []),
+                draw_pile=list(event.get("draw_pile") or []),
+                discard_pile=list(event.get("discard_pile") or []),
+                exhaust_pile=list(event.get("exhaust_pile") or []),
             )
 
         # Combat turns

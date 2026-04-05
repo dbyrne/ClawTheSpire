@@ -307,6 +307,9 @@ class RunLogger:
             "draw_pile_size": _pile_size(game_state, "draw"),
             "discard_pile_size": _pile_size(game_state, "discard"),
             "exhaust_pile_size": _pile_size(game_state, "exhaust"),
+            "draw_pile": _parse_pile(game_state, "draw")[1],
+            "discard_pile": _parse_pile(game_state, "discard")[1],
+            "exhaust_pile": _parse_pile(game_state, "exhaust")[1],
             "relics": [r.get("name") or r.get("relic_id", "?") for r in run.get("relics", [])],
             "available_actions": list(game_state.get("available_actions") or []),
         })
@@ -529,18 +532,18 @@ class RunLogger:
 # ------------------------------------------------------------------
 
 
-def _pile_size(game_state: dict, pile: str) -> int:
-    """Get card pile size from agent_view or combat dict.
+def _parse_pile(game_state: dict, pile: str) -> tuple[int, list[str]]:
+    """Get card pile size and card names from agent_view or combat dict.
 
     The C# mod exposes piles under agent_view.{run,combat}.piles.{draw,discard,exhaust}
     as grouped card stack arrays. Each entry has a ``line`` field like
-    "2x Strike (1) — Deal 6 damage." We parse the count prefix.
+    "2x Strike (1) — Deal 6 damage." We parse the count and card name.
+
+    Returns (total_count, card_names_list).
     """
     import re
 
     av = game_state.get("agent_view") or {}
-    # agent_view.combat has draw/discard/exhaust directly
-    # agent_view.run has them under .piles
     candidates = [
         (av.get("combat") or {}).get(pile),
         ((av.get("run") or {}).get("piles") or {}).get(pile),
@@ -548,20 +551,37 @@ def _pile_size(game_state: dict, pile: str) -> int:
     for pile_data in candidates:
         if pile_data and isinstance(pile_data, list):
             total = 0
+            names: list[str] = []
             for entry in pile_data:
                 if isinstance(entry, dict):
                     line = entry.get("line", "")
-                    # Parse "2x Card Name" → count 2, or "Card Name" → count 1
-                    m = re.match(r"(\d+)x\s", line)
-                    total += int(m.group(1)) if m else 1
+                    # Parse "2x Card Name (1) — desc" or "Card Name (0) — desc"
+                    m = re.match(r"(?:(\d+)x\s)?(.+?)(?:\s*\(\d+\))?\s*[—–-]", line)
+                    if m:
+                        count = int(m.group(1)) if m.group(1) else 1
+                        name = m.group(2).strip()
+                        total += count
+                        names.extend([name] * count)
+                    else:
+                        # Fallback: just count
+                        m2 = re.match(r"(\d+)x\s", line)
+                        total += int(m2.group(1)) if m2 else 1
+                        names.append(line.split("(")[0].strip())
                 else:
                     total += 1
-            return total
+                    names.append(str(entry))
+            return total, names
 
     # Fallback: combat dict might have {pile}_pile as a list
     combat = game_state.get("combat") or {}
     fallback = combat.get(f"{pile}_pile") or []
-    return len(fallback)
+    return len(fallback), [c.get("name", "?") if isinstance(c, dict) else str(c) for c in fallback]
+
+
+def _pile_size(game_state: dict, pile: str) -> int:
+    """Get card pile size. Convenience wrapper around _parse_pile."""
+    size, _ = _parse_pile(game_state, pile)
+    return size
 
 
 def _deck_counts(deck: list[dict]) -> dict[str, int]:
