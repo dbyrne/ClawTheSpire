@@ -536,6 +536,7 @@ class SnapshotValidationReport:
 def compare_states(
     simulated: CombatState,
     next_snapshot: CombatSnapshot,
+    current_snapshot: CombatSnapshot | None = None,
 ) -> list[FieldMismatch]:
     """Compare simulator output against next turn's snapshot."""
     mismatches: list[FieldMismatch] = []
@@ -647,12 +648,19 @@ def compare_states(
     total_sim = sim_hand_size + sim_draw + sim_discard + sim_exhaust
     total_snap = snap_hand_size + snap.draw_pile_size + snap.discard_pile_size + snap.exhaust_pile_size
 
-    # Exhaust pile size (most stable — cards only enter, never leave)
-    if sim_exhaust != snap.exhaust_pile_size:
-        mismatches.append(FieldMismatch(
-            "exhaust_pile_size", snap.exhaust_pile_size, sim_exhaust,
-            delta=sim_exhaust - snap.exhaust_pile_size,
-        ))
+    # Exhaust pile: compare the DELTA (cards exhausted this turn) rather
+    # than absolute count, since the starting exhaust pile is reconstructed
+    # and may not match. If we have the current snapshot, compute deltas.
+    if current_snapshot is not None:
+        snap_exhaust_delta = snap.exhaust_pile_size - current_snapshot.exhaust_pile_size
+        # sim started from a reconstruction, so compute sim delta from
+        # the number of cards that entered exhaust during simulate_turn + start_turn
+        sim_exhaust_delta = sim_exhaust  # sim starts with 0 exhaust (reconstruction)
+        if snap_exhaust_delta != sim_exhaust_delta:
+            mismatches.append(FieldMismatch(
+                "exhaust_delta", snap_exhaust_delta, sim_exhaust_delta,
+                delta=sim_exhaust_delta - snap_exhaust_delta,
+            ))
 
     # --- Retained cards (cards with Retain should appear in both hands) ---
     snap_hand_names = {c.get("name", "") for c in snap.hand}
@@ -806,7 +814,7 @@ def validate_run(run: RunReplay, card_db: CardDB) -> tuple[list[TurnValidation],
                 continue
 
             # Compare against next snapshot
-            mismatches = compare_states(simulated, next_snap)
+            mismatches = compare_states(simulated, next_snap, current_snapshot=snap)
             results.append(TurnValidation(
                 combat_idx=combat_idx,
                 turn=snap.turn,

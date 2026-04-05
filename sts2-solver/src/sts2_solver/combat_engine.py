@@ -226,7 +226,12 @@ def use_potion(state: CombatState, potion_idx: int) -> None:
 
 
 def _move_card_after_play(state: CombatState, card: Card) -> None:
-    """Move a played card to the correct zone."""
+    """Move a played card to the correct zone.
+
+    Token and Status cards that exhaust are removed from the game entirely
+    (they don't enter the exhaust pile). This matches STS2 behavior where
+    Shivs, Slimed, etc. vanish on exhaust rather than accumulating.
+    """
     should_exhaust = (
         card.exhausts
         or card.card_type == CardType.POWER
@@ -235,8 +240,15 @@ def _move_card_after_play(state: CombatState, card: Card) -> None:
     )
 
     if should_exhaust:
-        state.player.exhaust_pile.append(card)
-        _on_exhaust(state)
+        # Token-rarity cards (Shiv, Giant Rock) vanish on exhaust — removed
+        # from the game, not added to exhaust pile. Status cards (Slimed,
+        # Burn, etc.) DO go to the exhaust pile normally.
+        is_token = card.id in ("SHIV", "GIANT_ROCK")
+        if is_token:
+            _on_exhaust(state)  # Still trigger exhaust effects
+        else:
+            state.player.exhaust_pile.append(card)
+            _on_exhaust(state)
     else:
         state.player.discard_pile.append(card)
 
@@ -417,7 +429,10 @@ def end_turn(state: CombatState) -> None:
         if card.retain:
             remaining.append(card)
         elif card.ethereal:
-            state.player.exhaust_pile.append(card)
+            # Ethereal cards exhaust at end of turn. Token cards vanish.
+            is_token = card.id in ("SHIV", "GIANT_ROCK")
+            if not is_token:
+                state.player.exhaust_pile.append(card)
             _on_exhaust(state)
         else:
             state.player.discard_pile.append(card)
