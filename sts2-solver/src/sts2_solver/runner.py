@@ -1148,7 +1148,14 @@ class Runner:
 
         # discard_potion as sole action: game is forcing a potion discard
         # (e.g. potions full after a reward). Just discard slot 0.
+        # But if the player has no potions, this is a transient state —
+        # the game hasn't populated real actions yet. Skip this tick.
         if actions == ["discard_potion"]:
+            potions = (run.get("potions") or [])
+            has_potions = any(p.get("occupied") for p in potions if isinstance(p, dict))
+            if not has_potions:
+                self._log_action("  [dim]skip: discard_potion but no potions (transient)[/dim]")
+                return
             self._log_action("  [dim]auto: discard_potion (slot 0)[/dim]")
             if not self.dry_run:
                 try:
