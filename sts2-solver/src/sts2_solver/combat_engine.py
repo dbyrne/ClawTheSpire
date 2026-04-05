@@ -480,6 +480,15 @@ def resolve_enemy_intents(state: CombatState) -> None:
             _enemy_attacks_player(state, enemy)
         elif enemy.intent_type == "Defend" and enemy.intent_block is not None:
             enemy.block += enemy.intent_block
+        elif enemy.intent_type == "StatusCard":
+            # Slimes add Slimed cards to the player's discard pile.
+            # Slimed: cost 1, draw 1 card, Exhaust.
+            slimed = Card(
+                id="SLIMED", name="Slimed", cost=1,
+                card_type=CardType.STATUS, target=TargetType.SELF,
+                cards_draw=1, keywords=frozenset({"Exhaust"}),
+            )
+            state.player.discard_pile.append(slimed)
 
 
 def _enemy_attacks_player(state: CombatState, enemy: EnemyState) -> None:
