@@ -147,6 +147,7 @@ def extract_run(path: Path) -> RunReplay | None:
 
     # State machine for combat extraction
     in_combat = False
+    _mid_combat_restart = False
     combat_floor = 0
     combat_enemies: list[dict] = []
     combat_turns: list[CombatTurn] = []
@@ -180,16 +181,26 @@ def extract_run(path: Path) -> RunReplay | None:
 
         # Combat start
         if etype == "combat_start":
-            in_combat = True
-            combat_floor = event.get("floor", 0)
-            combat_enemies = list(event.get("enemies", []))
-            combat_turns = []
-            pending_snapshot = None
-            combat_hp_before = 0  # will be set by combat_end
-            # Enhancement #4: use deck from combat_start if available
-            combat_deck = event.get("deck")
-            if combat_deck:
-                current_deck = combat_deck
+            if in_combat:
+                # Mid-combat restart (e.g., after Survivor's deck_select screen).
+                # The game re-emits combat_start but it's the same combat.
+                # Don't reset turns — just update deck and set merge flag.
+                _mid_combat_restart = True
+                combat_deck = event.get("deck")
+                if combat_deck:
+                    current_deck = combat_deck
+            else:
+                _mid_combat_restart = False
+                in_combat = True
+                combat_floor = event.get("floor", 0)
+                combat_enemies = list(event.get("enemies", []))
+                combat_turns = []
+                pending_snapshot = None
+                combat_hp_before = 0  # will be set by combat_end
+                # Enhancement #4: use deck from combat_start if available
+                combat_deck = event.get("deck")
+                if combat_deck:
+                    current_deck = combat_deck
 
         # Combat snapshot (enhanced logging) — arrives just before combat_turn
         if etype == "combat_snapshot" and in_combat:
@@ -215,18 +226,43 @@ def extract_run(path: Path) -> RunReplay | None:
 
         # Combat turns
         if etype == "combat_turn" and in_combat:
-            combat_turns.append(CombatTurn(
-                turn=event.get("turn", 0),
-                cards_played=list(event.get("cards_played", [])),
-                score=event.get("score", 0.0),
-                states_evaluated=event.get("states_evaluated", 0),
-                solve_ms=event.get("solve_ms", 0.0),
-                ts=event.get("ts", ""),
-                targets_chosen=list(event.get("targets_chosen", [])),
-                snapshot=pending_snapshot,
-                discard_choices=list(event.get("discards", [])),
-                hand_after=event.get("hand_after"),
-            ))
+            turn_num = event.get("turn", 0)
+            new_cards = list(event.get("cards_played", []))
+            new_targets = list(event.get("targets_chosen", []))
+
+            # Check if this is a continuation of the previous turn (mid-combat
+            # restart after deck_select screen, e.g., Survivor discard).
+            # Merge when a mid-combat restart was detected and turn numbers match.
+            prev = combat_turns[-1] if combat_turns else None
+            is_continuation = (
+                _mid_combat_restart
+                and prev is not None
+                and new_cards
+                and turn_num == prev.turn
+            )
+            _mid_combat_restart = False
+            if is_continuation:
+                prev = combat_turns[-1]
+                prev.cards_played.extend(new_cards)
+                prev.targets_chosen.extend(new_targets)
+                # Update hand_after to the later snapshot (more complete)
+                new_hand_after = event.get("hand_after")
+                if new_hand_after is not None:
+                    prev.hand_after = new_hand_after
+                # Don't replace the snapshot — keep the original pre-turn state
+            else:
+                combat_turns.append(CombatTurn(
+                    turn=turn_num,
+                    cards_played=new_cards,
+                    score=event.get("score", 0.0),
+                    states_evaluated=event.get("states_evaluated", 0),
+                    solve_ms=event.get("solve_ms", 0.0),
+                    ts=event.get("ts", ""),
+                    targets_chosen=new_targets,
+                    snapshot=pending_snapshot,
+                    discard_choices=list(event.get("discards", [])),
+                    hand_after=event.get("hand_after"),
+                ))
             pending_snapshot = None
 
         # Mid-combat card selection (discard choices from Survivor, Acrobatics, etc.)
