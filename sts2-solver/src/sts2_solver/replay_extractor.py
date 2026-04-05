@@ -55,6 +55,7 @@ class CombatTurn:
     ts: str = ""
     targets_chosen: list[int | None] = field(default_factory=list)  # Per-card target indices
     snapshot: CombatSnapshot | None = None  # Present if enhanced logging enabled
+    discard_choices: list[str] = field(default_factory=list)  # Card names discarded (from deck_select events)
 
 
 @dataclass
@@ -220,6 +221,17 @@ def extract_run(path: Path) -> RunReplay | None:
                 snapshot=pending_snapshot,
             ))
             pending_snapshot = None
+
+        # Mid-combat card selection (discard choices from Survivor, Acrobatics, etc.)
+        if (etype == "decision" and in_combat and combat_turns
+                and event.get("screen_type") == "deck_select"):
+            scores = event.get("head_scores", {})
+            options = scores.get("options", [])
+            chosen = scores.get("chosen", 0)
+            if options and chosen < len(options):
+                label = options[chosen].get("label", "")
+                if label:
+                    combat_turns[-1].discard_choices.append(label)
 
         # Combat end
         if etype == "combat_end" and in_combat:

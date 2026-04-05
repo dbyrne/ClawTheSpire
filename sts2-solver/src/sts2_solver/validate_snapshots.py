@@ -255,12 +255,81 @@ def _infer_target(
     return best_idx if best_drop > 0 else None
 
 
+def _resolve_pending_choices(
+    state: CombatState,
+    card_db: CardDB,
+    discard_names: list[str] | None = None,
+) -> None:
+    """Resolve any pending choice, using logged discard names if available.
+
+    If discard_names is provided (from deck_select log events), discard
+    those specific cards. Otherwise fall back to a heuristic.
+    """
+    from .effects import discard_card_from_hand
+    from .sim_step import _post_resolve
+
+    discard_queue = list(discard_names) if discard_names else []
+
+    max_iterations = 5
+    for _ in range(max_iterations):
+        pc = state.pending_choice
+        if pc is None:
+            break
+
+        if pc.choice_type == "discard_from_hand":
+            if not state.player.hand:
+                state.pending_choice = None
+                break
+
+            candidates = [
+                i for i in range(len(state.player.hand))
+                if i not in pc.chosen_so_far
+            ]
+            if not candidates:
+                state.pending_choice = None
+                break
+
+            # Try to match a logged discard name
+            pick = None
+            if discard_queue:
+                target_name = discard_queue.pop(0)
+                for idx in candidates:
+                    if state.player.hand[idx].name == target_name:
+                        pick = idx
+                        break
+
+            # Fallback: heuristic (prefer Status > Curse > Sly > cheapest)
+            if pick is None:
+                def discard_priority(idx):
+                    c = state.player.hand[idx]
+                    if c.card_type.value == "Status":
+                        return (-10, c.cost)
+                    if c.card_type.value == "Curse":
+                        return (-5, c.cost)
+                    if "Sly" in c.keywords:
+                        return (-3, c.cost)
+                    return (c.cost, 0)
+
+                pick = min(candidates, key=discard_priority)
+
+            discard_card_from_hand(state, pick)
+            pc.chosen_so_far.append(pick)
+
+            if len(pc.chosen_so_far) >= pc.num_choices:
+                _post_resolve(state, pc, card_db)
+                state.pending_choice = None
+        else:
+            state.pending_choice = None
+            break
+
+
 def simulate_turn(
     state: CombatState,
     cards_played: list[str],
     card_db: CardDB,
     targets_chosen: list[int | None] | None = None,
     forced_target: int | None = None,
+    discard_choices: list[str] | None = None,
 ) -> CombatState:
     """Play logged cards, end turn, resolve enemy intents. Returns new state.
 
@@ -323,6 +392,10 @@ def simulate_turn(
             target = targets[0] if targets else None
 
         play_card(s, match_idx, target, card_db)
+
+        # Resolve any pending choice (Survivor, Acrobatics, Dagger Throw, etc.)
+        # Uses logged discard names if available, falls back to heuristic.
+        _resolve_pending_choices(s, card_db, discard_names=discard_choices)
 
         if is_combat_over(s):
             return s
@@ -773,22 +846,26 @@ def validate_run(run: RunReplay, card_db: CardDB) -> tuple[list[TurnValidation],
             try:
                 state = state_from_snapshot(snap, card_db, floor=combat.floor, deck=combat.deck)
 
-                # Use logged targets if available, otherwise infer
+                # Use logged targets and discard choices if available
                 logged_targets = turn.targets_chosen if turn.targets_chosen else None
+                discards = turn.discard_choices if turn.discard_choices else None
                 alive = [i for i, e in enumerate(state.enemies) if e.is_alive]
                 if logged_targets:
                     simulated = simulate_turn(
                         state, turn.cards_played, card_db,
                         targets_chosen=logged_targets,
+                        discard_choices=discards,
                     )
                 elif len(alive) > 1 and next_snap:
                     best_target = _infer_target(snap, next_snap)
                     simulated = simulate_turn(
                         state, turn.cards_played, card_db,
                         forced_target=best_target,
+                        discard_choices=discards,
                     )
                 else:
-                    simulated = simulate_turn(state, turn.cards_played, card_db)
+                    simulated = simulate_turn(state, turn.cards_played, card_db,
+                                              discard_choices=discards)
             except Exception as e:
                 log.warning(
                     "Simulation error combat %d turn %d: %s",
