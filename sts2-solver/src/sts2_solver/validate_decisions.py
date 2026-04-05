@@ -370,9 +370,9 @@ def _check_energy_usage(
 ) -> list[DecisionIssue]:
     """Check that cards played in a turn didn't exceed available energy.
 
-    Compares the energy at start of turn against the sum of costs of
-    cards played. Flags if more energy was spent than available (indicates
-    the solver had a wrong cost for a card, like the Anticipate bug).
+    Simulates energy flow card-by-card: each card costs energy, and some
+    cards (like Adrenaline) grant energy when played. Flags if energy
+    goes negative at any point.
     """
     issues: list[DecisionIssue] = []
     energy = snapshot.get("player", {}).get("energy", 0)
@@ -382,27 +382,53 @@ def _check_energy_usage(
     if not cards_played:
         return issues
 
-    # Build cost lookup from hand snapshot
-    hand_costs: dict[str, int] = {}
+    # Build cost and energy_gain lookup from hand snapshot + card DB
+    hand_info: dict[str, dict] = {}
     for c in hand:
         name = c.get("name", "?")
         cost = c.get("cost", 0)
-        if cost is not None and cost >= 0:
-            hand_costs[name] = cost
+        if cost is None or cost < 0:
+            cost = 0
+        hand_info[name] = {"cost": cost}
 
-    # Sum costs of played cards (skip potions)
-    total_cost = 0
+    # Use card DB for energy gain info (not in snapshot)
+    try:
+        from .data_loader import load_cards
+        card_db = load_cards()
+    except Exception:
+        card_db = None
+
+    # Simulate energy flow
+    current_energy = energy
+    went_negative = False
     for card_name in cards_played:
         if card_name.startswith("Use ") and "otion" in card_name:
             continue
         base = card_name.rstrip("+")
-        cost = hand_costs.get(base, hand_costs.get(card_name, 0))
-        total_cost += cost
+        is_upgraded = card_name.endswith("+")
 
-    if total_cost > energy:
+        # Get cost from snapshot hand info
+        info = hand_info.get(base, hand_info.get(card_name, {}))
+        cost = info.get("cost", 0)
+
+        current_energy -= cost
+        if current_energy < 0:
+            went_negative = True
+
+        # Account for energy gain from the card (Adrenaline, etc.)
+        if card_db:
+            card = card_db.get(base, upgraded=is_upgraded)
+            if card and card.energy_gain:
+                current_energy += card.energy_gain
+
+    if went_negative:
         played_str = ", ".join(cards_played[:5])
         if len(cards_played) > 5:
             played_str += f"... ({len(cards_played)} total)"
+        total_cost = sum(
+            hand_info.get(c.rstrip("+"), hand_info.get(c, {})).get("cost", 0)
+            for c in cards_played if not (c.startswith("Use ") and "otion" in c)
+        )
         issues.append(DecisionIssue(
             severity="warning",
             category="energy_overspend",
