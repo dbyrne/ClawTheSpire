@@ -42,7 +42,8 @@ def get_alive_enemies(state: CombatState) -> list[int]:
 def calculate_attack_damage(base: int, state: CombatState, target: EnemyState) -> int:
     """Calculate per-hit damage for an attack card."""
     player = state.player
-    raw = base + player.powers.get("Strength", 0)
+    # Vigor: flat bonus added to next attack's base damage
+    raw = base + player.powers.get("Strength", 0) + player.powers.get("Vigor", 0)
     if raw < 0:
         raw = 0
     if player.powers.get("Weak", 0) > 0:
@@ -101,6 +102,18 @@ def _on_enemy_death(state: CombatState, enemy_idx: int, from_poison: bool = Fals
             )
             state.enemies.append(wriggler)
 
+    # Ravenous (Corpse Slug): another enemy with Ravenous eats the corpse,
+    # gaining 1 Strength and becoming Stunned (skips next intent).
+    for other in state.enemies:
+        if other is enemy or not other.is_alive:
+            continue
+        if other.powers.get("Ravenous", 0) > 0:
+            other.powers["Strength"] = other.powers.get("Strength", 0) + 1
+            # Stunned: skip next intent (clear intent so resolve_enemy_intents does nothing)
+            other.intent_type = None
+            other.intent_damage = None
+            break  # Only one slug eats per death
+
 
 def deal_damage(state: CombatState, target_idx: int, base_damage: int, hits: int = 1) -> None:
     """Deal damage to a single enemy, accounting for Strength/Weak/Vulnerable/Slow and block."""
@@ -117,10 +130,10 @@ def deal_damage(state: CombatState, target_idx: int, base_damage: int, hits: int
         if enemy.powers.get("Slow", 0) > 0 and per_hit > 0:
             slow_mult = 1.0 + 0.1 * max(0, state.cards_played_this_turn - 1)
             per_hit = math.floor(per_hit * slow_mult)
-        # Skittish: enemy gains block equal to stacks on first hit each turn
+        # Skittish: enemy gains 1 block on first hit each turn
         skittish = enemy.powers.get("Skittish", 0)
         if skittish > 0 and not enemy.powers.get("_skittish_triggered"):
-            enemy.block += skittish
+            enemy.block += 1
             enemy.powers["_skittish_triggered"] = 1
 
         per_hit = apply_block(enemy, per_hit)

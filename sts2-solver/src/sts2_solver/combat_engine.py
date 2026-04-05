@@ -147,6 +147,10 @@ def play_card(
     effect_fn(state, target_idx)
 
     # --- Post-effect triggers ---
+    # Vigor: consumed after an Attack is played
+    if card.card_type == CardType.ATTACK:
+        state.player.powers.pop("Vigor", None)
+
     # Dark Embrace: draw on exhaust (handled in _move_card_after_play)
     # Feel No Pain: block on exhaust (handled in _move_card_after_play)
 
@@ -298,6 +302,10 @@ def start_combat(state: CombatState) -> None:
     # Oddly Smooth Stone: gain 1 Dexterity
     if "ODDLY_SMOOTH_STONE" in relics:
         state.player.powers["Dexterity"] = state.player.powers.get("Dexterity", 0) + 1
+
+    # Akabeko: first Attack each combat deals 8 additional damage
+    if "AKABEKO" in relics:
+        state.player.powers["Vigor"] = state.player.powers.get("Vigor", 0) + 8
 
     # Strike Dummy: gain 1 Strength for each Strike in deck
     if "STRIKE_DUMMY" in relics:

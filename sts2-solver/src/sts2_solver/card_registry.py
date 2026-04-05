@@ -977,3 +977,31 @@ def _thrumming_hatchet(card: Card, card_db: CardDB | None) -> CardEffect:
             state._thrumming_stash = []
         state._thrumming_stash.append(card)
     return effect
+
+
+@register("PURITY")
+def _purity(card: Card, card_db: CardDB | None) -> CardEffect:
+    """Choose up to 3(5) cards in hand. Exhaust them."""
+    max_exhaust = 3 if not card.upgraded else 5
+
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        # Heuristic: exhaust the least useful cards (Status/Curse first,
+        # then Strikes, then cheapest). In real game this is player choice.
+        candidates = []
+        for i, c in enumerate(state.player.hand):
+            if c.card_type in (CardType.STATUS, CardType.CURSE):
+                prio = 0
+            elif "Strike" in c.name:
+                prio = 1
+            elif c.card_type == CardType.ATTACK and c.cost <= 1:
+                prio = 2
+            else:
+                prio = 3
+            candidates.append((prio, i))
+        candidates.sort()
+        to_exhaust = [idx for _, idx in candidates[:max_exhaust]]
+        # Remove in reverse order to preserve indices
+        for idx in sorted(to_exhaust, reverse=True):
+            card_obj = state.player.hand.pop(idx)
+            state.player.exhaust_pile.append(card_obj)
+    return effect
