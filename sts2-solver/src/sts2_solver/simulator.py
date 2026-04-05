@@ -825,6 +825,19 @@ def _resolve_sim_intents(state: CombatState, ais: list[EnemyAI]) -> None:
         if intent.get("type") == "Debuff" and intent.get("damage"):
             _enemy_attacks_player(state, enemy)
 
+        # Spawn minions (e.g. Living Fog spawns Gas Bombs)
+        spawn_id = intent.get("spawn_minion")
+        if spawn_id:
+            try:
+                minion = _spawn_enemy(spawn_id)
+            except Exception:
+                minion = EnemyState(
+                    id=spawn_id, name=spawn_id.replace("_", " ").title(),
+                    hp=10, max_hp=10)
+            minion.powers["Minion"] = 1
+            state.enemies.append(minion)
+            ais.append(_create_enemy_ai(spawn_id))
+
         ai._pending_intent = None
 
 

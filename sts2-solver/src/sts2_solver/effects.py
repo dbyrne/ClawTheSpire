@@ -147,6 +147,11 @@ def deal_damage(state: CombatState, target_idx: int, base_damage: int, hits: int
 
         enemy.hp -= per_hit
 
+        # Enemy Thorns: player takes damage per hit
+        thorns = enemy.powers.get("Thorns", 0)
+        if thorns > 0 and per_hit > 0:
+            state.player.hp -= thorns
+
     # Check for death triggers
     if not enemy.is_alive:
         _on_enemy_death(state, target_idx)
