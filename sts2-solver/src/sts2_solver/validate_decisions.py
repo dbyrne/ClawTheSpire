@@ -62,6 +62,7 @@ class DecisionValidationReport:
     """Aggregate results across all audited decisions."""
     audits: list[DecisionAudit]
     run_count: int = 0
+    network_quality: list[DecisionAudit] = field(default_factory=list)
 
     @property
     def total(self) -> int:
@@ -83,6 +84,13 @@ class DecisionValidationReport:
     def issue_summary(self) -> dict[str, int]:
         counts: dict[str, int] = Counter()
         for a in self.audits:
+            for i in a.issues:
+                counts[i.category] += 1
+        return dict(counts.most_common())
+
+    def quality_summary(self) -> dict[str, int]:
+        counts: dict[str, int] = Counter()
+        for a in self.network_quality:
             for i in a.issues:
                 counts[i.category] += 1
         return dict(counts.most_common())
@@ -286,63 +294,73 @@ def _check_map_navigation(
     return issues, new_pos
 
 
-def _check_card_index_alignment(
+def _check_wasted_block(
     snapshot: dict, turn_event: dict, floor: int | None,
 ) -> list[DecisionIssue]:
-    """Check that cards played match what was in hand.
+    """Detect turns where block was played beyond what incoming damage requires.
 
-    If the MCTS card_idx maps to a different card than expected, the
-    game would play the wrong card (e.g., Defend instead of Strike).
-    Detects this by checking if unplayed cards in hand_after are
-    attacks that should have been played over blocks.
+    Flags when: total block gained > total incoming damage AND affordable
+    attack cards remained in hand. This means the network chose defensive
+    cards that provided no survival benefit over attacking.
     """
     issues: list[DecisionIssue] = []
     hand = snapshot.get("hand", [])
     played = turn_event.get("cards_played", [])
     hand_after = turn_event.get("hand_after", [])
-    energy = snapshot.get("player", {}).get("energy", 0)
-    block = snapshot.get("player", {}).get("block", 0)
+    player = snapshot.get("player", {})
+    energy = player.get("energy", 0)
+    existing_block = player.get("block", 0)
 
-    if not played or not hand_after or len(played) < 2:
+    if not played or not hand_after:
         return issues
 
-    # Check for attacks left in hand when only blocks were played
+    # Calculate total incoming damage (sum of all enemy intents)
+    enemies = snapshot.get("enemies", [])
+    total_incoming = 0
+    for e in enemies:
+        dmg = e.get("intent_damage") or 0
+        hits = e.get("intent_hits", 1)
+        total_incoming += dmg * hits
+
+    if total_incoming == 0:
+        return issues  # No incoming damage — blocking is always wasteful but harmless
+
+    # Estimate block gained this turn (rough: 5 per Defend/Deflect, 8 per Survivor)
+    block_cards = {"Defend": 5, "Deflect": 4, "Survivor": 8, "Dash": 10,
+                   "Backflip": 5, "Defend+": 8, "Deflect+": 7, "Survivor+": 11}
+    block_gained = sum(block_cards.get(p, 0) for p in played)
+    total_block = existing_block + block_gained
+
+    # Only flag if we over-blocked
+    if total_block <= total_incoming:
+        return issues
+
+    # Check if attacks were available and affordable
     attack_cards = {"Strike", "Neutralize", "Slice", "Sucker Punch",
-                    "Dagger Spray", "Flick-Flack", "Knife Trap"}
-    remaining_attacks = [c for c in hand_after if c in attack_cards]
-    played_only_blocks = all(
-        p in ("Defend", "Survivor", "Dash", "Backflip", "Deflect")
-        or p.startswith("Use ")
-        for p in played
-    )
+                    "Dagger Spray", "Flick-Flack", "Knife Trap", "Poisoned Stab",
+                    "Shiv", "Skewer", "Predator", "Leading Strike"}
+    remaining_attacks = [c for c in hand_after
+                         if c.rstrip("+") in attack_cards]
+    if not remaining_attacks:
+        return issues
 
-    if remaining_attacks and played_only_blocks and len(played) >= 2:
-        # Check if any remaining attack costs <= remaining energy
-        hand_costs = {c.get("name", "?"): c.get("cost", 1) for c in hand}
-        energy_spent = sum(hand_costs.get(p, 1) for p in played
-                          if not p.startswith("Use "))
-        energy_left = energy - energy_spent
-        affordable_attacks = [a for a in remaining_attacks
-                              if hand_costs.get(a, 99) <= energy_left]
+    hand_costs = {c.get("name", "?"): c.get("cost", 1) for c in hand}
+    energy_spent = sum(hand_costs.get(p.rstrip("+"), 1) for p in played
+                       if not p.startswith("Use "))
+    energy_left = energy - energy_spent
+    affordable = [a for a in remaining_attacks
+                  if hand_costs.get(a.rstrip("+"), 99) <= energy_left]
 
-        # Also check: could we have played an attack INSTEAD of a block?
-        # If block already exceeded incoming damage, attacks were better
-        enemies = snapshot.get("enemies", [])
-        total_incoming = sum(e.get("intent_damage") or 0 for e in enemies)
-        block_played = sum(hand_costs.get(p, 0) for p in played
-                          if p in ("Defend",))
-        total_block = block + block_played * 5  # rough: 5 block per Defend
-
-        if affordable_attacks:
-            issues.append(DecisionIssue(
-                severity="warning",
-                category="overblock",
-                message=f"Played only blocks {played} but had affordable "
-                        f"attacks {affordable_attacks} remaining. "
-                        f"Energy: {energy}, incoming: {total_incoming}, "
-                        f"block: {block}",
-                floor=floor,
-            ))
+    if affordable:
+        wasted = total_block - total_incoming
+        issues.append(DecisionIssue(
+            severity="info",
+            category="wasted_block",
+            message=f"Block {total_block} exceeded incoming {total_incoming} "
+                    f"(wasted {wasted}). Had affordable attacks: {affordable}. "
+                    f"Played: {played}",
+            floor=floor,
+        ))
 
     return issues
 
@@ -536,7 +554,10 @@ def validate_run_decisions(events: list[dict]) -> list[DecisionAudit]:
         )
         audits.append(audit)
 
-    # --- Energy usage checks (combat_snapshot + combat_turn pairs) ---
+    # --- Combat turn checks (combat_snapshot + combat_turn pairs) ---
+    # Separate routing errors (energy_overspend, stuck loops) from
+    # network quality metrics (wasted block).
+    quality_audits: list[DecisionAudit] = []
     last_snapshot = None
     for event in events:
         etype = event.get("type")
@@ -546,25 +567,32 @@ def validate_run_decisions(events: list[dict]) -> list[DecisionAudit]:
         elif etype == "combat_snapshot":
             last_snapshot = event
         elif etype == "combat_turn" and last_snapshot is not None:
-            turn_issues: list[DecisionIssue] = []
-            turn_issues.extend(_check_energy_usage(
-                last_snapshot, event, current_floor))
-            turn_issues.extend(_check_card_index_alignment(
-                last_snapshot, event, current_floor))
-            if turn_issues:
-                audit = DecisionAudit(
-                    run_id=run_id,
-                    floor=current_floor,
-                    screen_type="combat_turn",
-                    source="solver",
-                    action=f"T{event.get('turn', '?')}",
-                    reasoning=f"played {len(event.get('cards_played', []))} cards",
-                    issues=turn_issues,
-                )
-                audits.append(audit)
+            turn_played = len(event.get("cards_played", []))
+            turn_label = f"T{event.get('turn', '?')} \u2014 played {turn_played} cards"
+
+            # Routing checks (real bugs)
+            routing_issues = _check_energy_usage(last_snapshot, event, current_floor)
+            if routing_issues:
+                audits.append(DecisionAudit(
+                    run_id=run_id, floor=current_floor,
+                    screen_type="combat_turn", source="solver",
+                    action=turn_label, reasoning="",
+                    issues=routing_issues,
+                ))
+
+            # Quality checks (network play quality)
+            quality_issues = _check_wasted_block(last_snapshot, event, current_floor)
+            if quality_issues:
+                quality_audits.append(DecisionAudit(
+                    run_id=run_id, floor=current_floor,
+                    screen_type="combat_turn", source="network",
+                    action=turn_label, reasoning="",
+                    issues=quality_issues,
+                ))
+
             last_snapshot = None
 
-    return audits
+    return audits, quality_audits
 
 
 # ---------------------------------------------------------------------------
@@ -574,6 +602,7 @@ def validate_run_decisions(events: list[dict]) -> list[DecisionAudit]:
 def validate_all(logs_dir: Path) -> DecisionValidationReport:
     """Validate decisions across all JSONL logs in a directory."""
     all_audits: list[DecisionAudit] = []
+    all_quality: list[DecisionAudit] = []
     run_count = 0
 
     paths = sorted(logs_dir.glob("run_*.jsonl"))
@@ -586,10 +615,13 @@ def validate_all(logs_dir: Path) -> DecisionValidationReport:
         if not events:
             continue
         run_count += 1
-        audits = validate_run_decisions(events)
+        audits, quality = validate_run_decisions(events)
         all_audits.extend(audits)
+        all_quality.extend(quality)
 
-    return DecisionValidationReport(audits=all_audits, run_count=run_count)
+    return DecisionValidationReport(
+        audits=all_audits, run_count=run_count, network_quality=all_quality,
+    )
 
 
 def print_report(report: DecisionValidationReport) -> None:
@@ -619,7 +651,7 @@ def print_report(report: DecisionValidationReport) -> None:
         print(f"\n  --- Errors ({len(errors)}) ---")
         for a in errors:
             print(f"\n  Run {a.run_id} | F{a.floor} | {a.screen_type} | {a.source}")
-            print(f"    Action: {a.action} — {a.reasoning[:80]}")
+            print(f"    Action: {a.action}")
             for issue in a.issues:
                 print(f"    {issue}")
 
@@ -630,6 +662,29 @@ def print_report(report: DecisionValidationReport) -> None:
             print(f"    Action: {a.action}")
             for issue in a.issues:
                 print(f"    {issue}")
+
+    # --- Network quality metrics ---
+    if report.network_quality:
+        print(f"\n{'='*60}")
+        print(f"  NETWORK PLAY QUALITY")
+        print(f"{'='*60}")
+
+        qsummary = report.quality_summary()
+        total_turns = report.total  # rough: decisions ~ turns
+        quality_count = len(report.network_quality)
+        print(f"\n  Combat turns with issues:  {quality_count}")
+        if qsummary:
+            print(f"\n  Issues by category:")
+            for cat, count in qsummary.items():
+                print(f"    {cat}: {count}")
+
+        # Show first few
+        print(f"\n  --- Examples (first 10 of {quality_count}) ---")
+        for a in report.network_quality[:10]:
+            print(f"\n  Run {a.run_id} | F{a.floor} | T{a.action}")
+            for issue in a.issues:
+                sev = "INFO " if issue.severity == "info" else "WARN "
+                print(f"    [{sev}] {issue.category}: {issue.message}")
 
     print(f"\n{'='*60}\n")
 

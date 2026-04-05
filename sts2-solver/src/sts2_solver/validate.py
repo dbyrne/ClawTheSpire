@@ -70,6 +70,8 @@ def main(logs_dir: Path | None = None) -> int:
           f", {len(mt_report.missing_enemies)} missing)")
     if dec_report.warnings:
         print(f"  Warnings:     {dec_report.warnings}")
+    if dec_report.network_quality:
+        print(f"  Net quality:  {len(dec_report.network_quality)} turns with issues")
     print(f"{'='*60}\n")
 
     return 0 if (snap_ok and dec_ok and mt_ok) else 1
