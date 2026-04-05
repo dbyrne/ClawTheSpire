@@ -106,6 +106,16 @@ OPTION_CARD_REWARD = 12
 OPTION_CARD_SKIP = 13
 OPTION_SHOP_BUY_POTION = 14
 
+# Event option types (categorized by primary effect)
+OPTION_EVENT_HEAL = 15
+OPTION_EVENT_DAMAGE = 16
+OPTION_EVENT_GOLD = 17
+OPTION_EVENT_CARD_REMOVE = 18
+OPTION_EVENT_UPGRADE = 19
+OPTION_EVENT_TRANSFORM = 20
+OPTION_EVENT_RELIC = 21
+OPTION_EVENT_LEAVE = 22
+
 ROOM_TYPE_TO_OPTION = {
     "weak": OPTION_MAP_WEAK,
     "normal": OPTION_MAP_NORMAL,
@@ -114,6 +124,39 @@ ROOM_TYPE_TO_OPTION = {
     "shop": OPTION_MAP_SHOP,
     "rest": OPTION_MAP_REST,
 }
+
+
+def categorize_event_option(description: str) -> int:
+    """Map an event option description to an option type constant.
+
+    Priority order (highest first): relic > card_remove > upgrade >
+    transform > heal > gold > damage > leave.  For mixed-effect options
+    the primary *reward* determines the category; the network's hidden
+    state (HP/gold/deck) provides context to weigh costs.
+    """
+    import re
+    from ..game_data import strip_markup
+
+    desc = strip_markup(description or "").lower()
+    if not desc:
+        return OPTION_EVENT_LEAVE
+
+    if re.search(r'(?:obtain|gain|receive|procure).*relic', desc):
+        return OPTION_EVENT_RELIC
+    if re.search(r'remove.*card|remove.*strike|remove.*defend', desc):
+        return OPTION_EVENT_CARD_REMOVE
+    if re.search(r'upgrade', desc):
+        return OPTION_EVENT_UPGRADE
+    if re.search(r'transform', desc):
+        return OPTION_EVENT_TRANSFORM
+    if re.search(r'heal|(?:gain|increase).*max hp', desc):
+        return OPTION_EVENT_HEAL
+    if re.search(r'(?:gain|lose|pay).*gold', desc):
+        return OPTION_EVENT_GOLD
+    if re.search(r'(?:take|lose)\s*\d+.*(?:damage|hp)', desc):
+        return OPTION_EVENT_DAMAGE
+
+    return OPTION_EVENT_LEAVE
 
 
 class ReplayBuffer:
@@ -498,6 +541,17 @@ def train_worker(
             if k in current_state and v.shape == current_state[k].shape
         }
         skipped = set(saved_state.keys()) - set(compatible.keys())
+        # Partial-copy expanded embeddings (e.g. option_type_embed grew)
+        for k in list(skipped):
+            if k in current_state:
+                old_w = saved_state[k]
+                cur_w = current_state[k]
+                if (old_w.ndim == 2 and old_w.shape[0] < cur_w.shape[0]
+                        and old_w.shape[1] == cur_w.shape[1]):
+                    new_w = cur_w.clone()
+                    new_w[:old_w.shape[0]] = old_w
+                    compatible[k] = new_w
+                    skipped.discard(k)
         # If trunk.0 was skipped (input dim changed), also skip trunk.2
         # to avoid NaN from mismatched weight expectations
         if any("trunk.0" in k for k in skipped):

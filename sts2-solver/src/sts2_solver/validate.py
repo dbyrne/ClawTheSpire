@@ -1,9 +1,11 @@
-"""Combined validator — runs simulator, decision, and move table checks.
+"""Combined validator — rebuilds profiles, then runs all checks.
 
 Usage:
     python -m sts2_solver.validate [logs_dir]
 
 Defaults to the latest gen*/ directory under logs/.
+Steps: rebuild enemy + event profiles from ALL logs, then validate
+the specified gen's logs against simulator, decisions, and move tables.
 """
 
 from __future__ import annotations
@@ -39,10 +41,50 @@ def _resolve_logs_dir(dir_arg: Path | None) -> Path:
     return base
 
 
+def _rebuild_profiles(logs_dir: Path) -> None:
+    """Rebuild enemy and event profiles from all available logs."""
+    # Use the parent of logs_dir (e.g. logs/) so we get all gens, not just one
+    all_logs = logs_dir.parent if logs_dir.name.startswith("gen") else logs_dir
+
+    from .build_enemy_profiles import (
+        build_all_profiles as build_enemy,
+        load_profiles as load_enemy,
+        save_profiles as save_enemy,
+        _default_profile_path as enemy_path,
+    )
+    from .build_event_profiles import (
+        build_all_profiles as build_event,
+        load_profiles as load_event,
+        save_profiles as save_event,
+        _default_profile_path as event_path,
+    )
+
+    # Enemy profiles
+    existing_enemy = load_enemy(enemy_path())
+    enemy_profiles = build_enemy(all_logs, min_combats=3, existing=existing_enemy)
+    save_enemy(enemy_profiles, enemy_path())
+    n_new_enemy = len(enemy_profiles) - len(existing_enemy)
+    print(f"  Enemy profiles: {len(enemy_profiles)} total"
+          f"{f' (+{n_new_enemy} new)' if n_new_enemy else ''}")
+
+    # Event profiles
+    existing_event = load_event(event_path())
+    event_profiles = build_event(all_logs, min_observations=2, existing=existing_event)
+    save_event(event_profiles, event_path())
+    n_new_event = len(event_profiles) - len(existing_event)
+    print(f"  Event profiles: {len(event_profiles)} total"
+          f"{f' (+{n_new_event} new)' if n_new_event else ''}")
+
+
 def main(logs_dir: Path | None = None) -> int:
     """Run all validators and return exit code (0 = all pass)."""
     logs_dir = _resolve_logs_dir(logs_dir)
     print(f"\nValidating logs in: {logs_dir}\n")
+
+    # --- Rebuild profiles from latest log data ---
+    print("Rebuilding profiles...")
+    _rebuild_profiles(logs_dir)
+    print()
 
     # --- Simulator validation ---
     snap_report = snapshot_main(logs_dir)

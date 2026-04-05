@@ -74,6 +74,7 @@ from .self_play import (
     OPTION_REST, OPTION_SMITH, OPTION_SHOP_REMOVE, OPTION_SHOP_BUY,
     OPTION_SHOP_LEAVE, OPTION_CARD_REWARD, OPTION_CARD_SKIP,
     OPTION_SHOP_BUY_POTION, ROOM_TYPE_TO_OPTION,
+    categorize_event_option,
 )
 from ..effects import discard_card_from_hand
 from .state_tensor import encode_state, encode_actions
@@ -561,36 +562,41 @@ class MCTSStrategy:
             import random as _random
             return (_random.Random().randint(0, len(choices) - 1), [])
 
-    def pick_neow_bonus(self, deck, relics, gold, card_db, pools, rng):
-        neow_bonus = rng.choice(["remove_strike", "gain_relic", "upgrade_card",
-                                 "gain_gold", "transform"])
-        if neow_bonus == "remove_strike":
-            strikes = [i for i, c in enumerate(deck) if "Strike" in c.name]
-            if strikes:
-                deck.pop(rng.choice(strikes))
-        elif neow_bonus == "gain_relic":
-            available = [r for r in ELITE_RELIC_POOL if r not in relics]
-            if available:
-                relics.add(rng.choice(available))
-        elif neow_bonus == "upgrade_card":
-            upgradeable = [(i, c) for i, c in enumerate(deck)
-                           if not c.upgraded and c.card_type.value not in ("Status", "Curse")]
-            if upgradeable:
-                idx, card = rng.choice(upgradeable)
-                up = card_db.get_upgraded(card.id)
-                if up:
-                    deck[idx] = up
-        elif neow_bonus == "gain_gold":
-            return 100
-        elif neow_bonus == "transform":
-            strikes = [i for i, c in enumerate(deck) if "Strike" in c.name]
-            for _ in range(min(2, len(strikes))):
-                if strikes:
-                    idx = strikes.pop(rng.randrange(len(strikes)))
-                    offered = _offer_card_rewards(pools, deck, 1)
-                    if offered:
-                        deck[idx] = offered[0]
-        return 0
+    def decide_event(self, event_id, options, deck, hp, max_hp, gold, floor,
+                     card_db, rng, relics):
+        from ..simulator import _apply_profiled_effects
+
+        network = self.mcts.network
+        player = PlayerState(hp=hp, max_hp=max_hp, energy=3, max_energy=3,
+                             draw_pile=list(deck))
+        dummy = CombatState(player=player, enemies=[], floor=floor, gold=gold,
+                            relics=relics)
+        st = encode_state(dummy, self.vocabs, self.config)
+        st = {k: v.to(self.mcts.device) for k, v in st.items()}
+
+        opt_types = []
+        opt_cards = []
+        for opt in options:
+            if "option_type" in opt:
+                opt_types.append(opt["option_type"])
+            else:
+                opt_types.append(categorize_event_option(opt.get("description", "")))
+            opt_cards.append(0)
+
+        with torch.no_grad():
+            hidden = network.encode_state(**st)
+            best_idx, scores = network.pick_best_option(hidden, opt_types, opt_cards)
+
+        sample = OptionSample(
+            state_tensors={k: v.cpu() for k, v in st.items()},
+            option_types=opt_types, option_cards=opt_cards,
+            chosen_idx=best_idx, value=0.0, floor=floor,
+        )
+
+        chosen = options[best_idx] if best_idx < len(options) else options[0]
+        effects = chosen.get("effects", {})
+        changes = _apply_profiled_effects(effects, hp, max_hp, deck, gold, card_db, rng)
+        return (best_idx, changes, [sample])
 
 
 def play_full_run(

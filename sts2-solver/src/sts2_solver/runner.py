@@ -30,7 +30,6 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from .advisor import StrategicAdvisor
 from .advisor_prompts import AUTO_ACTIONS, detect_screen_type
 from .deterministic_advisor import (
     decide_boss_relic,
@@ -82,7 +81,6 @@ class Runner:
         self.client = GameClient()
         self.card_db = None
         self.game_data = None
-        self.advisor = None
         self.logger = RunLogger(logs_dir=Path(logs_dir) if logs_dir else None)
 
         # Structured event store (SQLite + Supabase + WebSocket)
@@ -296,10 +294,6 @@ class Runner:
         self.console.print(f"[dim]Loaded {len(self.card_db)} cards[/dim]")
         self.console.print("[dim]Loading game data...[/dim]")
         self.game_data = load_game_data()
-        self.advisor = StrategicAdvisor(
-            self.game_data, self.client, logger=self.logger
-        )
-
         # Initialize AlphaZero MCTS
         self.console.print("[dim]Initializing AlphaZero MCTS...[/dim]")
         self._mcts_vocabs = build_vocabs_from_card_db(self.card_db)
@@ -331,8 +325,6 @@ class Runner:
             card_db=self.card_db, device="cpu",
         )
         self.logger.metadata = {
-            "advisor_model": self.advisor.model,
-            "advisor_local": self.advisor.is_local,
             "checkpoint": self._checkpoint_name or "none",
         }
         try:
@@ -1473,6 +1465,7 @@ class Runner:
             "map": self._az_decide_map,
             "shop": self._az_decide_shop,
             "card_reward": self._az_decide_card_reward,
+            "event": self._az_decide_event,
         }
         _DETERMINISTIC_HANDLERS = {
             "rest": lambda: decide_rest(gs),
@@ -1510,37 +1503,11 @@ class Runner:
             )
             return
 
-        # Events + generic: LLM-based decision (only remaining LLM usage)
-        try:
-            result_str = self.advisor.advise(gs, execute=not self.dry_run)
-        except Exception as e:
-            self._log_action(f"[red]Advisor error: {e}[/red]")
-            raise
-
-        # If the advisor recommended an invalid/failed action, error out
-        if "not available" in result_str or "FAILED" in result_str:
-            self._log_action(
-                f"[bold red]Advisor returned invalid action for "
-                f"{screen_type}: {result_str[:100]}[/bold red]"
-            )
-            raise RuntimeError(
-                f"Advisor returned invalid action for {screen_type}: "
-                f"{result_str[:200]}"
-            )
-
-        # Update advisor panel
-        self._advisor_text = (
-            f"[bold]{screen_type.upper()}[/bold] | "
-            f"Floor {run.get('floor', '?')} | "
-            f"HP {run.get('current_hp', '?')}/{run.get('max_hp', '?')}\n\n"
-            f"{result_str}"
+        # No LLM fallback — all screen types must be handled above.
+        raise RuntimeError(
+            f"Unhandled screen type {screen_type!r} — no network or "
+            f"deterministic handler registered. Available actions: {actions}"
         )
-
-        lines = result_str.split("\n")
-        decision_line = next((l for l in lines if l.startswith("Decision:")), lines[0] if lines else "?")
-        self._log_action(f"  [blue]{decision_line}[/blue]")
-        self.action_count += 1
-        self._refresh()
 
     # ------------------------------------------------------------------
     # AlphaZero network non-combat decisions
@@ -1944,6 +1911,108 @@ class Runner:
             self._log_action(f"  [red]Network card_reward FAILED: {e}[/red]")
             raise
 
+    def _az_decide_event(self, gs: dict) -> "Decision | None":
+        """Use network option head to decide between event options.
+
+        Validates against event profiles to ensure we only handle events
+        we've trained on.  Raises RuntimeError for unknown events.
+        """
+        import torch
+        from .deterministic_advisor import Decision
+        from .alphazero.self_play import categorize_event_option
+        from .game_data import strip_markup
+        from .simulator import _load_event_profiles
+
+        try:
+            st, hidden, hp, max_hp, gold, floor, deck = self._az_run_state_tensors(gs)
+            network = self._mcts.network
+
+            event = gs.get("event") or (gs.get("agent_view") or {}).get("event") or {}
+            options = event.get("options") or []
+
+            unlocked = [(i, o) for i, o in enumerate(options) if not o.get("locked")]
+            if len(unlocked) <= 1:
+                return None  # Let auto-handler deal with single/no options
+
+            # Identify the event and look up its profile
+            event_name = strip_markup(
+                event.get("title") or event.get("name", ""))
+            event_id = event.get("event_id") or event.get("id", "")
+
+            profiles = _load_event_profiles()
+            profile = profiles.get(event_id) or profiles.get(
+                event_name.upper().replace(" ", "_").replace("?", "").strip("_"))
+
+            # For Neow, match options against the pool by title
+            if profile and profile.get("is_neow"):
+                pool_by_title = {
+                    strip_markup(o["title"]): o
+                    for o in profile.get("neow_pool", [])
+                }
+            elif profile:
+                pool_by_title = {
+                    strip_markup(o["title"]): o
+                    for o in profile.get("options", [])
+                }
+            else:
+                pool_by_title = None
+
+            if pool_by_title is None:
+                raise RuntimeError(
+                    f"No event profile for {event_id!r} / {event_name!r} — "
+                    f"run build_event_profiles.py to add it"
+                )
+
+            opt_types = []
+            opt_cards = []
+            option_labels = []
+            game_indices = []
+
+            for i, opt in unlocked:
+                desc = opt.get("description", "")
+                title = strip_markup(
+                    opt.get("title") or opt.get("name", ""))
+                label = title or strip_markup(desc)[:40] or f"Option {i}"
+
+                # Match against profile to get trained option_type
+                profiled = pool_by_title.get(title)
+                if profiled and "option_type" in profiled:
+                    opt_types.append(profiled["option_type"])
+                else:
+                    raise RuntimeError(
+                        f"Event option {title!r} not in profile for "
+                        f"{event_name!r} — run build_event_profiles.py "
+                        f"to update it"
+                    )
+
+                opt_cards.append(0)
+                option_labels.append(label)
+                game_indices.append(opt.get("index", i))
+
+            with torch.no_grad():
+                best_idx, scores = network.pick_best_option(
+                    hidden, opt_types, opt_cards)
+                nv = network.value_head(hidden).item()
+
+            hs = {
+                "head": "option_eval",
+                "chosen": best_idx,
+                "options": [{"label": lbl, "score": round(s, 4)}
+                            for lbl, s in zip(option_labels, scores)],
+            }
+
+            chosen_game_idx = game_indices[best_idx]
+            chosen_label = option_labels[best_idx]
+
+            return Decision(
+                "choose_event_option", chosen_game_idx,
+                f"Network: {chosen_label} (score={scores[best_idx]:.2f})",
+                network_value=nv, head_scores=hs,
+            )
+        except Exception as e:
+            self._log_action(f"  [red]Network event FAILED: {e}[/red]")
+            raise
+
     def _az_decide_deck_select(self, gs: dict) -> "Decision | None":
         """Use network option head for deck card selection (add/remove/upgrade).
 
@@ -1955,7 +2024,7 @@ class Runner:
         """Use network option head for card selection (removal/upgrade/transform)."""
         import torch
         from .deterministic_advisor import Decision
-        from .alphazero.self_play import OPTION_SHOP_REMOVE, OPTION_SMITH, OPTION_CARD_REWARD
+        from .alphazero.self_play import OPTION_SHOP_REMOVE, OPTION_SMITH, OPTION_CARD_REWARD, OPTION_EVENT_TRANSFORM
 
         try:
             st, hidden, hp, max_hp, gold, floor, deck = self._az_run_state_tensors(gs)
@@ -1974,9 +2043,11 @@ class Runner:
             is_upgrade = kind in ("deck_upgrade_select", "combat_hand_upgrade_select",
                                   "deck_enchant_select")
             is_remove_prompt = "remove" in prompt_text or "destroy" in prompt_text
+            is_transform = "transform" in prompt_text
             is_add_prompt = ("add" in prompt_text
-                             or ("choose" in prompt_text and not is_remove_prompt))
-            is_add = not is_upgrade and not is_remove_prompt and is_add_prompt
+                             or ("choose" in prompt_text and not is_remove_prompt
+                                 and not is_transform))
+            is_add = not is_upgrade and not is_remove_prompt and not is_transform and is_add_prompt
             is_remove = not is_upgrade and not is_add
 
             # Build options for the unified option head
@@ -1994,6 +2065,8 @@ class Runner:
                     opt_types.append(OPTION_SMITH)
                 elif is_add:
                     opt_types.append(OPTION_CARD_REWARD)
+                elif is_transform:
+                    opt_types.append(OPTION_EVENT_TRANSFORM)
                 else:
                     opt_types.append(OPTION_SHOP_REMOVE)
 
@@ -2015,7 +2088,14 @@ class Runner:
             chosen_idx = card_indices[best_idx]
             card_name = option_labels[best_idx]
             nv = network.value_head(hidden).item()
-            action = "upgrade" if is_upgrade else ("add" if is_add else "remove")
+            if is_upgrade:
+                action = "upgrade"
+            elif is_add:
+                action = "add"
+            elif is_transform:
+                action = "transform"
+            else:
+                action = "remove"
 
             hs = {
                 "head": "option_eval",
@@ -2059,6 +2139,7 @@ class Runner:
                 "shop": ("close_shop_inventory", None),
                 "boss_relic": ("choose_treasure_relic", 0),
                 "deck_select": ("select_deck_card", 0),
+                "event": ("choose_event_option", 0),
             }
             fb = _FALLBACKS.get(screen_type)
             if fb and fb[0] in actions:

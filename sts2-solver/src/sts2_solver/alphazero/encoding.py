@@ -163,7 +163,7 @@ class EncoderConfig:
     potion_feature_dim: int = 6  # occupied(1) + type one-hot(5): heal/block/str/dmg/weak
 
     # Option evaluation
-    num_option_types: int = 16
+    num_option_types: int = 24
     option_type_embed_dim: int = 16
 
     # Card stats vector: upgraded(1) + cost(1) + damage(1) + block(1) +

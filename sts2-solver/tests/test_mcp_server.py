@@ -22,108 +22,9 @@ def _reset_singletons():
     """Reset module-level singletons between tests."""
     mcp_mod._card_db = None
     mcp_mod._game_client = None
-    mcp_mod._game_data = None
-    mcp_mod._advisor = None
-    mcp_mod._logger = None
     yield
     mcp_mod._card_db = None
     mcp_mod._game_client = None
-    mcp_mod._game_data = None
-    mcp_mod._advisor = None
-    mcp_mod._logger = None
-
-
-def _combat_game_state(hand=None, enemy_hp=20, player_hp=70, turn=1):
-    """Build a minimal combat game state dict."""
-    if hand is None:
-        hand = [
-            {
-                "card_id": "STRIKE_IRONCLAD",
-                "upgraded": False,
-                "energy_cost": 1,
-                "dynamic_values": [],
-            },
-        ]
-    return {
-        "screen": "COMBAT",
-        "turn": turn,
-        "run_id": "TEST_RUN",
-        "available_actions": ["play_card", "end_turn"],
-        "run": {
-            "max_energy": 3,
-            "character_name": "Ironclad",
-            "floor": 1,
-            "current_hp": player_hp,
-            "max_hp": 80,
-            "gold": 99,
-            "deck": [],
-            "relics": [],
-            "potions": [],
-        },
-        "combat": {
-            "player": {
-                "current_hp": player_hp,
-                "max_hp": 80,
-                "block": 0,
-                "energy": 3,
-                "powers": [],
-            },
-            "hand": hand,
-            "enemies": [
-                {
-                    "enemy_id": "NIBBIT",
-                    "name": "Nibbit",
-                    "current_hp": enemy_hp,
-                    "max_hp": 46,
-                    "block": 0,
-                    "powers": [],
-                    "intents": [
-                        {"intent_type": "Attack", "damage": 10, "hits": 1},
-                    ],
-                },
-            ],
-        },
-    }
-
-
-# ---------------------------------------------------------------------------
-# advise_strategy
-# ---------------------------------------------------------------------------
-
-
-class TestAdviseStrategy:
-    def test_auto_action_proceed(self):
-        state = {
-            "screen": "REWARD",
-            "available_actions": ["proceed"],
-            "run_id": "TEST",
-            "run": {
-                "character_name": "Ironclad",
-                "floor": 1,
-                "current_hp": 80,
-                "max_hp": 80,
-                "gold": 99,
-                "deck": [],
-                "relics": [],
-                "potions": [],
-            },
-        }
-        result = mcp_mod.advise_strategy(
-            raw_state=json.dumps(state), execute=False
-        )
-        assert "proceed" in result.lower()
-
-    def test_connection_error(self):
-        mock_client = MagicMock()
-        mock_client.get_state.side_effect = ConnectionError("refused")
-        mcp_mod._game_client = mock_client
-
-        result = mcp_mod.advise_strategy(raw_state=None)
-        assert "Cannot connect" in result
-
-    def test_invalid_json(self):
-        result = mcp_mod.advise_strategy(raw_state="{bad json")
-        assert "Error" in result
 
 
 # ---------------------------------------------------------------------------
@@ -170,8 +71,3 @@ class TestSingletons:
         c1 = mcp_mod._get_client()
         c2 = mcp_mod._get_client()
         assert c1 is c2
-
-    def test_logger_cached(self):
-        l1 = mcp_mod._get_logger()
-        l2 = mcp_mod._get_logger()
-        assert l1 is l2

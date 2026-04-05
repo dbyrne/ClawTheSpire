@@ -1,0 +1,982 @@
+{
+  "ABYSSAL_BATHS": {
+    "event_id": "ABYSSAL_BATHS",
+    "event_name": "Abyssal Baths",
+    "n_observations": 4,
+    "options": [
+      {
+        "title": "Immerse",
+        "description": "Gain 2 Max HP. Take 3 damage.",
+        "option_type": 15,
+        "effects": {
+          "max_hp_delta": 2,
+          "hp_delta": -3
+        },
+        "n_offered": 4,
+        "n_chosen": 0
+      },
+      {
+        "title": "Abstain",
+        "description": "Heal 10 HP.",
+        "option_type": 15,
+        "effects": {
+          "hp_delta": 10
+        },
+        "n_offered": 4,
+        "n_chosen": 4
+      }
+    ]
+  },
+  "AROMA_OF_CHAOS": {
+    "event_id": "AROMA_OF_CHAOS",
+    "event_name": "Aroma of Chaos",
+    "n_observations": 8,
+    "options": [
+      {
+        "title": "Let Go",
+        "description": "Transform a card in your Deck.",
+        "option_type": 20,
+        "effects": {
+          "card_transform": 1
+        },
+        "n_offered": 8,
+        "n_chosen": 0
+      },
+      {
+        "title": "Maintain Control",
+        "description": "Upgrade a card in your Deck.",
+        "option_type": 19,
+        "effects": {
+          "card_upgrade": 1
+        },
+        "n_offered": 8,
+        "n_chosen": 8
+      }
+    ]
+  },
+  "BRAIN_LEECH": {
+    "event_id": "BRAIN_LEECH",
+    "event_name": "Brain Leech",
+    "n_observations": 13,
+    "options": [
+      {
+        "title": "Share Knowledge",
+        "description": "Choose 1 of 5 random cards to add to your Deck.",
+        "option_type": 22,
+        "effects": {
+          "card_add_random": 1
+        },
+        "n_offered": 13,
+        "n_chosen": 11
+      },
+      {
+        "title": "Rip the Leech Off",
+        "description": "Lose 5 HP. Gain a Colorless card reward.",
+        "option_type": 16,
+        "effects": {
+          "hp_delta": -5
+        },
+        "n_offered": 13,
+        "n_chosen": 2
+      }
+    ]
+  },
+  "BYRDONIS_NEST": {
+    "event_id": "BYRDONIS_NEST",
+    "event_name": "Byrdonis Nest",
+    "n_observations": 13,
+    "options": [
+      {
+        "title": "Eat the Egg",
+        "description": "Gain 7 Max HP.",
+        "option_type": 15,
+        "effects": {
+          "max_hp_delta": 7
+        },
+        "n_offered": 13,
+        "n_chosen": 2
+      },
+      {
+        "title": "Take the Egg",
+        "description": "Add Byrdonis Egg to your Deck.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 13,
+        "n_chosen": 11
+      }
+    ]
+  },
+  "DENSE_VEGETATION": {
+    "event_id": "DENSE_VEGETATION",
+    "event_name": "Dense Vegetation",
+    "n_observations": 11,
+    "options": [
+      {
+        "title": "Trudge On",
+        "description": "Remove a card from your Deck. Lose 11 HP.",
+        "option_type": 18,
+        "effects": {
+          "hp_delta": -11,
+          "card_remove": 1
+        },
+        "n_offered": 11,
+        "n_chosen": 4
+      },
+      {
+        "title": "Rest",
+        "description": "Heal 21 HP. Fight some enemies.",
+        "option_type": 15,
+        "effects": {
+          "hp_delta": 21
+        },
+        "n_offered": 11,
+        "n_chosen": 7
+      }
+    ]
+  },
+  "DOORS_OF_LIGHT_AND_DARK": {
+    "event_id": "DOORS_OF_LIGHT_AND_DARK",
+    "event_name": "Doors of Light and Dark",
+    "n_observations": 2,
+    "options": [
+      {
+        "title": "Light Door",
+        "description": "Upgrade 2 random cards.",
+        "option_type": 19,
+        "effects": {},
+        "n_offered": 2,
+        "n_chosen": 0
+      },
+      {
+        "title": "Dark Door",
+        "description": "Remove 1 card from your Deck.",
+        "option_type": 18,
+        "effects": {
+          "card_remove": 1
+        },
+        "n_offered": 2,
+        "n_chosen": 2
+      }
+    ]
+  },
+  "DROWNING_BEACON": {
+    "event_id": "DROWNING_BEACON",
+    "event_name": "Drowning Beacon",
+    "n_observations": 2,
+    "options": [
+      {
+        "title": "Bottle",
+        "description": "Procure [aqua]Glowwater Potion[/aqua].",
+        "option_type": 22,
+        "effects": {
+          "potion_add": 1
+        },
+        "n_offered": 2,
+        "n_chosen": 2
+      },
+      {
+        "title": "Climb",
+        "description": "Obtain Fresnel Lens. Lose 13 Max HP.",
+        "option_type": 16,
+        "effects": {
+          "max_hp_delta": -13
+        },
+        "n_offered": 2,
+        "n_chosen": 0
+      }
+    ]
+  },
+  "ENDLESS_CONVEYOR": {
+    "event_id": "ENDLESS_CONVEYOR",
+    "event_name": "Endless Conveyor",
+    "n_observations": 41,
+    "options": [
+      {
+        "title": "Broke",
+        "description": "You could eat more but you are out of Gold.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 34,
+        "n_chosen": 32
+      },
+      {
+        "title": "Grab Caviar off the Belt",
+        "description": "Pay 35 Gold. Gain 4 Max HP. Continue feasting!",
+        "option_type": 15,
+        "effects": {
+          "max_hp_delta": 4,
+          "gold_delta": -35
+        },
+        "n_offered": 2,
+        "n_chosen": 2
+      },
+      {
+        "title": "Observe the Chef",
+        "description": "Upgrade a random card in your Deck.",
+        "option_type": 19,
+        "effects": {
+          "card_upgrade": 1
+        },
+        "n_offered": 2,
+        "n_chosen": 0
+      },
+      {
+        "title": "Grab Clam Roll off the Belt",
+        "description": "Pay 35 Gold. Heal 10 HP. Continue feasting!",
+        "option_type": 15,
+        "effects": {
+          "hp_delta": 10,
+          "gold_delta": -35
+        },
+        "n_offered": 2,
+        "n_chosen": 2
+      },
+      {
+        "title": "Grab Jelly Liver off the Belt",
+        "description": "Pay 35 Gold. Transform a card. Continue feasting!",
+        "option_type": 20,
+        "effects": {
+          "gold_delta": -35,
+          "card_transform": 1
+        },
+        "n_offered": 1,
+        "n_chosen": 1
+      },
+      {
+        "title": "Grab Spicy Snappy off the Belt",
+        "description": "Pay 35 Gold. Upgrade a random card. Continue feasting!",
+        "option_type": 19,
+        "effects": {
+          "gold_delta": -35,
+          "card_upgrade": 1
+        },
+        "n_offered": 1,
+        "n_chosen": 1
+      },
+      {
+        "title": "Grab Suspicious Condiment off the Belt",
+        "description": "Pay 35 Gold. Procure a random Potion. Continue feasting!",
+        "option_type": 17,
+        "effects": {
+          "gold_delta": -35,
+          "potion_add": 1
+        },
+        "n_offered": 1,
+        "n_chosen": 1
+      }
+    ]
+  },
+  "JUNGLE_MAZE_ADVENTURE": {
+    "event_id": "JUNGLE_MAZE_ADVENTURE",
+    "event_name": "Jungle Maze Adventure",
+    "n_observations": 11,
+    "options": [
+      {
+        "title": "Solo Quest",
+        "description": "Gain 136 Gold. Lose 18 HP.",
+        "option_type": 17,
+        "effects": {
+          "hp_delta": -18,
+          "gold_delta": 136
+        },
+        "n_offered": 11,
+        "n_chosen": 10
+      },
+      {
+        "title": "Join Forces",
+        "description": "Gain 43 Gold.",
+        "option_type": 17,
+        "effects": {
+          "gold_delta": 43
+        },
+        "n_offered": 11,
+        "n_chosen": 1
+      }
+    ]
+  },
+  "LUMINOUS_CHOIR": {
+    "event_id": "LUMINOUS_CHOIR",
+    "event_name": "Luminous Choir",
+    "n_observations": 4,
+    "options": [
+      {
+        "title": "Reach into the Flesh",
+        "description": "Remove 2 cards from your Deck. Add Spore Mind to your Deck.",
+        "option_type": 18,
+        "effects": {
+          "card_remove": 2
+        },
+        "n_offered": 4,
+        "n_chosen": 4
+      },
+      {
+        "title": "Offer Tribute",
+        "description": "Pay 108 Gold. Obtain a random Relic.",
+        "option_type": 21,
+        "effects": {
+          "gold_delta": -108,
+          "relic_random": true
+        },
+        "n_offered": 4,
+        "n_chosen": 0
+      }
+    ]
+  },
+  "MORPHIC_GROVE": {
+    "event_id": "MORPHIC_GROVE",
+    "event_name": "Morphic Grove",
+    "n_observations": 3,
+    "options": [
+      {
+        "title": "Group",
+        "description": "Lose 100 Gold. Transform 2 cards.",
+        "option_type": 20,
+        "effects": {
+          "gold_delta": -100,
+          "card_transform": 2
+        },
+        "n_offered": 3,
+        "n_chosen": 0
+      },
+      {
+        "title": "Loner",
+        "description": "Gain 5 Max HP.",
+        "option_type": 15,
+        "effects": {
+          "max_hp_delta": 5
+        },
+        "n_offered": 3,
+        "n_chosen": 3
+      }
+    ]
+  },
+  "NEOW": {
+    "event_name": "Neow",
+    "is_neow": true,
+    "n_observations": 132,
+    "neow_pool": [
+      {
+        "title": "Scroll Boxes",
+        "description": "Lose all Gold. Choose 1 of 2 packs of cards to add to your Deck.",
+        "option_type": 17,
+        "relic_id": "SCROLL_BOXES",
+        "effects": {
+          "gold_delta_all": true,
+          "card_add_random": 1
+        },
+        "n_seen": 29
+      },
+      {
+        "title": "Lead Paperweight",
+        "description": "Choose 1 of 2 Colorless cards to add to your Deck.",
+        "option_type": 22,
+        "relic_id": "LEAD_PAPERWEIGHT",
+        "effects": {
+          "card_add_random": 1
+        },
+        "n_seen": 28
+      },
+      {
+        "title": "Neow's Torment",
+        "description": "Add 1 Neow's Fury to your Deck.",
+        "option_type": 22,
+        "relic_id": "NEOWS_TORMENT",
+        "effects": {},
+        "n_seen": 26
+      },
+      {
+        "title": "Lost Coffer",
+        "description": "Gain 1 card reward and procure 1 random Potion.",
+        "option_type": 22,
+        "relic_id": "LOST_COFFER",
+        "effects": {
+          "potion_add": 1
+        },
+        "n_seen": 26
+      },
+      {
+        "title": "New Leaf",
+        "description": "Transform 1 card.",
+        "option_type": 20,
+        "relic_id": "NEW_LEAF",
+        "effects": {
+          "card_transform": 1
+        },
+        "n_seen": 26
+      },
+      {
+        "title": "Silver Crucible",
+        "description": "The first 3 card rewards you see are Upgraded. The first Treasure Chest you open is empty.",
+        "option_type": 19,
+        "relic_id": "SILVER_CRUCIBLE",
+        "effects": {},
+        "n_seen": 25
+      },
+      {
+        "title": "Booming Conch",
+        "description": "At the start of Elite combats, draw 2 additional cards.",
+        "option_type": 22,
+        "relic_id": "BOOMING_CONCH",
+        "effects": {},
+        "n_seen": 25
+      },
+      {
+        "title": "Arcane Scroll",
+        "description": "Obtain a random Rare Card.",
+        "option_type": 22,
+        "relic_id": "ARCANE_SCROLL",
+        "effects": {},
+        "n_seen": 24
+      },
+      {
+        "title": "Cursed Pearl",
+        "description": "Receive Greed. Gain 333 Gold.",
+        "option_type": 17,
+        "relic_id": "CURSED_PEARL",
+        "effects": {
+          "gold_delta": 333
+        },
+        "n_seen": 23
+      },
+      {
+        "title": "Large Capsule",
+        "description": "Obtain 2 random Relics. Add an additional Strike and Defend to your Deck.",
+        "option_type": 21,
+        "relic_id": "LARGE_CAPSULE",
+        "effects": {
+          "relic_random": true
+        },
+        "n_seen": 21
+      },
+      {
+        "title": "Precise Scissors",
+        "description": "Remove 1 card from your Deck.",
+        "option_type": 18,
+        "relic_id": "PRECISE_SCISSORS",
+        "effects": {
+          "card_remove": 1
+        },
+        "n_seen": 20
+      },
+      {
+        "title": "Pomander",
+        "description": "Upgrade a card.",
+        "option_type": 19,
+        "relic_id": "POMANDER",
+        "effects": {
+          "card_upgrade": 1
+        },
+        "n_seen": 20
+      },
+      {
+        "title": "Leafy Poultice",
+        "description": "Transform 1 of your Strikes and 1 of your Defends. Lose 10 Max HP.",
+        "option_type": 20,
+        "relic_id": "LEAFY_POULTICE",
+        "effects": {
+          "max_hp_delta": -10,
+          "card_transform": 1
+        },
+        "n_seen": 19
+      },
+      {
+        "title": "Golden Pearl",
+        "description": "Upon pickup, gain 150 Gold.",
+        "option_type": 17,
+        "relic_id": "GOLDEN_PEARL",
+        "effects": {
+          "gold_delta": 150
+        },
+        "n_seen": 16
+      },
+      {
+        "title": "Precarious Shears",
+        "description": "Remove 2 cards from your Deck. Take 13 damage.",
+        "option_type": 18,
+        "relic_id": "PRECARIOUS_SHEARS",
+        "effects": {
+          "hp_delta": -13,
+          "card_remove": 2
+        },
+        "n_seen": 15
+      },
+      {
+        "title": "Small Capsule",
+        "description": "Obtain a random Relic.",
+        "option_type": 21,
+        "relic_id": "SMALL_CAPSULE",
+        "effects": {
+          "relic_random": true
+        },
+        "n_seen": 15
+      },
+      {
+        "title": "Nutritious Oyster",
+        "description": "Raise your Max HP by 11.",
+        "option_type": 22,
+        "relic_id": "NUTRITIOUS_OYSTER",
+        "effects": {
+          "max_hp_delta": 11
+        },
+        "n_seen": 14
+      },
+      {
+        "title": "Stone Humidifier",
+        "description": "Whenever you Rest at a Rest Site, raise your Max HP by 5.",
+        "option_type": 22,
+        "relic_id": "STONE_HUMIDIFIER",
+        "effects": {
+          "max_hp_delta": 5
+        },
+        "n_seen": 13
+      },
+      {
+        "title": "Lava Rock",
+        "description": "The Act 1 Boss drops 2 Relics.",
+        "option_type": 22,
+        "relic_id": "LAVA_ROCK",
+        "effects": {},
+        "n_seen": 11
+      }
+    ]
+  },
+  "ROOM_FULL_OF_CHEESE": {
+    "event_id": "ROOM_FULL_OF_CHEESE",
+    "event_name": "Room Full of Cheese",
+    "n_observations": 17,
+    "options": [
+      {
+        "title": "Gorge",
+        "description": "Choose 2 of 8 random Common cards to add to your Deck.",
+        "option_type": 22,
+        "effects": {
+          "card_add_random": 2
+        },
+        "n_offered": 17,
+        "n_chosen": 17
+      },
+      {
+        "title": "Search",
+        "description": "Lose 14 HP. Obtain the Chosen Cheese.",
+        "option_type": 16,
+        "effects": {
+          "hp_delta": -14
+        },
+        "n_offered": 17,
+        "n_chosen": 0
+      }
+    ]
+  },
+  "SAPPHIRE_SEED": {
+    "event_id": "SAPPHIRE_SEED",
+    "event_name": "Sapphire Seed",
+    "n_observations": 7,
+    "options": [
+      {
+        "title": "Consume",
+        "description": "Heal 9 HP. Upgrade a card in your Deck.",
+        "option_type": 19,
+        "effects": {
+          "hp_delta": 9,
+          "card_upgrade": 1
+        },
+        "n_offered": 7,
+        "n_chosen": 5
+      },
+      {
+        "title": "Plant and Nourish",
+        "description": "Enchant a card with [purple]Sown[/purple].",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 7,
+        "n_chosen": 2
+      }
+    ]
+  },
+  "SELF_HELP_BOOK": {
+    "event_id": "SELF_HELP_BOOK",
+    "event_name": "Self-Help Book",
+    "n_observations": 6,
+    "options": [
+      {
+        "title": "Read the Back",
+        "description": "Choose an Attack to Enchant with [purple]Sharp[/purple] 2.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 6,
+        "n_chosen": 5
+      },
+      {
+        "title": "Read a Random Passage",
+        "description": "Choose a Skill to Enchant with [purple]Nimble[/purple] 2.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 6,
+        "n_chosen": 0
+      },
+      {
+        "title": "Locked",
+        "description": "You don't have any Powers that can be Enchanted.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 3,
+        "n_chosen": 0
+      },
+      {
+        "title": "Read the Entire Book",
+        "description": "Choose a Power to Enchant with [purple]Swift[/purple] 2.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 3,
+        "n_chosen": 1
+      }
+    ]
+  },
+  "SLIPPERY_BRIDGE": {
+    "event_id": "SLIPPERY_BRIDGE",
+    "event_name": "Slippery Bridge",
+    "n_observations": 5,
+    "options": [
+      {
+        "title": "Overcome",
+        "description": "Slice is removed from your Deck.",
+        "option_type": 22,
+        "effects": {
+          "card_remove": 1
+        },
+        "n_offered": 5,
+        "n_chosen": 4
+      },
+      {
+        "title": "Hold On",
+        "description": "Lose 3 HP. The card in the above option is randomized.",
+        "option_type": 16,
+        "effects": {
+          "hp_delta": -3
+        },
+        "n_offered": 5,
+        "n_chosen": 1
+      }
+    ]
+  },
+  "SUNKEN_TREASURY": {
+    "event_id": "SUNKEN_TREASURY",
+    "event_name": "Sunken Treasury",
+    "n_observations": 5,
+    "options": [
+      {
+        "title": "First Chest",
+        "description": "Gain 67 Gold.",
+        "option_type": 17,
+        "effects": {
+          "gold_delta": 67
+        },
+        "n_offered": 5,
+        "n_chosen": 0
+      },
+      {
+        "title": "Second Chest",
+        "description": "Gain 331 Gold. Receive Greed.",
+        "option_type": 17,
+        "effects": {
+          "gold_delta": 331
+        },
+        "n_offered": 5,
+        "n_chosen": 5
+      }
+    ]
+  },
+  "TABLET_OF_TRUTH": {
+    "event_id": "TABLET_OF_TRUTH",
+    "event_name": "Tablet of Truth",
+    "n_observations": 7,
+    "options": [
+      {
+        "title": "Decipher",
+        "description": "Lose 3 Max HP. Upgrade a random card.",
+        "option_type": 19,
+        "effects": {
+          "max_hp_delta": -3,
+          "card_upgrade": 1
+        },
+        "n_offered": 7,
+        "n_chosen": 0
+      },
+      {
+        "title": "Smash",
+        "description": "Heal 20 HP.",
+        "option_type": 15,
+        "effects": {
+          "hp_delta": 20
+        },
+        "n_offered": 7,
+        "n_chosen": 7
+      }
+    ]
+  },
+  "TEA_MASTER": {
+    "event_id": "TEA_MASTER",
+    "event_name": "Tea Master",
+    "n_observations": 4,
+    "options": [
+      {
+        "title": "Bone Tea",
+        "description": "Pay 50 Gold. At the start of the next combat, Upgrade your starting hand.",
+        "option_type": 19,
+        "effects": {
+          "gold_delta": -50
+        },
+        "n_offered": 4,
+        "n_chosen": 1
+      },
+      {
+        "title": "Ember Tea",
+        "description": "Pay 150 Gold. At the start of the next 5 combats, gain 2 Strength.",
+        "option_type": 17,
+        "effects": {
+          "gold_delta": -150
+        },
+        "n_offered": 4,
+        "n_chosen": 0
+      },
+      {
+        "title": "Tea of Discourtesy",
+        "description": "At the start of the next combat, shuffle 2 Dazed into your Draw Pile.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 4,
+        "n_chosen": 3
+      }
+    ]
+  },
+  "THE_FUTURE_OF_POTIONS": {
+    "event_id": "THE_FUTURE_OF_POTIONS",
+    "event_name": "The Future of Potions?",
+    "n_observations": 2,
+    "options": [
+      {
+        "title": "Insert Common Potion",
+        "description": "Lose Colorless Potion. Obtain an Upgraded Common Skill.",
+        "option_type": 19,
+        "effects": {},
+        "n_offered": 2,
+        "n_chosen": 1
+      },
+      {
+        "title": "Insert Rare Potion",
+        "description": "Lose Entropic Brew. Obtain an Upgraded Rare Power.",
+        "option_type": 19,
+        "effects": {},
+        "n_offered": 1,
+        "n_chosen": 0
+      },
+      {
+        "title": "Insert Event Potion",
+        "description": "Lose Glowwater Potion. Obtain an Upgraded Rare Attack.",
+        "option_type": 19,
+        "effects": {},
+        "n_offered": 1,
+        "n_chosen": 1
+      }
+    ]
+  },
+  "THE_LEGENDS_WERE_TRUE": {
+    "event_id": "THE_LEGENDS_WERE_TRUE",
+    "event_name": "The Legends Were True",
+    "n_observations": 12,
+    "options": [
+      {
+        "title": "Nab the Map",
+        "description": "Receive the Spoils Map.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 12,
+        "n_chosen": 7
+      },
+      {
+        "title": "Slowly Find an Exit",
+        "description": "Lose 8 HP. Procure 1 random Potion.",
+        "option_type": 16,
+        "effects": {
+          "hp_delta": -8,
+          "potion_add": 1
+        },
+        "n_offered": 12,
+        "n_chosen": 5
+      }
+    ]
+  },
+  "SUNKEN_STATUE": {
+    "event_id": "SUNKEN_STATUE",
+    "event_name": "The Sunken Statue",
+    "n_observations": 14,
+    "options": [
+      {
+        "title": "Grab the Sword",
+        "description": "Obtain the Sword of Stone.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 14,
+        "n_chosen": 2
+      },
+      {
+        "title": "Dive into the Water",
+        "description": "Gain 101 Gold. Lose 7 HP.",
+        "option_type": 17,
+        "effects": {
+          "hp_delta": -7,
+          "gold_delta": 101
+        },
+        "n_offered": 14,
+        "n_chosen": 12
+      }
+    ]
+  },
+  "THIS_OR_THAT": {
+    "event_id": "THIS_OR_THAT",
+    "event_name": "This or That?",
+    "n_observations": 13,
+    "options": [
+      {
+        "title": "This",
+        "description": "Lose 6 HP. Gain 44 Gold.",
+        "option_type": 17,
+        "effects": {
+          "hp_delta": -6,
+          "gold_delta": 44
+        },
+        "n_offered": 13,
+        "n_chosen": 7
+      },
+      {
+        "title": "That",
+        "description": "Add Clumsy to your Deck. Obtain a random Relic.",
+        "option_type": 21,
+        "effects": {
+          "relic_random": true
+        },
+        "n_offered": 13,
+        "n_chosen": 6
+      }
+    ]
+  },
+  "UNREST_SITE": {
+    "event_id": "UNREST_SITE",
+    "event_name": "Unrest Site",
+    "n_observations": 7,
+    "options": [
+      {
+        "title": "Rest Anyways",
+        "description": "Heal to full HP. Receive Poor Sleep.",
+        "option_type": 15,
+        "effects": {
+          "hp_delta_pct": 100
+        },
+        "n_offered": 7,
+        "n_chosen": 0
+      },
+      {
+        "title": "Kill the Trees",
+        "description": "Lose 8 Max HP. Obtain a random Relic.",
+        "option_type": 21,
+        "effects": {
+          "max_hp_delta": -8,
+          "relic_random": true
+        },
+        "n_offered": 7,
+        "n_chosen": 7
+      }
+    ]
+  },
+  "WELLSPRING": {
+    "event_id": "WELLSPRING",
+    "event_name": "Wellspring",
+    "n_observations": 6,
+    "options": [
+      {
+        "title": "Bottle",
+        "description": "Procure 1 random Potion.",
+        "option_type": 22,
+        "effects": {
+          "potion_add": 1
+        },
+        "n_offered": 6,
+        "n_chosen": 0
+      },
+      {
+        "title": "Bathe",
+        "description": "Remove 1 card from your Deck. Add 1 Guilty to your Deck.",
+        "option_type": 18,
+        "effects": {
+          "card_remove": 1
+        },
+        "n_offered": 6,
+        "n_chosen": 6
+      }
+    ]
+  },
+  "WHISPERING_HOLLOW": {
+    "event_id": "WHISPERING_HOLLOW",
+    "event_name": "Whispering Hollow",
+    "n_observations": 13,
+    "options": [
+      {
+        "title": "Exchange Gold",
+        "description": "Lose 50 Gold. Procure 2 random Potions.",
+        "option_type": 17,
+        "effects": {
+          "gold_delta": -50,
+          "potion_add": 2
+        },
+        "n_offered": 13,
+        "n_chosen": 13
+      },
+      {
+        "title": "Hug the Tree",
+        "description": "Lose 9 HP. Choose a card to Transform.",
+        "option_type": 20,
+        "effects": {
+          "hp_delta": -9,
+          "card_transform": 1
+        },
+        "n_offered": 13,
+        "n_chosen": 0
+      }
+    ]
+  },
+  "WOOD_CARVINGS": {
+    "event_id": "WOOD_CARVINGS",
+    "event_name": "Wood Carvings",
+    "n_observations": 16,
+    "options": [
+      {
+        "title": "Bird",
+        "description": "Choose 1 starter card to Transform into Peck.",
+        "option_type": 20,
+        "effects": {
+          "card_transform": 1
+        },
+        "n_offered": 16,
+        "n_chosen": 5
+      },
+      {
+        "title": "Snake",
+        "description": "Enchant 1 card with [purple]Slither[/purple].",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 16,
+        "n_chosen": 11
+      },
+      {
+        "title": "Torus",
+        "description": "Choose 1 starter card to Transform into Toric Toughness.",
+        "option_type": 20,
+        "effects": {
+          "card_transform": 1
+        },
+        "n_offered": 16,
+        "n_chosen": 0
+      }
+    ]
+  }
+}
