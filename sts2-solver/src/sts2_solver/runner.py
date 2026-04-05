@@ -1281,18 +1281,44 @@ class Runner:
             ))
 
             if is_combat_select:
-                # Quick deterministic pick: avoid key card, prefer Strikes/Defends
-                from .config import CHARACTER_CONFIG, detect_character
-                _char = detect_character(gs)
-                _key = CHARACTER_CONFIG.get(_char, {}).get("key_card", "Bash").lower()
-                cards = sel.get("cards", [])
-                pick_idx = 0
-                for card in cards:
-                    name = (card.get("name") or "").lower()
-                    if _key not in name:
-                        pick_idx = card.get("index", card.get("i", 0))
-                        break
-                self._log_action(f"  [dim]auto: select_deck_card({pick_idx}) — combat select[/dim]")
+                # Try network-based discard selection first
+                net_decision = self._az_decide_combat_discard(gs, sel)
+                if net_decision is not None:
+                    pick_idx = net_decision.option_index
+                    self._log_action(f"  [blue]{net_decision.reasoning}[/blue]")
+                    if self.logger:
+                        self.logger.log_decision(
+                            game_state=gs, screen_type="deck_select",
+                            options=["select_deck_card"],
+                            choice={"action": "select_deck_card",
+                                    "option_index": pick_idx,
+                                    "reasoning": net_decision.reasoning},
+                            source="network",
+                            network_value=net_decision.network_value,
+                            head_scores=net_decision.head_scores,
+                        )
+                else:
+                    # Fallback: deterministic pick — avoid key card
+                    from .config import CHARACTER_CONFIG, detect_character
+                    _char = detect_character(gs)
+                    _key = CHARACTER_CONFIG.get(_char, {}).get("key_card", "Bash").lower()
+                    cards = sel.get("cards", [])
+                    pick_idx = 0
+                    for card in cards:
+                        name = (card.get("name") or "").lower()
+                        if _key not in name:
+                            pick_idx = card.get("index", card.get("i", 0))
+                            break
+                    self._log_action(f"  [dim]auto: select_deck_card({pick_idx}) — combat select[/dim]")
+                    if self.logger:
+                        self.logger.log_decision(
+                            game_state=gs, screen_type="deck_select",
+                            options=["select_deck_card"],
+                            choice={"action": "select_deck_card",
+                                    "option_index": pick_idx,
+                                    "reasoning": "deterministic fallback"},
+                            source="deterministic",
+                        )
                 if not self.dry_run:
                     try:
                         self._execute_with_retry("select_deck_card", option_index=pick_idx)
@@ -1505,6 +1531,71 @@ class Runner:
             hidden = self._mcts.network.encode_state(**st)
 
         return st, hidden, hp, max_hp, gold, floor, deck_cards
+
+    def _az_decide_combat_discard(self, gs: dict, sel: dict) -> "Decision | None":
+        """Use network to pick which card to discard mid-combat (Survivor, etc.).
+
+        Scores each card with OPTION_SHOP_REMOVE (lower = better to discard).
+        Returns None to fall back to deterministic if network isn't available.
+        """
+        import torch
+        from .deterministic_advisor import Decision
+        from .alphazero.self_play import OPTION_SHOP_REMOVE
+
+        if not self._mcts or not self._mcts_vocabs:
+            return None
+
+        try:
+            st, hidden, hp, max_hp, gold, floor, deck = self._az_run_state_tensors(gs)
+            network = self._mcts.network
+            vocabs = self._mcts_vocabs
+
+            cards = sel.get("cards", [])
+            if not cards:
+                return None
+
+            # Score each card — use OPTION_SHOP_REMOVE type since we're
+            # evaluating "how good is the deck without this card"
+            opt_types = []
+            opt_cards = []
+            option_labels = []
+            game_indices = []
+
+            for card_info in cards:
+                card_id = card_info.get("card_id") or card_info.get("id", "")
+                name = card_info.get("name", "?")
+                idx = card_info.get("index", len(opt_types))
+                opt_types.append(OPTION_SHOP_REMOVE)
+                opt_cards.append(vocabs.cards.get(card_id.rstrip("+")))
+                option_labels.append(name)
+                game_indices.append(idx)
+
+            if not opt_types:
+                return None
+
+            with torch.no_grad():
+                # Pick the LOWEST-scored card (worst to keep = best to discard)
+                _, scores = network.pick_best_option(
+                    hidden, opt_types, opt_cards)
+                best_idx = min(range(len(scores)), key=lambda i: scores[i])
+
+            chosen_idx = game_indices[best_idx]
+            card_name = option_labels[best_idx]
+            nv = network.value_head(hidden).item()
+
+            hs = {
+                "head": "option_eval",
+                "chosen": best_idx,
+                "options": [{"label": lbl, "score": round(s, 4)}
+                            for lbl, s in zip(option_labels, scores)],
+            }
+
+            return Decision("select_deck_card", chosen_idx,
+                            f"Network: discard {card_name} (score={scores[best_idx]:.2f})",
+                            network_value=nv, head_scores=hs)
+        except Exception as e:
+            self._log_action(f"  [dim]Network combat discard failed ({e})[/dim]")
+            return None
 
     def _az_decide_rest(self, gs: dict) -> "Decision | None":
         """Use network to decide rest vs upgrade at a rest site."""
