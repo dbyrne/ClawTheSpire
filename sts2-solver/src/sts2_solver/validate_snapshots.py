@@ -462,9 +462,24 @@ class TurnValidation:
 
 
 @dataclass
+class CombatValidation:
+    """Aggregate validation for a single combat (shallow checks)."""
+    run_id: str
+    floor: int
+    outcome: str
+    turn_count_match: bool = True
+    missing_cards: list[str] = field(default_factory=list)
+
+    @property
+    def passed(self) -> bool:
+        return self.turn_count_match and not self.missing_cards
+
+
+@dataclass
 class SnapshotValidationReport:
-    """Aggregate results across all validated turns."""
+    """Aggregate results across all validated turns and combats."""
     results: list[TurnValidation]
+    combat_results: list[CombatValidation] = field(default_factory=list)
 
     @property
     def total(self) -> int:
@@ -497,6 +512,20 @@ class SnapshotValidationReport:
         """Largest numeric deltas across all turns."""
         all_mm = [m for r in self.results for m in r.mismatches if m.delta is not None]
         return sorted(all_mm, key=lambda m: abs(m.delta or 0), reverse=True)[:n]
+
+    @property
+    def combats_total(self) -> int:
+        return len(self.combat_results)
+
+    @property
+    def combats_passed(self) -> int:
+        return sum(1 for c in self.combat_results if c.passed)
+
+    def missing_cards_summary(self, n: int = 10) -> list[tuple[str, int]]:
+        counter: Counter[str] = Counter()
+        for c in self.combat_results:
+            counter.update(c.missing_cards)
+        return counter.most_common(n)
 
 
 def compare_states(
@@ -601,11 +630,49 @@ def compare_states(
 # Main validation pipeline
 # ---------------------------------------------------------------------------
 
-def validate_run(run: RunReplay, card_db: CardDB) -> list[TurnValidation]:
-    """Validate all turn transitions in a run."""
+def _validate_combat_shallow(combat) -> CombatValidation:
+    """Shallow combat-level checks: turn count, card feasibility."""
+    result = CombatValidation(
+        run_id=combat.run_id,
+        floor=combat.floor,
+        outcome=combat.outcome,
+    )
+
+    # Turn count consistency
+    logged_turns = len(combat.turns)
+    reported_turns = combat.turn_count
+    if logged_turns != reported_turns and reported_turns > 0:
+        result.turn_count_match = False
+
+    # Card feasibility — were all played cards in the deck?
+    deck_base_names = {d.rstrip("+") for d in combat.deck}
+    deck_base_names.update({"Shiv", "Giant Rock", "Burn", "Wound", "Dazed",
+                            "Void", "Slimed", "Peck", "Infection"})
+
+    all_played = set()
+    for turn in combat.turns:
+        all_played.update(turn.cards_played)
+
+    for card_name in all_played:
+        normalized = card_name.rstrip("+")
+        # Skip potion usage (logged as "Use X Potion (slot N)")
+        if normalized.startswith("Use ") and "Potion" in normalized:
+            continue
+        if normalized not in deck_base_names:
+            result.missing_cards.append(card_name)
+
+    return result
+
+
+def validate_run(run: RunReplay, card_db: CardDB) -> tuple[list[TurnValidation], list[CombatValidation]]:
+    """Validate all turn transitions and combat-level checks in a run."""
     results: list[TurnValidation] = []
+    combat_results: list[CombatValidation] = []
 
     for combat_idx, combat in enumerate(run.combats):
+        # Shallow combat-level checks
+        combat_results.append(_validate_combat_shallow(combat))
+
         # Find consecutive turns that both have snapshots
         snapshot_turns = [t for t in combat.turns if t.snapshot is not None]
 
@@ -707,16 +774,21 @@ def validate_run(run: RunReplay, card_db: CardDB) -> list[TurnValidation]:
                 mismatches=mismatches,
             ))
 
-    return results
+    return results, combat_results
 
 
 def validate_all(logs_dir: Path, card_db: CardDB) -> SnapshotValidationReport:
     """Run snapshot validation across all runs."""
     runs = extract_all_runs(logs_dir)
     all_results: list[TurnValidation] = []
+    all_combat_results: list[CombatValidation] = []
 
     for run in runs:
-        # Only validate runs that have snapshot data
+        # Always do shallow combat checks
+        for combat in run.combats:
+            all_combat_results.append(_validate_combat_shallow(combat))
+
+        # Only do deep snapshot validation for runs with snapshot data
         has_snapshots = any(
             t.snapshot is not None
             for c in run.combats
@@ -725,17 +797,37 @@ def validate_all(logs_dir: Path, card_db: CardDB) -> SnapshotValidationReport:
         if not has_snapshots:
             continue
 
-        results = validate_run(run, card_db)
+        results, combat_vals = validate_run(run, card_db)
         all_results.extend(results)
+        # Avoid duplicating combat results (already added above)
 
-    return SnapshotValidationReport(results=all_results)
+    return SnapshotValidationReport(results=all_results, combat_results=all_combat_results)
 
 
 def print_report(report: SnapshotValidationReport) -> None:
     """Print a human-readable validation report."""
     print(f"\n{'='*60}")
-    print(f"  SNAPSHOT VALIDATION REPORT")
+    print(f"  SIMULATOR VALIDATION REPORT")
     print(f"{'='*60}")
+
+    # Combat-level (shallow) checks
+    if report.combat_results:
+        c_passed = report.combats_passed
+        c_total = report.combats_total
+        print(f"\n  --- Combat-level checks ---")
+        print(f"  Combats:        {c_total}")
+        print(f"  Passed:         {c_passed}")
+        print(f"  Failed:         {c_total - c_passed}")
+        if c_total > 0:
+            print(f"  Pass rate:      {c_passed / c_total:.1%}")
+        missing = report.missing_cards_summary()
+        if missing:
+            print(f"  Missing cards:")
+            for card, count in missing:
+                print(f"    {card}: {count}")
+
+    # Turn-level (deep) checks
+    print(f"\n  --- Turn-by-turn snapshot checks ---")
     print(f"  Total turns:    {report.total}")
     print(f"  Validated:      {report.validated}")
     print(f"  Passed:         {report.passed}")
