@@ -244,11 +244,12 @@ def _move_card_after_play(state: CombatState, card: Card) -> None:
     )
 
     if should_exhaust:
-        # Token-rarity cards (Shiv, Giant Rock) vanish on exhaust — removed
-        # from the game, not added to exhaust pile. Status cards (Slimed,
-        # Burn, etc.) DO go to the exhaust pile normally.
+        # Powers go to the power zone, not the exhaust pile (STS2 behavior).
+        # Token-rarity cards (Shiv, Giant Rock) vanish entirely.
+        # All other Exhaust cards go to the exhaust pile.
+        is_power = card.card_type == CardType.POWER
         is_token = card.id in ("SHIV", "GIANT_ROCK")
-        if is_token:
+        if is_power or is_token:
             _on_exhaust(state)  # Still trigger exhaust effects
         else:
             state.player.exhaust_pile.append(card)

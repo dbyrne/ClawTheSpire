@@ -281,8 +281,9 @@ class TestCorruption:
         state = _state(["CORRUPTION", "DEFEND_IRONCLAD"], energy=5)
         play_card(state, 0, card_db=DB)  # Corruption
         play_card(state, 0, card_db=DB)  # Defend (free, exhausts)
-        # Corruption goes to exhaust (Power type), Defend goes to exhaust (Corruption effect)
-        assert len(state.player.exhaust_pile) == 2
+        # Corruption goes to power zone (not exhaust pile), Defend goes to exhaust (Corruption effect)
+        assert len(state.player.exhaust_pile) == 1
+        assert state.player.exhaust_pile[0].name == "Defend"
 
 
 class TestDarkEmbrace:
