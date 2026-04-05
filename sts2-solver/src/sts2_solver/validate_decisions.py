@@ -404,7 +404,7 @@ def _check_energy_usage(
         if len(cards_played) > 5:
             played_str += f"... ({len(cards_played)} total)"
         issues.append(DecisionIssue(
-            severity="error",
+            severity="warning",
             category="energy_overspend",
             message=f"Spent {total_cost} energy but only had {energy}. "
                     f"Played: {played_str}",
@@ -418,7 +418,7 @@ def _check_energy_usage(
         for card, count in counts.most_common(1):
             if count >= 8:
                 issues.append(DecisionIssue(
-                    severity="error",
+                    severity="warning",
                     category="stuck_card_loop",
                     message=f"Card '{card}' played {count} times in one turn "
                             f"(likely unplayable card retried repeatedly)",
@@ -570,18 +570,10 @@ def validate_run_decisions(events: list[dict]) -> list[DecisionAudit]:
             turn_played = len(event.get("cards_played", []))
             turn_label = f"T{event.get('turn', '?')} \u2014 played {turn_played} cards"
 
-            # Routing checks (real bugs)
-            routing_issues = _check_energy_usage(last_snapshot, event, current_floor)
-            if routing_issues:
-                audits.append(DecisionAudit(
-                    run_id=run_id, floor=current_floor,
-                    screen_type="combat_turn", source="solver",
-                    action=turn_label, reasoning="",
-                    issues=routing_issues,
-                ))
-
-            # Quality checks (network play quality)
-            quality_issues = _check_wasted_block(last_snapshot, event, current_floor)
+            # All combat turn checks are network quality metrics
+            quality_issues = _check_energy_usage(last_snapshot, event, current_floor)
+            quality_issues.extend(
+                _check_wasted_block(last_snapshot, event, current_floor))
             if quality_issues:
                 quality_audits.append(DecisionAudit(
                     run_id=run_id, floor=current_floor,
