@@ -55,19 +55,32 @@ class TestDecisionValidation:
         assert not issues
 
     def test_score_inversion_detected(self):
-        from sts2_solver.validate_decisions import _check_option_head_type
-        decision = {
-            "choice": {"reasoning": "Network: remove Shockwave (score=0.33)"},
-            "head_scores": {
-                "chosen": 1,
-                "options": [
-                    {"label": "Omnislice", "score": 0.38},
-                    {"label": "Shockwave", "score": 0.33},
-                ],
+        from sts2_solver.validate_decisions import _check_deck_select_sequence
+        # Multi-select: 2 picks from 3 options. Picking the 2 lowest instead of 2 highest.
+        seq = [
+            {
+                "choice": {"reasoning": "Network: select Shockwave"},
+                "head_scores": {
+                    "chosen": 1,
+                    "options": [
+                        {"label": "Omnislice", "score": 0.50},
+                        {"label": "Shockwave", "score": 0.33},
+                        {"label": "Dash", "score": 0.45},
+                    ],
+                },
             },
-        }
-        deck_change = {"added": {"Shockwave": 1}, "removed": None}
-        issues = _check_option_head_type(decision, deck_change, floor=1)
+            {
+                "choice": {"reasoning": "Network: select Dash"},
+                "head_scores": {
+                    "chosen": 1,
+                    "options": [
+                        {"label": "Omnislice", "score": 0.50},
+                        {"label": "Dash", "score": 0.45},
+                    ],
+                },
+            },
+        ]
+        issues = _check_deck_select_sequence(seq, floor=1)
         assert any(i.category == "score_inversion" for i in issues)
 
 

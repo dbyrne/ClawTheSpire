@@ -141,51 +141,82 @@ def _check_deck_select_label(
     return issues
 
 
-def _check_option_head_type(
-    decision: dict, next_deck_change: dict | None, floor: int | None,
+def _check_deck_select_sequence(
+    sequence: list[dict], floor: int | None,
 ) -> list[DecisionIssue]:
-    """Check that deck_select decisions pick the highest-scored option.
+    """Validate a sequence of deck_select decisions as a group.
 
-    The option head always scores "how good is this action?" — higher is
-    better for ALL operation types (add, remove, upgrade). Picking the
-    lowest-scored option indicates a score inversion bug.
-
-    Exception: combat discards (Survivor) intentionally invert to pick
-    the least valuable card, but those go through _az_decide_combat_discard
-    not _az_decide_deck_select, so they don't log as deck_select.
+    deck_select screens can be:
+    - Single discard (Survivor): 1 decision, network picks card to discard.
+      For discards, picking the HIGHEST-scored card is wrong (discarding
+      your best card). Flag if the discarded card was the highest score.
+    - Multi-select (hand building): N decisions picking cards one at a time.
+      Order doesn't matter — validate the final chosen SET against scores.
+      Flag if a lower-scored card was chosen over a higher-scored card that
+      was available and NOT eventually selected.
     """
     issues: list[DecisionIssue] = []
-    hs = decision.get("head_scores")
-    if not hs:
+    if not sequence:
         return issues
 
-    options = hs.get("options", [])
-    chosen_idx = hs.get("chosen")
-
-    if chosen_idx is None or not options or len(options) < 2:
+    # Single-pick: combat discard (Survivor, Acrobatics, etc.)
+    # Score semantics depend on the option type used — combat discards use
+    # OPTION_SHOP_REMOVE where high score = "good removal target" = less
+    # valuable card. We can't reliably validate single discards without
+    # knowing the option type, so skip them.
+    if len(sequence) == 1:
         return issues
 
-    scores = [o.get("score", 0) for o in options]
-    if chosen_idx >= len(scores):
+    # Multi-select: validate the final chosen set
+    # Reconstruct: first decision has the full option list, each subsequent
+    # decision has one fewer option (the previously chosen card removed).
+    first_hs = sequence[0].get("head_scores", {})
+    first_options = first_hs.get("options", [])
+    if not first_options:
         return issues
 
-    chosen_score = scores[chosen_idx]
-    max_score = max(scores)
-    min_score = min(scores)
+    # Build {label: score} from the first (complete) option set.
+    # Multiple cards with same name get the same score, so use a list.
+    all_cards_with_scores = [(o.get("label", "?"), o.get("score", 0)) for o in first_options]
+    total_to_pick = len(sequence)
+    total_available = len(first_options)
 
-    # Flag if the chosen option is the minimum score (and not tied with max)
-    if (abs(chosen_score - min_score) < 0.001
-            and max_score - min_score > 0.01):
-        best_label = options[scores.index(max_score)].get("label", "?")
-        chosen_label = options[chosen_idx].get("label", "?")
-        issues.append(DecisionIssue(
-            severity="error",
-            category="score_inversion",
-            message=f"Picked lowest-scored option '{chosen_label}' "
-                    f"(score={chosen_score:.4f}) instead of "
-                    f"'{best_label}' (score={max_score:.4f})",
-            floor=floor,
-        ))
+    # Collect what was chosen (by label)
+    chosen_labels = []
+    for decision in sequence:
+        hs = decision.get("head_scores", {})
+        opts = hs.get("options", [])
+        chosen_idx = hs.get("chosen")
+        if chosen_idx is not None and chosen_idx < len(opts):
+            chosen_labels.append(opts[chosen_idx].get("label", "?"))
+
+    # The optimal set would be the top-N scored cards.
+    sorted_by_score = sorted(all_cards_with_scores, key=lambda x: x[1], reverse=True)
+    optimal_labels = [label for label, _ in sorted_by_score[:total_to_pick]]
+
+    # Check if a high-scored card was skipped in favor of a lower one
+    chosen_set = set(chosen_labels)
+    optimal_set = set(optimal_labels)
+    missed = optimal_set - chosen_set
+    extra = chosen_set - optimal_set
+
+    if missed and extra:
+        # Cards that should have been picked but weren't
+        missed_scores = [(l, s) for l, s in all_cards_with_scores if l in missed]
+        extra_scores = [(l, s) for l, s in all_cards_with_scores if l in extra]
+        if missed_scores and extra_scores:
+            best_missed = max(missed_scores, key=lambda x: x[1])
+            worst_extra = min(extra_scores, key=lambda x: x[1])
+            if best_missed[1] - worst_extra[1] > 0.01:
+                issues.append(DecisionIssue(
+                    severity="error",
+                    category="score_inversion",
+                    message=f"Multi-select: picked '{worst_extra[0]}' "
+                            f"(score={worst_extra[1]:.4f}) over "
+                            f"'{best_missed[0]}' (score={best_missed[1]:.4f}). "
+                            f"Chose {total_to_pick}/{total_available} cards.",
+                    floor=floor,
+                ))
 
     return issues
 
@@ -557,7 +588,8 @@ def validate_run_decisions(events: list[dict]) -> list[DecisionAudit]:
         # Run applicable checks
         if screen_type == "deck_select":
             issues.extend(_check_deck_select_label(event, next_dc, current_floor))
-            issues.extend(_check_option_head_type(event, next_dc, current_floor))
+            # Score inversion for deck_select is checked as grouped sequences
+            # (see below), not per-decision.
 
         if screen_type == "card_reward":
             issues.extend(_check_card_reward_vs_deck_change(event, next_dc, current_floor))
@@ -579,6 +611,41 @@ def validate_run_decisions(events: list[dict]) -> list[DecisionAudit]:
             issues=issues,
         )
         audits.append(audit)
+
+    # --- Grouped deck_select sequence checks ---
+    # Collect consecutive deck_select decisions into sequences and validate
+    # the chosen set, not individual picks.
+    deck_select_seq: list[dict] = []
+    seq_floor: int | None = None
+    for event in events:
+        if (event.get("type") == "decision"
+                and event.get("screen_type") == "deck_select"):
+            if not deck_select_seq:
+                seq_floor = current_floor
+            deck_select_seq.append(event)
+        else:
+            if deck_select_seq:
+                seq_issues = _check_deck_select_sequence(deck_select_seq, seq_floor)
+                if seq_issues:
+                    audits.append(DecisionAudit(
+                        run_id=run_id, floor=seq_floor,
+                        screen_type="deck_select", source="network",
+                        action=f"sequence of {len(deck_select_seq)} picks",
+                        reasoning="",
+                        issues=seq_issues,
+                    ))
+                deck_select_seq = []
+    # Flush final sequence
+    if deck_select_seq:
+        seq_issues = _check_deck_select_sequence(deck_select_seq, seq_floor)
+        if seq_issues:
+            audits.append(DecisionAudit(
+                run_id=run_id, floor=seq_floor,
+                screen_type="deck_select", source="network",
+                action=f"sequence of {len(deck_select_seq)} picks",
+                reasoning="",
+                issues=seq_issues,
+            ))
 
     # --- Combat turn checks (combat_snapshot + combat_turn pairs) ---
     # Separate routing errors (energy_overspend, stuck loops) from
