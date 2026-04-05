@@ -862,28 +862,51 @@ def validate_run(run: RunReplay, card_db: CardDB) -> tuple[list[TurnValidation],
                 state.player.energy = snap.player_energy
                 state.player.powers = dict(snap.player_powers)
 
-                # Rebuild hand from snapshot (ground truth)
+                # Rebuild hand from snapshot by pulling cards from the sim's
+                # piles. Merge draw + discard (start_turn would reshuffle
+                # anyway), then pull each snapshot card by name match.
+                # This is "drawing with pre-selected cards" — order doesn't
+                # matter, just availability.
+                all_pile = state.player.draw_pile + state.player.discard_pile
+                state.player.draw_pile = []
+                state.player.discard_pile = []
                 state.player.hand = []
+
                 for c in snap.hand:
                     name = c.get("name", "?")
                     upgraded = bool(c.get("upgraded", False))
                     cost = c.get("cost")
-                    card = _find_card(name, cost, upgraded, card_db)
-                    if card is None:
-                        card = _make_fallback_card(name, cost, upgraded)
-                    if cost is not None and cost != card.cost:
-                        card = Card(
-                            id=card.id, name=card.name, cost=cost,
-                            card_type=card.card_type, target=card.target,
-                            upgraded=card.upgraded, damage=card.damage,
-                            block=card.block, hit_count=card.hit_count,
-                            powers_applied=card.powers_applied,
-                            cards_draw=card.cards_draw, energy_gain=card.energy_gain,
-                            hp_loss=card.hp_loss, keywords=card.keywords,
-                            tags=card.tags, spawns_cards=card.spawns_cards,
-                            is_x_cost=card.is_x_cost,
-                        )
-                    state.player.hand.append(card)
+
+                    # Pull from merged pile by name match
+                    found = False
+                    for j, pile_card in enumerate(all_pile):
+                        if pile_card.name == name and pile_card.upgraded == upgraded:
+                            state.player.hand.append(all_pile.pop(j))
+                            found = True
+                            break
+
+                    if not found:
+                        # Not in piles — create from DB (retained card, or
+                        # card gained mid-combat we don't track)
+                        card = _find_card(name, cost, upgraded, card_db)
+                        if card is None:
+                            card = _make_fallback_card(name, cost, upgraded)
+                        if cost is not None and cost != card.cost:
+                            card = Card(
+                                id=card.id, name=card.name, cost=cost,
+                                card_type=card.card_type, target=card.target,
+                                upgraded=card.upgraded, damage=card.damage,
+                                block=card.block, hit_count=card.hit_count,
+                                powers_applied=card.powers_applied,
+                                cards_draw=card.cards_draw, energy_gain=card.energy_gain,
+                                hp_loss=card.hp_loss, keywords=card.keywords,
+                                tags=card.tags, spawns_cards=card.spawns_cards,
+                                is_x_cost=card.is_x_cost,
+                            )
+                        state.player.hand.append(card)
+
+                # Remaining pile cards go back to draw pile
+                state.player.draw_pile = all_pile
 
                 # Rebuild enemies from snapshot (ground truth for HP/block/intents)
                 state.enemies = []
