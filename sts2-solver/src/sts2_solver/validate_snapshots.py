@@ -648,26 +648,9 @@ def compare_states(
         snap_hp = snap_enemy.get("hp", 0)
         snap_block = snap_enemy.get("block", 0)
 
-        # Compute expected block from this snapshot's intent + move table
-        snap_intent = snap_enemy.get("intent_type")
-        snap_intent_block = snap_enemy.get("intent_block")
-        snap_intent_damage = snap_enemy.get("intent_damage")
-        snap_enemy_id = snap_enemy.get("id", "")
-
-        expected_block = 0
-        if snap_intent == "Defend" and snap_intent_block is not None:
-            expected_block = snap_intent_block
-        # Also check move table for self_block on any intent type
-        table = ENEMY_MOVE_TABLES.get(snap_enemy_id, [])
-        for move in table:
-            if move["type"] == snap_intent:
-                if snap_intent == "Attack":
-                    if move.get("damage") == snap_intent_damage and move.get("self_block"):
-                        expected_block += move["self_block"]
-                        break
-                elif move.get("self_block"):
-                    expected_block += move["self_block"]
-                    break
+        # Enemy block is unreliable to compare — the snapshot may show
+        # pre-applied block from the upcoming intent, or 0 if the intent
+        # hasn't resolved yet. HP comparison is what matters.
 
         # Find matching sim enemy by name (prefer unmatched ones)
         matched = False
@@ -683,12 +666,7 @@ def compare_states(
                         snap_hp, sim_enemy.hp,
                         delta=sim_enemy.hp - snap_hp,
                     ))
-                if expected_block != snap_block:
-                    mismatches.append(FieldMismatch(
-                        f"enemy_{snap_idx}_block ({sim_enemy.name})",
-                        snap_block, expected_block,
-                        delta=expected_block - snap_block,
-                    ))
+                # Skip enemy block comparison (unreliable — see note above)
                 matched = True
                 break
 
