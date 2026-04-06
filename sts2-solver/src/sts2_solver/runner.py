@@ -2884,6 +2884,26 @@ class Runner:
                         except Exception as e:
                             self._log_action(f"  [red]Card reward action failed: {e}[/red]")
                     self._card_reward_handled = True
+                    # After a skip, wait for the reward screen to clear
+                    # so the main tick loop doesn't see collect_rewards_and_proceed
+                    if decision.action == "skip_reward_cards":
+                        self._deck_size_after_skip = len(
+                            (gs.get("run") or {}).get("deck", [])
+                        )
+                        for _ in range(10):
+                            time.sleep(0.3)
+                            try:
+                                gs2 = self.client.get_state()
+                            except Exception:
+                                break
+                            s2 = gs2.get("screen", "").upper()
+                            if "REWARD" not in s2:
+                                break
+                            # If proceed is available, use it to leave cleanly
+                            a2 = gs2.get("available_actions", [])
+                            if "proceed" in a2:
+                                self._execute_with_retry("proceed")
+                                break
                 return
 
             # Card selection didn't open — try claiming it explicitly
@@ -2928,6 +2948,22 @@ class Runner:
                                         except Exception as e:
                                             self._log_action(f"  [red]Failed: {e}[/red]")
                                     self._card_reward_handled = True
+                                    # After skip, wait for reward screen to clear
+                                    if decision.action == "skip_reward_cards":
+                                        self._deck_size_after_skip = len(
+                                            (gs2.get("run") or {}).get("deck", [])
+                                        )
+                                        for _ in range(10):
+                                            time.sleep(0.3)
+                                            try:
+                                                gs3 = self.client.get_state()
+                                            except Exception:
+                                                break
+                                            if "REWARD" not in gs3.get("screen", "").upper():
+                                                break
+                                            if "proceed" in gs3.get("available_actions", []):
+                                                self._execute_with_retry("proceed")
+                                                break
                         except Exception as e:
                             self._log_action(f"  [red]Card reward network error: {e}[/red]")
                             raise
