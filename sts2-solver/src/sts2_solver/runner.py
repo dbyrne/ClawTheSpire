@@ -110,6 +110,10 @@ class Runner:
         self._screen_repeat_count: int = 0  # Same-screen repeat counter
         self._combat_move_indices: dict[tuple[int, str], int] = {}  # Enemy move cycle tracking
 
+        # Run context for network encoding
+        self._current_act_id: str = ""
+        self._current_boss_id: str = ""
+
         # Decision routing counters — tracks how each screen_type was resolved
         self._decision_routing: dict[str, dict[str, int]] = {}  # {screen_type: {source: count}}
 
@@ -421,6 +425,9 @@ class Runner:
                 )
                 self._store_run_started = True
                 self._store_run_id = run_id
+
+                # Detect act and boss from map data
+                self._detect_run_context(self.game_state)
 
         screen = self.game_state.get("screen", "")
 
@@ -1538,15 +1545,83 @@ class Runner:
             if card:
                 deck_cards.append(card)
 
+        # Relics from game state
+        relic_ids = frozenset(
+            r.get("id", r.get("relic_id", ""))
+            for r in (run.get("relics") or [])
+            if isinstance(r, dict)
+        ) or frozenset(
+            r for r in (run.get("relics") or [])
+            if isinstance(r, str)
+        )
+
+        # Remaining map path from game state
+        remaining_path = self._extract_remaining_path(gs, floor)
+
         player = PlayerState(hp=hp, max_hp=max_hp, energy=3, max_energy=3,
                              draw_pile=list(deck_cards))
-        dummy = CombatState(player=player, enemies=[], floor=floor, gold=gold)
+        dummy = CombatState(
+            player=player, enemies=[], floor=floor, gold=gold,
+            relics=relic_ids, act_id=self._current_act_id,
+            boss_id=self._current_boss_id, map_path=remaining_path,
+        )
         st = az_encode_state(dummy, self._mcts_vocabs, self._mcts_config)
 
         with torch.no_grad():
             hidden = self._mcts.network.encode_state(**st)
 
         return st, hidden, hp, max_hp, gold, floor, deck_cards
+
+    def _detect_run_context(self, gs: dict) -> None:
+        """Detect act_id and boss_id from game state at run start."""
+        from .game_data import strip_markup
+
+        # Try to get act from game state
+        run = gs.get("run") or {}
+        act_name = run.get("act") or run.get("act_name") or ""
+        act_map = {
+            "Overgrowth": "OVERGROWTH", "Act 1 - Overgrowth": "OVERGROWTH",
+            "Underdocks": "UNDERDOCKS",
+            "Hive": "HIVE", "Act 2 - Hive": "HIVE",
+            "Glory": "GLORY", "Act 3 - Glory": "GLORY",
+        }
+        self._current_act_id = act_map.get(act_name, "")
+
+        # Try to get boss from map's boss node
+        map_data = gs.get("map") or (gs.get("agent_view") or {}).get("map") or {}
+        boss_node = map_data.get("boss_node") or {}
+        boss_name = boss_node.get("name") or boss_node.get("encounter") or ""
+        if boss_name:
+            self._current_boss_id = boss_name.upper().replace(" ", "_")
+        else:
+            self._current_boss_id = ""
+
+    def _extract_remaining_path(self, gs: dict, current_floor: int) -> tuple[str, ...]:
+        """Extract remaining room types from the live game's map data."""
+        map_data = gs.get("map") or (gs.get("agent_view") or {}).get("map") or {}
+        nodes = map_data.get("nodes") or []
+        if not nodes:
+            return ()
+
+        # Build a simple forward path: collect node types for rows > current
+        remaining = []
+        by_row: dict[int, list[str]] = {}
+        for n in nodes:
+            row = n.get("row", 0)
+            if row > current_floor:
+                nt = n.get("node_type", "Monster")
+                if row not in by_row:
+                    by_row[row] = []
+                by_row[row].append(nt)
+
+        # Take the most common type per row (simplified)
+        for row in sorted(by_row.keys()):
+            types = by_row[row]
+            from collections import Counter
+            most_common = Counter(types).most_common(1)[0][0]
+            remaining.append(most_common)
+
+        return tuple(remaining[:10])
 
     def _az_decide_combat_discard(self, gs: dict, sel: dict,
                                     pick_worst: bool = True) -> "Decision | None":
