@@ -626,7 +626,135 @@ def test_card_play_parity(
 
 
 # ---------------------------------------------------------------------------
-# Test 4: Decision parity (optional — requires model checkpoint)
+# Test 4: Mid-turn state reconstruction parity
+# ---------------------------------------------------------------------------
+#
+# The runner rebuilds CombatState from the game API after every card play.
+# Sim-internal counters (cards_played_this_turn, _skills_played, etc.) are
+# lost each time.  This test catches those divergences by:
+# 1. Building state from a snapshot (like the bridge does)
+# 2. Playing each card through the sim (accumulating internal counters)
+# 3. After each card, extracting "observable" state and rebuilding fresh
+# 4. Comparing can_play_card() results between persistent and rebuilt state
+
+from .constants import CardType
+
+
+def test_midturn_parity(
+    logs_dir: Path, card_db: CardDB, max_turns: int = 100,
+) -> list[dict]:
+    """Find mid-turn state divergences between persistent sim and bridge reconstruction.
+
+    Returns list of divergence records with details on which cards become
+    wrongly playable/unplayable after reconstruction.
+    """
+    runs = extract_all_runs(logs_dir)
+    results: list[dict] = []
+    count = 0
+
+    for run in runs:
+        for combat in run.combats:
+            for turn in combat.turns:
+                if turn.snapshot is None:
+                    continue
+                if count >= max_turns:
+                    break
+                if len(turn.cards_played) < 2:
+                    continue  # Need at least 2 cards to see mid-turn divergence
+                count += 1
+
+                snap = turn.snapshot
+                try:
+                    state = state_from_snapshot(snap, card_db)
+                except Exception:
+                    continue
+
+                # Play cards one at a time, checking for divergence after each
+                for card_idx_in_turn, card_name in enumerate(turn.cards_played):
+                    if card_idx_in_turn == 0:
+                        continue  # First card has no prior plays to diverge on
+
+                    # Find and play the card in the sim
+                    base_name = card_name.rstrip("+")
+                    upgraded = card_name.endswith("+")
+                    played = False
+                    target = None
+                    if turn.targets_chosen and card_idx_in_turn < len(turn.targets_chosen):
+                        target = turn.targets_chosen[card_idx_in_turn]
+
+                    prev_name = turn.cards_played[card_idx_in_turn - 1]
+                    prev_base = prev_name.rstrip("+")
+                    prev_upgraded = prev_name.endswith("+")
+                    prev_target = None
+                    if turn.targets_chosen and card_idx_in_turn - 1 < len(turn.targets_chosen):
+                        prev_target = turn.targets_chosen[card_idx_in_turn - 1]
+
+                    # Play the PREVIOUS card to advance the sim
+                    for hi, h in enumerate(state.player.hand):
+                        match_name = h.name == prev_base or h.id.rstrip("+") == prev_base.upper().replace(" ", "_")
+                        if match_name and h.upgraded == prev_upgraded and can_play_card(state, hi):
+                            play_card(state, hi, prev_target, card_db)
+                            played = True
+                            break
+
+                    if not played:
+                        break  # Can't continue if card wasn't found
+
+                    # Now compare: what does the persistent sim think is playable
+                    # vs what a fresh reconstruction would think?
+                    sim_playable = set()
+                    for hi in range(len(state.player.hand)):
+                        if can_play_card(state, hi):
+                            c = state.player.hand[hi]
+                            sim_playable.add((c.name, c.upgraded, c.card_type.name))
+
+                    # Build reconstructed state (like bridge would)
+                    recon = deepcopy(state)
+                    recon.cards_played_this_turn = 0
+                    recon.attacks_played_this_turn = 0
+                    recon.player.powers.pop("_skills_played", None)
+
+                    recon_playable = set()
+                    for hi in range(len(recon.player.hand)):
+                        if can_play_card(recon, hi):
+                            c = recon.player.hand[hi]
+                            recon_playable.add((c.name, c.upgraded, c.card_type.name))
+
+                    # Find divergences
+                    wrongly_playable = recon_playable - sim_playable
+                    wrongly_blocked = sim_playable - recon_playable
+
+                    if wrongly_playable or wrongly_blocked:
+                        results.append({
+                            "run": run.run_id,
+                            "floor": combat.floor,
+                            "turn": turn.turn,
+                            "card_num": card_idx_in_turn,
+                            "cards_played_so_far": turn.cards_played[:card_idx_in_turn],
+                            "wrongly_playable": [
+                                f"{name}{'+'if up else ''} ({ctype})"
+                                for name, up, ctype in sorted(wrongly_playable)
+                            ],
+                            "wrongly_blocked": [
+                                f"{name}{'+'if up else ''} ({ctype})"
+                                for name, up, ctype in sorted(wrongly_blocked)
+                            ],
+                            "sim_counters": {
+                                "cards_played": state.cards_played_this_turn,
+                                "attacks_played": state.attacks_played_this_turn,
+                                "skills_played": state.player.powers.get("_skills_played", 0),
+                            },
+                            "player_powers": {
+                                k: v for k, v in state.player.powers.items()
+                                if not k.startswith("_")
+                            },
+                        })
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Test 5: Decision parity (optional — requires model checkpoint)
 # ---------------------------------------------------------------------------
 
 def test_decision_parity(
@@ -789,6 +917,8 @@ class CrossValidationReport:
     card_play_turns_checked: int = 0
     decision_turns_checked: int = 0
     decision_matches: int = 0
+    midturn_diffs: list[dict] = field(default_factory=list)
+    midturn_turns_checked: int = 0
 
 
 def print_report(report: CrossValidationReport) -> None:
@@ -830,6 +960,39 @@ def print_report(report: CrossValidationReport) -> None:
             print(f"  Enemies involved:")
             for e, count in enemy_counts.most_common(5):
                 print(f"    {e}: {count}")
+    print()
+
+    # Mid-turn parity
+    n_mt = report.midturn_turns_checked
+    n_mt_fail = len(report.midturn_diffs)
+    print(f"  Mid-turn Parity:       {n_mt - n_mt_fail}/{n_mt} turns clean")
+    if report.midturn_diffs:
+        # Summarize by type
+        wrongly_playable_cards: Counter[str] = Counter()
+        wrongly_blocked_cards: Counter[str] = Counter()
+        for r in report.midturn_diffs:
+            for c in r.get("wrongly_playable", []):
+                wrongly_playable_cards[c] += 1
+            for c in r.get("wrongly_blocked", []):
+                wrongly_blocked_cards[c] += 1
+        if wrongly_playable_cards:
+            print(f"  Cards wrongly playable after reconstruction (runner bug):")
+            for card, cnt in wrongly_playable_cards.most_common(5):
+                print(f"    {card}: {cnt} occurrences")
+        if wrongly_blocked_cards:
+            print(f"  Cards wrongly blocked after reconstruction:")
+            for card, cnt in wrongly_blocked_cards.most_common(5):
+                print(f"    {card}: {cnt} occurrences")
+        # Show first example
+        ex = report.midturn_diffs[0]
+        print(f"  Example: {ex['run']} F{ex['floor']} T{ex['turn']} "
+              f"after {ex['cards_played_so_far']}")
+        print(f"    counters: {ex['sim_counters']}")
+        if ex.get('player_powers'):
+            relevant = {k: v for k, v in ex['player_powers'].items()
+                       if k in ('Smoggy', 'Ringing', 'Velvet Choker', 'Unmovable', 'Slow')}
+            if relevant:
+                print(f"    relevant powers: {relevant}")
     print()
 
     # Decision parity
@@ -893,7 +1056,12 @@ def main(logs_dir: Path | None = None,
     cp_diffs = []
     cp_checked = 0
 
-    # Test 3: Decision parity (optional)
+    # Test 3: Mid-turn reconstruction parity
+    print("  Running mid-turn parity test...")
+    mt_diffs = test_midturn_parity(logs_dir, card_db, max_turns=100)
+    mt_checked = 100
+
+    # Test 4: Decision parity (optional)
     print("  Running decision parity test...")
     dec_result = test_decision_parity(logs_dir, card_db,
                                       checkpoint_path=checkpoint,
@@ -913,6 +1081,8 @@ def main(logs_dir: Path | None = None,
         card_play_turns_checked=cp_checked,
         decision_turns_checked=dec_checked,
         decision_matches=dec_matches,
+        midturn_diffs=mt_diffs,
+        midturn_turns_checked=mt_checked,
     )
     print_report(report)
     return report
