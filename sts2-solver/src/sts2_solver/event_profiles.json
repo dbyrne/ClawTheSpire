@@ -1067,5 +1067,872 @@
         "n_chosen": 0
       }
     ]
+  },
+  "TRASH_HEAP": {
+    "event_id": "TRASH_HEAP",
+    "event_name": "Trash Heap",
+    "n_observations": 0,
+    "options": [
+      {
+        "title": "Dive In",
+        "description": "Lose 8 HP. Obtain a random forgotten Relic from the past.",
+        "option_type": 21,
+        "effects": {
+          "hp_delta": -8,
+          "relic_random": true
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Grab Random Junk",
+        "description": "Gain 100 Gold. Obtain a random forgotten card from the past.",
+        "option_type": 17,
+        "effects": {
+          "gold_delta": 100,
+          "card_add_random": 1
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      }
+    ]
+  },
+  "AMALGAMATOR": {
+    "event_id": "AMALGAMATOR",
+    "event_name": "Amalgamator",
+    "n_observations": 0,
+    "options": [
+      {
+        "title": "Combine Defends",
+        "description": "Remove 2 Defends. Add Ultimate Defend to your Deck.",
+        "option_type": 18,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Combine Strikes",
+        "description": "Remove 2 Strikes. Add Ultimate Strike to your Deck.",
+        "option_type": 18,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      }
+    ]
+  },
+  "BATTLEWORN_DUMMY": {
+    "event_id": "BATTLEWORN_DUMMY",
+    "event_name": "Battleworn Dummy",
+    "n_observations": 0,
+    "options": [
+      {
+        "title": "Setting 1",
+        "description": "Fight a [Setting1Hp] HP dummy. Procure 1 random Potion.",
+        "option_type": 22,
+        "effects": {
+          "potion_add": 1
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Setting 2",
+        "description": "Fight a [Setting2Hp] HP dummy. Upgrade 2 random cards.",
+        "option_type": 19,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Setting 3",
+        "description": "Fight a [Setting3Hp] HP dummy. Obtain a random Relic.",
+        "option_type": 21,
+        "effects": {
+          "relic_random": true
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      }
+    ]
+  },
+  "BUGSLAYER": {
+    "event_id": "BUGSLAYER",
+    "event_name": "Bugslayer",
+    "n_observations": 0,
+    "options": [
+      {
+        "title": "Learn Extermination Technique",
+        "description": "Add Exterminate to your Deck.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Learn Squash Technique",
+        "description": "Add Squash to your Deck.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      }
+    ]
+  },
+  "COLORFUL_PHILOSOPHERS": {
+    "event_id": "COLORFUL_PHILOSOPHERS",
+    "event_name": "Colorful Philosophers",
+    "n_observations": 0,
+    "options": [
+      {
+        "title": "Blue",
+        "description": "Obtain 3 Defect cards.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Equality",
+        "description": "Obtain Prismatic Shard.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Red",
+        "description": "Obtain 3 Ironclad cards.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Pink",
+        "description": "Obtain 3 Necrobinder cards.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Orange",
+        "description": "Obtain 3 Regent cards.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Green",
+        "description": "Obtain 3 Silent cards.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      }
+    ]
+  },
+  "COLOSSAL_FLOWER": {
+    "event_id": "COLOSSAL_FLOWER",
+    "event_name": "Colossal Flower",
+    "n_observations": 0,
+    "options": [
+      {
+        "title": "Extract Nectar",
+        "description": "Gain 35 Gold.",
+        "option_type": 17,
+        "effects": {
+          "gold_delta": 35
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Reach Deeper",
+        "description": "Enter deeper. Lose 5 HP.",
+        "option_type": 16,
+        "effects": {
+          "hp_delta": -5
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      }
+    ]
+  },
+  "FIELD_OF_MAN_SIZED_HOLES": {
+    "event_id": "FIELD_OF_MAN_SIZED_HOLES",
+    "event_name": "Field of Man-Sized Holes",
+    "n_observations": 0,
+    "options": [
+      {
+        "title": "Enter Your Hole",
+        "description": "Enchant a card with [purple]Perfect Fit[/purple].",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Resist",
+        "description": "Remove 2 cards from your Deck. Add Normality to your Deck.",
+        "option_type": 18,
+        "effects": {
+          "card_remove": 2
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      }
+    ]
+  },
+  "GRAVE_OF_THE_FORGOTTEN": {
+    "event_id": "GRAVE_OF_THE_FORGOTTEN",
+    "event_name": "Grave of the Forgotten",
+    "n_observations": 0,
+    "options": [
+      {
+        "title": "Accept the Forgotten Soul",
+        "description": "Obtain Forgotten Soul.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Confront with Truth",
+        "description": "Add Decay to your Deck. Enchant a card that Exhausts with [purple]Soul's Power[/purple].",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Locked",
+        "description": "You have no cards with Exhaust that can be [purple]Enchanted[/purple].",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      }
+    ]
+  },
+  "HUNGRY_FOR_MUSHROOMS": {
+    "event_id": "HUNGRY_FOR_MUSHROOMS",
+    "event_name": "Hungry for Mushrooms",
+    "n_observations": 0,
+    "options": [
+      {
+        "title": "Big Mushroom",
+        "description": "Obtain Big Mushroom. Upon pickup, raise your Max HP by 20. At the start of each combat, draw 2 fewer cards.",
+        "option_type": 22,
+        "effects": {
+          "max_hp_delta": 20
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Fragrant Mushroom",
+        "description": "Obtain Fragrant Mushroom. Upon pickup, lose 15 HP and Upgrade 3 random cards.",
+        "option_type": 19,
+        "effects": {
+          "hp_delta": -15
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      }
+    ]
+  },
+  "INFESTED_AUTOMATON": {
+    "event_id": "INFESTED_AUTOMATON",
+    "event_name": "Infested Automaton",
+    "n_observations": 0,
+    "options": [
+      {
+        "title": "Study",
+        "description": "Obtain a random Power.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Touch the Core",
+        "description": "Obtain a random 0 cost card.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      }
+    ]
+  },
+  "LOST_WISP": {
+    "event_id": "LOST_WISP",
+    "event_name": "The Lost Wisp",
+    "n_observations": 0,
+    "options": [
+      {
+        "title": "Capture the Wisp",
+        "description": "Add Decay to your Deck. Obtain the Lost Wisp.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Locked",
+        "description": "Your Max HP is too low.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Search the Nearby Area",
+        "description": "Gain 60 Gold.",
+        "option_type": 17,
+        "effects": {
+          "gold_delta": 60
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      }
+    ]
+  },
+  "REFLECTIONS": {
+    "event_id": "REFLECTIONS",
+    "event_name": "Reflections snoitcelfeR",
+    "n_observations": 0,
+    "options": [
+      {
+        "title": "Shatter",
+        "description": "Duplicate your Deck. Receive [purple]Bad Luck[/purple].",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Touch a Mirror",
+        "description": "Downgrade 2 random cards. Upgrade 4 random cards.",
+        "option_type": 19,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      }
+    ]
+  },
+  "ROUND_TEA_PARTY": {
+    "event_id": "ROUND_TEA_PARTY",
+    "event_name": "The Round Tea Party",
+    "n_observations": 0,
+    "options": [
+      {
+        "title": "Enjoy Your Tea",
+        "description": "Obtain Royal Poison. Heal to full HP.",
+        "option_type": 15,
+        "effects": {
+          "hp_delta_pct": 100
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Pick a Fight",
+        "description": "Lose 11 HP. Obtain a random Relic.",
+        "option_type": 21,
+        "effects": {
+          "hp_delta": -11,
+          "relic_random": true
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      }
+    ]
+  },
+  "SPIRIT_GRAFTER": {
+    "event_id": "SPIRIT_GRAFTER",
+    "event_name": "Spirit Grafter",
+    "n_observations": 0,
+    "options": [
+      {
+        "title": "Let It In",
+        "description": "Heal 25 HP. Add Metamorphosis to your Deck.",
+        "option_type": 15,
+        "effects": {
+          "hp_delta": 25
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Rejection",
+        "description": "Lose 9 HP. Remove a card from your Deck.",
+        "option_type": 18,
+        "effects": {
+          "hp_delta": -9,
+          "card_remove": 1
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      }
+    ]
+  },
+  "THE_LANTERN_KEY": {
+    "event_id": "THE_LANTERN_KEY",
+    "event_name": "The Lantern Key",
+    "n_observations": 0,
+    "options": [
+      {
+        "title": "Keep the Key",
+        "description": "Fight to obtain the Key.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Return the Key",
+        "description": "Gain 100 Gold.",
+        "option_type": 17,
+        "effects": {
+          "gold_delta": 100
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      }
+    ]
+  },
+  "TINKER_TIME": {
+    "event_id": "TINKER_TIME",
+    "event_name": "Tinker Time",
+    "n_observations": 0,
+    "options": [
+      {
+        "title": "Accept",
+        "description": "Create a custom card to add to your Deck.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      }
+    ]
+  },
+  "TRIAL": {
+    "event_id": "TRIAL",
+    "event_name": "The Trial",
+    "n_observations": 0,
+    "options": [
+      {
+        "title": "Accept",
+        "description": "Serve as today's Decider.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Reject",
+        "description": "You are not allowed to Reject.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      }
+    ]
+  },
+  "ZEN_WEAVER": {
+    "event_id": "ZEN_WEAVER",
+    "event_name": "Zen Weaver",
+    "n_observations": 0,
+    "options": [
+      {
+        "title": "Arachnid Acupuncture",
+        "description": "Pay 250 Gold. Remove 2 cards from your Deck.",
+        "option_type": 18,
+        "effects": {
+          "gold_delta": -250,
+          "card_remove": 2
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Breathing Techniques",
+        "description": "Pay 50 Gold. Add 2 Enlightenment to your Deck.",
+        "option_type": 17,
+        "effects": {
+          "gold_delta": -50
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Emotional Awareness",
+        "description": "Pay 125 Gold. Remove 1 card from your Deck.",
+        "option_type": 18,
+        "effects": {
+          "gold_delta": -125,
+          "card_remove": 1
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Locked",
+        "description": "Not enough Gold.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      }
+    ]
+  },
+  "CRYSTAL_SPHERE": {
+    "event_id": "CRYSTAL_SPHERE",
+    "event_name": "Crystal Sphere",
+    "n_observations": 0,
+    "options": [
+      {
+        "title": "Payment Plan",
+        "description": "Gain a Debt. [purple]Divine[/purple] 6 times.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Uncover Future",
+        "description": "Pay 50 Gold. [purple]Divine[/purple] 3 times.",
+        "option_type": 17,
+        "effects": {
+          "gold_delta": -50
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      }
+    ]
+  },
+  "DOLL_ROOM": {
+    "event_id": "DOLL_ROOM",
+    "event_name": "Doll Room",
+    "n_observations": 0,
+    "options": [
+      {
+        "title": "Examine Each and Make the Best Choice",
+        "description": "Lose 15 HP. Choose 1 of 3 Doll Relics.",
+        "option_type": 16,
+        "effects": {
+          "hp_delta": -15
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Pick at Random",
+        "description": "Obtain a random Doll Relic.",
+        "option_type": 21,
+        "effects": {
+          "relic_random": true
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Take Some Time",
+        "description": "Lose 5 HP. Choose 1 of 2 Doll Relics.",
+        "option_type": 16,
+        "effects": {
+          "hp_delta": -5
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      }
+    ]
+  },
+  "POTION_COURIER": {
+    "event_id": "POTION_COURIER",
+    "event_name": "Potion Courier",
+    "n_observations": 0,
+    "options": [
+      {
+        "title": "Grab Potions",
+        "description": "Procure 3 Foul Potions.",
+        "option_type": 22,
+        "effects": {
+          "potion_add": 1
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Ransack",
+        "description": "Procure 1 random Uncommon Potion.",
+        "option_type": 22,
+        "effects": {
+          "potion_add": 1
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      }
+    ]
+  },
+  "RANWID_THE_ELDER": {
+    "event_id": "RANWID_THE_ELDER",
+    "event_name": "Ranwid the Elder",
+    "n_observations": 0,
+    "options": [
+      {
+        "title": "Give 100 Gold",
+        "description": "Obtain a random Relic.",
+        "option_type": 21,
+        "effects": {
+          "relic_random": true
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Give Potion",
+        "description": "Obtain a random Relic.",
+        "option_type": 21,
+        "effects": {
+          "relic_random": true
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Locked",
+        "description": "You don't have any Potions that can be given.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Give Relic",
+        "description": "Obtain 2 random Relics.",
+        "option_type": 21,
+        "effects": {
+          "relic_random": true
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Locked",
+        "description": "You don't have any Relics that can be given.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      }
+    ]
+  },
+  "RELIC_TRADER": {
+    "event_id": "RELIC_TRADER",
+    "event_name": "Relic Trader",
+    "n_observations": 0,
+    "options": [
+      {
+        "title": "Take the Bottom One",
+        "description": "Trade one of your Relics for a random Relic.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Take the Middle One",
+        "description": "Trade one of your Relics for a random Relic.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Take the Top One",
+        "description": "Trade one of your Relics for a random Relic.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      }
+    ]
+  },
+  "STONE_OF_ALL_TIME": {
+    "event_id": "STONE_OF_ALL_TIME",
+    "event_name": "Stone of All Time",
+    "n_observations": 0,
+    "options": [
+      {
+        "title": "Drink and Lift",
+        "description": "Lose a random Potion. Gain 10 Max HP.",
+        "option_type": 15,
+        "effects": {
+          "max_hp_delta": 10
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Locked",
+        "description": "Requires a Potion.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Push",
+        "description": "Lose 6 HP. Enchant an Attack with [purple]Vigorous[/purple] 8.",
+        "option_type": 16,
+        "effects": {
+          "hp_delta": -6
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Locked",
+        "description": "Requires an Attack.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      }
+    ]
+  },
+  "SYMBIOTE": {
+    "event_id": "SYMBIOTE",
+    "event_name": "Symbiote",
+    "n_observations": 0,
+    "options": [
+      {
+        "title": "Approach",
+        "description": "Enchant an Attack with [purple]Corrupted[/purple].",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Locked",
+        "description": "None of your Attacks can be Enchanted.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Kill with Fire",
+        "description": "Choose a card to Transform.",
+        "option_type": 20,
+        "effects": {
+          "card_transform": 1
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      }
+    ]
+  },
+  "WAR_HISTORIAN_REPY": {
+    "event_id": "WAR_HISTORIAN_REPY",
+    "event_name": "War Historian, Repy",
+    "n_observations": 0,
+    "options": [
+      {
+        "title": "Unlock the Cage",
+        "description": "Lose Lantern Key. Obtain History Course.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Unlock the Chest",
+        "description": "Lose Lantern Key. Procure 2 random Potions. Obtain 2 random Relics.",
+        "option_type": 21,
+        "effects": {
+          "relic_random": true,
+          "potion_add": 2
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      }
+    ]
+  },
+  "WELCOME_TO_WONGOS": {
+    "event_id": "WELCOME_TO_WONGOS",
+    "event_name": "Welcome to Wongo's",
+    "n_observations": 0,
+    "options": [
+      {
+        "title": "Wongo's Bargain Bin",
+        "description": "Pay 100 Gold. Obtain 1 random Common Relic.",
+        "option_type": 21,
+        "effects": {
+          "gold_delta": -100,
+          "relic_random": true
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Locked",
+        "description": "Requires 100 Gold.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Wongo's Featured Item",
+        "description": "Pay 200 Gold. Obtain a random Relic.",
+        "option_type": 21,
+        "effects": {
+          "gold_delta": -200,
+          "relic_random": true
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Locked",
+        "description": "Requires 200 Gold.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Leave",
+        "description": "Downgrade a random card.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Wongo's Mystery Box",
+        "description": "Pay 300 Gold. Obtain 3 random Relics after 5 combats.",
+        "option_type": 21,
+        "effects": {
+          "gold_delta": -300,
+          "relic_random": true
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Locked",
+        "description": "Requires 300 Gold.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      }
+    ]
   }
 }
