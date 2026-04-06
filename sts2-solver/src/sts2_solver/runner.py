@@ -41,6 +41,7 @@ from .deterministic_advisor import (
 )
 from .game_data import strip_markup
 from .bridge import state_from_mcp
+from .constants import CardType
 from .data_loader import load_cards
 from .game_client import GameClient
 from .game_data import load_game_data
@@ -876,6 +877,23 @@ class Runner:
             try:
                 sim_state = state_from_mcp(gs, self.card_db,
                                           move_indices=self._combat_move_indices)
+                # Restore play counters so MCTS knows what's already been
+                # played this turn (Smoggy skill limit, Slow scaling, etc.)
+                sim_state.cards_played_this_turn = len(cards_played)
+                skills_this_turn = 0
+                attacks_this_turn = 0
+                for cname in cards_played:
+                    if cname.startswith("Use "):
+                        continue  # potion usage, not a card
+                    card_id = cname.rstrip("+").upper().replace(" ", "_")
+                    card_def = self.card_db.get(card_id)
+                    if card_def and card_def.card_type == CardType.SKILL:
+                        skills_this_turn += 1
+                    elif card_def and card_def.card_type == CardType.ATTACK:
+                        attacks_this_turn += 1
+                if skills_this_turn > 0:
+                    sim_state.player.powers["_skills_played"] = skills_this_turn
+                sim_state.attacks_played_this_turn = attacks_this_turn
                 hand = list(sim_state.player.hand)
                 t0 = time.perf_counter()
                 first_action, policy, root_value = self._mcts.search(
