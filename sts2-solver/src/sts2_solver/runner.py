@@ -1328,11 +1328,27 @@ class Runner:
                         except Exception:
                             pass
                 else:
-                    # No way to skip — log error and DON'T claim
+                    # No way to dismiss the card — collect_rewards_and_proceed
+                    # is the only exit and it will claim the card the network
+                    # skipped. Log the override and proceed rather than looping.
                     self._log_action(
-                        "[bold red]ERROR: Cannot leave reward screen without "
-                        "claiming skipped card. Waiting for screen change.[/bold red]"
+                        "[bold red]WARN: Forced to collect_rewards_and_proceed "
+                        "— card skip will be overridden (no other exit)[/bold red]"
                     )
+                    # Disable the runtime guard so it doesn't crash
+                    self._deck_size_after_skip = None
+                    if self.logger:
+                        self.logger._emit({
+                            "type": "skip_override_forced",
+                            "reason": "no skip/proceed action available",
+                            "actions": actions,
+                        })
+                    if not self.dry_run:
+                        try:
+                            self._execute_with_retry("collect_rewards_and_proceed")
+                            self.action_count += 1
+                        except Exception:
+                            pass
             return
 
         elif "collect_rewards_and_proceed" in actions and screen_type != "card_reward":
