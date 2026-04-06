@@ -16,7 +16,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
-from collections import Counter, deque
+from collections import deque
 import json
 import os
 import time
@@ -1601,30 +1601,26 @@ class Runner:
             self._current_boss_id = ""
 
     def _extract_remaining_path(self, gs: dict, current_floor: int) -> tuple[str, ...]:
-        """Extract remaining room types from the live game's map data."""
+        """BFS from the player's current map node to get downstream room types."""
+        from .simulator import _bfs_downstream_path
+
         map_data = gs.get("map") or (gs.get("agent_view") or {}).get("map") or {}
         nodes = map_data.get("nodes") or []
         if not nodes:
             return ()
 
-        # Build a simple forward path: collect node types for rows > current
-        remaining = []
-        by_row: dict[int, list[str]] = {}
-        for n in nodes:
-            row = n.get("row", 0)
-            if row > current_floor:
-                nt = n.get("node_type", "Monster")
-                if row not in by_row:
-                    by_row[row] = []
-                by_row[row].append(nt)
+        # Find the player's current node
+        current = map_data.get("current_node") or {}
+        current_pos = (current.get("row"), current.get("col"))
 
-        # Take the most common type per row (simplified — doesn't track
-        # which specific branch the player is on, just a statistical summary)
-        for row in sorted(by_row.keys()):
-            most_common = Counter(by_row[row]).most_common(1)[0][0]
-            remaining.append(most_common)
+        by_pos = {(n["row"], n["col"]): n for n in nodes
+                  if "row" in n and "col" in n}
+        current_node = by_pos.get(current_pos)
+        if not current_node:
+            return ()
 
-        return tuple(remaining[:10])
+        return _bfs_downstream_path(
+            {"nodes": nodes}, current_node, max_depth=10)
 
     def _az_decide_combat_discard(self, gs: dict, sel: dict,
                                     pick_worst: bool = True) -> "Decision | None":
