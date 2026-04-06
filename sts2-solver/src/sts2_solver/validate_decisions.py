@@ -259,6 +259,41 @@ def _check_card_reward_vs_deck_change(
     return issues
 
 
+def _check_shop_options(
+    decision: dict, floor: int | None,
+) -> list[DecisionIssue]:
+    """Validate shop options don't contain ghost/invalid entries.
+
+    Ghost entries (empty name, 0g price) appear when a card was already
+    bought but the game API still lists the slot. These dilute the
+    network's option head and can cause it to pick invalid actions.
+    """
+    issues: list[DecisionIssue] = []
+    hs = decision.get("head_scores") or {}
+    options = hs.get("options", [])
+
+    ghost_options = []
+    for i, opt in enumerate(options):
+        label = opt.get("label", "")
+        if label.startswith("Buy") and ("(0g)" in label or label == "Buy  (0g)"):
+            ghost_options.append((i, label))
+        elif label.startswith("Buy ") and label.split("Buy ", 1)[1].startswith(" ("):
+            # "Buy  (Xg)" — empty card name
+            ghost_options.append((i, label))
+
+    if ghost_options:
+        labels = [f"option {i}: {lbl}" for i, lbl in ghost_options]
+        issues.append(DecisionIssue(
+            severity="error",
+            category="shop_ghost_option",
+            message=f"Shop presented {len(ghost_options)} ghost option(s) to network: "
+                    f"{', '.join(labels)}. Sold-out slots should be filtered.",
+            floor=floor,
+        ))
+
+    return issues
+
+
 def _check_map_navigation(
     decision: dict, map_nodes: dict[tuple[int, int], dict] | None,
     current_pos: tuple[int, int] | None, floor: int | None,
@@ -599,6 +634,9 @@ def validate_run_decisions(events: list[dict]) -> list[DecisionAudit]:
             map_issues, map_pos = _check_map_navigation(
                 event, map_nodes, map_pos, current_floor)
             issues.extend(map_issues)
+
+        if screen_type == "shop":
+            issues.extend(_check_shop_options(event, current_floor))
 
         issues.extend(_check_network_bypass(event, current_floor))
 
