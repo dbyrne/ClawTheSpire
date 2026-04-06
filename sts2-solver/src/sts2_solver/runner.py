@@ -2676,7 +2676,6 @@ class Runner:
                 floor=floor if isinstance(floor, int) else 0,
                 hp=hp, max_hp=run.get("max_hp"),
             )
-            self.store.flush()
             self._store_run_started = False
 
         self._log_action(
