@@ -218,6 +218,12 @@ def _load_enemy_profiles() -> dict[str, dict]:
 _EVENT_PROFILES: dict[str, dict] | None = None
 
 
+def invalidate_event_profile_cache() -> None:
+    """Force reload of event profiles on next access."""
+    global _EVENT_PROFILES
+    _EVENT_PROFILES = None
+
+
 def _load_event_profiles() -> dict[str, dict]:
     """Load event profiles from JSON file (cached)."""
     global _EVENT_PROFILES

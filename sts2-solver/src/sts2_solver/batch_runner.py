@@ -49,6 +49,10 @@ def load_config() -> dict:
 
 def run_one_game(cfg: dict, game_num: int) -> dict | None:
     """Play a single game with the given config. Returns result dict or None."""
+    # Invalidate cached profiles so new events/enemies are picked up
+    from .simulator import invalidate_event_profile_cache
+    invalidate_event_profile_cache()
+
     gen = cfg["gen"]
     logs_dir = LOGS_ROOT / f"gen{gen}"
     logs_dir.mkdir(parents=True, exist_ok=True)
