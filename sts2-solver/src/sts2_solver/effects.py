@@ -30,6 +30,22 @@ def apply_block(entity: PlayerState | EnemyState, damage: int) -> int:
     return damage
 
 
+def apply_block_and_plating(enemy: EnemyState, damage: int) -> int:
+    """Apply block and Plating to enemy damage. Returns HP damage dealt.
+
+    Plating loses 1 stack when a hit deals damage through block.
+    Single source of truth — used by both deal_damage and _raw_damage_to_enemy.
+    """
+    had_block = enemy.block > 0
+    dmg = apply_block(enemy, damage)
+    plating = enemy.powers.get("Plating", 0)
+    if plating > 0 and had_block and dmg > 0:
+        enemy.powers["Plating"] = plating - 1
+        if enemy.powers["Plating"] <= 0:
+            del enemy.powers["Plating"]
+    return dmg
+
+
 def get_alive_enemies(state: CombatState) -> list[int]:
     """Return indices of all living enemies."""
     return [i for i, e in enumerate(state.enemies) if e.is_alive]
@@ -136,14 +152,7 @@ def deal_damage(state: CombatState, target_idx: int, base_damage: int, hits: int
             enemy.block += 1
             enemy.powers["_skittish_triggered"] = 1
 
-        had_block = enemy.block > 0
-        per_hit = apply_block(enemy, per_hit)
-        # Plating: lose 1 stack when hit through block
-        plating = enemy.powers.get("Plating", 0)
-        if plating > 0 and had_block and per_hit > 0:
-            enemy.powers["Plating"] = plating - 1
-            if enemy.powers["Plating"] <= 0:
-                del enemy.powers["Plating"]
+        per_hit = apply_block_and_plating(enemy, per_hit)
         # Slippery: caps damage to 1 per hit while stacks remain
         slippery = enemy.powers.get("Slippery", 0)
         if slippery > 0 and per_hit > 0:

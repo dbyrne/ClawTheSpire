@@ -280,7 +280,7 @@ def _network_pick_card(
             opt_cards.append(vocabs.cards.get(base_id))
             opt_stats.append(card_stats_vector(card))
         opt_cards.append(0)  # PAD for skip
-        opt_stats.append([0.0] * 15)  # No card stats for skip
+        opt_stats.append([0.0] * config.card_stats_dim)  # No card stats for skip
 
         with torch.no_grad():
             hidden = network.encode_state(**state_tensors)
@@ -409,7 +409,7 @@ class MCTSStrategy:
 
             opt_types = [OPTION_REST]
             opt_cards = [0]
-            opt_stats = [[0.0] * 15]  # No card stats for rest
+            opt_stats = [[0.0] * self.config.card_stats_dim]  # No card stats for rest
             deck_indices = [None]  # maps option idx -> deck idx
 
             for di, card in enumerate(deck):
@@ -528,13 +528,13 @@ class MCTSStrategy:
                         if pot is not None:
                             opt_types.append(OPTION_SHOP_BUY_POTION)
                             opt_cards.append(0)
-                            opt_stats.append([0.0] * 15)
+                            opt_stats.append([0.0] * self.config.card_stats_dim)
                             actions.append(("potion", pi))
 
                 # Leave option (always available)
                 opt_types.append(OPTION_SHOP_LEAVE)
                 opt_cards.append(0)
-                opt_stats.append([0.0] * 15)
+                opt_stats.append([0.0] * self.config.card_stats_dim)
                 actions.append(("leave",))
 
                 if len(opt_types) == 1:

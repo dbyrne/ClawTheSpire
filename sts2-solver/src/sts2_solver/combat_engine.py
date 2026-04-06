@@ -37,18 +37,13 @@ def _tick_counted_relic(
 
 def _raw_damage_to_enemy(state: CombatState, enemy_idx: int, damage: int) -> None:
     """Deal flat damage to an enemy, respecting block/Plating. No Strength/Weak/Vulnerable."""
-    from .effects import _on_enemy_death
+    # Lazy import to avoid circular dependency: effects.py imports from combat_engine,
+    # and _on_enemy_death lives in effects.py. This is the only cross-boundary call.
+    from .effects import _on_enemy_death, apply_block_and_plating
     enemy = state.enemies[enemy_idx]
     if not enemy.is_alive:
         return
-    had_block = enemy.block > 0
-    dmg = apply_block(enemy, damage)
-    # Plating: lose 1 stack when hit through block
-    plating = enemy.powers.get("Plating", 0)
-    if plating > 0 and had_block and dmg > 0:
-        enemy.powers["Plating"] = plating - 1
-        if enemy.powers["Plating"] <= 0:
-            del enemy.powers["Plating"]
+    dmg = apply_block_and_plating(enemy, damage)
     enemy.hp -= dmg
     if not enemy.is_alive:
         _on_enemy_death(state, enemy_idx)

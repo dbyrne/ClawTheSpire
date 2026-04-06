@@ -642,7 +642,7 @@ from .constants import CardType
 
 def test_midturn_parity(
     logs_dir: Path, card_db: CardDB, max_turns: int = 100,
-) -> list[dict]:
+) -> tuple[list[dict], int]:
     """Find mid-turn state divergences between persistent sim and bridge reconstruction.
 
     Returns list of divergence records with details on which cards become
@@ -750,7 +750,7 @@ def test_midturn_parity(
                             },
                         })
 
-    return results
+    return results, count
 
 
 # ---------------------------------------------------------------------------
@@ -1058,8 +1058,7 @@ def main(logs_dir: Path | None = None,
 
     # Test 3: Mid-turn reconstruction parity
     print("  Running mid-turn parity test...")
-    mt_diffs = test_midturn_parity(logs_dir, card_db, max_turns=100)
-    mt_checked = 100
+    mt_diffs, mt_checked = test_midturn_parity(logs_dir, card_db, max_turns=100)
 
     # Test 4: Decision parity (optional)
     print("  Running decision parity test...")

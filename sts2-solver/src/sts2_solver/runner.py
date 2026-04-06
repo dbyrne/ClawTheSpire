@@ -399,10 +399,9 @@ class Runner:
                         "deck_before": self._deck_size_after_skip,
                         "deck_after": len(current_deck),
                     })
-                raise RuntimeError(
-                    f"Card reward skip was overridden — deck grew by {added}. "
-                    f"This corrupts training data. Fix the reward screen handler."
-                )
+                # Don't crash — this decision is already corrupted but the
+                # rest of the run's data is still valuable.
+                self._deck_size_after_skip = None
             # Clear once we've moved past the reward screen
             if "REWARD" not in screen.upper():
                 self._deck_size_after_skip = None
