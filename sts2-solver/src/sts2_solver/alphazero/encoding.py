@@ -257,6 +257,7 @@ class EncoderConfig:
     # Card stats vector: upgraded(1) + cost(1) + damage(1) + block(1) +
     # is_x_cost(1) + card_type_onehot(5) + target_type_onehot(5) = 15
     card_stats_dim: int = 15
+    num_trunk_blocks: int = 3
 
     # Global scalars: floor, turn, gold, deck_size, has_pending_choice, choice_type
     num_scalars: int = 6

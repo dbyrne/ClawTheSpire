@@ -198,13 +198,18 @@ class ReplayBuffer:
 # Self-play game
 # ---------------------------------------------------------------------------
 
-TRAINING_ENCOUNTERS = [
-    "ENCOUNTER_NIBBIT",
-    "ENCOUNTER_SHRINKER_BEETLE",
-    "ENCOUNTER_FUZZY_WURM_CRAWLER",
-    "ENCOUNTER_SLIME_PAIR",
-    "ENCOUNTER_RUBY_RAIDERS",
-]
+_TRAINING_ENCOUNTER_CACHE: list[str] = []
+
+
+def _get_training_encounters() -> list[str]:
+    """Return all normal/weak encounter IDs from the loaded encounter data."""
+    if not _TRAINING_ENCOUNTER_CACHE:
+        _ensure_data_loaded()
+        for eid, enc in _ENCOUNTERS_BY_ID.items():
+            room = enc.get("room_type", "")
+            if room == "Monster" and "EVENT_ENCOUNTER" not in eid:
+                _TRAINING_ENCOUNTER_CACHE.append(eid)
+    return _TRAINING_ENCOUNTER_CACHE
 
 
 def _make_starter_deck(card_db: CardDB, character: str = "silent") -> list[Card]:
@@ -248,9 +253,7 @@ def play_one_game(
     _ensure_data_loaded()
 
     if encounter_id is None:
-        available = [e for e in TRAINING_ENCOUNTERS if e in _ENCOUNTERS_BY_ID]
-        if not available:
-            available = list(_ENCOUNTERS_BY_ID.keys())[:5]
+        available = _get_training_encounters()
         encounter_id = rng.choice(available)
 
     if deck is None:
@@ -386,44 +389,53 @@ def train_batch(
     option_losses = []
     nan_combat = nan_option = 0
 
-    # --- Combat samples: accumulate gradients, step once ---
+    # --- Combat samples: batched forward/backward ---
     optimizer.zero_grad()
-    valid_count = 0
 
-    for sample in samples:
-        state_tensors = {k: v.to(device) for k, v in sample.state_tensors.items()}
-        action_card_ids = sample.action_card_ids.to(device)
-        action_features = sample.action_features.to(device)
-        action_mask = sample.action_mask.to(device)
+    if samples:
+        # Stack state tensors (all have fixed shapes with batch=1)
+        batched_state = {}
+        for key in samples[0].state_tensors:
+            batched_state[key] = torch.cat(
+                [s.state_tensors[key] for s in samples], dim=0
+            ).to(device)
 
-        hidden = network.encode_state(**state_tensors)
-        value, logits = network.forward(hidden, action_card_ids, action_features, action_mask)
+        # Pad action tensors to common max_actions
+        max_act = max(s.action_card_ids.shape[1] for s in samples)
+        n = len(samples)
+        feat_dim = samples[0].action_features.shape[-1]
 
-        target_value = torch.tensor([[sample.value]], dtype=torch.float32, device=device)
-        v_loss = F.mse_loss(value, target_value)
+        act_card_ids = torch.zeros(n, max_act, dtype=torch.long, device=device)
+        act_features = torch.zeros(n, max_act, feat_dim, dtype=torch.float32, device=device)
+        act_mask = torch.ones(n, max_act, dtype=torch.bool, device=device)  # True=invalid
+        target_policies = torch.zeros(n, max_act, dtype=torch.float32, device=device)
+        target_values = torch.zeros(n, 1, dtype=torch.float32, device=device)
 
-        target_policy = torch.tensor(
-            sample.policy[:sample.num_actions], dtype=torch.float32, device=device
-        )
-        if len(target_policy) < logits.shape[1]:
-            padding = torch.zeros(logits.shape[1] - len(target_policy), device=device)
-            target_policy = torch.cat([target_policy, padding])
-        log_probs = F.log_softmax(logits[0, :len(sample.policy)], dim=0)
-        p_loss = -torch.sum(target_policy[:len(log_probs)] * log_probs)
+        for i, s in enumerate(samples):
+            na = s.action_card_ids.shape[1]
+            act_card_ids[i, :na] = s.action_card_ids[0]
+            act_features[i, :na] = s.action_features[0]
+            act_mask[i, :na] = s.action_mask[0]
+            np_ = min(s.num_actions, max_act)
+            target_policies[i, :np_] = torch.tensor(s.policy[:np_], dtype=torch.float32)
+            target_values[i, 0] = s.value
+
+        hidden = network.encode_state(**batched_state)
+        values, logits = network.forward(hidden, act_card_ids, act_features, act_mask)
+
+        v_loss = F.mse_loss(values, target_values)
+        log_probs = F.log_softmax(logits, dim=1)
+        p_loss = -(target_policies * log_probs).nan_to_num(0.0).sum(dim=1).mean()
 
         loss = 0.25 * v_loss + p_loss
         if torch.isnan(loss):
             nan_combat += 1
-            continue
-        value_losses.append(v_loss.item())
-        policy_losses.append(p_loss.item())
-        # Accumulate gradients without growing the graph (#8)
-        (loss / max(1, len(samples))).backward()
-        valid_count += 1
-
-    if valid_count > 0:
-        torch.nn.utils.clip_grad_norm_(network.parameters(), 1.0)
-        optimizer.step()
+        else:
+            value_losses.append(v_loss.item())
+            policy_losses.append(p_loss.item())
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(network.parameters(), 1.0)
+            optimizer.step()
 
     # --- Option samples (all non-combat decisions): accumulate gradients, step once ---
     optimizer.zero_grad()
@@ -500,19 +512,20 @@ def _read_progress(path: Path) -> dict:
 
 def train_worker(
     num_generations: int = 100,
-    games_per_generation: int = 10,
+    games_per_generation: int = 50,
     mcts_simulations: int = 50,
     batch_size: int = 64,
-    train_epochs: int = 3,
+    train_epochs: int = 10,
     lr: float = 1e-3,
     temperature: float = 1.0,
     save_dir: str | None = None,
     progress_file: str | None = None,
+    num_trunk_blocks: int = 3,
 ):
     """Headless training loop. Writes progress to JSON file."""
     card_db = load_cards()
     vocabs = build_vocabs_from_card_db(card_db)
-    config = EncoderConfig()
+    config = EncoderConfig(num_trunk_blocks=num_trunk_blocks)
     network = STS2Network(vocabs, config)
     # Exclude embedding tables from weight decay so rare cards/powers
     # can develop strong representations (#12)
@@ -532,40 +545,45 @@ def train_worker(
     save_path.mkdir(parents=True, exist_ok=True)
 
     # Load latest checkpoint if available (warm start)
-    # Filter out keys with shape mismatches (e.g. trunk input dim changed)
+    # Check architecture lineage: trunk depth must match for warm start
     ckpts = sorted(save_path.glob("gen_*.pt"), key=lambda p: p.stat().st_mtime)
     if ckpts:
         ckpt = torch.load(ckpts[-1], map_location="cpu", weights_only=True)
-        saved_state = ckpt["model_state"]
-        current_state = network.state_dict()
-        compatible = {
-            k: v for k, v in saved_state.items()
-            if k in current_state and v.shape == current_state[k].shape
-        }
-        skipped = set(saved_state.keys()) - set(compatible.keys())
-        # Partial-copy expanded embeddings (e.g. option_type_embed grew)
-        for k in list(skipped):
-            if k in current_state:
-                old_w = saved_state[k]
-                cur_w = current_state[k]
-                if (old_w.ndim == 2 and old_w.shape[0] < cur_w.shape[0]
-                        and old_w.shape[1] == cur_w.shape[1]):
-                    new_w = cur_w.clone()
-                    new_w[:old_w.shape[0]] = old_w
-                    compatible[k] = new_w
-                    skipped.discard(k)
-        # If trunk input layer was skipped (input dim changed), also skip
-        # the rest of the trunk to avoid NaN from mismatched expectations
-        if any("trunk_in" in k or "trunk.0" in k for k in skipped):
-            trunk_keys = [k for k in compatible if k.startswith("trunk")]
-            for k in trunk_keys:
-                compatible.pop(k)
-                skipped.add(k)
-        network.load_state_dict(compatible, strict=False)
-        msg = f"Warm start from {ckpts[-1].name} ({len(compatible)}/{len(saved_state)} params)"
-        if skipped:
-            msg += f", skipped {len(skipped)} shape-mismatched"
-        print(msg, flush=True)
+        ckpt_blocks = ckpt.get("num_trunk_blocks", 1)  # legacy checkpoints had 1 block
+        if ckpt_blocks != num_trunk_blocks:
+            print(f"Lineage mismatch: checkpoint has {ckpt_blocks} trunk blocks, "
+                  f"current config has {num_trunk_blocks}. Cold start.", flush=True)
+        else:
+            saved_state = ckpt["model_state"]
+            current_state = network.state_dict()
+            compatible = {
+                k: v for k, v in saved_state.items()
+                if k in current_state and v.shape == current_state[k].shape
+            }
+            skipped = set(saved_state.keys()) - set(compatible.keys())
+            # Partial-copy expanded embeddings (e.g. option_type_embed grew)
+            for k in list(skipped):
+                if k in current_state:
+                    old_w = saved_state[k]
+                    cur_w = current_state[k]
+                    if (old_w.ndim == 2 and old_w.shape[0] < cur_w.shape[0]
+                            and old_w.shape[1] == cur_w.shape[1]):
+                        new_w = cur_w.clone()
+                        new_w[:old_w.shape[0]] = old_w
+                        compatible[k] = new_w
+                        skipped.discard(k)
+            # If trunk input layer was skipped (input dim changed), also skip
+            # the rest of the trunk to avoid NaN from mismatched expectations
+            if any("trunk_in" in k or "trunk.0" in k for k in skipped):
+                trunk_keys = [k for k in compatible if k.startswith("trunk")]
+                for k in trunk_keys:
+                    compatible.pop(k)
+                    skipped.add(k)
+            network.load_state_dict(compatible, strict=False)
+            msg = f"Warm start from {ckpts[-1].name} ({len(compatible)}/{len(saved_state)} params)"
+            if skipped:
+                msg += f", skipped {len(skipped)} shape-mismatched"
+            print(msg, flush=True)
 
     progress_path = Path(progress_file) if progress_file else _default_progress_path()
 
@@ -684,6 +702,7 @@ def train_worker(
                 "optimizer_state": optimizer.state_dict(),
                 "games_played": total_games,
                 "win_rate": total_wins / max(1, total_games),
+                "num_trunk_blocks": config.num_trunk_blocks,
             }, ckpt_path)
             print(f"  Saved checkpoint: {ckpt_path.name}")
 
@@ -796,14 +815,15 @@ if __name__ == "__main__":
     # Train command
     train_parser = subparsers.add_parser("train", help="Run headless training worker")
     train_parser.add_argument("--generations", type=int, default=100)
-    train_parser.add_argument("--games-per-gen", type=int, default=10)
+    train_parser.add_argument("--games-per-gen", type=int, default=50)
     train_parser.add_argument("--sims", type=int, default=50)
     train_parser.add_argument("--batch-size", type=int, default=64)
-    train_parser.add_argument("--epochs", type=int, default=3)
+    train_parser.add_argument("--epochs", type=int, default=10)
     train_parser.add_argument("--lr", type=float, default=1e-3)
     train_parser.add_argument("--temperature", type=float, default=1.0)
     train_parser.add_argument("--save-dir", type=str, default=None)
     train_parser.add_argument("--progress-file", type=str, default=None)
+    train_parser.add_argument("--trunk-blocks", type=int, default=3)
 
     # Monitor command
     monitor_parser = subparsers.add_parser("monitor", help="Live TUI dashboard")
@@ -823,6 +843,7 @@ if __name__ == "__main__":
             temperature=args.temperature,
             save_dir=args.save_dir,
             progress_file=args.progress_file,
+            num_trunk_blocks=args.trunk_blocks,
         )
     elif args.command == "monitor":
         train_monitor(

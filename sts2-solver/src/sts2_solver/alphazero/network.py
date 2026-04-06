@@ -230,9 +230,14 @@ class STS2Network(nn.Module):
         # --- Trunk MLP ---
         trunk_input_dim = cfg.state_dim
         self.trunk_in = nn.Linear(trunk_input_dim, 256)
-        self.trunk_hidden = nn.Linear(256, 256)
-        self.trunk_norm = nn.LayerNorm(256)
-        self.trunk_dropout = nn.Dropout(0.1)
+        self.trunk_blocks = nn.ModuleList([
+            nn.ModuleDict({
+                'linear': nn.Linear(256, 256),
+                'norm': nn.LayerNorm(256),
+                'dropout': nn.Dropout(0.1),
+            })
+            for _ in range(cfg.num_trunk_blocks)
+        ])
 
         # --- Value head ---
         self.value_head = nn.Sequential(
@@ -350,10 +355,11 @@ class STS2Network(nn.Module):
             act_vec, boss_vec, path_vec,
         ], dim=-1)
 
-        # Trunk with residual + layer norm
+        # Trunk with residual blocks
         h = F.relu(self.trunk_in(state_vec))
-        h = h + self.trunk_dropout(F.relu(self.trunk_hidden(h)))
-        h = self.trunk_norm(h)
+        for block in self.trunk_blocks:
+            h = h + block['dropout'](F.relu(block['linear'](h)))
+            h = block['norm'](h)
         return h
 
     def forward(
