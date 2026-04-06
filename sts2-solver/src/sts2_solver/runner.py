@@ -889,6 +889,7 @@ class Runner:
             self._turn_cards_played = []
             self._turn_targets_chosen = []
             self._turn_start_gs = gs
+            self._potions_used_this_turn = set()
         cards_played = self._turn_cards_played
         targets_chosen = self._turn_targets_chosen
         turn_start_gs = self._turn_start_gs
@@ -920,6 +921,10 @@ class Runner:
                 if skills_this_turn > 0:
                     sim_state.player.powers["_skills_played"] = skills_this_turn
                 sim_state.attacks_played_this_turn = attacks_this_turn
+                # Clear potions already used this turn
+                for pidx in self._potions_used_this_turn:
+                    if pidx < len(sim_state.player.potions):
+                        sim_state.player.potions[pidx] = {}
                 hand = list(sim_state.player.hand)
                 t0 = time.perf_counter()
                 first_action, policy, root_value = self._mcts.search(
@@ -952,6 +957,9 @@ class Runner:
 
             # Handle potion usage from MCTS
             if first_action.action_type == "use_potion":
+                # Skip if already used this turn (prevents retry loops)
+                if first_action.potion_idx in self._potions_used_this_turn:
+                    break
                 pot_name = "potion"
                 potions_raw = (gs.get("run") or {}).get("potions", [])
                 for p in potions_raw:
@@ -961,6 +969,7 @@ class Runner:
                 label = f"Use {pot_name} (slot {first_action.potion_idx})"
                 cards_played.append(label)
                 targets_chosen.append(first_action.target_idx)
+                self._potions_used_this_turn.add(first_action.potion_idx)
 
                 if not self.dry_run:
                     mcp_action = action_to_mcp(first_action)
