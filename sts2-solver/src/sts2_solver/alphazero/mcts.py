@@ -241,7 +241,7 @@ class MCTS:
         # preventing it from overvaluing block plays.
         from .state_tensor import encode_state, encode_actions
 
-        with torch.no_grad():
+        with torch.inference_mode():
             # Policy from current state
             state_tensors = encode_state(node.state, self.vocabs, self.config)
             state_tensors = {k: v.to(self.device) for k, v in state_tensors.items()}
@@ -284,7 +284,6 @@ class MCTS:
                 eot_tensors = encode_state(eot, self.vocabs, self.config)
                 eot_tensors = {k: v.to(self.device) for k, v in eot_tensors.items()}
                 eot_hidden = self.network.encode_state(**eot_tensors)
-                # Use value_head directly (no policy needed for evaluation)
                 value = self.network.value_head(eot_hidden).item()
 
         # Create child nodes lazily — state computed on first visit
