@@ -93,7 +93,7 @@
   },
   "BYGONE_EFFIGY": {
     "monster_id": "BYGONE_EFFIGY",
-    "n_combats": 19,
+    "n_combats": 20,
     "fixed_opening": [],
     "moves": {
       "None": {
@@ -113,8 +113,8 @@
       }
     },
     "start_weights": {
-      "None": 0.842,
-      "Buff": 0.158
+      "None": 0.8,
+      "Buff": 0.2
     },
     "transitions": {
       "None": {
@@ -122,8 +122,8 @@
         "None": 0.304
       },
       "Buff": {
-        "Buff": 0.321,
-        "Attack_25": 0.679
+        "Buff": 0.31,
+        "Attack_25": 0.69
       },
       "Attack_25": {
         "Attack_25": 1.0
@@ -680,7 +680,7 @@
   },
   "FUZZY_WURM_CRAWLER": {
     "monster_id": "FUZZY_WURM_CRAWLER",
-    "n_combats": 94,
+    "n_combats": 96,
     "fixed_opening": [
       {
         "type": "Attack",
@@ -731,10 +731,10 @@
       }
     },
     "start_weights": {
-      "Attack_4": 0.436,
-      "Buff": 0.489,
+      "Attack_4": 0.427,
+      "Buff": 0.479,
       "Attack_0": 0.021,
-      "Attack_11": 0.053
+      "Attack_11": 0.073
     },
     "transitions": {
       "Attack_4": {
@@ -748,9 +748,9 @@
         "Attack_8": 0.005
       },
       "Attack_11": {
-        "Attack_11": 0.676,
-        "Buff": 0.311,
-        "Attack_5": 0.005,
+        "Attack_11": 0.673,
+        "Buff": 0.314,
+        "Attack_5": 0.004,
         "Attack_8": 0.009
       },
       "Attack_18": {
@@ -895,7 +895,7 @@
   },
   "LEAF_SLIME_S": {
     "monster_id": "LEAF_SLIME_S",
-    "n_combats": 88,
+    "n_combats": 90,
     "fixed_opening": [],
     "moves": {
       "Attack_3": {
@@ -920,18 +920,18 @@
       }
     },
     "start_weights": {
-      "Attack_3": 0.489,
-      "StatusCard": 0.511
+      "Attack_3": 0.478,
+      "StatusCard": 0.522
     },
     "transitions": {
       "Attack_3": {
-        "Attack_3": 0.335,
-        "StatusCard": 0.658,
+        "Attack_3": 0.329,
+        "StatusCard": 0.665,
         "Attack_0": 0.006
       },
       "StatusCard": {
-        "StatusCard": 0.347,
-        "Attack_3": 0.647,
+        "StatusCard": 0.339,
+        "Attack_3": 0.655,
         "Attack_2": 0.006
       },
       "Attack_0": {
@@ -1012,7 +1012,7 @@
   },
   "NIBBIT": {
     "monster_id": "NIBBIT",
-    "n_combats": 131,
+    "n_combats": 132,
     "fixed_opening": [],
     "moves": {
       "Attack_12": {
@@ -1072,26 +1072,26 @@
       }
     },
     "start_weights": {
-      "Attack_12": 0.626,
-      "Attack_6": 0.168,
-      "Buff": 0.137,
+      "Attack_12": 0.629,
+      "Attack_6": 0.167,
+      "Buff": 0.136,
       "Attack_10": 0.061,
       "Attack_14": 0.008
     },
     "transitions": {
       "Attack_12": {
-        "Attack_12": 0.366,
-        "Attack_6": 0.618,
+        "Attack_12": 0.364,
+        "Attack_6": 0.621,
         "Buff": 0.008,
         "Attack_4": 0.008
       },
       "Attack_6": {
-        "Buff": 0.712,
-        "Attack_6": 0.288
+        "Buff": 0.714,
+        "Attack_6": 0.286
       },
       "Buff": {
-        "Buff": 0.273,
-        "Attack_14": 0.556,
+        "Buff": 0.272,
+        "Attack_14": 0.558,
         "Attack_16": 0.117,
         "Attack_18": 0.034,
         "Attack_20": 0.005,
@@ -1134,7 +1134,7 @@
   },
   "PHROG_PARASITE": {
     "monster_id": "PHROG_PARASITE",
-    "n_combats": 14,
+    "n_combats": 15,
     "fixed_opening": [
       {
         "type": "StatusCard",
@@ -1160,18 +1160,18 @@
       }
     },
     "start_weights": {
-      "Attack_4x4": 0.571,
-      "StatusCard": 0.429
+      "Attack_4x4": 0.533,
+      "StatusCard": 0.467
     },
     "transitions": {
       "Attack_4x4": {
-        "Attack_4x4": 0.315,
-        "StatusCard": 0.667,
-        "Attack_3x4": 0.019
+        "Attack_4x4": 0.309,
+        "StatusCard": 0.673,
+        "Attack_3x4": 0.018
       },
       "StatusCard": {
-        "Attack_4x4": 0.907,
-        "StatusCard": 0.093
+        "Attack_4x4": 0.911,
+        "StatusCard": 0.089
       },
       "Attack_3x4": {
         "StatusCard": 1.0
@@ -1180,7 +1180,7 @@
   },
   "SHRINKER_BEETLE": {
     "monster_id": "SHRINKER_BEETLE",
-    "n_combats": 94,
+    "n_combats": 95,
     "fixed_opening": [
       {
         "type": "None",
@@ -1216,10 +1216,10 @@
       }
     },
     "start_weights": {
-      "None": 0.538,
-      "Attack_7": 0.419,
-      "Attack_5": 0.022,
-      "Attack_13": 0.022
+      "None": 0.532,
+      "Attack_7": 0.415,
+      "Attack_5": 0.021,
+      "Attack_13": 0.032
     },
     "transitions": {
       "None": {
@@ -1427,7 +1427,7 @@
   },
   "TWIG_SLIME_M": {
     "monster_id": "TWIG_SLIME_M",
-    "n_combats": 63,
+    "n_combats": 65,
     "fixed_opening": [
       {
         "type": "StatusCard",
@@ -1458,13 +1458,13 @@
     },
     "transitions": {
       "StatusCard": {
-        "Attack_11": 0.737,
-        "StatusCard": 0.242,
+        "Attack_11": 0.74,
+        "StatusCard": 0.24,
         "Attack_16": 0.02
       },
       "Attack_11": {
-        "Attack_11": 0.532,
-        "StatusCard": 0.448,
+        "Attack_11": 0.538,
+        "StatusCard": 0.442,
         "Attack_16": 0.019
       },
       "Attack_16": {
@@ -1476,7 +1476,7 @@
   },
   "TWIG_SLIME_S": {
     "monster_id": "TWIG_SLIME_S",
-    "n_combats": 89,
+    "n_combats": 90,
     "fixed_opening": [
       {
         "type": "Attack",
@@ -1603,7 +1603,7 @@
   },
   "WRIGGLER": {
     "monster_id": "WRIGGLER",
-    "n_combats": 62,
+    "n_combats": 66,
     "fixed_opening": [],
     "moves": {
       "Attack_6": {
@@ -1648,24 +1648,24 @@
       }
     },
     "start_weights": {
-      "Attack_6": 0.355,
-      "Buff": 0.403,
-      "None": 0.194,
-      "Attack_8": 0.048
+      "Attack_6": 0.364,
+      "Buff": 0.409,
+      "None": 0.182,
+      "Attack_8": 0.045
     },
     "transitions": {
       "Attack_6": {
-        "Attack_6": 0.294,
-        "Buff": 0.559,
-        "Attack_8": 0.147
+        "Attack_6": 0.278,
+        "Buff": 0.583,
+        "Attack_8": 0.139
       },
       "Buff": {
-        "Buff": 0.337,
-        "Attack_8": 0.326,
-        "Attack_10": 0.242,
-        "Attack_12": 0.074,
-        "Attack_14": 0.011,
-        "Attack_16": 0.011
+        "Buff": 0.343,
+        "Attack_8": 0.324,
+        "Attack_10": 0.245,
+        "Attack_12": 0.069,
+        "Attack_14": 0.01,
+        "Attack_16": 0.01
       },
       "None": {
         "Attack_6": 0.3,
@@ -1673,14 +1673,14 @@
         "None": 0.4
       },
       "Attack_8": {
-        "Attack_8": 0.325,
-        "Buff": 0.6,
-        "Attack_10": 0.075
+        "Attack_8": 0.333,
+        "Buff": 0.595,
+        "Attack_10": 0.071
       },
       "Attack_10": {
-        "Attack_10": 0.19,
-        "Buff": 0.714,
-        "Attack_12": 0.095
+        "Attack_10": 0.227,
+        "Buff": 0.682,
+        "Attack_12": 0.091
       },
       "Attack_12": {
         "Buff": 0.6,
@@ -1926,7 +1926,7 @@
   },
   "CALCIFIED_CULTIST": {
     "monster_id": "CALCIFIED_CULTIST",
-    "n_combats": 5,
+    "n_combats": 6,
     "fixed_opening": [],
     "moves": {
       "Buff": {
@@ -1943,28 +1943,34 @@
         "type": "Attack",
         "damage": 11,
         "hits": 1
+      },
+      "Attack_13": {
+        "type": "Attack",
+        "damage": 13,
+        "hits": 1
       }
     },
     "start_weights": {
-      "Buff": 0.4,
-      "Attack_9": 0.6
+      "Buff": 0.333,
+      "Attack_9": 0.667
     },
     "transitions": {
       "Buff": {
         "Attack_9": 1.0
       },
       "Attack_9": {
-        "Attack_11": 0.833,
-        "Attack_9": 0.167
+        "Attack_11": 0.857,
+        "Attack_9": 0.143
       },
       "Attack_11": {
-        "Attack_9": 1.0
+        "Attack_13": 0.5,
+        "Attack_9": 0.5
       }
     }
   },
   "CORPSE_SLUG": {
     "monster_id": "CORPSE_SLUG",
-    "n_combats": 43,
+    "n_combats": 47,
     "fixed_opening": [],
     "moves": {
       "Attack_3x2": {
@@ -2009,16 +2015,17 @@
       }
     },
     "start_weights": {
-      "Attack_3x2": 0.326,
-      "Attack_8": 0.395,
-      "Debuff": 0.279
+      "Attack_3x2": 0.319,
+      "Attack_8": 0.383,
+      "Debuff": 0.277,
+      "Attack_7x2": 0.021
     },
     "transitions": {
       "Attack_3x2": {
-        "Attack_3x2": 0.222,
-        "Attack_8": 0.444,
-        "Attack_7x2": 0.074,
-        "Attack_12": 0.259
+        "Attack_3x2": 0.214,
+        "Attack_8": 0.429,
+        "Attack_7x2": 0.071,
+        "Attack_12": 0.286
       },
       "Attack_8": {
         "Attack_8": 0.095,
@@ -2026,20 +2033,21 @@
         "None": 0.048
       },
       "Debuff": {
-        "Debuff": 0.289,
-        "Attack_3x2": 0.342,
-        "Attack_7x2": 0.342,
-        "None": 0.026
+        "Debuff": 0.275,
+        "Attack_3x2": 0.325,
+        "Attack_7x2": 0.35,
+        "None": 0.025,
+        "Attack_11x2": 0.025
       },
       "Attack_7x2": {
-        "Attack_12": 0.615,
-        "Attack_11x2": 0.077,
-        "Attack_7x2": 0.231,
-        "Attack_16": 0.077
+        "Attack_12": 0.667,
+        "Attack_11x2": 0.067,
+        "Attack_7x2": 0.2,
+        "Attack_16": 0.067
       },
       "Attack_12": {
-        "Attack_12": 0.2,
-        "Debuff": 0.8
+        "Attack_12": 0.125,
+        "Debuff": 0.875
       },
       "None": {
         "Attack_7x2": 0.5,
@@ -2052,7 +2060,7 @@
   },
   "DAMP_CULTIST": {
     "monster_id": "DAMP_CULTIST",
-    "n_combats": 4,
+    "n_combats": 5,
     "fixed_opening": [],
     "moves": {
       "Buff": {
@@ -2107,27 +2115,27 @@
       }
     },
     "start_weights": {
-      "Buff": 0.25,
-      "Attack_1": 0.75
+      "Buff": 0.2,
+      "Attack_1": 0.8
     },
     "transitions": {
       "Buff": {
         "Attack_1": 1.0
       },
       "Attack_1": {
-        "Attack_1": 0.25,
-        "Attack_6": 0.75
+        "Attack_1": 0.2,
+        "Attack_6": 0.8
       },
       "Attack_6": {
         "Attack_11": 1.0
       },
       "Attack_11": {
-        "Attack_11": 0.4,
-        "Attack_16": 0.6
+        "Attack_11": 0.333,
+        "Attack_16": 0.667
       },
       "Attack_16": {
-        "Attack_16": 0.25,
-        "Attack_21": 0.75
+        "Attack_16": 0.2,
+        "Attack_21": 0.8
       },
       "Attack_21": {
         "Attack_26": 1.0
@@ -2426,7 +2434,7 @@
   },
   "SEAPUNK": {
     "monster_id": "SEAPUNK",
-    "n_combats": 15,
+    "n_combats": 17,
     "fixed_opening": [
       {
         "type": "Attack",
@@ -2467,10 +2475,10 @@
       }
     },
     "start_weights": {
-      "Attack_11": 0.286,
-      "Attack_2x4": 0.286,
-      "Attack_12": 0.071,
-      "Buff": 0.357
+      "Attack_11": 0.25,
+      "Attack_2x4": 0.25,
+      "Attack_12": 0.062,
+      "Buff": 0.438
     },
     "transitions": {
       "Attack_11": {
@@ -2481,8 +2489,8 @@
         "Attack_2x4": 0.111
       },
       "Buff": {
-        "Attack_12": 0.875,
-        "Buff": 0.125
+        "Attack_12": 0.9,
+        "Buff": 0.1
       },
       "Attack_12": {
         "Attack_3x4": 1.0
@@ -2495,7 +2503,7 @@
   },
   "SEWER_CLAM": {
     "monster_id": "SEWER_CLAM",
-    "n_combats": 3,
+    "n_combats": 4,
     "fixed_opening": [],
     "moves": {
       "Attack_10": {
@@ -2517,11 +2525,26 @@
         "type": "Attack",
         "damage": 18,
         "hits": 1
+      },
+      "Attack_22": {
+        "type": "Attack",
+        "damage": 22,
+        "hits": 1
+      },
+      "Attack_26": {
+        "type": "Attack",
+        "damage": 26,
+        "hits": 1
+      },
+      "Attack_30": {
+        "type": "Attack",
+        "damage": 30,
+        "hits": 1
       }
     },
     "start_weights": {
-      "Attack_10": 0.333,
-      "Buff": 0.667
+      "Attack_10": 0.25,
+      "Buff": 0.75
     },
     "transitions": {
       "Attack_10": {
@@ -2529,14 +2552,23 @@
         "Buff": 0.5
       },
       "Buff": {
-        "Attack_14": 0.5,
-        "Buff": 0.167,
-        "Attack_18": 0.333
+        "Attack_14": 0.364,
+        "Buff": 0.091,
+        "Attack_18": 0.273,
+        "Attack_22": 0.091,
+        "Attack_26": 0.091,
+        "Attack_30": 0.091
       },
       "Attack_14": {
         "Buff": 1.0
       },
       "Attack_18": {
+        "Buff": 1.0
+      },
+      "Attack_22": {
+        "Buff": 1.0
+      },
+      "Attack_26": {
         "Buff": 1.0
       }
     }
@@ -2625,7 +2657,7 @@
   },
   "SLUDGE_SPINNER": {
     "monster_id": "SLUDGE_SPINNER",
-    "n_combats": 17,
+    "n_combats": 20,
     "fixed_opening": [
       {
         "type": "Attack",
@@ -2671,8 +2703,8 @@
       }
     },
     "start_weights": {
-      "Attack_11": 0.75,
-      "Attack_6": 0.25
+      "Attack_11": 0.6,
+      "Attack_6": 0.4
     },
     "transitions": {
       "Attack_11": {
@@ -2693,7 +2725,7 @@
   },
   "TERROR_EEL": {
     "monster_id": "TERROR_EEL",
-    "n_combats": 4,
+    "n_combats": 5,
     "fixed_opening": [
       {
         "type": "Attack",
@@ -2746,11 +2778,22 @@
         "type": "Attack",
         "damage": 25,
         "hits": 1
+      },
+      "Attack_2x3": {
+        "type": "Attack",
+        "damage": 2,
+        "hits": 3
+      },
+      "Attack_18": {
+        "type": "Attack",
+        "damage": 18,
+        "hits": 1
       }
     },
     "start_weights": {
-      "Attack_24": 0.667,
-      "Debuff": 0.333
+      "Attack_24": 0.5,
+      "Debuff": 0.25,
+      "Attack_18": 0.25
     },
     "transitions": {
       "Attack_24": {
@@ -2758,17 +2801,20 @@
         "Attack_3x3": 0.5
       },
       "Attack_3x3": {
-        "Attack_24": 0.5,
-        "Debuff": 0.5
+        "Attack_24": 0.333,
+        "Debuff": 0.667
       },
       "Debuff": {
         "Attack_25": 1.0
+      },
+      "Attack_18": {
+        "Attack_3x3": 1.0
       }
     }
   },
   "TOADPOLE": {
     "monster_id": "TOADPOLE",
-    "n_combats": 28,
+    "n_combats": 33,
     "fixed_opening": [],
     "moves": {
       "Buff": {
@@ -2788,29 +2834,29 @@
       }
     },
     "start_weights": {
-      "Buff": 0.5,
-      "Attack_7": 0.357,
-      "Attack_3x3": 0.143
+      "Buff": 0.515,
+      "Attack_7": 0.333,
+      "Attack_3x3": 0.152
     },
     "transitions": {
       "Buff": {
-        "Attack_3x3": 0.72,
-        "Buff": 0.28
+        "Attack_3x3": 0.741,
+        "Buff": 0.259
       },
       "Attack_3x3": {
         "Attack_3x3": 0.5,
-        "Attack_7": 0.455,
-        "Buff": 0.045
+        "Attack_7": 0.458,
+        "Buff": 0.042
       },
       "Attack_7": {
-        "Buff": 0.867,
-        "Attack_7": 0.133
+        "Buff": 0.833,
+        "Attack_7": 0.167
       }
     }
   },
   "TWO-TAILED_RAT": {
     "monster_id": "TWO-TAILED_RAT",
-    "n_combats": 9,
+    "n_combats": 11,
     "fixed_opening": [],
     "moves": {
       "Debuff": {
@@ -2835,9 +2881,9 @@
       }
     },
     "start_weights": {
-      "Debuff": 0.556,
-      "Attack_8": 0.222,
-      "Attack_6": 0.222
+      "Debuff": 0.455,
+      "Attack_8": 0.182,
+      "Attack_6": 0.364
     },
     "transitions": {
       "Debuff": {
@@ -2846,10 +2892,10 @@
         "None": 0.143
       },
       "Attack_6": {
-        "Attack_6": 0.444,
-        "None": 0.111,
-        "Debuff": 0.333,
-        "Attack_8": 0.111
+        "Attack_6": 0.4,
+        "None": 0.2,
+        "Debuff": 0.3,
+        "Attack_8": 0.1
       },
       "None": {
         "Attack_8": 0.5,
@@ -2863,5 +2909,176 @@
         "Attack_6": 0.273
       }
     }
+  },
+  "FOSSIL_STALKER": {
+    "monster_id": "FOSSIL_STALKER",
+    "n_combats": 3,
+    "fixed_opening": [
+      {
+        "type": "Attack",
+        "damage": 12,
+        "hits": 1
+      },
+      {
+        "type": "Attack",
+        "damage": 9,
+        "hits": 2
+      },
+      {
+        "type": "Attack",
+        "damage": 12,
+        "hits": 1
+      },
+      {
+        "type": "Attack",
+        "damage": 12,
+        "hits": 1
+      }
+    ],
+    "moves": {
+      "Attack_12": {
+        "type": "Attack",
+        "damage": 12,
+        "hits": 1
+      },
+      "Attack_6x2": {
+        "type": "Attack",
+        "damage": 6,
+        "hits": 2
+      },
+      "Attack_12x2": {
+        "type": "Attack",
+        "damage": 12,
+        "hits": 2
+      },
+      "Attack_9x2": {
+        "type": "Attack",
+        "damage": 9,
+        "hits": 2
+      },
+      "Attack_21": {
+        "type": "Attack",
+        "damage": 21,
+        "hits": 1
+      },
+      "Attack_24": {
+        "type": "Attack",
+        "damage": 24,
+        "hits": 1
+      },
+      "Attack_15": {
+        "type": "Attack",
+        "damage": 15,
+        "hits": 1
+      }
+    },
+    "start_weights": {
+      "Attack_6x2": 1.0
+    },
+    "transitions": {
+      "Attack_6x2": {
+        "Attack_12x2": 1.0
+      }
+    }
+  },
+  "SOUL_FYSH": {
+    "monster_id": "SOUL_FYSH",
+    "n_combats": 3,
+    "fixed_opening": [
+      {
+        "type": "Attack",
+        "damage": 16,
+        "hits": 1
+      },
+      {
+        "type": "Attack",
+        "damage": 7,
+        "hits": 1
+      },
+      {
+        "type": "Buff",
+        "damage": null,
+        "hits": 1
+      },
+      {
+        "type": "Attack",
+        "damage": 11,
+        "hits": 1
+      },
+      {
+        "type": "StatusCard",
+        "damage": null,
+        "hits": 1
+      },
+      {
+        "type": "Attack",
+        "damage": 24,
+        "hits": 1
+      },
+      {
+        "type": "Attack",
+        "damage": 10,
+        "hits": 1
+      },
+      {
+        "type": "Buff",
+        "damage": null,
+        "hits": 1
+      },
+      {
+        "type": "Attack",
+        "damage": 11,
+        "hits": 1
+      },
+      {
+        "type": "StatusCard",
+        "damage": null,
+        "hits": 1
+      },
+      {
+        "type": "Attack",
+        "damage": 24,
+        "hits": 1
+      }
+    ],
+    "moves": {
+      "Attack_16": {
+        "type": "Attack",
+        "damage": 16,
+        "hits": 1
+      },
+      "Attack_7": {
+        "type": "Attack",
+        "damage": 7,
+        "hits": 1
+      },
+      "Buff": {
+        "type": "Buff",
+        "damage": null,
+        "hits": 1
+      },
+      "Attack_11": {
+        "type": "Attack",
+        "damage": 11,
+        "hits": 1
+      },
+      "StatusCard": {
+        "type": "StatusCard",
+        "damage": null,
+        "hits": 1
+      },
+      "Attack_24": {
+        "type": "Attack",
+        "damage": 24,
+        "hits": 1
+      },
+      "Attack_10": {
+        "type": "Attack",
+        "damage": 10,
+        "hits": 1
+      }
+    },
+    "start_weights": {},
+    "transitions": {}
   }
 }

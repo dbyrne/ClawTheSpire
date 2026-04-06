@@ -24,6 +24,25 @@
         },
         "n_offered": 4,
         "n_chosen": 4
+      },
+      {
+        "title": "Linger",
+        "description": "Gain 2 Max HP. Take 3 damage.",
+        "option_type": 15,
+        "effects": {
+          "max_hp_delta": 2,
+          "hp_delta": -3
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Exit Baths",
+        "description": "",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
       }
     ]
   },
@@ -912,6 +931,45 @@
         },
         "n_offered": 6,
         "n_chosen": 6
+      }
+    ]
+  },
+  "WATERLOGGED_SCRIPTORIUM": {
+    "event_id": "WATERLOGGED_SCRIPTORIUM",
+    "event_name": "Waterlogged Scriptorium",
+    "n_observations": 0,
+    "options": [
+      {
+        "title": "Bloody Ink",
+        "description": "Gain 6 Max HP.",
+        "option_type": 15,
+        "effects": {
+          "max_hp_delta": 6
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Tentacle Quill",
+        "description": "Pay 65 Gold. Enchant a card with Steady.",
+        "option_type": 17,
+        "effects": {
+          "gold_delta": -65,
+          "card_upgrade": 1
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Prickly Sponge",
+        "description": "Pay 155 Gold. Enchant 2 cards with Steady.",
+        "option_type": 17,
+        "effects": {
+          "gold_delta": -155,
+          "card_upgrade": 2
+        },
+        "n_offered": 0,
+        "n_chosen": 0
       }
     ]
   },
