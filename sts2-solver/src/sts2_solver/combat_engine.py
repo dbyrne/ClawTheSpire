@@ -357,7 +357,9 @@ def start_turn(state: CombatState) -> None:
 
     # Remove enemy block and reset per-turn triggers
     for enemy in state.enemies:
-        enemy.block = 0
+        # Plating: block resets to Plating amount each turn
+        plating = enemy.powers.get("Plating", 0)
+        enemy.block = plating
         enemy.powers.pop("_skittish_triggered", None)
         enemy.powers.pop("_shell_damage_taken", None)
 

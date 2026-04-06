@@ -125,13 +125,14 @@ UNDERDOCKS_WAVE_POOL: list[list[str]] = [
 
 
 def is_gauntlet_encounter(encounter_id: str) -> bool:
-    """Check if an encounter is an Underdocks gauntlet (multi-wave)."""
-    _ensure_data_loaded()
-    enc = _ENCOUNTERS_BY_ID.get(encounter_id, {})
-    if enc.get("act") != "Underdocks":
-        return False
-    room_type = (enc.get("room_type") or "").lower()
-    return room_type == "monster"
+    """Check if an encounter is a gauntlet (multi-wave).
+
+    Gauntlets are extremely rare in the real game. For now, always
+    return False — standard Underdocks combats are single-enemy fights,
+    same as Overgrowth. Gauntlet support can be re-added when we have
+    reliable data on when they actually occur.
+    """
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -557,6 +558,19 @@ def _match_damage(move_name: str, move_id: str, damage_values: dict) -> int | No
     return None
 
 
+_INNATE_POWERS: dict[str, dict[str, int]] = {
+    "BYGONE_EFFIGY": {"Slow": 1},
+    "BYRDONIS": {"Territorial": 1},
+    "CORPSE_SLUG": {"Ravenous": 4},
+    "CUBEX_CONSTRUCT": {"Artifact": 1},
+    "INKLET": {"Slippery": 1},
+    "PHROG_PARASITE": {"Infested": 4},
+    "PUNCH_CONSTRUCT": {"Artifact": 1},
+    "SEWER_CLAM": {"Plating": 8},
+    "VANTOM": {"Slippery": 9},
+}
+
+
 def _spawn_enemy(monster_id: str) -> EnemyState:
     """Create an EnemyState from monster data."""
     _ensure_data_loaded()
@@ -564,11 +578,15 @@ def _spawn_enemy(monster_id: str) -> EnemyState:
     min_hp = monster.get("min_hp") or 20
     max_hp = monster.get("max_hp") or min_hp
     hp = random.randint(min_hp, max_hp) if min_hp < max_hp else min_hp
+    powers = dict(_INNATE_POWERS.get(monster_id, {}))
+    block = powers.get("Plating", 0)
     return EnemyState(
         id=monster_id,
         name=monster.get("name", monster_id),
         hp=hp,
         max_hp=hp,
+        block=block,
+        powers=powers,
     )
 
 
@@ -870,6 +888,52 @@ def _pick_real_map(rng: random.Random, act_id: str | None = None) -> dict | None
         if filtered:
             return rng.choice(filtered)
     return rng.choice(_MAP_POOL)
+
+
+# ---------------------------------------------------------------------------
+# Encounter pool (real encounters from game logs)
+# ---------------------------------------------------------------------------
+
+_ENCOUNTER_POOL: list[dict] | None = None
+_ENCOUNTER_POOL_BY_FLOOR: dict[int, list[dict]] | None = None
+
+
+def _pick_encounter_from_pool(
+    floor: int, act_id: str, rng: random.Random,
+) -> dict | None:
+    """Pick a real encounter from the pool for this floor and act.
+
+    Returns an encounter dict with 'waves' (list of enemy ID lists),
+    or None if no pool data exists for this floor/act combination.
+    """
+    global _ENCOUNTER_POOL, _ENCOUNTER_POOL_BY_FLOOR
+    if _ENCOUNTER_POOL is None:
+        pool_path = Path(__file__).resolve().parent / "encounter_pool.json"
+        if pool_path.exists():
+            import json as _json
+            with open(pool_path, encoding="utf-8") as f:
+                _ENCOUNTER_POOL = _json.load(f)
+            # Index by (floor, act_id)
+            from collections import defaultdict as _dd
+            _ENCOUNTER_POOL_BY_FLOOR = _dd(list)
+            for enc in _ENCOUNTER_POOL:
+                key = (enc["floor"], enc.get("act_id", "UNKNOWN"))
+                _ENCOUNTER_POOL_BY_FLOOR[key].append(enc)
+        else:
+            _ENCOUNTER_POOL = []
+            _ENCOUNTER_POOL_BY_FLOOR = {}
+
+    # Try exact (floor, act_id) match first
+    candidates = _ENCOUNTER_POOL_BY_FLOOR.get((floor, act_id), [])
+    if not candidates:
+        # Fall back to any act for this floor
+        candidates = [
+            e for e in _ENCOUNTER_POOL
+            if e["floor"] == floor
+        ]
+    if not candidates:
+        return None
+    return rng.choice(candidates)
 
 
 def _walk_real_map(map_data: dict, rng: random.Random) -> list:
@@ -1553,7 +1617,8 @@ class RunStrategy(Protocol):
                      encounter_id: str, card_db, rng, potions: list[dict],
                      relics: frozenset[str],
                      gauntlet_waves: int = 0,
-                     wave_pool: list[list[str]] | None = None) -> StrategyCombatResult: ...
+                     wave_pool: list[list[str]] | None = None,
+                     wave_list: list[list[str]] | None = None) -> StrategyCombatResult: ...
 
     def pick_card_reward(self, offered: list, deck: list, hp: int, max_hp: int,
                          floor: int, card_db, pools: dict,
@@ -1785,18 +1850,10 @@ def run_act1(
                 continue
 
             potions_before = len([p for p in potions if p])
-            # Underdocks normal/weak encounters are gauntlets with random waves
-            gauntlet_kw = {}
-            if is_gauntlet_encounter(enc_id):
-                gauntlet_kw = {
-                    "gauntlet_waves": rng.randint(2, 5),
-                    "wave_pool": UNDERDOCKS_WAVE_POOL,
-                }
             combat = strategy.fight_combat(
                 deck=deck, hp=hp, max_hp=max_hp, max_energy=max_energy,
                 encounter_id=enc_id, card_db=card_db, rng=rng,
                 potions=potions, relics=frozenset(relics),
-                **gauntlet_kw,
             )
             potions = combat.potions_after
             potions_after = len([p for p in potions if p])

@@ -528,9 +528,9 @@ def simulate_turn(
     # captured AFTER clearing.  The snapshot's enemy block comes from the
     # UPCOMING intent being pre-applied (the game shows block the enemy
     # will gain from whatever they're about to do next turn).
-    # We validate block separately using the next snapshot's intent info.
+    # Plating: block resets to Plating amount, not 0.
     for enemy in s.enemies:
-        enemy.block = 0
+        enemy.block = enemy.powers.get("Plating", 0)
 
     return s
 

@@ -136,7 +136,14 @@ def deal_damage(state: CombatState, target_idx: int, base_damage: int, hits: int
             enemy.block += 1
             enemy.powers["_skittish_triggered"] = 1
 
+        had_block = enemy.block > 0
         per_hit = apply_block(enemy, per_hit)
+        # Plating: lose 1 stack when hit through block
+        plating = enemy.powers.get("Plating", 0)
+        if plating > 0 and had_block and per_hit > 0:
+            enemy.powers["Plating"] = plating - 1
+            if enemy.powers["Plating"] <= 0:
+                del enemy.powers["Plating"]
         # Slippery: caps damage to 1 per hit while stacks remain
         slippery = enemy.powers.get("Slippery", 0)
         if slippery > 0 and per_hit > 0:
@@ -190,19 +197,34 @@ def gain_block(state: CombatState, base_block: int) -> None:
     state.player.block += amount
 
 
+_DEBUFFS = {"Weak", "Vulnerable", "Poison", "Frail"}
+
+
+def _apply_power_single(enemy: EnemyState, power: str, amount: int) -> None:
+    """Apply a power to a single enemy, respecting Artifact."""
+    if power in _DEBUFFS:
+        artifact = enemy.powers.get("Artifact", 0)
+        if artifact > 0:
+            enemy.powers["Artifact"] = artifact - 1
+            if enemy.powers["Artifact"] <= 0:
+                del enemy.powers["Artifact"]
+            return  # Debuff blocked
+    enemy.powers[power] = enemy.powers.get(power, 0) + amount
+
+
 def apply_power_to_enemy(state: CombatState, target_idx: int, power: str, amount: int) -> None:
     """Apply a power/debuff to an enemy."""
     enemy = state.enemies[target_idx]
     if not enemy.is_alive:
         return
-    enemy.powers[power] = enemy.powers.get(power, 0) + amount
+    _apply_power_single(enemy, power, amount)
 
 
 def apply_power_to_all_enemies(state: CombatState, power: str, amount: int) -> None:
     """Apply a power/debuff to all living enemies."""
     for enemy in state.enemies:
         if enemy.is_alive:
-            enemy.powers[power] = enemy.powers.get(power, 0) + amount
+            _apply_power_single(enemy, power, amount)
 
 
 def apply_power_to_player(state: CombatState, power: str, amount: int) -> None:
