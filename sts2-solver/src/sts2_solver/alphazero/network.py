@@ -96,7 +96,7 @@ class CardSetEncoder(nn.Module):
 class SetEncoder(nn.Module):
     """Encode a variable-size set via self-attention + mean pooling.
 
-    Reusable for relics, map paths, or any small embedding set.
+    Permutation-invariant — suitable for relics and other unordered sets.
     """
 
     def __init__(self, input_dim: int, output_dim: int, num_heads: int = 1):
@@ -116,6 +116,48 @@ class SetEncoder(nn.Module):
             (batch, output_dim)
         """
         x = self.project_in(embeds)
+        valid = (~mask).unsqueeze(-1).float()
+        num_valid = valid.sum(dim=1)
+        if (num_valid == 0).all():
+            return torch.zeros(x.shape[0], self.output_dim, device=x.device)
+        attn_out, _ = self.attention(x, x, x, key_padding_mask=mask)
+        x = self.layer_norm(x + attn_out)
+        pooled = (x * valid).sum(dim=1) / num_valid.clamp(min=1)
+        return pooled
+
+
+class SequenceEncoder(nn.Module):
+    """Encode an ordered sequence via positional embeddings + attention + mean pooling.
+
+    Unlike SetEncoder, this preserves ordering via learned positional
+    embeddings — "Elite at position 0" is different from "Elite at position 5".
+    Used for map paths where BFS order (distance from current node) matters.
+    """
+
+    def __init__(self, input_dim: int, output_dim: int, max_length: int,
+                 num_heads: int = 1):
+        super().__init__()
+        self.project_in = nn.Linear(input_dim, output_dim)
+        self.pos_embed = nn.Embedding(max_length, output_dim)
+        self.attention = nn.MultiheadAttention(
+            embed_dim=output_dim, num_heads=num_heads, batch_first=True)
+        self.layer_norm = nn.LayerNorm(output_dim)
+        self.output_dim = output_dim
+
+    def forward(self, embeds: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            embeds: (batch, seq_len, input_dim)
+            mask: (batch, seq_len) — True for padded positions
+        Returns:
+            (batch, output_dim)
+        """
+        x = self.project_in(embeds)
+        # Add positional embeddings
+        seq_len = x.shape[1]
+        positions = torch.arange(seq_len, device=x.device)
+        x = x + self.pos_embed(positions).unsqueeze(0)
+
         valid = (~mask).unsqueeze(-1).float()
         num_valid = valid.sum(dim=1)
         if (num_valid == 0).all():
@@ -176,9 +218,10 @@ class STS2Network(nn.Module):
         self.relic_encoder = SetEncoder(
             cfg.relic_embed_dim, cfg.relic_projected_dim, cfg.relic_attention_heads)
 
-        # --- Map path encoder (reused for global trunk path + per-option paths) ---
-        self.path_encoder = SetEncoder(
-            cfg.room_type_embed_dim, cfg.path_output_dim, num_heads=1)
+        # --- Map path encoder (ordered — BFS distance from current node matters) ---
+        self.path_encoder = SequenceEncoder(
+            cfg.room_type_embed_dim, cfg.path_output_dim,
+            max_length=cfg.max_path_length, num_heads=1)
 
         # --- Trunk MLP ---
         trunk_input_dim = cfg.state_dim
