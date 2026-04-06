@@ -656,6 +656,7 @@ AUTO_ACTIONS = {
     "open_chest",
     "open_shop_inventory",
     "confirm_selection",
+    "confirm_bundle",
     "choose_capstone_option",
 }
 
