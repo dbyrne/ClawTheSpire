@@ -1251,20 +1251,55 @@ class Runner:
                         except Exception:
                             pass
                     return
-            # Only card rewards left (skipped by network), or nothing claimable — leave
-            leave_action = None
+            # Only card rewards left (skipped by network), or nothing claimable.
+            # NEVER use collect_rewards_and_proceed here — it auto-claims the
+            # card reward the network decided to skip!
+            has_skipped_card = any(
+                self._is_card_reward_item(item) and item.get("claimable", True)
+                for item in reward_items
+            )
             if "proceed" in actions:
-                leave_action = "proceed"
-            elif "collect_rewards_and_proceed" in actions:
-                leave_action = "collect_rewards_and_proceed"
-            if leave_action:
-                self._log_action(f"  [dim]auto: {leave_action} (rewards done)[/dim]")
+                self._log_action("  [dim]auto: proceed (rewards done)[/dim]")
                 if not self.dry_run:
                     try:
-                        self._execute_with_retry(leave_action)
+                        self._execute_with_retry("proceed")
                         self.action_count += 1
                     except Exception:
                         pass
+            elif "collect_rewards_and_proceed" in actions and not has_skipped_card:
+                self._log_action("  [dim]auto: collect_rewards_and_proceed (no card left)[/dim]")
+                if not self.dry_run:
+                    try:
+                        self._execute_with_retry("collect_rewards_and_proceed")
+                        self.action_count += 1
+                    except Exception:
+                        pass
+            elif "collect_rewards_and_proceed" in actions and has_skipped_card:
+                # Card still on screen but network skipped it.
+                # Use skip_reward_cards again to dismiss, then proceed.
+                if "skip_reward_cards" in actions:
+                    self._log_action("  [dim]auto: skip_reward_cards (re-skip after claim)[/dim]")
+                    if not self.dry_run:
+                        try:
+                            self._execute_with_retry("skip_reward_cards")
+                            self.action_count += 1
+                        except Exception:
+                            pass
+                elif "choose_reward_card" in actions:
+                    # Card selection is showing — skip it
+                    self._log_action("  [dim]auto: skip_reward_cards (dismiss card selection)[/dim]")
+                    if not self.dry_run:
+                        try:
+                            self._execute_with_retry("skip_reward_cards")
+                            self.action_count += 1
+                        except Exception:
+                            pass
+                else:
+                    # No way to skip — log error and DON'T claim
+                    self._log_action(
+                        "[bold red]ERROR: Cannot leave reward screen without "
+                        "claiming skipped card. Waiting for screen change.[/bold red]"
+                    )
             return
 
         elif "collect_rewards_and_proceed" in actions and screen_type != "card_reward":
