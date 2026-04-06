@@ -99,17 +99,20 @@ class CardSetEncoder(nn.Module):
 
 
 class SetEncoder(nn.Module):
-    """Encode a variable-size set via self-attention + mean pooling.
+    """Encode a variable-size set via MLP + mean pooling.
 
-    Permutation-invariant — suitable for relics and other unordered sets.
+    Lightweight and permutation-invariant. Each element is projected
+    through a nonlinear layer, then mean-pooled over valid positions.
+    Much faster than attention for small sets (relics: 2-10 items).
     """
 
     def __init__(self, input_dim: int, output_dim: int, num_heads: int = 1):
         super().__init__()
-        self.project_in = nn.Linear(input_dim, output_dim)
-        self.attention = nn.MultiheadAttention(
-            embed_dim=output_dim, num_heads=num_heads, batch_first=True)
-        self.layer_norm = nn.LayerNorm(output_dim)
+        self.mlp = nn.Sequential(
+            nn.Linear(input_dim, output_dim),
+            nn.ReLU(),
+            nn.Linear(output_dim, output_dim),
+        )
         self.output_dim = output_dim
 
     def forward(self, embeds: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
@@ -120,26 +123,19 @@ class SetEncoder(nn.Module):
         Returns:
             (batch, output_dim)
         """
-        x = self.project_in(embeds)
+        x = self.mlp(embeds)
         valid = (~mask).unsqueeze(-1).float()
-        num_valid = valid.sum(dim=1)
-        if (num_valid == 0).all():
-            return torch.zeros(x.shape[0], self.output_dim, device=x.device)
-        attn_out, _ = self.attention(x, x, x, key_padding_mask=mask)
-        # Zero out padded positions before LayerNorm to prevent NaN
-        # (PyTorch MHA can produce NaN for fully-masked rows in mixed batches)
-        attn_out = attn_out.masked_fill(mask.unsqueeze(-1), 0.0)
-        x = self.layer_norm(x + attn_out)
-        pooled = (x * valid).sum(dim=1) / num_valid.clamp(min=1)
+        num_valid = valid.sum(dim=1).clamp(min=1)
+        pooled = (x * valid).sum(dim=1) / num_valid
         return pooled
 
 
 class SequenceEncoder(nn.Module):
-    """Encode an ordered sequence via positional embeddings + attention + mean pooling.
+    """Encode an ordered sequence via positional embeddings + MLP + mean pooling.
 
-    Unlike SetEncoder, this preserves ordering via learned positional
-    embeddings — "Elite at position 0" is different from "Elite at position 5".
-    Used for map paths where BFS order (distance from current node) matters.
+    Preserves ordering via learned positional embeddings — "Elite at
+    position 0" is different from "Elite at position 5". Lightweight
+    alternative to attention for small sequences (map paths: 5-10 items).
 
     Note: BFS frontiers are flattened, so multiple nodes at the same depth
     share the same positional embedding (bag-of-rooms-at-distance-N).
@@ -148,11 +144,12 @@ class SequenceEncoder(nn.Module):
     def __init__(self, input_dim: int, output_dim: int, max_length: int,
                  num_heads: int = 1):
         super().__init__()
-        self.project_in = nn.Linear(input_dim, output_dim)
-        self.pos_embed = nn.Embedding(max_length, output_dim)
-        self.attention = nn.MultiheadAttention(
-            embed_dim=output_dim, num_heads=num_heads, batch_first=True)
-        self.layer_norm = nn.LayerNorm(output_dim)
+        self.pos_embed = nn.Embedding(max_length, input_dim)
+        self.mlp = nn.Sequential(
+            nn.Linear(input_dim, output_dim),
+            nn.ReLU(),
+            nn.Linear(output_dim, output_dim),
+        )
         self.output_dim = output_dim
 
     def forward(self, embeds: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
@@ -163,19 +160,13 @@ class SequenceEncoder(nn.Module):
         Returns:
             (batch, output_dim)
         """
-        x = self.project_in(embeds)
-        seq_len = x.shape[1]
-        positions = torch.arange(seq_len, device=x.device)
-        x = x + self.pos_embed(positions).unsqueeze(0)
-
+        seq_len = embeds.shape[1]
+        positions = torch.arange(seq_len, device=embeds.device)
+        x = embeds + self.pos_embed(positions).unsqueeze(0)
+        x = self.mlp(x)
         valid = (~mask).unsqueeze(-1).float()
-        num_valid = valid.sum(dim=1)
-        if (num_valid == 0).all():
-            return torch.zeros(x.shape[0], self.output_dim, device=x.device)
-        attn_out, _ = self.attention(x, x, x, key_padding_mask=mask)
-        attn_out = attn_out.masked_fill(mask.unsqueeze(-1), 0.0)
-        x = self.layer_norm(x + attn_out)
-        pooled = (x * valid).sum(dim=1) / num_valid.clamp(min=1)
+        num_valid = valid.sum(dim=1).clamp(min=1)
+        pooled = (x * valid).sum(dim=1) / num_valid
         return pooled
 
 
