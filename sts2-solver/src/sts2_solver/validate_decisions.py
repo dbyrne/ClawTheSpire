@@ -249,9 +249,10 @@ def _check_card_reward_vs_deck_change(
             if any(v > 0 for v in added.values()):
                 added_names = ", ".join(added.keys())
                 issues.append(DecisionIssue(
-                    severity="warning",
+                    severity="error",
                     category="reward_skip_but_added",
-                    message=f"Skipped card reward but deck gained: +{{{added_names}}}",
+                    message=f"Skipped card reward but deck gained: +{{{added_names}}}. "
+                            f"Network decision was overridden — likely stuck-screen fallback.",
                     floor=floor,
                 ))
 
