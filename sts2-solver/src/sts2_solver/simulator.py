@@ -92,49 +92,6 @@ def _normalize_card_id(raw_id: str) -> str:
 # Format: list of (intent_type, damage, hits, block, buff_effects)
 # buff_effects: dict of effects to apply, e.g. {"self_strength": 2}
 # ---------------------------------------------------------------------------
-# Underdocks gauntlet wave pool (observed from game logs)
-# ---------------------------------------------------------------------------
-# Normal/weak Underdocks encounters are gauntlets: killing all enemies in a
-# wave spawns a new random wave.  Bosses and elites are NOT gauntlets.
-
-UNDERDOCKS_WAVE_POOL: list[list[str]] = [
-    ["SLUDGE_SPINNER"],
-    ["CORPSE_SLUG", "CORPSE_SLUG"],
-    ["SEAPUNK"],
-    ["NIBBIT"],
-    ["FUZZY_WURM_CRAWLER"],
-    ["LEAF_SLIME_M", "TWIG_SLIME_S"],
-    ["FLYCONID", "SNAPPING_JAXFRUIT"],
-    ["LIVING_FOG"],
-    ["TOADPOLE", "TOADPOLE"],
-    ["TERROR_EEL"],
-    ["WRIGGLER", "WRIGGLER", "WRIGGLER", "WRIGGLER"],
-    ["EYE_WITH_TEETH", "FOGMOG"],
-    ["SHRINKER_BEETLE"],
-    ["BYGONE_EFFIGY"],
-    ["CALCIFIED_CULTIST", "DAMP_CULTIST"],
-    ["SKULKING_COLONY"],
-    ["PUNCH_CONSTRUCT"],
-    ["TWO_TAILED_RAT", "TWO_TAILED_RAT"],
-    ["SEWER_CLAM"],
-    ["VINE_SHAMBLER"],
-    ["MAWLER"],
-    ["HAUNTED_SHIP"],
-    ["FOSSIL_STALKER"],
-]
-
-
-def is_gauntlet_encounter(encounter_id: str) -> bool:
-    """Check if an encounter is a gauntlet (multi-wave).
-
-    Gauntlets are extremely rare in the real game. For now, always
-    return False — standard Underdocks combats are single-enemy fights,
-    same as Overgrowth. Gauntlet support can be re-added when we have
-    reliable data on when they actually occur.
-    """
-    return False
-
-
 # ---------------------------------------------------------------------------
 # Enemy side effects: extra mechanical effects keyed by (enemy_id, intent_key)
 # ---------------------------------------------------------------------------
@@ -1609,9 +1566,7 @@ class RunStrategy(Protocol):
     def fight_combat(self, deck: list, hp: int, max_hp: int, max_energy: int,
                      encounter_id: str, card_db, rng, potions: list[dict],
                      relics: frozenset[str],
-                     gauntlet_waves: int = 0,
-                     wave_pool: list[list[str]] | None = None,
-                     wave_list: list[list[str]] | None = None) -> StrategyCombatResult: ...
+                     enemy_ids: list[str] | None = None) -> StrategyCombatResult: ...
 
     def pick_card_reward(self, offered: list, deck: list, hp: int, max_hp: int,
                          floor: int, card_db, pools: dict,
@@ -1854,7 +1809,7 @@ def run_act1(
                 deck=deck, hp=hp, max_hp=max_hp, max_energy=max_energy,
                 encounter_id=enc_id or "", card_db=card_db, rng=rng,
                 potions=potions, relics=frozenset(relics),
-                wave_list=[enemy_ids] if enemy_ids else None,
+                enemy_ids=enemy_ids,
             )
             potions = combat.potions_after
             potions_after = len([p for p in potions if p])

@@ -569,20 +569,6 @@ def test_card_play_parity(
                     log.debug("simulate_turn failed: %s", e)
                     continue
 
-                # Skip gauntlet wave transitions — enemy set changed between
-                # snapshots, meaning a wave was cleared and new enemies spawned.
-                # The sim can't model this (it's an Underdocks-specific mechanic).
-                curr_enemies = set(e.get("name") for e in snap.enemies)
-                next_enemies = set(e.get("name") for e in next_snap.enemies)
-                if curr_enemies != next_enemies:
-                    # Check if ALL current enemies died (wave clear)
-                    sim_alive = [e for e in simulated.enemies if e.is_alive]
-                    sim_names = set(e.name for e in sim_alive)
-                    if not sim_names & curr_enemies:
-                        # Wave cleared — new enemies are from a new wave
-                        count += 1
-                        continue
-
                 # Compare sim result against next snapshot
                 diffs = []
 
