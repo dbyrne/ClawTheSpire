@@ -26,6 +26,8 @@ from __future__ import annotations
 import math
 import time
 from copy import deepcopy
+
+import numpy as np
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -113,6 +115,7 @@ class MCTS:
         self.card_db = card_db
         self.c_puct = c_puct
         self.device = device
+        self.add_noise = False  # Enable for training, disable for runner
         self.network.to(device)
         self.network.eval()
 
@@ -135,6 +138,16 @@ class MCTS:
 
         if root.is_terminal or not root.legal_actions:
             return END_TURN, [1.0], root.terminal_value if root.is_terminal else 0.0
+
+        # Add Dirichlet noise to root priors for exploration (training only).
+        # Without this, cards with near-zero policy prior (rare/unseen cards)
+        # are never explored by MCTS, creating a self-reinforcing blind spot.
+        if self.add_noise and len(root.children) > 1:
+            noise_frac = 0.25
+            alpha = 0.3
+            noise = np.random.dirichlet([alpha] * len(root.children))
+            for i, child in root.children.items():
+                child.prior = (1 - noise_frac) * child.prior + noise_frac * noise[i]
 
         deadline = None
         if time_limit_ms is not None:
