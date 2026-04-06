@@ -3373,5 +3373,131 @@
         "Attack_9": 1.0
       }
     }
+  },
+  "KIN_PRIEST": {
+    "monster_id": "KIN_PRIEST",
+    "n_combats": 2,
+    "fixed_opening": [
+      {
+        "type": "Attack",
+        "damage": 8,
+        "hits": 1
+      },
+      {
+        "type": "Attack",
+        "damage": 8,
+        "hits": 1
+      },
+      {
+        "type": "Attack",
+        "damage": 8,
+        "hits": 1
+      },
+      {
+        "type": "Attack",
+        "damage": 3,
+        "hits": 3
+      },
+      {
+        "type": "Buff",
+        "damage": null,
+        "hits": 1
+      },
+      {
+        "type": "Buff",
+        "damage": null,
+        "hits": 1
+      },
+      {
+        "type": "Attack",
+        "damage": 10,
+        "hits": 1
+      }
+    ],
+    "moves": {
+      "Attack_8": {
+        "type": "Attack",
+        "damage": 8,
+        "hits": 1
+      },
+      "Attack_3x3": {
+        "type": "Attack",
+        "damage": 3,
+        "hits": 3
+      },
+      "Buff": {
+        "type": "Buff",
+        "damage": null,
+        "hits": 1
+      },
+      "Attack_10": {
+        "type": "Attack",
+        "damage": 10,
+        "hits": 1
+      }
+    },
+    "start_weights": {},
+    "transitions": {}
+  },
+  "WATERFALL_GIANT": {
+    "monster_id": "WATERFALL_GIANT",
+    "n_combats": 2,
+    "fixed_opening": [],
+    "moves": {
+      "Buff": {
+        "type": "Buff",
+        "damage": null,
+        "hits": 1
+      },
+      "Attack_15": {
+        "type": "Attack",
+        "damage": 15,
+        "hits": 1
+      },
+      "Attack_10": {
+        "type": "Attack",
+        "damage": 10,
+        "hits": 1
+      },
+      "Attack_20": {
+        "type": "Attack",
+        "damage": 20,
+        "hits": 1
+      },
+      "Attack_13": {
+        "type": "Attack",
+        "damage": 13,
+        "hits": 1
+      },
+      "Attack_25": {
+        "type": "Attack",
+        "damage": 25,
+        "hits": 1
+      }
+    },
+    "start_weights": {
+      "Buff": 0.5,
+      "Attack_15": 0.5
+    },
+    "transitions": {
+      "Buff": {
+        "Attack_15": 0.25,
+        "Attack_20": 0.5,
+        "Attack_25": 0.25
+      },
+      "Attack_15": {
+        "Attack_15": 0.25,
+        "Attack_10": 0.75
+      },
+      "Attack_10": {
+        "Buff": 1.0
+      },
+      "Attack_20": {
+        "Attack_13": 1.0
+      },
+      "Attack_13": {
+        "Attack_15": 1.0
+      }
+    }
   }
 }

@@ -25,8 +25,10 @@ log = logging.getLogger(__name__)
 
 # Minimum combats needed to generate a profile. Below this, we keep
 # whatever's already in the profile file to avoid overwriting good
-# data with noise from a small sample.
-DEFAULT_MIN_COMBATS = 5
+# data with noise from a small sample. 3 is enough to identify fixed
+# openings and basic move sets — better than the auto-generated fallback
+# from monsters.json which often has wrong damage values.
+DEFAULT_MIN_COMBATS = 3
 
 # Threshold for considering a turn's move "fixed" (deterministic).
 # If 90%+ of observations show the same intent type, it's fixed.

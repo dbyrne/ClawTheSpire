@@ -206,6 +206,18 @@ ENEMY_CYCLING_TABLES: dict[str, list[dict]] = {
         {"type": "Attack", "damage": 27, "hits": 1},
         {"type": "Buff", "self_strength": 4},
     ],
+    # Lagavulin Matriarch: elite with Attack/Debuff cycle, +2 Str on Debuff.
+    # Only 1 combat observed — kept as cycling table until more data.
+    "LAGAVULIN_MATRIARCH": [
+        {"type": "Attack", "damage": 19, "hits": 1},
+        {"type": "Attack", "damage": 9, "hits": 2},
+        {"type": "Attack", "damage": 12, "hits": 1},
+        {"type": "Debuff", "self_strength": 2},
+        {"type": "Attack", "damage": 19, "hits": 1},
+        {"type": "Attack", "damage": 9, "hits": 2},
+        {"type": "Attack", "damage": 12, "hits": 1},
+        {"type": "Debuff", "self_strength": 2},
+    ],
 }
 
 # Backwards-compat alias — importers should migrate to ENEMY_CYCLING_TABLES.

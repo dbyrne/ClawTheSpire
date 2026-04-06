@@ -65,7 +65,7 @@ def _rebuild_profiles(logs_dir: Path) -> None:
 
     # Enemy profiles
     existing_enemy = load_enemy(enemy_path())
-    enemy_profiles = build_enemy(all_logs, min_combats=3, existing=existing_enemy)
+    enemy_profiles = build_enemy(all_logs, min_combats=2, existing=existing_enemy)
     save_enemy(enemy_profiles, enemy_path())
     n_new_enemy = len(enemy_profiles) - len(existing_enemy)
     print(f"  Enemy profiles: {len(enemy_profiles)} total"
