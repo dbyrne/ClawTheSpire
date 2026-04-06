@@ -846,20 +846,6 @@ def print_report(report: CrossValidationReport) -> None:
                 print(f"    {e}: {count}")
     print()
 
-    # Card play parity
-    n_cp = report.card_play_turns_checked
-    n_cp_fail = len(report.card_play_diffs)
-    print(f"  Card Play Parity:      {n_cp - n_cp_fail}/{n_cp} turns match")
-    if report.card_play_diffs:
-        field_counts2: Counter[str] = Counter()
-        for r in report.card_play_diffs:
-            for d in r["diffs"]:
-                field_counts2[d.field] += 1
-        print(f"  Mismatched fields:")
-        for fld, count in field_counts2.most_common(10):
-            print(f"    {fld}: {count}")
-    print()
-
     # Decision parity
     n_dec = report.decision_turns_checked
     if n_dec > 0:
@@ -916,12 +902,12 @@ def main(logs_dir: Path | None = None,
         if any(t.snapshot for t in c.turns)
     )
 
-    # Test 3: Card play
-    print("  Running card play parity test...")
-    cp_diffs = test_card_play_parity(logs_dir, card_db, max_turns=200)
-    cp_checked = 200
+    # Card play parity is not run here — it duplicates the snapshot
+    # validator (validate_snapshots.py) which covers it more thoroughly.
+    cp_diffs = []
+    cp_checked = 0
 
-    # Test 4: Decision parity (optional)
+    # Test 3: Decision parity (optional)
     print("  Running decision parity test...")
     dec_result = test_decision_parity(logs_dir, card_db,
                                       checkpoint_path=checkpoint,

@@ -125,12 +125,10 @@ def main(logs_dir: Path | None = None) -> int:
           f"  ({mt_report.total_mismatches} mismatches"
           f", {len(mt_report.missing_enemies)} missing)")
     xv_enc_pass = xv_report.encoding_turns_checked - len(xv_report.encoding_diffs)
-    xv_cp_pass = xv_report.card_play_turns_checked - len(xv_report.card_play_diffs)
+    xv_ep_pass = xv_report.enemy_combats_checked - len(xv_report.enemy_phase_diffs)
     print(f"  X-val encode: {xv_enc_pass}/{xv_report.encoding_turns_checked} turns")
     print(f"  X-val enemy:  {'PASS' if xv_ep_ok else 'FAIL'}"
-          f"  ({xv_report.enemy_combats_checked - len(xv_report.enemy_phase_diffs)}"
-          f"/{xv_report.enemy_combats_checked} turns)")
-    print(f"  X-val cards:  {xv_cp_pass}/{xv_report.card_play_turns_checked} turns")
+          f"  ({xv_ep_pass}/{xv_report.enemy_combats_checked} turns)")
     if xv_report.decision_turns_checked > 0:
         print(f"  X-val decide: {xv_report.decision_matches}"
               f"/{xv_report.decision_turns_checked} match")
