@@ -886,6 +886,37 @@ def _pick_encounter_from_pool(
     return list(rng.choice(candidates)["enemies"])
 
 
+# ---------------------------------------------------------------------------
+# Shop pool (real shop offerings from game logs)
+# ---------------------------------------------------------------------------
+
+_SHOP_POOL: list[dict] | None = None
+
+
+def _load_shop_pool() -> None:
+    global _SHOP_POOL
+    pool_path = Path(__file__).resolve().parent / "shop_pool.json"
+    if pool_path.exists():
+        import json as _json
+        with open(pool_path, encoding="utf-8") as f:
+            _SHOP_POOL = _json.load(f)
+    else:
+        _SHOP_POOL = []
+
+
+def pick_shop_from_pool(rng: random.Random) -> dict | None:
+    """Pick a real shop from the pool.
+
+    Returns a shop dict with 'cards' (list of {card_id, name, price, rarity}),
+    'relics', 'potions', 'remove_cost', or None if no pool data.
+    """
+    if _SHOP_POOL is None:
+        _load_shop_pool()
+    if not _SHOP_POOL:
+        return None
+    return rng.choice(_SHOP_POOL)
+
+
 def _walk_real_map(map_data: dict, rng: random.Random) -> list:
     """Convert a real map graph into a room sequence with choices.
 

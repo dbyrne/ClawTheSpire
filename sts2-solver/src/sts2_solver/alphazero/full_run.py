@@ -64,6 +64,7 @@ from ..simulator import (
     SHOP_CARD_REMOVE_COST,
     SHOP_CARD_COSTS,
     SHOP_POTION_COST,
+    pick_shop_from_pool,
 )
 
 from .encoding import EncoderConfig, Vocabs
@@ -453,18 +454,33 @@ class MCTSStrategy:
                        card_db, pools, rng):
         try:
             network = self.mcts.network
-            shop_cards = _offer_card_rewards(pools, deck, 3)
-            shop_costs = []
-            for sc in shop_cards:
-                cost = 75
-                for rarity, pool_cards in pools.items():
-                    if any(c.id == sc.id for c in pool_cards):
-                        cost = SHOP_CARD_COSTS.get(rarity, 75)
-                        break
-                shop_costs.append(cost)
 
-            # Offer 2 random potions at the shop
-            shop_potions = [rng.choice(POTION_TYPES) for _ in range(2)]
+            # Try real shop pool first, fall back to synthetic
+            pool_shop = pick_shop_from_pool(rng)
+            if pool_shop:
+                shop_cards = []
+                shop_costs = []
+                for c in pool_shop["cards"]:
+                    card_id = c.get("card_id", "")
+                    card = card_db.get(card_id.rstrip("+"))
+                    if card:
+                        shop_cards.append(card)
+                        shop_costs.append(c.get("price", 75))
+                    # else: unknown card, skip
+                shop_potions = [rng.choice(POTION_TYPES) for _ in range(2)]
+                remove_cost = pool_shop.get("remove_cost") or SHOP_CARD_REMOVE_COST
+            else:
+                shop_cards = _offer_card_rewards(pools, deck, 3)
+                shop_costs = []
+                for sc in shop_cards:
+                    cost = 75
+                    for rarity, pool_cards in pools.items():
+                        if any(c.id == sc.id for c in pool_cards):
+                            cost = SHOP_CARD_COSTS.get(rarity, 75)
+                            break
+                    shop_costs.append(cost)
+                shop_potions = [rng.choice(POTION_TYPES) for _ in range(2)]
+                remove_cost = SHOP_CARD_REMOVE_COST
 
             total_gold_spent = 0
             cards_added = []
@@ -483,7 +499,7 @@ class MCTSStrategy:
                 actions = []
 
                 # Remove options (Strike/Defend only)
-                if gold >= SHOP_CARD_REMOVE_COST:
+                if gold >= remove_cost:
                     for di, card in enumerate(deck):
                         if card.name in ("Strike", "Defend") and not card.upgraded:
                             opt_types.append(OPTION_SHOP_REMOVE)
@@ -530,8 +546,8 @@ class MCTSStrategy:
                 elif action[0] == "remove":
                     # Apply immediately (needed for subsequent network encoding)
                     deck.pop(action[1])
-                    gold -= SHOP_CARD_REMOVE_COST
-                    total_gold_spent += SHOP_CARD_REMOVE_COST
+                    gold -= remove_cost
+                    total_gold_spent += remove_cost
                 elif action[0] == "buy":
                     cards_added.append(shop_cards[action[1]])
                     deck.append(shop_cards[action[1]])

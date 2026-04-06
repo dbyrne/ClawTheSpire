@@ -106,6 +106,7 @@ class Runner:
         self._deck_select_stuck = False  # Track stuck deck_select screens
         self._stuck_since: float | None = None  # Timestamp when we got stuck
         self._shop_visited = False  # Prevent re-opening shop after closing
+        self._shop_snapshot_logged = False
         self._last_floor: int | None = None  # Track floor for shop reset
         self._last_screen_key: tuple[str, str] | None = None  # (screen, screen_type)
         self._screen_repeat_count: int = 0  # Same-screen repeat counter
@@ -441,6 +442,7 @@ class Runner:
         current_floor = run.get("floor")
         if current_floor is not None and current_floor != self._last_floor:
             self._shop_visited = False
+            self._shop_snapshot_logged = False
             self._last_floor = current_floor
 
         # Reset deck_select stuck flag when we leave the card selection screen
@@ -1906,6 +1908,36 @@ class Runner:
             shop_actions = []  # (action_name, option_index, reasoning)
 
             shop = gs.get("shop") or (gs.get("agent_view") or {}).get("shop") or {}
+
+            # Log shop snapshot on first visit (before any purchases)
+            if not getattr(self, "_shop_snapshot_logged", False) and self.logger:
+                run = gs.get("run") or {}
+                self.logger._emit({
+                    "type": "shop_snapshot",
+                    "floor": run.get("floor", 0),
+                    "gold": gold,
+                    "cards": [
+                        {"card_id": c.get("card_id", c.get("id", "")),
+                         "name": c.get("name", ""),
+                         "price": c.get("price", c.get("cost", 0)),
+                         "rarity": c.get("rarity", "")}
+                        for c in shop.get("cards", [])
+                        if c.get("name")
+                    ],
+                    "relics": [
+                        {"relic_id": r.get("relic_id", r.get("id", "")),
+                         "name": r.get("name", ""),
+                         "price": r.get("price", r.get("cost", 0))}
+                        for r in shop.get("relics", [])
+                    ],
+                    "potions": [
+                        {"name": p.get("name", ""),
+                         "price": p.get("price", p.get("cost", 0))}
+                        for p in shop.get("potions", [])
+                    ],
+                    "remove_cost": shop.get("remove_cost"),
+                })
+                self._shop_snapshot_logged = True
 
             # Remove card options
             if "remove_card_at_shop" in actions:
