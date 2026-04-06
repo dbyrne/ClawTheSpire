@@ -24,7 +24,6 @@ import random
 import sys
 import time
 from collections import deque
-from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -35,27 +34,7 @@ import torch.nn.functional as F
 from torch.optim import Adam
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
-from ..actions import Action, END_TURN, enumerate_actions
-from ..combat_engine import (
-    end_turn,
-    is_combat_over,
-    play_card,
-    resolve_enemy_intents,
-    start_turn,
-    tick_enemy_powers,
-)
-from ..constants import CardType
 from ..data_loader import CardDB, load_cards
-from ..models import Card, CombatState, EnemyState, PlayerState
-from ..simulator import (
-    _ensure_data_loaded,
-    _ENCOUNTERS_BY_ID,
-    _spawn_enemy,
-    _create_enemy_ai,
-    _set_enemy_intents,
-    _resolve_sim_intents,
-    ENEMY_MOVE_TABLES,
-)
 
 from .encoding import EncoderConfig, Vocabs, build_vocabs_from_card_db
 from .mcts import MCTS
@@ -192,183 +171,6 @@ class ReplayBuffer:
 
     def __len__(self) -> int:
         return len(self.buffer)
-
-
-# ---------------------------------------------------------------------------
-# Self-play game
-# ---------------------------------------------------------------------------
-
-_TRAINING_ENCOUNTER_CACHE: list[str] = []
-
-
-def _get_training_encounters() -> list[str]:
-    """Return all normal/weak encounter IDs from the loaded encounter data."""
-    if not _TRAINING_ENCOUNTER_CACHE:
-        _ensure_data_loaded()
-        for eid, enc in _ENCOUNTERS_BY_ID.items():
-            room = enc.get("room_type", "")
-            if room == "Monster" and "EVENT_ENCOUNTER" not in eid:
-                _TRAINING_ENCOUNTER_CACHE.append(eid)
-    return _TRAINING_ENCOUNTER_CACHE
-
-
-def _make_starter_deck(card_db: CardDB, character: str = "silent") -> list[Card]:
-    """Build a basic starter deck."""
-    cards = []
-    strike = card_db.get("STRIKE_SILENT") or card_db.get("STRIKE")
-    defend = card_db.get("DEFEND_SILENT") or card_db.get("DEFEND")
-    neutralize = card_db.get("NEUTRALIZE")
-    survivor = card_db.get("SURVIVOR")
-
-    if strike:
-        cards.extend([strike] * 5)
-    if defend:
-        cards.extend([defend] * 5)
-    if neutralize:
-        cards.append(neutralize)
-    if survivor:
-        cards.append(survivor)
-    return cards
-
-
-def play_one_game(
-    mcts: MCTS,
-    card_db: CardDB,
-    vocabs: Vocabs,
-    config: EncoderConfig,
-    encounter_id: str | None = None,
-    deck: list[Card] | None = None,
-    max_turns: int = 30,
-    mcts_simulations: int = 50,
-    temperature: float = 1.0,
-    rng: random.Random | None = None,
-) -> tuple[list[TrainingSample], str, int, str]:
-    """Play one combat game using MCTS.
-
-    Returns (samples, outcome, turns, encounter_id).
-    """
-    if rng is None:
-        rng = random.Random()
-
-    _ensure_data_loaded()
-
-    if encounter_id is None:
-        available = _get_training_encounters()
-        encounter_id = rng.choice(available)
-
-    if deck is None:
-        deck = _make_starter_deck(card_db)
-
-    enc = _ENCOUNTERS_BY_ID.get(encounter_id, {})
-    monster_list = enc.get("monsters", [])
-    enemies: list[EnemyState] = []
-    enemy_ais = []
-    for m in monster_list:
-        mid = m["id"]
-        enemy = _spawn_enemy(mid)
-        enemies.append(enemy)
-        enemy_ais.append(_create_enemy_ai(mid))
-
-    if not enemies:
-        return [], "win", 0, encounter_id
-
-    draw_pile = list(deck)
-    rng.shuffle(draw_pile)
-    player = PlayerState(
-        hp=70, max_hp=70, energy=3, max_energy=3,
-        draw_pile=draw_pile,
-    )
-    state = CombatState(player=player, enemies=enemies)
-    samples: list[TrainingSample] = []
-    turn_count = 0
-    outcome = None
-
-    for turn_num in range(1, max_turns + 1):
-        start_turn(state)
-        turn_count = turn_num
-        _set_enemy_intents(state, enemy_ais)
-
-        cards_this_turn = 0
-        while cards_this_turn < 12:
-            outcome = is_combat_over(state)
-            if outcome:
-                break
-
-            actions = enumerate_actions(state)
-            if not actions:
-                break
-
-            state_tensors = encode_state(state, vocabs, config)
-            action_card_ids, action_features, action_mask = encode_actions(actions, state, vocabs, config, card_db=card_db)
-
-            action, policy, _root_value = mcts.search(
-                state, num_simulations=mcts_simulations,
-                temperature=temperature,
-            )
-
-            samples.append(TrainingSample(
-                state_tensors=state_tensors,
-                policy=policy,
-                value=0.0,
-                action_card_ids=action_card_ids,
-                action_features=action_features,
-                action_mask=action_mask,
-                num_actions=len(actions),
-            ))
-
-            if action.action_type == "end_turn":
-                break
-
-            if action.action_type == "choose_card":
-                # Resolve pending choice — doesn't count as a card play
-                if action.choice_idx is not None and state.pending_choice is not None:
-                    from ..effects import discard_card_from_hand
-                    pc = state.pending_choice
-                    if pc.choice_type == "discard_from_hand":
-                        if action.choice_idx < len(state.player.hand):
-                            discard_card_from_hand(state, action.choice_idx)
-                        pc.chosen_so_far.append(action.choice_idx)
-                        if len(pc.chosen_so_far) >= pc.num_choices:
-                            state.pending_choice = None
-            elif action.card_idx is not None:
-                from ..combat_engine import can_play_card
-                if can_play_card(state, action.card_idx):
-                    play_card(state, action.card_idx, action.target_idx, card_db)
-                    cards_this_turn += 1
-
-            outcome = is_combat_over(state)
-            if outcome:
-                break
-
-        if outcome:
-            break
-
-        end_turn(state)
-        resolve_enemy_intents(state)
-        _resolve_sim_intents(state, enemy_ais)
-        tick_enemy_powers(state)
-
-        outcome = is_combat_over(state)
-        if outcome:
-            break
-
-    if outcome is None:
-        outcome = "lose"
-
-    # Value based on HP remaining, not binary win/loss.
-    # Win with full HP = +1.0, win with 1 HP = ~+0.5
-    # Lose = scaled by how much HP was remaining (-0.2 to -1.0)
-    # This gives much richer training signal than binary +1/-1.
-    hp_frac = state.player.hp / max(1, state.player.max_hp)
-    if outcome == "win":
-        value = 0.5 + 0.5 * hp_frac  # [0.5, 1.0]
-    else:
-        value = -0.5 - 0.5 * (1.0 - hp_frac)  # [-1.0, -0.5]
-
-    for sample in samples:
-        sample.value = value
-
-    return samples, outcome, turn_count, encounter_id
 
 
 # ---------------------------------------------------------------------------
