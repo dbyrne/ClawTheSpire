@@ -1517,7 +1517,7 @@ class Runner:
                 self._log_action("  [dim]auto: discard_potion(0) — making room[/dim]")
                 if not self.dry_run:
                     try:
-                        self._execute_with_retry("discard_potion", potion_index=0)
+                        self._execute_with_retry("discard_potion", option_index=0)
                         self.action_count += 1
                     except Exception as e:
                         self._log_action(f"  [red]Failed: {e}[/red]")
