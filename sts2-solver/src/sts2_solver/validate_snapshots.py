@@ -213,19 +213,22 @@ def state_from_snapshot(
         for p in (e.get("powers") or []):
             if isinstance(p, dict):
                 powers[p["name"]] = p["amount"]
-        # The API's intent_damage already includes enemy Strength and
-        # existing Weak on the enemy. The combat engine re-applies both,
-        # so reverse them here to get the base damage.
+        # The API's intent_damage already includes enemy Strength,
+        # existing Weak on the enemy, and player Vulnerable. The combat
+        # engine re-applies all three, so reverse them here to get base damage.
         raw_intent_damage = e.get("intent_damage")
         enemy_strength = powers.get("Strength", 0)
         enemy_weak = powers.get("Weak", 0)
         adjusted_damage = raw_intent_damage
 
         if adjusted_damage is not None:
-            # Reverse Weak: if enemy has Weak, the displayed damage was
-            # already multiplied by 0.75. Divide back to get pre-Weak damage.
+            # Reverse player Vulnerable: displayed damage was multiplied by 1.5
+            import math
+            player_vuln = snapshot.player_powers.get("Vulnerable", 0)
+            if player_vuln > 0:
+                adjusted_damage = math.ceil(adjusted_damage / 1.5)
+            # Reverse Weak: displayed damage was multiplied by 0.75
             if enemy_weak > 0:
-                import math
                 adjusted_damage = math.ceil(adjusted_damage / 0.75)
             # Reverse Strength: subtract it so the engine can add it back
             if enemy_strength > 0:
@@ -360,7 +363,7 @@ def _resolve_pending_choices(
 def _apply_potion(state: CombatState, potion_str: str) -> None:
     """Apply potion effects during combat replay.
 
-    Potion strings look like "Use Fire Potion (slot 0)".
+    Potion strings look like "Use Fire Potion (slot 0)" or "Use Fruit Juice (slot 0)".
     """
     import re
     name_match = re.match(r"Use (.+?) \(slot \d+\)", potion_str)
@@ -408,6 +411,26 @@ def _apply_potion(state: CombatState, potion_str: str) -> None:
     elif "block potion" in potion_name:
         # Gain 12 Block
         state.player.block += 12
+    elif "strength potion" in potion_name:
+        # Gain 2 Strength
+        state.player.powers["Strength"] = state.player.powers.get("Strength", 0) + 2
+    elif "fruit juice" in potion_name:
+        # Gain 5 Max HP and heal 5 HP
+        state.player.max_hp += 5
+        state.player.hp = min(state.player.hp + 5, state.player.max_hp)
+    elif "heart of iron" in potion_name:
+        # Gain 6 Metallicize (block at start of each turn)
+        state.player.powers["Metallicize"] = state.player.powers.get("Metallicize", 0) + 6
+    elif "poison potion" in potion_name:
+        # Apply 6 Poison to first alive enemy
+        target = alive[0]
+        target.powers["Poison"] = target.powers.get("Poison", 0) + 6
+    elif "dexterity potion" in potion_name:
+        # Gain 2 Dexterity
+        state.player.powers["Dexterity"] = state.player.powers.get("Dexterity", 0) + 2
+    elif "energy potion" in potion_name or "liquid bronze" in potion_name:
+        # Gain 2 energy
+        state.player.energy += 2
     elif "attack potion" in potion_name:
         # Adds a random attack card to hand — can't simulate, skip
         pass
@@ -431,8 +454,8 @@ def simulate_turn(
     s = deepcopy(state)
 
     for card_idx_in_seq, card_name in enumerate(cards_played):
-        # Handle potion usage (logged as "Use X Potion (slot N)")
-        if card_name.startswith("Use ") and "otion" in card_name:
+        # Handle potion usage (logged as "Use X (slot N)")
+        if card_name.startswith("Use ") and "(slot " in card_name:
             _apply_potion(s, card_name)
             continue
 
@@ -548,10 +571,36 @@ def _apply_move_table_effects(state: CombatState) -> None:
     """Apply enemy move table effects (block, buffs, debuffs) not covered
     by resolve_enemy_intents. Matches enemy intent_type to known move tables
     to fill in effects the API doesn't expose (e.g., block on Buff intents).
+    Also handles special mechanics: Gas Bomb explosion, Living Fog spawning.
     """
     from .simulator import ENEMY_MOVE_TABLES
 
+    # Gas Bomb: explodes for 8 damage to player then self-destructs.
+    # Snapshots show intent_type=None because the game doesn't expose
+    # the fuse intent. Gas Bombs that appear in the snapshot were spawned
+    # on a previous turn and explode NOW.
     for enemy in state.enemies:
+        if enemy.id == "GAS_BOMB" and enemy.is_alive:
+            raw = 8 + enemy.powers.get("Strength", 0)
+            if raw < 0:
+                raw = 0
+            if enemy.powers.get("Weak", 0) > 0:
+                raw = int(raw * 0.75)
+            if state.player.powers.get("Vulnerable", 0) > 0:
+                raw = int(raw * 1.5)
+            if state.player.block > 0:
+                if raw >= state.player.block:
+                    raw -= state.player.block
+                    state.player.block = 0
+                else:
+                    state.player.block -= raw
+                    raw = 0
+            state.player.hp -= raw
+            enemy.hp = 0
+
+    # Iterate only the original enemies (not newly spawned ones)
+    original_enemies = list(state.enemies)
+    for enemy in original_enemies:
         if not enemy.is_alive or not enemy.intent_type:
             continue
 
@@ -650,6 +699,36 @@ def _apply_move_table_effects(state: CombatState) -> None:
                     intent_hits=1,
                 )
                 state.enemies.append(eye)
+
+        # Smoggy: Living Fog's first move applies Smoggy to player
+        if matched.get("player_smoggy"):
+            state.player.powers["Smoggy"] = 1
+
+        # Spawn minions (e.g. Living Fog spawns Gas Bombs)
+        # Spawn count increases each use: 1, 2, 3...
+        spawn_id = matched.get("spawn_minion")
+        if spawn_id:
+            # Track spawn count by monster ID (persists across turns
+            # since setattr is on the CombatState which is carried forward)
+            count_key = f"_spawn_count_{enemy.id}"
+            prev = getattr(state, count_key, 0)
+            spawn_count = prev + 1
+            setattr(state, count_key, spawn_count)
+            for _ in range(spawn_count):
+                if spawn_id == "GAS_BOMB":
+                    minion = EnemyState(
+                        id="GAS_BOMB", name="Gas Bomb",
+                        hp=10, max_hp=10, block=0,
+                        intent_type=None, intent_damage=None,
+                        intent_hits=1,
+                    )
+                else:
+                    minion = EnemyState(
+                        id=spawn_id,
+                        name=spawn_id.replace("_", " ").title(),
+                        hp=10, max_hp=10, block=0,
+                    )
+                state.enemies.append(minion)
 
 
 # ---------------------------------------------------------------------------
@@ -897,8 +976,8 @@ def _validate_combat_shallow(combat) -> CombatValidation:
 
     for card_name in all_played:
         normalized = card_name.rstrip("+")
-        # Skip potion usage (logged as "Use X Potion (slot N)")
-        if normalized.startswith("Use ") and "Potion" in normalized:
+        # Skip potion usage (logged as "Use X (slot N)")
+        if normalized.startswith("Use ") and "(slot " in normalized:
             continue
         if normalized not in deck_base_names:
             result.missing_cards.append(card_name)
@@ -1086,9 +1165,15 @@ def validate_run(run: RunReplay, card_db: CardDB) -> tuple[list[TurnValidation],
                     enemy_weak = powers.get("Weak", 0)
                     adjusted_damage = raw_intent_damage
                     if adjusted_damage is not None:
+                        import math
+                        # Reverse player Vulnerable
+                        player_vuln = snap.player_powers.get("Vulnerable", 0)
+                        if player_vuln > 0:
+                            adjusted_damage = math.ceil(adjusted_damage / 1.5)
+                        # Reverse enemy Weak
                         if enemy_weak > 0:
-                            import math
                             adjusted_damage = math.ceil(adjusted_damage / 0.75)
+                        # Reverse enemy Strength
                         if enemy_strength > 0:
                             adjusted_damage = adjusted_damage - enemy_strength
                     state.enemies.append(EnemyState(
@@ -1134,6 +1219,11 @@ def validate_run(run: RunReplay, card_db: CardDB) -> tuple[list[TurnValidation],
                 state.player.draw_pile = simulated.player.draw_pile
                 state.player.discard_pile = simulated.player.discard_pile
                 state.player.exhaust_pile = simulated.player.exhaust_pile
+
+                # Carry forward spawn counters for enemy summoning mechanics
+                for attr in list(vars(simulated)):
+                    if attr.startswith("_spawn_count_"):
+                        setattr(state, attr, getattr(simulated, attr))
 
             except Exception as e:
                 log.warning(
