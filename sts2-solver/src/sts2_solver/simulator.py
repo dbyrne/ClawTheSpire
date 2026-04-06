@@ -122,6 +122,28 @@ ENEMY_SIDE_EFFECTS: dict[str, dict[str, dict]] = {
     "VANTOM": {
         "Buff": {"self_strength": 4},
     },
+    # Sludge Spinner: gains +3 Strength every 3rd attack (on the weak 6-dmg hit).
+    # Observed: T1-3 no Strength, T4-6 Str 3, T7-9 Str 6.
+    "SLUDGE_SPINNER": {
+        "Attack_6": {"self_strength": 3},
+    },
+    # Corpse Slug: Debuff move gives +4 Strength (matches Ravenous amount).
+    "CORPSE_SLUG": {
+        "Debuff": {"self_strength": 4},
+    },
+    # Phantasmal Gardener: Buff gives +2 Strength.
+    "PHANTASMAL_GARDENER": {
+        "Buff": {"self_strength": 2},
+    },
+    # Mawler: Debuff gives +2 Strength.
+    # Observed: T1 Attack_4x2, T2 Debuff, T3 Attack_6x2 (+2 per hit = Str +2).
+    "MAWLER": {
+        "Debuff": {"self_strength": 2},
+    },
+    # Two-Tailed Rat: None intent spawns another rat.
+    "TWO_TAILED_RAT": {
+        "None": {"spawn_minion": "TWO_TAILED_RAT", "spawn_max": 3},
+    },
 }
 
 # ---------------------------------------------------------------------------
@@ -521,6 +543,7 @@ _INNATE_POWERS: dict[str, dict[str, int]] = {
     "CORPSE_SLUG": {"Ravenous": 4},
     "CUBEX_CONSTRUCT": {"Artifact": 1},
     "INKLET": {"Slippery": 1},
+    "PHANTASMAL_GARDENER": {"Skittish": 6},
     "PHROG_PARASITE": {"Infested": 4},
     "PUNCH_CONSTRUCT": {"Artifact": 1},
     "SEWER_CLAM": {"Plating": 8},
