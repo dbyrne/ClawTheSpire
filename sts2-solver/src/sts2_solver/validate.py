@@ -75,14 +75,19 @@ def _rebuild_profiles(logs_dir: Path) -> None:
     print(f"  Event profiles: {len(event_profiles)} total"
           f"{f' (+{n_new_event} new)' if n_new_event else ''}")
 
+    # Map pool
+    from .build_map_pool import main as build_maps, _default_pool_path
+    n_maps = build_maps(all_logs)
+    print(f"  Map pool: {n_maps} total")
+
 
 def main(logs_dir: Path | None = None) -> int:
     """Run all validators and return exit code (0 = all pass)."""
     logs_dir = _resolve_logs_dir(logs_dir)
     print(f"\nValidating logs in: {logs_dir}\n")
 
-    # --- Rebuild profiles from latest log data ---
-    print("Rebuilding profiles...")
+    # --- Rebuild profiles + map pool from latest log data ---
+    print("Rebuilding profiles and map pool...")
     _rebuild_profiles(logs_dir)
     print()
 

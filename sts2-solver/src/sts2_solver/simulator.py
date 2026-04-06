@@ -711,17 +711,17 @@ def _pick_card_reward(offered: list[Card], deck: list[Card]) -> Card | None:
 ROOM_TYPE = str  # "weak", "normal", "elite", "rest", "event", "boss", "shop"
 
 
-def _generate_act1_map_with_choices(rng: random.Random) -> list:
-    """Generate Act 1 map from real game data or synthetic fallback.
+def _generate_act1_map_with_choices(rng: random.Random,
+                                    act_id: str | None = None) -> list:
+    """Generate map from real game data or synthetic fallback.
 
-    Tries to load a real map from the map pool (built by build_map_pool.py).
-    If available, walks the map graph row by row, presenting reachable node
-    types as choices. Otherwise falls back to synthetic generation.
+    Tries to load a real map from the map pool (built by build_map_pool.py),
+    filtered by act_id if provided. Otherwise falls back to synthetic generation.
 
     Returns a list where each entry is either a single room type string
     (forced) or a list of 2-3 room type strings (player chooses).
     """
-    real_map = _pick_real_map(rng)
+    real_map = _pick_real_map(rng, act_id=act_id)
     if real_map is not None:
         return _walk_real_map(real_map, rng)
 
@@ -761,8 +761,8 @@ _WEAK_ROW_THRESHOLD = 4
 _MAP_POOL: list[dict] | None = None
 
 
-def _pick_real_map(rng: random.Random) -> dict | None:
-    """Load a random map from the pool (cached)."""
+def _pick_real_map(rng: random.Random, act_id: str | None = None) -> dict | None:
+    """Load a random map from the pool, optionally filtered by act."""
     global _MAP_POOL
     if _MAP_POOL is None:
         pool_path = Path(__file__).resolve().parent / "map_pool.json"
@@ -774,6 +774,10 @@ def _pick_real_map(rng: random.Random) -> dict | None:
             _MAP_POOL = []
     if not _MAP_POOL:
         return None
+    if act_id:
+        filtered = [m for m in _MAP_POOL if m.get("act_id") == act_id]
+        if filtered:
+            return rng.choice(filtered)
     return rng.choice(_MAP_POOL)
 
 
@@ -1467,8 +1471,9 @@ def run_act1(
     character: str = "SILENT",
     seed: int | None = None,
     card_db: CardDB | None = None,
+    act_id: str | None = None,
 ) -> RunResult:
-    """Shared Act 1 run loop with pluggable strategy.
+    """Shared run loop with pluggable strategy.
 
     Args:
         strategy: A RunStrategy implementation (e.g., MCTSStrategy).
@@ -1520,8 +1525,13 @@ def run_act1(
     pools = _build_card_pool(card_db, card_color)
 
     # Act data + map
-    act_data = _ACTS_BY_ID.get("OVERGROWTH", {})
-    room_sequence = _generate_act1_map_with_choices(rng)
+    if act_id is None:
+        act_id = rng.choice(["OVERGROWTH", "UNDERDOCKS"])
+    act_data = _ACTS_BY_ID.get(act_id, {})
+    if not act_data:
+        act_data = _ACTS_BY_ID.get("OVERGROWTH", {})
+        act_id = "OVERGROWTH"
+    room_sequence = _generate_act1_map_with_choices(rng, act_id=act_id)
 
     # Starter relic
     relics: set[str] = set()
