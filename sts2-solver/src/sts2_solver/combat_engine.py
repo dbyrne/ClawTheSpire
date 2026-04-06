@@ -75,6 +75,13 @@ def can_play_card(state: CombatState, card_idx: int) -> bool:
     # Grand Finale: can only play when draw pile is empty
     if card.id.rstrip("+") == "GRAND_FINALE" and len(state.player.draw_pile) > 0:
         return False
+    # Clash: can only play if every card in hand is an Attack
+    if card.id.rstrip("+") == "CLASH":
+        if any(c.card_type != CardType.ATTACK for c in state.player.hand):
+            return False
+    # Pact's End: can only play with 3+ cards in exhaust pile
+    if card.id.rstrip("+") == "PACTS_END" and len(state.player.exhaust_pile) < 3:
+        return False
     return True
 
 
