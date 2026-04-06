@@ -35,7 +35,6 @@ from .deterministic_advisor import (
     detect_screen_type,
     decide_boss_relic,
     decide_card_reward,
-    decide_deck_select,
     decide_map,
     decide_rest,
     decide_shop,
@@ -2322,10 +2321,8 @@ class Runner:
             self._handle_single_deck_select(gs)
 
     def _handle_single_deck_select(self, gs: dict) -> None:
-        """Single-select deck screen — try network, fall back to deterministic."""
+        """Single-select deck screen — network required."""
         decision = self._az_decide_deck_select(gs)
-        if decision is None:
-            decision = decide_deck_select(gs)
         actions = gs.get("available_actions", [])
         run = gs.get("run") or {}
         self._execute_deterministic(gs, decision, "deck_select", actions, run)
@@ -2345,41 +2342,128 @@ class Runner:
                     pass
             self._log_action("  [dim]auto: confirm_selection[/dim]")
 
-    def _handle_multi_deck_select(self, gs: dict, cards: list, prompt_text: str) -> None:
-        """Multi-select deck screen — pick deterministically.
+    def _az_score_deck_cards(self, gs: dict) -> "list[tuple[int, str, float]]":
+        """Score all cards in a deck_select screen using the network.
 
-        For remove: Strikes first, then Defends, never key card.
-        For other multi-selects: pick sequentially from index 0.
+        Returns list of (game_index, card_name, score) sorted best-first.
+        Raises if the network is unavailable.
         """
+        import torch
+        from .alphazero.self_play import (
+            OPTION_SHOP_REMOVE, OPTION_SMITH,
+            OPTION_CARD_REWARD, OPTION_EVENT_TRANSFORM,
+        )
+
+        if not self._mcts or not self._mcts_vocabs:
+            raise RuntimeError("Network required for deck_select but _mcts not initialized")
+
+        st, hidden, hp, max_hp, gold, floor, deck = self._az_run_state_tensors(gs)
+        network = self._mcts.network
+        vocabs = self._mcts_vocabs
+
+        sel = gs.get("selection") or {}
+        kind = (sel.get("kind") or "").lower()
+        cards = sel.get("cards", [])
+        if not cards:
+            raise RuntimeError("deck_select has no cards")
+
+        prompt_text = strip_markup(sel.get("prompt") or "").lower()
+        is_upgrade = kind in ("deck_upgrade_select", "combat_hand_upgrade_select",
+                              "deck_enchant_select")
+        is_remove_prompt = "remove" in prompt_text or "destroy" in prompt_text
+        is_transform = "transform" in prompt_text
+        is_add_prompt = ("add" in prompt_text
+                         or ("choose" in prompt_text and not is_remove_prompt
+                             and not is_transform))
+        is_add = not is_upgrade and not is_remove_prompt and not is_transform and is_add_prompt
+
+        opt_types = []
+        opt_cards = []
+        card_indices = []
+        option_labels = []
+
+        for card_info in cards:
+            card_id = card_info.get("card_id") or card_info.get("id", "")
+            name = card_info.get("name", "?")
+            idx = card_info.get("index", len(opt_types))
+            if is_upgrade:
+                opt_types.append(OPTION_SMITH)
+            elif is_add:
+                opt_types.append(OPTION_CARD_REWARD)
+            elif is_transform:
+                opt_types.append(OPTION_EVENT_TRANSFORM)
+            else:
+                opt_types.append(OPTION_SHOP_REMOVE)
+            opt_cards.append(vocabs.cards.get(card_id.rstrip("+")))
+            card_indices.append(idx)
+            option_labels.append(name)
+
+        if not opt_types:
+            raise RuntimeError("deck_select produced no scoreable options")
+
+        with torch.no_grad():
+            _, scores = network.pick_best_option(hidden, opt_types, opt_cards)
+
+        # Return (game_index, name, score) sorted by score descending
+        ranked = sorted(
+            zip(card_indices, option_labels, scores),
+            key=lambda x: x[2], reverse=True,
+        )
+        return ranked
+
+    def _handle_multi_deck_select(self, gs: dict, cards: list, prompt_text: str) -> None:
+        """Multi-select deck screen — use network scores to pick the top N cards."""
         import re
         multi_match = re.search(r"choose\s+(\d+)", prompt_text)
         num_to_pick = int(multi_match.group(1)) if multi_match else 2
 
-        is_remove = "remove" in prompt_text
-        is_upgrade = "upgrade" in prompt_text
+        ranked = self._az_score_deck_cards(gs)
+        priority = [idx for idx, _, _ in ranked]
 
-        # Build priority order for indices
-        if is_remove:
-            # Remove Strikes first, then Defends, then others, NEVER key card
-            from .config import CHARACTER_CONFIG, detect_character
-            _char = detect_character(gs)
-            _key = CHARACTER_CONFIG.get(_char, {}).get("key_card", "Bash").lower()
-            priority = []
-            for card in cards:
-                name = (card.get("name") or "").lower()
-                idx = card.get("index", 0)
-                if _key in name:
-                    continue  # Never remove key card
-                if "strike" in name:
-                    priority.insert(0, idx)  # Strikes first
-                elif "defend" in name:
-                    priority.append(idx)  # Defends after Strikes
-                else:
-                    priority.append(idx)  # Others last
-            self._log_action(f"  [cyan]Multi-remove: picking {num_to_pick} from priority {priority[:num_to_pick]}[/cyan]")
-        else:
-            # For upgrade/other: just pick sequentially
-            priority = [card.get("index", i) for i, card in enumerate(cards)]
+        # Log the full ranking
+        ranking_str = ", ".join(
+            f"{name}={score:.3f}" for _, name, score in ranked
+        )
+        self._log_action(
+            f"  [blue]Multi-select ({num_to_pick}/{len(cards)}): "
+            f"network ranking: {ranking_str}[/blue]"
+        )
+        # Log each pick as a decision with head_scores
+        if self.logger:
+            nv = None
+            try:
+                import torch
+                st, hidden, *_ = self._az_run_state_tensors(gs)
+                nv = self._mcts.network.value_head(hidden).item()
+            except Exception:
+                pass
+            hs = {
+                "head": "option_eval",
+                "chosen": None,  # filled per-pick below
+                "options": [
+                    {"label": name, "score": round(score, 4)}
+                    for _, name, score in ranked
+                ],
+            }
+            # Log top-N picks as a single grouped decision
+            for pick_num in range(min(num_to_pick, len(ranked))):
+                pick_idx, pick_name, pick_score = ranked[pick_num]
+                hs_copy = {**hs, "chosen": pick_num}
+                self.logger.log_decision(
+                    game_state=gs,
+                    screen_type="deck_select",
+                    options=["select_deck_card"],
+                    choice={
+                        "action": "select_deck_card",
+                        "option_index": pick_idx,
+                        "reasoning": f"Network multi-select {pick_num+1}/{num_to_pick}: "
+                                     f"{pick_name} (score={pick_score:.2f})",
+                    },
+                    source="network",
+                    network_value=nv,
+                    head_scores=hs_copy,
+                )
+        self._track_decision("deck_select", "network")
 
         picked = 0
         max_attempts = num_to_pick * 3  # Safety limit
