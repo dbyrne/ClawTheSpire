@@ -133,8 +133,8 @@ class Runner:
         layout = Layout()
         layout.split_column(
             Layout(name="status", size=3),
-            Layout(name="panels", ratio=3),
-            Layout(name="log", ratio=2),
+            Layout(name="panels", ratio=2),
+            Layout(name="log", ratio=3),
         )
         layout["panels"].split_row(
             Layout(name="solver"),
@@ -1249,12 +1249,17 @@ class Runner:
                         except Exception:
                             pass
                     return
-            # Only card rewards left, or nothing claimable — proceed
+            # Only card rewards left (skipped by network), or nothing claimable — leave
+            leave_action = None
             if "proceed" in actions:
-                self._log_action("  [dim]auto: proceed (rewards done)[/dim]")
+                leave_action = "proceed"
+            elif "collect_rewards_and_proceed" in actions:
+                leave_action = "collect_rewards_and_proceed"
+            if leave_action:
+                self._log_action(f"  [dim]auto: {leave_action} (rewards done)[/dim]")
                 if not self.dry_run:
                     try:
-                        self._execute_with_retry("proceed")
+                        self._execute_with_retry(leave_action)
                         self.action_count += 1
                     except Exception:
                         pass
