@@ -107,6 +107,7 @@ class Runner:
         self._stuck_since: float | None = None  # Timestamp when we got stuck
         self._shop_visited = False  # Prevent re-opening shop after closing
         self._shop_snapshot_logged = False
+        self._deck_size_after_skip: int | None = None  # Set after skip_reward_cards
         self._last_floor: int | None = None  # Track floor for shop reset
         self._last_screen_key: tuple[str, str] | None = None  # (screen, screen_type)
         self._screen_repeat_count: int = 0  # Same-screen repeat counter
@@ -382,6 +383,29 @@ class Runner:
 
         screen = self.game_state.get("screen", "")
         actions = self.game_state.get("available_actions", [])
+
+        # Runtime guard: detect if a skipped card reward was claimed anyway
+        if self._deck_size_after_skip is not None:
+            current_deck = (self.game_state.get("run") or {}).get("deck", [])
+            if len(current_deck) > self._deck_size_after_skip:
+                added = len(current_deck) - self._deck_size_after_skip
+                self._log_action(
+                    f"[bold red]FATAL: Deck grew by {added} after skip_reward_cards! "
+                    f"Network decision was overridden.[/bold red]"
+                )
+                if self.logger:
+                    self.logger._emit({
+                        "type": "skip_override_detected",
+                        "deck_before": self._deck_size_after_skip,
+                        "deck_after": len(current_deck),
+                    })
+                raise RuntimeError(
+                    f"Card reward skip was overridden — deck grew by {added}. "
+                    f"This corrupts training data. Fix the reward screen handler."
+                )
+            # Clear once we've moved past the reward screen
+            if "REWARD" not in screen.upper():
+                self._deck_size_after_skip = None
 
         if screen == "GAME_OVER":
             self._handle_game_over()
@@ -2398,6 +2422,11 @@ class Runner:
         # Post-execution bookkeeping
         if screen_type == "card_reward":
             self._card_reward_handled = True
+            if decision.action == "skip_reward_cards":
+                # Record deck size so we can detect if a card gets added anyway
+                self._deck_size_after_skip = len(
+                    (gs.get("run") or {}).get("deck", [])
+                )
         if screen_type == "shop" and decision.action == "close_shop_inventory":
             self._shop_visited = True
 
