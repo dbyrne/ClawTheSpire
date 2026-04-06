@@ -903,23 +903,25 @@ class Runner:
             try:
                 sim_state = state_from_mcp(gs, self.card_db,
                                           move_indices=self._combat_move_indices)
-                # Restore play counters so MCTS knows what's already been
-                # played this turn (Smoggy skill limit, Slow scaling, etc.)
-                sim_state.cards_played_this_turn = len(cards_played)
-                skills_this_turn = 0
-                attacks_this_turn = 0
-                for cname in cards_played:
-                    if cname.startswith("Use "):
-                        continue  # potion usage, not a card
-                    upgraded = cname.endswith("+")
-                    card_def = self.card_db.get_by_name(cname.rstrip("+"), upgraded=upgraded)
-                    if card_def and card_def.card_type == CardType.SKILL:
-                        skills_this_turn += 1
-                    elif card_def and card_def.card_type == CardType.ATTACK:
-                        attacks_this_turn += 1
-                if skills_this_turn > 0:
-                    sim_state.player.powers["_skills_played"] = skills_this_turn
-                sim_state.attacks_played_this_turn = attacks_this_turn
+                # Mid-turn counters: bridge.py sets these from the mod API
+                # when available (Phase 1A).  Fall back to manual reconstruction
+                # only if the mod didn't provide them (old mod version).
+                if sim_state.cards_played_this_turn == 0 and cards_played:
+                    sim_state.cards_played_this_turn = len(cards_played)
+                    skills_this_turn = 0
+                    attacks_this_turn = 0
+                    for cname in cards_played:
+                        if cname.startswith("Use "):
+                            continue
+                        upgraded = cname.endswith("+")
+                        card_def = self.card_db.get_by_name(cname.rstrip("+"), upgraded=upgraded)
+                        if card_def and card_def.card_type == CardType.SKILL:
+                            skills_this_turn += 1
+                        elif card_def and card_def.card_type == CardType.ATTACK:
+                            attacks_this_turn += 1
+                    if skills_this_turn > 0:
+                        sim_state.player.powers["_skills_played"] = skills_this_turn
+                    sim_state.attacks_played_this_turn = attacks_this_turn
                 # Clear potions already used this turn
                 for pidx in self._potions_used_this_turn:
                     if pidx < len(sim_state.player.potions):

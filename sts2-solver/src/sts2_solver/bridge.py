@@ -44,26 +44,40 @@ def state_from_mcp(raw: dict, card_db: CardDB,
     # Build hand from runtime card data (has computed values)
     player.hand = [_card_from_runtime(c, card_db) for c in hand_raw]
 
-    # Build draw/discard/exhaust piles from game state.
-    # The game provides card names per pile. We resolve them to Card objects
-    # and shuffle the draw pile — we know *what's* in it but not the order.
-    # This lets MCTS simulate draw effects and multi-turn lookahead.
-    from .run_logger import _parse_pile
-    for pile_name, attr in [("draw", "draw_pile"), ("discard", "discard_pile"),
-                            ("exhaust", "exhaust_pile")]:
-        _, card_names = _parse_pile(raw, pile_name)
-        pile_cards: list[Card] = []
-        for name in card_names:
-            base = name.rstrip("+")
-            upgraded = name.endswith("+")
-            card = card_db.get_by_name(base, upgraded=upgraded)
-            if card is None:
-                card = card_db.get_by_name(base)
-            if card is not None:
-                pile_cards.append(card)
-        if attr == "draw_pile":
-            random.shuffle(pile_cards)  # Unknown order — randomize for MCTS
-        setattr(player, attr, pile_cards)
+    # Build draw/discard/exhaust piles from structured data if available,
+    # falling back to display-string parsing for older mod versions.
+    av_combat = (raw.get("agent_view") or {}).get("combat") or {}
+    for struct_key, attr in [("draw_cards", "draw_pile"),
+                             ("discard_cards", "discard_pile"),
+                             ("exhaust_cards", "exhaust_pile")]:
+        struct_cards = av_combat.get(struct_key) or []
+        if struct_cards:
+            # Structured format: [{card_id, upgraded, card_type}]
+            pile_cards: list[Card] = []
+            for sc in struct_cards:
+                card = card_db.get(sc["card_id"], upgraded=sc.get("upgraded", False))
+                if card is not None:
+                    pile_cards.append(card)
+            if attr == "draw_pile":
+                random.shuffle(pile_cards)
+            setattr(player, attr, pile_cards)
+        else:
+            # Fallback: parse display strings (pre-fork mod)
+            from .run_logger import _parse_pile
+            pile_name = struct_key.replace("_cards", "")
+            _, card_names = _parse_pile(raw, pile_name)
+            pile_cards = []
+            for name in card_names:
+                base = name.rstrip("+")
+                upgraded = name.endswith("+")
+                card = card_db.get_by_name(base, upgraded=upgraded)
+                if card is None:
+                    card = card_db.get_by_name(base)
+                if card is not None:
+                    pile_cards.append(card)
+            if attr == "draw_pile":
+                random.shuffle(pile_cards)
+            setattr(player, attr, pile_cards)
 
     # Build enemies
     enemies = [_enemy_from_runtime(e) for e in enemies_raw]
@@ -81,37 +95,28 @@ def state_from_mcp(raw: dict, card_db: CardDB,
     # Predict future enemy intents from move tables
     annotate_predictions(enemies, turns=2, move_indices=move_indices)
 
-    # Parse potions from run state
+    # Parse potions from run state.
+    # Uses potion_id from the enriched mod API when available,
+    # falling back to keyword-based classification for older mods.
     potions_raw = run.get("potions") or []
     potions = []
     for p in potions_raw:
         if not p.get("occupied"):
             potions.append({})
             continue
-        name = (p.get("name") or "").lower()
-        desc = (p.get("description") or "").lower()
         pot: dict = {"name": p.get("name", "?")}
-        # Classify by keywords (matches simulator POTION_TYPES)
-        if any(k in name for k in ("blood", "heal", "fairy", "fruit", "regen")):
-            pot["heal"] = 20
-        elif any(k in name for k in ("block", "ghost", "shield", "iron", "armor")):
-            pot["block"] = 12
-        elif "strength" in name or "flex" in name:
-            pot["strength"] = 2
-        elif any(k in name for k in ("fire", "explosive", "attack")):
-            pot["damage_all"] = 20
-        elif "weak" in name or "fear" in name:
-            pot["enemy_weak"] = 3
+        potion_id = p.get("potion_id") or ""
+        classified = _classify_potion(potion_id, p.get("name", ""))
+        if classified:
+            pot.update(classified)
+            potions.append(pot)
         else:
-            # Unknown potion — skip (empty slot from network's perspective)
             potions.append({})
-            continue
-        potions.append(pot)
     player.potions = potions
 
     gold = run.get("gold", 0)
 
-    return CombatState(
+    state = CombatState(
         player=player,
         enemies=enemies,
         turn=raw.get("turn", 1),
@@ -119,6 +124,20 @@ def state_from_mcp(raw: dict, card_db: CardDB,
         floor=floor,
         gold=gold,
     )
+
+    # Set mid-turn counters from enriched mod API (Phase 1A).
+    # These are maintained by the mod's GameActionService and exposed
+    # on combat.player.  When present, the runner no longer needs to
+    # reconstruct them from logged card names.
+    cards_played = player_raw.get("cards_played_this_turn")
+    if cards_played is not None:
+        state.cards_played_this_turn = cards_played
+        state.attacks_played_this_turn = player_raw.get("attacks_played_this_turn", 0)
+        skills = player_raw.get("skills_played_this_turn", 0)
+        if skills > 0:
+            state.player.powers["_skills_played"] = skills
+
+    return state
 
 
 def action_to_mcp(action: Action) -> dict:
@@ -153,6 +172,37 @@ def actions_to_mcp_sequence(actions: list[Action]) -> list[dict]:
 # ---------------------------------------------------------------------------
 # Internal parsing helpers
 # ---------------------------------------------------------------------------
+
+# Potion ID → simulator effect mapping.  Keys are substrings matched
+# against the potion_id from the mod API (case-insensitive).
+_POTION_ID_MAP: dict[str, dict] = {
+    "BLOOD": {"heal": 20},
+    "HEAL": {"heal": 20},
+    "FAIRY": {"heal": 20},
+    "FRUIT": {"heal": 20},
+    "REGEN": {"heal": 20},
+    "BLOCK": {"block": 12},
+    "GHOST": {"block": 12},
+    "IRON": {"block": 12},
+    "STRENGTH": {"strength": 2},
+    "FLEX": {"strength": 2},
+    "FIRE": {"damage_all": 20},
+    "EXPLOSIVE": {"damage_all": 20},
+    "ATTACK": {"damage_all": 20},
+    "WEAK": {"enemy_weak": 3},
+    "FEAR": {"enemy_weak": 3},
+    "VULNERABLE": {"enemy_weak": 3},
+}
+
+
+def _classify_potion(potion_id: str, name: str) -> dict | None:
+    """Classify a potion by ID or name into simulator effect dict."""
+    key = (potion_id or name or "").upper()
+    for pattern, effect in _POTION_ID_MAP.items():
+        if pattern in key:
+            return dict(effect)
+    return None
+
 
 def _parse_powers(powers_raw: list[dict]) -> dict[str, int]:
     """Parse runtime powers list into {power_name: amount} dict."""
