@@ -108,14 +108,10 @@ def encode_state(
         enemy_power_amts_all.extend(e_pow_amts)
 
     # --- Relics ---
+    # Vocab uses UPPER_SNAKE (AKABEKO, RING_OF_THE_SNAKE, etc.)
     relic_ids = []
     for relic_name in list(state.relics)[:cfg.max_relics]:
-        # Try UPPER_SNAKE first (how relics are stored), then display name
-        idx = vocabs.relics.get(relic_name)
-        if idx <= 1:
-            display = relic_name.replace("_", " ").title()
-            idx = vocabs.relics.get(display)
-        relic_ids.append(idx)
+        relic_ids.append(vocabs.relics.get(relic_name))
     relic_size = len(relic_ids)
     while len(relic_ids) < cfg.max_relics:
         relic_ids.append(PAD_IDX)

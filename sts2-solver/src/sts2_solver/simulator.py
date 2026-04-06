@@ -1481,12 +1481,13 @@ class RunStrategy(Protocol):
                      relics: frozenset[str]) -> tuple: ...
         # Returns (chosen_option_idx: int, changes_dict: dict, samples: list)
 
-    def set_run_context(self, act_id: str, boss_id: str) -> None: ...
-        # Called once at run start with act and boss IDs.
-        # Implementations should store these for use in state encoding.
+    def set_run_context(self, act_id: str, boss_id: str) -> None:
+        """Called once at run start with act and boss IDs."""
+        ...
 
-    def set_remaining_path(self, path: tuple[str, ...]) -> None: ...
-        # Called each floor with the remaining room types ahead.
+    def set_remaining_path(self, path: tuple[str, ...]) -> None:
+        """Called each floor with the remaining room types ahead."""
+        ...
 
 
 # ---------------------------------------------------------------------------
@@ -1655,16 +1656,19 @@ def run_act1(
                 row_nodes = [n for pos, n in _map_by_pos.items()
                              if pos[0] == map_row]
                 if row_nodes:
-                    # Match each choice to a node by room type
+                    # Match each choice to a distinct node by room type.
+                    # Track used nodes so duplicate types get different nodes.
                     downstream_paths = []
+                    available = list(row_nodes)
                     for choice_rt in room_entry:
-                        # Find a node whose type maps to this choice
                         game_nt = _NODE_TYPE_MAP_REVERSE.get(choice_rt, "Monster")
                         matched = next(
-                            (n for n in row_nodes
+                            (n for n in available
                              if n.get("node_type") == game_nt),
-                            row_nodes[0],
+                            available[0] if available else row_nodes[0],
                         )
+                        if matched in available:
+                            available.remove(matched)
                         downstream_paths.append(
                             _bfs_downstream_path(map_graph, matched))
 

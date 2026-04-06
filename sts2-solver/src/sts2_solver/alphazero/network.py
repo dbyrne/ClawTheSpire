@@ -126,6 +126,9 @@ class SetEncoder(nn.Module):
         if (num_valid == 0).all():
             return torch.zeros(x.shape[0], self.output_dim, device=x.device)
         attn_out, _ = self.attention(x, x, x, key_padding_mask=mask)
+        # Zero out padded positions before LayerNorm to prevent NaN
+        # (PyTorch MHA can produce NaN for fully-masked rows in mixed batches)
+        attn_out = attn_out.masked_fill(mask.unsqueeze(-1), 0.0)
         x = self.layer_norm(x + attn_out)
         pooled = (x * valid).sum(dim=1) / num_valid.clamp(min=1)
         return pooled
@@ -137,6 +140,9 @@ class SequenceEncoder(nn.Module):
     Unlike SetEncoder, this preserves ordering via learned positional
     embeddings — "Elite at position 0" is different from "Elite at position 5".
     Used for map paths where BFS order (distance from current node) matters.
+
+    Note: BFS frontiers are flattened, so multiple nodes at the same depth
+    share the same positional embedding (bag-of-rooms-at-distance-N).
     """
 
     def __init__(self, input_dim: int, output_dim: int, max_length: int,
@@ -158,7 +164,6 @@ class SequenceEncoder(nn.Module):
             (batch, output_dim)
         """
         x = self.project_in(embeds)
-        # Add positional embeddings
         seq_len = x.shape[1]
         positions = torch.arange(seq_len, device=x.device)
         x = x + self.pos_embed(positions).unsqueeze(0)
@@ -168,6 +173,7 @@ class SequenceEncoder(nn.Module):
         if (num_valid == 0).all():
             return torch.zeros(x.shape[0], self.output_dim, device=x.device)
         attn_out, _ = self.attention(x, x, x, key_padding_mask=mask)
+        attn_out = attn_out.masked_fill(mask.unsqueeze(-1), 0.0)
         x = self.layer_norm(x + attn_out)
         pooled = (x * valid).sum(dim=1) / num_valid.clamp(min=1)
         return pooled

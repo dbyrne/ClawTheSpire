@@ -1588,11 +1588,15 @@ class Runner:
         self._current_act_id = act_map.get(act_name, "")
 
         # Try to get boss from map's boss node
+        # Boss vocab uses encounter IDs like "CEREMONIAL_BEAST_BOSS"
         map_data = gs.get("map") or (gs.get("agent_view") or {}).get("map") or {}
         boss_node = map_data.get("boss_node") or {}
         boss_name = boss_node.get("name") or boss_node.get("encounter") or ""
         if boss_name:
-            self._current_boss_id = boss_name.upper().replace(" ", "_")
+            boss_id = boss_name.upper().replace(" ", "_")
+            if not boss_id.endswith("_BOSS"):
+                boss_id += "_BOSS"
+            self._current_boss_id = boss_id
         else:
             self._current_boss_id = ""
 
