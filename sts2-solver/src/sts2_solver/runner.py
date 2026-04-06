@@ -155,8 +155,8 @@ class Runner:
             Panel(Text.from_markup(self._advisor_text), title="Advisor", border_style="blue")
         )
 
-        # Log panel
-        log_text = "\n".join(self._log) if self._log else "[dim]Waiting...[/dim]"
+        # Log panel — show newest entries first so they don't scroll off
+        log_text = "\n".join(reversed(self._log)) if self._log else "[dim]Waiting...[/dim]"
         layout["log"].update(
             Panel(Text.from_markup(log_text), title="Action Log", border_style="green")
         )
@@ -835,6 +835,7 @@ class Runner:
             self.logger.log_combat_start(gs)
             self._combat_logged = True
             self._combat_move_indices = {}
+            self.turn_count = 0
 
             if self._store_run_started:
                 run = gs.get("run") or {}
@@ -1036,6 +1037,7 @@ class Runner:
 
         # End turn if we're still in combat
         turn_ended = False
+        combat_won_by_card = False
         if not self.dry_run and "end_turn" in gs.get("available_actions", []):
             self._wait_for_ready()
             try:
@@ -1045,6 +1047,17 @@ class Runner:
                 turn_ended = True
             except Exception as e:
                 self._log_action(f"  [red]X End Turn: {e}[/red]")
+        elif not self.dry_run and "play_card" not in gs.get("available_actions", []):
+            # Card play killed the last enemy — combat ended mid-turn.
+            # Check if all enemies are dead to confirm it's a win (not a
+            # mid-combat discard prompt or phase transition).
+            post_enemies = (gs.get("combat") or {}).get("enemies") or []
+            all_dead = not post_enemies or all(
+                e.get("current_hp", 0) <= 0 for e in post_enemies
+            )
+            if all_dead:
+                combat_won_by_card = True
+                turn_ended = True  # Allow turn logging below
 
         # Only log complete turns (not mid-turn breaks from discard prompts).
         # Mid-turn snapshots are useless for validation and cause false mismatches.
@@ -1098,39 +1111,52 @@ class Runner:
 
         self.turn_count += 1
 
-        # Check for combat end — only log "win" if all enemies are dead,
-        # not just because the screen changed (boss phase transitions leave
-        # combat temporarily for card selection screens).
-        self._wait_for_ready()
-        try:
-            post = self.client.get_state()
-            post_screen = post.get("screen", "").upper()
-            if "COMBAT" not in post_screen:
-                # Verify enemies are actually dead (not a mid-combat phase transition)
-                combat = post.get("combat") or {}
-                enemies = combat.get("enemies") or []
-                all_dead = not enemies or all(
-                    e.get("current_hp", 0) <= 0 for e in enemies
+        # Check for combat end — either the last card killed all enemies
+        # (combat_won_by_card) or end_turn resolved and the screen changed.
+        if combat_won_by_card:
+            # Already confirmed all enemies dead above; gs is current state
+            self._log_action("[bold green]Combat won![/bold green]")
+            self.logger.log_combat_end(gs, "win")
+            self._combat_logged = False
+            if self._store_run_started:
+                post_run = (gs.get("run") or {})
+                self.store.log_combat_end(
+                    self._store_run_id,
+                    floor=post_run.get("floor", 0),
+                    hp=post_run.get("current_hp", 0),
+                    max_hp=post_run.get("max_hp", 0),
+                    outcome="win", turns=self.turn_count,
                 )
-                if all_dead:
-                    self._log_action("[bold green]Combat won![/bold green]")
-                    self.logger.log_combat_end(post, "win")
-                    self._combat_logged = False
-                    if self._store_run_started:
-                        post_run = post.get("run") or {}
-                        self.store.log_combat_end(
-                            self._store_run_id,
-                            floor=post_run.get("floor", 0),
-                            hp=post_run.get("current_hp", 0),
-                            max_hp=post_run.get("max_hp", 0),
-                            outcome="win", turns=self.turn_count,
-                        )
-                    # Intercept the reward screen before it auto-resolves.
-                    # Poll rapidly for claim_reward to appear so we can
-                    # claim the card reward individually for network eval.
-                    self._intercept_card_reward()
-        except Exception:
-            pass
+            self._intercept_card_reward()
+        else:
+            self._wait_for_ready()
+            try:
+                post = self.client.get_state()
+                post_screen = post.get("screen", "").upper()
+                if "COMBAT" not in post_screen:
+                    # Verify enemies are actually dead (not a mid-combat phase transition)
+                    combat = post.get("combat") or {}
+                    enemies = combat.get("enemies") or []
+                    all_dead = not enemies or all(
+                        e.get("current_hp", 0) <= 0 for e in enemies
+                    )
+                    if all_dead:
+                        self._log_action("[bold green]Combat won![/bold green]")
+                        self.logger.log_combat_end(post, "win")
+                        self._combat_logged = False
+                        if self._store_run_started:
+                            post_run = post.get("run") or {}
+                            self.store.log_combat_end(
+                                self._store_run_id,
+                                floor=post_run.get("floor", 0),
+                                hp=post_run.get("current_hp", 0),
+                                max_hp=post_run.get("max_hp", 0),
+                                outcome="win", turns=self.turn_count,
+                            )
+                        self._intercept_card_reward()
+            except Exception as e:
+                self._log_action(f"[red]Combat end check error: {e}[/red]")
+                raise
 
     # ------------------------------------------------------------------
     # Non-combat
@@ -1179,8 +1205,9 @@ class Runner:
             # Fall through to network handler below
 
         elif "claim_reward" in actions:
-            # Claim next reward item (gold, potion, relic — card was
-            # already handled by the intercept or this is a non-card reward)
+            # Auto-claim non-card rewards (gold, potion, relic).
+            # Card rewards are NEVER auto-claimed — they must go through
+            # the network via _intercept_card_reward or the card_reward handler.
             reward = gs.get("reward") or {}
             if not reward:
                 reward = (gs.get("agent_view") or {}).get("reward") or {}
@@ -1189,19 +1216,22 @@ class Runner:
                 reward_items = ((gs.get("agent_view") or {}).get("reward") or {}).get("rewards") or []
 
             for item in reward_items:
-                if item.get("claimable", True):
-                    idx = item.get("index", item.get("i"))
-                    if idx is not None:
-                        rtype = str(item.get("reward_type", item.get("line", ""))).split(":")[0]
-                        self._log_action(f"  [dim]auto: claim_reward({idx}) — {rtype}[/dim]")
-                        if not self.dry_run:
-                            try:
-                                self._execute_with_retry("claim_reward", option_index=idx)
-                                self.action_count += 1
-                            except Exception:
-                                pass
-                        return
-            # Nothing left to claim — wait for proceed or collect
+                if not item.get("claimable", True):
+                    continue
+                if self._is_card_reward_item(item):
+                    continue
+                idx = item.get("index", item.get("i"))
+                if idx is not None:
+                    rtype = str(item.get("reward_type", item.get("line", ""))).split(":")[0]
+                    self._log_action(f"  [dim]auto: claim_reward({idx}) — {rtype}[/dim]")
+                    if not self.dry_run:
+                        try:
+                            self._execute_with_retry("claim_reward", option_index=idx)
+                            self.action_count += 1
+                        except Exception:
+                            pass
+                    return
+            # Only card rewards left, or nothing claimable — proceed
             if "proceed" in actions:
                 self._log_action("  [dim]auto: proceed (rewards done)[/dim]")
                 if not self.dry_run:
@@ -1978,7 +2008,7 @@ class Runner:
             else:
                 # Skip — use skip_reward_cards (card selection screen)
                 self._card_reward_handled = True
-                return Decision(skip_action, None,
+                return Decision("skip_reward_cards", None,
                                 f"Network: skip (score={scores[best_idx]:.2f})",
                                 network_value=nv, head_scores=hs)
         except Exception as e:
@@ -2751,8 +2781,9 @@ class Runner:
                                         except Exception as e:
                                             self._log_action(f"  [red]Failed: {e}[/red]")
                                     self._card_reward_handled = True
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            self._log_action(f"  [red]Card reward network error: {e}[/red]")
+                            raise
                     return
 
             self._log_action(f"  [yellow]No card reward found after claiming non-card items[/yellow]")
