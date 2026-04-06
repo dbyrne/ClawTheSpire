@@ -1510,33 +1510,6 @@ class Runner:
             )
             return
 
-        # Handle generic potion screens (use/discard offered between rooms).
-        # These appear when potion slots interact with rewards.  The game
-        # keeps showing this screen until dismissed — avoid looping by
-        # checking if we already handled it this floor.
-        if set(actions) <= {"use_potion", "discard_potion", "proceed",
-                            "collect_rewards_and_proceed", "confirm_modal"}:
-            for dismiss in ("proceed", "collect_rewards_and_proceed", "confirm_modal"):
-                if dismiss in actions:
-                    self._log_action(f"  [dim]auto: {dismiss} — dismissing potion screen[/dim]")
-                    if not self.dry_run:
-                        try:
-                            self._execute_with_retry(dismiss)
-                            self.action_count += 1
-                        except Exception:
-                            pass
-                    return
-            # No dismiss action — discard one potion to advance
-            if "discard_potion" in actions:
-                self._log_action("  [dim]auto: discard_potion(0) — making room[/dim]")
-                if not self.dry_run:
-                    try:
-                        self._execute_with_retry("discard_potion", option_index=0)
-                        self.action_count += 1
-                    except Exception as e:
-                        self._log_action(f"  [red]Failed: {e}[/red]")
-                return
-
         # No handler for this screen type.
         raise RuntimeError(
             f"Unhandled screen type {screen_type!r} — no network or "

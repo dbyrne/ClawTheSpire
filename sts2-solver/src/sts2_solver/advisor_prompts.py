@@ -660,9 +660,14 @@ AUTO_ACTIONS = {
 }
 
 
+_AMBIENT_ACTIONS = {"use_potion", "discard_potion"}
+
+
 def detect_screen_type(available_actions: list[str]) -> str:
     """Detect screen type from available actions."""
-    actions_set = set(available_actions)
+    # Filter ambient actions (potion use/discard available on many screens)
+    # so they don't cause misclassification as 'generic'.
+    actions_set = set(available_actions) - _AMBIENT_ACTIONS
 
     # choose_reward_card takes priority over select_deck_card —
     # the card reward selection screen has both, but the primary
