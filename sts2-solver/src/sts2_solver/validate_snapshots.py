@@ -520,6 +520,14 @@ def simulate_turn(
 
     # End turn + enemy phase
     end_turn(s)
+    # Patch Gas Bomb intents BEFORE resolve_enemy_intents so their
+    # explosion damage is dealt in the correct enemy ordering (matching
+    # self-play, which sets intents from profiles before resolving).
+    for enemy in s.enemies:
+        if enemy.id == "GAS_BOMB" and enemy.is_alive and enemy.intent_type is None:
+            enemy.intent_type = "Attack"
+            enemy.intent_damage = 8
+            enemy.intent_hits = 1
     resolve_enemy_intents(s)
     _apply_move_table_effects(s)
     tick_enemy_powers(s)
@@ -543,9 +551,9 @@ def _apply_move_table_effects(state: CombatState) -> None:
     identical.  Side effects are looked up from ENEMY_SIDE_EFFECTS by
     intent key (e.g. "Attack_5", "Buff").
 
-    Special case: Gas Bomb snapshots show intent_type=None (fuse mechanic).
-    We override with Attack_8 so resolve_enemy_intents deals the damage,
-    then apply_intent_effects handles the self-destruct.
+    Special case: Gas Bomb intents are patched before resolve_enemy_intents
+    (in the caller) so explosion damage is dealt in correct enemy ordering.
+    This function just self-destructs surviving Gas Bombs.
     """
     from .simulator import (
         ENEMY_SIDE_EFFECTS,
@@ -563,19 +571,11 @@ def _apply_move_table_effects(state: CombatState) -> None:
             return f"{t}_{d}x{h}" if h > 1 else f"{t}_{d}"
         return t
 
-    # --- Gas Bomb: snapshot shows intent_type=None, but it actually ---
-    # --- explodes for 8 damage. Set intent so resolve_enemy_intents ---
-    # --- already dealt the damage (called before us). Just self-destruct. ---
+    # Gas Bomb: intents are patched before resolve_enemy_intents (in the
+    # caller) so damage is dealt in the correct enemy ordering.  Here we
+    # just need to self-destruct any surviving Gas Bombs.
     for enemy in state.enemies:
         if enemy.id == "GAS_BOMB" and enemy.is_alive:
-            # resolve_enemy_intents already ran; if intent was None it did
-            # nothing.  We need to deal the explosion damage ourselves since
-            # the snapshot doesn't expose the Gas Bomb's real Attack intent.
-            from .combat_engine import _enemy_attacks_player
-            enemy.intent_type = "Attack"
-            enemy.intent_damage = 8
-            enemy.intent_hits = 1
-            _enemy_attacks_player(state, enemy)
             enemy.hp = 0
 
     # Build spawn counter from state attributes (persisted across turns)
