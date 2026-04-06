@@ -69,7 +69,7 @@ def _rebuild_profiles(logs_dir: Path) -> None:
 
     # Event profiles
     existing_event = load_event(event_path())
-    event_profiles = build_event(all_logs, min_observations=2, existing=existing_event)
+    event_profiles = build_event(all_logs, min_observations=1, existing=existing_event)
     save_event(event_profiles, event_path())
     n_new_event = len(event_profiles) - len(existing_event)
     print(f"  Event profiles: {len(event_profiles)} total"

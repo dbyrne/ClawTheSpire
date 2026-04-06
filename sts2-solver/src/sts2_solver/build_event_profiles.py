@@ -25,7 +25,7 @@ from .game_data import strip_markup
 
 log = logging.getLogger(__name__)
 
-DEFAULT_MIN_OBSERVATIONS = 2
+DEFAULT_MIN_OBSERVATIONS = 1
 
 
 # ---------------------------------------------------------------------------

@@ -24,25 +24,6 @@
         },
         "n_offered": 4,
         "n_chosen": 4
-      },
-      {
-        "title": "Linger",
-        "description": "Gain 2 Max HP. Take 3 damage.",
-        "option_type": 15,
-        "effects": {
-          "max_hp_delta": 2,
-          "hp_delta": -3
-        },
-        "n_offered": 0,
-        "n_chosen": 0
-      },
-      {
-        "title": "Exit Baths",
-        "description": "",
-        "option_type": 22,
-        "effects": {},
-        "n_offered": 0,
-        "n_chosen": 0
       }
     ]
   },
@@ -1033,6 +1014,56 @@
           "card_transform": 1
         },
         "n_offered": 16,
+        "n_chosen": 0
+      }
+    ]
+  },
+  "PUNCH_OFF": {
+    "event_id": "PUNCH_OFF",
+    "event_name": "Punch Off",
+    "n_observations": 1,
+    "options": [
+      {
+        "title": "Nab",
+        "description": "Add Injury to your Deck. Obtain a random Relic.",
+        "option_type": 21,
+        "effects": {
+          "relic_random": true
+        },
+        "n_offered": 1,
+        "n_chosen": 1
+      },
+      {
+        "title": "I Can Take Them",
+        "description": "Fight them for Greater Rewards.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 1,
+        "n_chosen": 0
+      }
+    ]
+  },
+  "SPIRALING_WHIRLPOOL": {
+    "event_id": "SPIRALING_WHIRLPOOL",
+    "event_name": "Spiraling Whirlpool",
+    "n_observations": 1,
+    "options": [
+      {
+        "title": "Observe",
+        "description": "Enchant a Strike or Defend with [purple]Spiral[/purple].",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 1,
+        "n_chosen": 1
+      },
+      {
+        "title": "Drink",
+        "description": "Heal 23 HP.",
+        "option_type": 15,
+        "effects": {
+          "hp_delta": 23
+        },
+        "n_offered": 1,
         "n_chosen": 0
       }
     ]
