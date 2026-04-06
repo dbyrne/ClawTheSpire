@@ -956,9 +956,13 @@ class Runner:
 
             # Handle potion usage from MCTS
             if first_action.action_type == "use_potion":
-                # Skip if already used this turn (prevents retry loops)
+                # Already used this turn — potion is gone but MCTS doesn't
+                # know yet. Log and continue so MCTS re-searches without it.
                 if first_action.potion_idx in self._potions_used_this_turn:
-                    break
+                    self._log_action(
+                        f"  [yellow]Potion slot {first_action.potion_idx} already used, re-searching[/yellow]"
+                    )
+                    continue
                 pot_name = "potion"
                 potions_raw = (gs.get("run") or {}).get("potions", [])
                 for p in potions_raw:
