@@ -141,7 +141,7 @@ class TestRealMaps:
     def test_map_generates_valid_sequence(self):
         from sts2_solver.simulator import _generate_act1_map_with_choices
         rng = random.Random(42)
-        rooms = _generate_act1_map_with_choices(rng)
+        rooms, _map_data = _generate_act1_map_with_choices(rng)
         assert len(rooms) >= 14
         assert rooms[-1] == "boss"
         # Should have at least one combat room
@@ -156,7 +156,7 @@ class TestRealMaps:
         from sts2_solver.simulator import _generate_act1_map_with_choices
         sequences = set()
         for seed in range(20):
-            rooms = _generate_act1_map_with_choices(random.Random(seed))
+            rooms, _map_data = _generate_act1_map_with_choices(random.Random(seed))
             # Flatten for comparison
             flat = tuple(str(r) for r in rooms)
             sequences.add(flat)

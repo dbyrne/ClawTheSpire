@@ -723,7 +723,7 @@ def _generate_act1_map_with_choices(rng: random.Random,
     """
     real_map = _pick_real_map(rng, act_id=act_id)
     if real_map is not None:
-        return _walk_real_map(real_map, rng)
+        return _walk_real_map(real_map, rng), real_map
 
     # Synthetic fallback (used only if no map_pool.json exists)
     rooms: list = []
@@ -739,7 +739,7 @@ def _generate_act1_map_with_choices(rng: random.Random,
     rooms.append(rng.sample(["event", "shop"], k=2))
     rooms.append("rest")
     rooms.append("boss")
-    return rooms
+    return rooms, None
 
 
 # Node type → sim room type.  "Monster" is split into weak/normal by row.
@@ -756,6 +756,48 @@ _NODE_TYPE_MAP = {
 
 # Rows below this threshold map Monster → "weak" instead of "normal"
 _WEAK_ROW_THRESHOLD = 4
+
+def _bfs_downstream_path(
+    map_data: dict,
+    start_node: dict,
+    max_depth: int = 10,
+) -> tuple[str, ...]:
+    """BFS from a node to collect downstream room types in order.
+
+    Returns a tuple of game node types (Monster, Elite, RestSite, etc.)
+    representing the rooms reachable from start_node, in BFS order
+    (distance 1 first, then distance 2, etc.).
+    """
+    by_pos: dict[tuple[int, int], dict] = {}
+    for n in map_data.get("nodes", []):
+        by_pos[(n["row"], n["col"])] = n
+
+    result: list[str] = []
+    frontier = [start_node]
+    for _ in range(max_depth):
+        next_frontier: list[dict] = []
+        for node in frontier:
+            for c in node.get("children", []):
+                pos = (c["row"], c["col"])
+                child = by_pos.get(pos)
+                if child:
+                    next_frontier.append(child)
+        if not next_frontier:
+            break
+        # Deduplicate by position (multiple parents can reach same child)
+        seen_pos: set[tuple[int, int]] = set()
+        deduped: list[dict] = []
+        for n in next_frontier:
+            pos = (n["row"], n["col"])
+            if pos not in seen_pos:
+                seen_pos.add(pos)
+                deduped.append(n)
+        for n in deduped:
+            result.append(n.get("node_type", "Monster"))
+        frontier = deduped
+
+    return tuple(result)
+
 
 # Reverse mapping: sim room type → game node type (for path encoding)
 _NODE_TYPE_MAP_REVERSE = {
@@ -1548,7 +1590,13 @@ def run_act1(
     if not act_data:
         act_data = _ACTS_BY_ID.get("OVERGROWTH", {})
         act_id = "OVERGROWTH"
-    room_sequence = _generate_act1_map_with_choices(rng, act_id=act_id)
+    room_sequence, map_graph = _generate_act1_map_with_choices(rng, act_id=act_id)
+
+    # Build position lookup for BFS downstream paths
+    _map_by_pos: dict[tuple[int, int], dict] = {}
+    if map_graph:
+        for n in map_graph.get("nodes", []):
+            _map_by_pos[(n["row"], n["col"])] = n
 
     # Pre-pick boss (visible on map from run start)
     boss_encounters = [e for e in act_data.get("encounters", [])
@@ -1598,13 +1646,31 @@ def run_act1(
 
         # Resolve map choice nodes
         if isinstance(room_entry, list):
-            # TODO: compute true per-option downstream paths from the map graph.
-            # Currently the room_sequence is a flat list so we can't resolve
-            # which specific path each choice leads to.  Pass None so the
-            # network honestly sees zeros rather than identical fake paths.
+            # Compute per-option downstream paths via BFS on the map graph
+            downstream_paths = None
+            if map_graph and _map_by_pos:
+                # Map rows are 0-indexed; floor_num is 1-indexed.
+                # Floor 1 = Neow (row 0), floor 2 = row 1, etc.
+                map_row = floor_num - 1
+                row_nodes = [n for pos, n in _map_by_pos.items()
+                             if pos[0] == map_row]
+                if row_nodes:
+                    # Match each choice to a node by room type
+                    downstream_paths = []
+                    for choice_rt in room_entry:
+                        # Find a node whose type maps to this choice
+                        game_nt = _NODE_TYPE_MAP_REVERSE.get(choice_rt, "Monster")
+                        matched = next(
+                            (n for n in row_nodes
+                             if n.get("node_type") == game_nt),
+                            row_nodes[0],
+                        )
+                        downstream_paths.append(
+                            _bfs_downstream_path(map_graph, matched))
+
             chosen_idx, map_samples = strategy.pick_map_path(
                 room_entry, deck, hp, max_hp, gold, floor_num, frozenset(relics),
-                downstream_paths=None)
+                downstream_paths=downstream_paths)
             result.option_samples.extend(map_samples)
             room_type = room_entry[chosen_idx]
         else:
