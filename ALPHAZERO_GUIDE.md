@@ -55,17 +55,21 @@ Each game concept gets encoded differently:
 | Hand (variable size) | **Self-attention + mean pool** | Hands vary from 0-15 cards. Attention lets cards "look at" each other (a Defend is more valuable when you also have Entrench). Mean pooling collapses variable-length to fixed-length. |
 | Draw/Discard/Exhaust piles | **Mean of card embeddings** | Simpler than the hand — we don't need card-to-card attention for piles, just a summary of what's in there. |
 | Enemies (variable count) | **Fixed slots (max 5)** with padding | Each slot has HP, block, intent, and power features. Empty slots are zeroed out. A small linear layer projects each enemy to 32 dimensions. |
-| Relics, Potions | **Embeddings / feature vectors** | Similar pattern: identity embedding + numeric features. |
+| Relics | **Self-attention encoder (SetEncoder)** — 16-dim output | Like the hand encoder but for relics. Attention lets relics "see" each other (Kunai is more valuable with shiv-generating cards). Permutation-invariant — relic order doesn't matter. |
+| Act ID | **Learned embedding** — 4-dim | Which world we're in (Overgrowth, Underdocks, Hive, Glory). Different acts have different card pools, enemies, and strategies. |
+| Boss ID | **Learned embedding** — 8-dim | Which boss to prepare for (e.g., Ceremonial Beast vs Soul Fysh). Pre-picked at run start, visible on the map. Affects card/relic evaluation for the entire run. |
+| Map path | **Ordered sequence encoder (SequenceEncoder)** — 16-dim | Remaining room types ahead (Monster, Elite, RestSite, etc.) in BFS order. Has positional embeddings so "Elite next" is different from "Elite in 5 floors." |
+| Potions | **Feature vectors** — 6-dim per slot | occupied flag + type one-hot (heal/block/strength/damage/weak). |
 
 All of these pieces get concatenated (joined end-to-end) into one long vector
-(~445 numbers), which feeds into the **trunk**.
+(451 numbers), which feeds into the **trunk**.
 
 ### The trunk (shared backbone)
 
 ```
-[~445-dim input]
+[451-dim input]
        |
-  Linear(445 -> 256) + ReLU        <-- compress to 256 dimensions
+  Linear(451 -> 256) + ReLU        <-- compress to 256 dimensions
        |
   Linear(256 -> 256) + ReLU        <-- refine
        + residual connection        <-- add the input back (prevents vanishing gradients)
@@ -135,28 +139,41 @@ Invalid actions get their scores set to negative infinity so they're never chose
 #### 3. Option Evaluation Head — "What should I do outside of combat?"
 
 ```
-hidden(256) + option_type_embed(16) + card_embed(32) = 304 -> Linear -> score
+hidden(256) + option_type_embed(16) + card_embed(32) + path_embed(16) = 320 -> Linear -> score
 ```
 
-**One head for all non-combat decisions.** The option type embedding (16-dim)
-carries context, while the card embedding (32-dim) identifies the card involved:
+**One head for all non-combat decisions.** Each option is scored using four
+concatenated features:
 
-| Decision | Option Type | Card Embed |
-|----------|------------|------------|
-| Card reward: take Backstab | CARD_REWARD | Backstab |
-| Card reward: skip | CARD_SKIP | zeros |
-| Shop: buy Footwork (75g) | SHOP_BUY | Footwork |
-| Shop: remove Strike (50g) | SHOP_REMOVE | Strike |
-| Shop: leave | SHOP_LEAVE | zeros |
-| Rest site: heal | REST | zeros |
-| Rest site: upgrade Defend | SMITH | Defend |
-| Map: take elite path | MAP_ELITE | zeros |
+- **Option type embedding (16-dim):** What kind of choice this is
+- **Card embedding (32-dim):** Which card is involved (zeros for non-card options)
+- **Path embedding (16-dim):** What rooms lie ahead if this option is chosen
+  (per-option for map decisions, shared global context for other decisions)
+
+| Decision | Option Type | Card Embed | Path Embed |
+|----------|------------|------------|------------|
+| Card reward: take Backstab | CARD_REWARD | Backstab | remaining rooms |
+| Card reward: skip | CARD_SKIP | zeros | remaining rooms |
+| Shop: buy Footwork (75g) | SHOP_BUY | Footwork | remaining rooms |
+| Shop: remove Strike (50g) | SHOP_REMOVE | Strike | remaining rooms |
+| Shop: leave | SHOP_LEAVE | zeros | remaining rooms |
+| Rest site: heal | REST | zeros | remaining rooms |
+| Rest site: upgrade Defend | SMITH | Defend | remaining rooms |
+| Map: take elite path | MAP_ELITE | zeros | **elite's downstream** |
+| Map: take rest path | MAP_REST | zeros | **rest's downstream** |
+| Event: heal option | EVENT_HEAL | zeros | remaining rooms |
+| Event: card remove | EVENT_CARD_REMOVE | zeros | remaining rooms |
 
 *Why one head instead of separate card/shop/rest heads?* "Should I take Backstab
 as a free reward?" and "Should I buy Backstab for 75g?" are the same question —
 "does this card improve my deck?" — just with different context. A single head
 with type embeddings shares card-scoring knowledge across all decision types and
 gets more training data per parameter.
+
+*Why per-option path encoding for map decisions?* "Take the elite path" is a very
+different choice if the elite is followed by a rest site vs followed by another
+elite. The path embedding (using a SequenceEncoder with positional embeddings)
+gives each map option its own downstream context.
 
 ---
 

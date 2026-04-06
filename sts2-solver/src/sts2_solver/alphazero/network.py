@@ -1,13 +1,16 @@
-"""AlphaZero neural network for STS2 combat.
+"""AlphaZero neural network for STS2.
 
 Architecture:
-    State encoder (shared trunk):
+    State encoder (shared trunk, 451-dim → 256-dim hidden):
         - Card embeddings (learned, 32-dim per card ID)
         - Hand: card embed (32) + stats (15) → self-attention → mean pool → 32-dim
         - Piles (draw/discard/exhaust): mean card embeddings → project → 32-dim each
         - Player: scalar features (HP, block, energy) + power embeddings
         - Enemies: per-slot features → linear projection → 32-dim × max_enemies
-        - Relics: mean embeddings (8-dim)
+        - Relics: self-attention encoder (SetEncoder) → 16-dim
+        - Act ID: 4-dim embedding (Overgrowth, Underdocks, Hive, Glory)
+        - Boss ID: 8-dim embedding (12 bosses across 4 acts)
+        - Map path: ordered room type sequence → SequenceEncoder → 16-dim
         - Scalars: floor, turn, gold, deck_size, pending_choice, choice_type
         - Concatenated → MLP trunk (residual + LayerNorm) → 256-dim hidden state
 
@@ -20,9 +23,11 @@ Architecture:
         - Supports play_card, end_turn, use_potion, and choose_card actions
 
     Option evaluation head (all non-combat decisions):
-        hidden + option_type_embed + card_embed → Linear(304→64) → ReLU → Linear(64→1)
-        Handles card rewards, rest/smith, map pathing, shop buy/remove/leave.
+        hidden(256) + option_type_embed(16) + card_embed(32) + path_embed(16)
+        → Linear(320→64) → ReLU → Linear(64→1)
+        Handles card rewards, rest/smith, map pathing, shop, events.
         Type embedding carries context (free reward vs gold cost vs removal).
+        Path embedding gives per-option downstream room context for map decisions.
 """
 
 from __future__ import annotations
