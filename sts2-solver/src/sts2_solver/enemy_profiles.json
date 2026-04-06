@@ -386,7 +386,7 @@
   },
   "CORPSE_SLUG": {
     "monster_id": "CORPSE_SLUG",
-    "n_combats": 151,
+    "n_combats": 153,
     "fixed_opening": [],
     "moves": {
       "Attack_3x2": {
@@ -436,9 +436,9 @@
       }
     },
     "start_weights": {
-      "Attack_3x2": 0.311,
-      "Attack_8": 0.318,
-      "Debuff": 0.338,
+      "Attack_3x2": 0.307,
+      "Attack_8": 0.32,
+      "Debuff": 0.34,
       "Attack_7x2": 0.026,
       "None": 0.007
     },
@@ -450,26 +450,26 @@
         "Attack_12": 0.281
       },
       "Attack_8": {
-        "Attack_8": 0.05,
-        "Debuff": 0.875,
-        "None": 0.013,
-        "Attack_12": 0.05,
-        "Attack_3x2": 0.013
+        "Attack_8": 0.049,
+        "Debuff": 0.877,
+        "None": 0.012,
+        "Attack_12": 0.049,
+        "Attack_3x2": 0.012
       },
       "Debuff": {
-        "Debuff": 0.114,
+        "Debuff": 0.112,
         "Attack_3x2": 0.504,
-        "Attack_7x2": 0.35,
+        "Attack_7x2": 0.352,
         "None": 0.008,
         "Attack_11x2": 0.016,
         "Attack_5x2": 0.008
       },
       "Attack_7x2": {
-        "Attack_12": 0.758,
-        "Attack_11x2": 0.03,
-        "Attack_7x2": 0.091,
-        "Attack_16": 0.091,
-        "Debuff": 0.03
+        "Attack_12": 0.765,
+        "Attack_11x2": 0.029,
+        "Attack_7x2": 0.088,
+        "Attack_16": 0.088,
+        "Debuff": 0.029
       },
       "Attack_12": {
         "Attack_12": 0.036,
@@ -1951,7 +1951,7 @@
   },
   "PUNCH_CONSTRUCT": {
     "monster_id": "PUNCH_CONSTRUCT",
-    "n_combats": 9,
+    "n_combats": 10,
     "fixed_opening": [],
     "moves": {
       "Defend": {
@@ -1971,8 +1971,8 @@
       }
     },
     "start_weights": {
-      "Defend": 0.222,
-      "Attack_14": 0.778
+      "Defend": 0.3,
+      "Attack_14": 0.7
     },
     "transitions": {
       "Defend": {
@@ -1988,7 +1988,7 @@
   },
   "SEAPUNK": {
     "monster_id": "SEAPUNK",
-    "n_combats": 51,
+    "n_combats": 52,
     "fixed_opening": [
       {
         "type": "Attack",
@@ -2039,23 +2039,23 @@
       }
     },
     "start_weights": {
-      "Attack_11": 0.082,
-      "Attack_2x4": 0.469,
+      "Attack_11": 0.08,
+      "Attack_2x4": 0.48,
       "Attack_12": 0.02,
-      "Buff": 0.429
+      "Buff": 0.42
     },
     "transitions": {
       "Attack_11": {
         "Attack_2x4": 1.0
       },
       "Attack_2x4": {
-        "Buff": 0.964,
-        "Attack_2x4": 0.036
+        "Buff": 0.966,
+        "Attack_2x4": 0.034
       },
       "Buff": {
-        "Attack_12": 0.931,
-        "Buff": 0.034,
-        "Attack_13": 0.034
+        "Attack_12": 0.933,
+        "Buff": 0.033,
+        "Attack_13": 0.033
       },
       "Attack_12": {
         "Attack_3x4": 1.0
@@ -2225,7 +2225,7 @@
   },
   "SKULKING_COLONY": {
     "monster_id": "SKULKING_COLONY",
-    "n_combats": 10,
+    "n_combats": 11,
     "fixed_opening": [
       {
         "type": "Attack",
@@ -2308,10 +2308,16 @@
         "type": "Attack",
         "damage": 15,
         "hits": 2
+      },
+      "Attack_9": {
+        "type": "Attack",
+        "damage": 9,
+        "hits": 1
       }
     },
     "start_weights": {
-      "Attack_15": 1.0
+      "Attack_15": 0.8,
+      "Attack_12x2": 0.2
     },
     "transitions": {
       "Attack_15": {
@@ -2322,6 +2328,9 @@
       },
       "Defend": {
         "Attack_15x2": 1.0
+      },
+      "Attack_12x2": {
+        "Attack_15": 1.0
       }
     }
   },
@@ -2369,7 +2378,7 @@
   },
   "SLUDGE_SPINNER": {
     "monster_id": "SLUDGE_SPINNER",
-    "n_combats": 54,
+    "n_combats": 57,
     "fixed_opening": [
       {
         "type": "Attack",
@@ -2378,7 +2387,7 @@
       },
       {
         "type": "Attack",
-        "damage": 6,
+        "damage": 11,
         "hits": 1
       },
       {
@@ -2420,16 +2429,16 @@
       }
     },
     "start_weights": {
-      "Attack_11": 0.231,
-      "Attack_6": 0.231,
-      "Attack_10": 0.077,
-      "Attack_9": 0.308,
-      "Attack_14": 0.154
+      "Attack_11": 0.214,
+      "Attack_6": 0.286,
+      "Attack_10": 0.071,
+      "Attack_9": 0.286,
+      "Attack_14": 0.143
     },
     "transitions": {
       "Attack_11": {
-        "Attack_14": 0.5,
-        "Attack_9": 0.5
+        "Attack_14": 0.667,
+        "Attack_9": 0.333
       },
       "Attack_14": {
         "Attack_14": 0.5,

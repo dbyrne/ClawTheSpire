@@ -956,7 +956,7 @@ def _omnislice(card: Card, card_db: CardDB | None) -> CardEffect:
             from .combat_engine import _raw_damage_to_enemy
             for i, enemy in enumerate(state.enemies):
                 if i != target_idx and enemy.is_alive:
-                    _raw_damage_to_enemy(enemy, actual)
+                    _raw_damage_to_enemy(state, i, actual)
     return effect
 
 

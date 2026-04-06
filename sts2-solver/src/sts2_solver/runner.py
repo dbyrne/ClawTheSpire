@@ -1311,9 +1311,19 @@ class Runner:
                     except Exception:
                         pass
             elif "collect_rewards_and_proceed" in actions and has_skipped_card:
+                # If the intercept already handled the card skip, the card
+                # item is stale (game hasn't cleared it yet).  Safe to proceed.
+                if self._card_reward_handled:
+                    self._log_action("  [dim]auto: collect_rewards_and_proceed (card already skipped by intercept)[/dim]")
+                    if not self.dry_run:
+                        try:
+                            self._execute_with_retry("collect_rewards_and_proceed")
+                            self.action_count += 1
+                        except Exception:
+                            pass
                 # Card still on screen but network skipped it.
                 # Use skip_reward_cards again to dismiss, then proceed.
-                if "skip_reward_cards" in actions:
+                elif "skip_reward_cards" in actions:
                     self._log_action("  [dim]auto: skip_reward_cards (re-skip after claim)[/dim]")
                     if not self.dry_run:
                         try:
@@ -2902,10 +2912,16 @@ class Runner:
                             s2 = gs2.get("screen", "").upper()
                             if "REWARD" not in s2:
                                 break
-                            # If proceed is available, use it to leave cleanly
+                            # If proceed or collect_rewards_and_proceed is
+                            # available, use it to leave cleanly.  The card was
+                            # already skipped so collect_rewards_and_proceed
+                            # won't add it to the deck.
                             a2 = gs2.get("available_actions", [])
                             if "proceed" in a2:
                                 self._execute_with_retry("proceed")
+                                break
+                            if "collect_rewards_and_proceed" in a2:
+                                self._execute_with_retry("collect_rewards_and_proceed")
                                 break
                 return
 
@@ -2964,8 +2980,12 @@ class Runner:
                                                 break
                                             if "REWARD" not in gs3.get("screen", "").upper():
                                                 break
-                                            if "proceed" in gs3.get("available_actions", []):
+                                            a3 = gs3.get("available_actions", [])
+                                            if "proceed" in a3:
                                                 self._execute_with_retry("proceed")
+                                                break
+                                            if "collect_rewards_and_proceed" in a3:
+                                                self._execute_with_retry("collect_rewards_and_proceed")
                                                 break
                         except Exception as e:
                             self._log_action(f"  [red]Card reward network error: {e}[/red]")
