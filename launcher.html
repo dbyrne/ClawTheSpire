@@ -1,0 +1,720 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ClawTheSpire — Command Center</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #0a0a0f;
+    color: #e0e0e0;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  .bg-glow {
+    position: fixed; top: -40%; left: -20%; width: 140%; height: 140%;
+    background: radial-gradient(ellipse at 30% 20%, rgba(139, 92, 246, 0.08) 0%, transparent 60%),
+                radial-gradient(ellipse at 70% 80%, rgba(234, 88, 12, 0.06) 0%, transparent 60%);
+    pointer-events: none; z-index: 0;
+  }
+
+  .container {
+    position: relative; z-index: 1;
+    max-width: 1300px; margin: 0 auto; padding: 32px 24px;
+  }
+
+  header { text-align: center; margin-bottom: 36px; }
+
+  header h1 {
+    font-size: 2.2rem; font-weight: 700;
+    background: linear-gradient(135deg, #c084fc, #f97316);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    letter-spacing: -0.5px;
+  }
+
+  header p { color: #888; font-size: 0.95rem; margin-top: 6px; }
+
+  .status-bar {
+    display: flex; gap: 16px; justify-content: center;
+    flex-wrap: wrap; margin-top: 16px;
+  }
+
+  .status-pill {
+    display: flex; align-items: center; gap: 6px;
+    background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 20px; padding: 6px 14px; font-size: 0.82rem; color: #aaa;
+  }
+
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #555; flex-shrink: 0; }
+  .status-dot.ok { background: #22c55e; box-shadow: 0 0 6px rgba(34,197,94,0.5); }
+  .status-dot.err { background: #ef4444; box-shadow: 0 0 6px rgba(239,68,68,0.4); }
+  .status-dot.loading { background: #eab308; animation: pulse 1.2s ease-in-out infinite; }
+
+  @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.35; } }
+
+  /* ── 3-column grid ── */
+  .columns {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 20px;
+    align-items: start;
+  }
+
+  @media (max-width: 960px) {
+    .columns { grid-template-columns: 1fr; }
+  }
+
+  .card {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 16px; padding: 24px;
+    transition: border-color 0.25s, box-shadow 0.25s;
+  }
+
+  .card:hover {
+    border-color: rgba(255,255,255,0.12);
+    box-shadow: 0 6px 24px rgba(0,0,0,0.25);
+  }
+
+  .card-header {
+    display: flex; align-items: center; gap: 12px; margin-bottom: 16px;
+  }
+
+  .card-icon {
+    width: 40px; height: 40px; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.3rem; flex-shrink: 0;
+  }
+
+  .card-icon.play { background: rgba(34,197,94,0.12); }
+  .card-icon.stats { background: rgba(234,88,12,0.12); }
+  .card-icon.code { background: rgba(139,92,246,0.12); }
+
+  .card-header h2 { font-size: 1.1rem; font-weight: 600; color: #f0f0f0; }
+
+  .card .subtitle { font-size: 0.82rem; color: #666; margin-bottom: 16px; line-height: 1.4; }
+
+  /* ── Sub-cards inside Play column ── */
+  .sub-card {
+    background: rgba(255,255,255,0.02);
+    border: 1px solid rgba(255,255,255,0.05);
+    border-radius: 12px; padding: 16px; margin-bottom: 12px;
+  }
+
+  .sub-card:last-child { margin-bottom: 0; }
+
+  .sub-card h3 {
+    font-size: 0.9rem; font-weight: 600; color: #ddd; margin-bottom: 8px;
+  }
+
+  .sub-card .desc {
+    font-size: 0.8rem; color: #888; line-height: 1.45; margin-bottom: 10px;
+  }
+
+  /* ── Steps ── */
+  .step-list { list-style: none; counter-reset: step; }
+
+  .step-list li {
+    counter-increment: step;
+    display: flex; align-items: flex-start; gap: 10px;
+    padding: 7px 0; border-top: 1px solid rgba(255,255,255,0.03);
+    font-size: 0.82rem; color: #bbb; line-height: 1.45;
+  }
+
+  .step-list li::before {
+    content: counter(step);
+    flex-shrink: 0; width: 20px; height: 20px; border-radius: 50%;
+    background: rgba(255,255,255,0.06); color: #999;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.7rem; font-weight: 600; margin-top: 1px;
+  }
+
+  .cmd-block {
+    display: flex; align-items: center; gap: 6px;
+    background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 6px; padding: 6px 10px; margin-top: 5px;
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 0.72rem; color: #c8c8c8; cursor: pointer;
+    transition: border-color 0.2s; width: 100%;
+  }
+
+  .cmd-block:hover { border-color: rgba(255,255,255,0.15); }
+  .cmd-block code { flex: 1; white-space: nowrap; overflow-x: auto; }
+
+  .cmd-block .copy-btn {
+    flex-shrink: 0; background: none; border: none;
+    color: #555; cursor: pointer; font-size: 0.7rem;
+    padding: 2px 5px; border-radius: 3px;
+    transition: color 0.2s, background 0.2s;
+  }
+
+  .cmd-block .copy-btn:hover { color: #aaa; background: rgba(255,255,255,0.06); }
+  .cmd-block .copy-btn.copied { color: #22c55e; }
+
+  .note { font-size: 0.74rem; color: #555; margin-top: 4px; font-style: italic; }
+  .warn { font-size: 0.74rem; color: #eab308; margin-top: 4px; }
+
+  /* ── Config profile cards ── */
+  .profile-card {
+    border-radius: 10px; padding: 14px; margin-bottom: 8px;
+    position: relative;
+  }
+
+  .profile-card.champion {
+    background: rgba(34,197,94,0.04);
+    border: 1px solid rgba(34,197,94,0.15);
+  }
+
+  .profile-card.challenger {
+    background: rgba(139,92,246,0.04);
+    border: 1px solid rgba(139,92,246,0.15);
+  }
+
+  .profile-badge {
+    display: inline-block; font-size: 0.65rem; font-weight: 700;
+    padding: 2px 8px; border-radius: 4px; text-transform: uppercase;
+    letter-spacing: 0.5px; margin-bottom: 6px;
+  }
+
+  .profile-badge.champion { background: rgba(34,197,94,0.15); color: #22c55e; }
+  .profile-badge.challenger { background: rgba(139,92,246,0.15); color: #c084fc; }
+
+  .profile-card h4 { font-size: 0.85rem; font-weight: 600; color: #ddd; margin-bottom: 4px; }
+  .profile-card .profile-desc { font-size: 0.76rem; color: #888; line-height: 1.4; margin-bottom: 6px; }
+  .profile-card .profile-file {
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 0.7rem; color: #666; word-break: break-all;
+  }
+
+  /* ── Stats ── */
+  .stats-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;
+    margin-bottom: 14px;
+  }
+
+  .stat-box {
+    background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.05);
+    border-radius: 10px; padding: 12px 8px; text-align: center;
+  }
+
+  .stat-box .value { font-size: 1.5rem; font-weight: 700; color: #f97316; }
+  .stat-box .label {
+    font-size: 0.68rem; color: #666; margin-top: 2px;
+    text-transform: uppercase; letter-spacing: 0.5px;
+  }
+
+  .perf-compare {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+    margin: 14px 0;
+  }
+
+  .perf-box {
+    background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.05);
+    border-radius: 10px; padding: 14px; text-align: center;
+  }
+
+  .perf-box .perf-label {
+    font-size: 0.68rem; color: #888; text-transform: uppercase;
+    letter-spacing: 0.5px; margin-bottom: 4px;
+  }
+
+  .perf-box .perf-value { font-size: 1.3rem; font-weight: 700; }
+  .perf-box .perf-sub { font-size: 0.68rem; color: #555; margin-top: 2px; }
+
+  .perf-box.baseline .perf-value { color: #8b949e; }
+  .perf-box.current .perf-value { color: #22c55e; }
+  .perf-box.current .perf-value.worse { color: #ef4444; }
+  .perf-box.current .perf-value.same { color: #eab308; }
+
+  .delta-badge {
+    display: inline-block; font-size: 0.72rem; font-weight: 600;
+    padding: 2px 8px; border-radius: 10px; margin-top: 6px;
+  }
+
+  .delta-badge.positive { background: rgba(34,197,94,0.12); color: #22c55e; }
+  .delta-badge.negative { background: rgba(239,68,68,0.12); color: #ef4444; }
+  .delta-badge.neutral { background: rgba(234,179,8,0.12); color: #eab308; }
+
+  .char-table {
+    width: 100%; border-collapse: collapse; font-size: 0.78rem; margin-top: 12px;
+  }
+
+  .char-table th {
+    text-align: left; color: #666; font-weight: 500; padding: 5px 6px;
+    border-bottom: 1px solid rgba(255,255,255,0.06); font-size: 0.72rem;
+  }
+
+  .char-table td {
+    padding: 5px 6px; color: #bbb;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+  }
+
+  .stats-note { text-align: center; font-size: 0.78rem; color: #555; margin: 10px 0; }
+
+  .btn-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+
+  .action-btn {
+    display: inline-flex; align-items: center; gap: 5px;
+    background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 7px; padding: 7px 14px; color: #aaa;
+    font-size: 0.78rem; cursor: pointer; text-decoration: none;
+    transition: all 0.2s;
+  }
+
+  .action-btn:hover { background: rgba(255,255,255,0.08); color: #ddd; }
+
+  /* ── Footer ── */
+  footer {
+    text-align: center; margin-top: 36px; padding-top: 20px;
+    border-top: 1px solid rgba(255,255,255,0.05);
+    font-size: 0.75rem; color: #444;
+  }
+
+  footer a { color: #666; }
+</style>
+</head>
+<body>
+<div class="bg-glow"></div>
+<div class="container">
+
+  <header>
+    <h1>ClawTheSpire</h1>
+    <p>AI Bot for Slay the Spire 2</p>
+    <div class="status-bar">
+      <div class="status-pill">
+        <span class="status-dot loading" id="dot-game"></span>
+        <span id="lbl-game">Checking game...</span>
+      </div>
+      <div class="status-pill">
+        <span class="status-dot loading" id="dot-ollama"></span>
+        <span id="lbl-ollama">Checking Ollama...</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="columns">
+
+    <!-- ════════ COLUMN 1: PLAY ════════ -->
+    <div style="display:flex; flex-direction:column; gap:16px;">
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-icon play">&#9876;</div>
+          <h2>Play</h2>
+        </div>
+        <p class="subtitle">Before playing: make sure Ollama is running, launch STS2 on Steam, accept the mods prompt, and stay on the main menu.</p>
+
+        <!-- Single Game -->
+        <div class="sub-card">
+          <h3>Single Game</h3>
+          <p class="desc">Interactive TUI — plays one run, then stops. Great for watching the bot in action.</p>
+          <div style="display:flex; gap:6px; margin-bottom:4px;">
+            <span style="font-size:0.7rem; color:#22c55e; background:rgba(34,197,94,0.1); padding:2px 8px; border-radius:4px;">A = Champion</span>
+            <span style="font-size:0.7rem; color:#c084fc; background:rgba(139,92,246,0.1); padding:2px 8px; border-radius:4px;">B = Challenger</span>
+          </div>
+          <div class="cmd-block" onclick="copyCmd(this)">
+            <code>cd ~/AJS_CTS/ClawTheSpire && bash play.sh --profile a</code>
+            <button class="copy-btn">copy</button>
+          </div>
+          <div class="cmd-block" onclick="copyCmd(this)" style="margin-top:4px;">
+            <code>cd ~/AJS_CTS/ClawTheSpire && bash play.sh --profile b</code>
+            <button class="copy-btn">copy</button>
+          </div>
+          <p class="note">Add --step to step through each action</p>
+        </div>
+
+        <!-- Batch -->
+        <div class="sub-card">
+          <h3>Batch (Continuous)</h3>
+          <p class="desc">Runs games back-to-back automatically. Ideal for gathering data overnight.</p>
+          <div style="display:flex; gap:6px; margin-bottom:4px;">
+            <span style="font-size:0.7rem; color:#22c55e; background:rgba(34,197,94,0.1); padding:2px 8px; border-radius:4px;">A = Champion</span>
+            <span style="font-size:0.7rem; color:#c084fc; background:rgba(139,92,246,0.1); padding:2px 8px; border-radius:4px;">B = Challenger</span>
+          </div>
+          <div class="cmd-block" onclick="copyCmd(this)">
+            <code>cd ~/AJS_CTS/ClawTheSpire && bash play.sh batch --profile a</code>
+            <button class="copy-btn">copy</button>
+          </div>
+          <div class="cmd-block" onclick="copyCmd(this)" style="margin-top:4px;">
+            <code>cd ~/AJS_CTS/ClawTheSpire && bash play.sh batch --profile b</code>
+            <button class="copy-btn">copy</button>
+          </div>
+          <p class="note">Add --once for a single game via batch runner</p>
+        </div>
+
+        <!-- Common notes -->
+        <div style="margin-top:8px;">
+          <p class="warn">Start the bot BEFORE beginning a run so it picks the character.</p>
+          <p class="note">Press Ctrl+C in Terminal to stop the bot at any time.</p>
+          <p class="note">Profile A is the known-good config. Edit config_b.py to experiment, then test with profile B.</p>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ════════ COLUMN 2: STATS ════════ -->
+    <div style="display:flex; flex-direction:column; gap:16px;">
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-icon stats">&#128200;</div>
+          <h2>Stats</h2>
+        </div>
+
+        <div class="stats-grid">
+          <div class="stat-box">
+            <div class="value" id="stat-runs">—</div>
+            <div class="label">Runs</div>
+          </div>
+          <div class="stat-box">
+            <div class="value" id="stat-best">—</div>
+            <div class="label">Best Floor</div>
+          </div>
+          <div class="stat-box">
+            <div class="value" id="stat-avg">—</div>
+            <div class="label">Avg Floor</div>
+          </div>
+        </div>
+
+        <!-- Baseline vs Current -->
+        <div class="perf-compare">
+          <div class="perf-box baseline">
+            <div class="perf-label">Baseline</div>
+            <div class="perf-value" id="perf-baseline">—</div>
+            <div class="perf-sub">avg of first 5 runs</div>
+          </div>
+          <div class="perf-box current">
+            <div class="perf-label">Current</div>
+            <div class="perf-value" id="perf-current">—</div>
+            <div class="perf-sub">avg of last 5 runs</div>
+          </div>
+        </div>
+        <div style="text-align:center;">
+          <span class="delta-badge neutral" id="perf-delta" style="display:none;"></span>
+        </div>
+
+        <!-- Character breakdown -->
+        <table class="char-table" id="char-breakdown" style="display:none;">
+          <thead><tr><th>Character</th><th>Runs</th><th>Best</th><th>Avg</th></tr></thead>
+          <tbody id="char-tbody"></tbody>
+        </table>
+
+        <p class="stats-note" id="stats-msg">Loading stats...</p>
+
+        <div class="btn-row">
+          <button class="action-btn" onclick="loadStats()">&#8635; Refresh</button>
+          <a href="/dashboard/index.html" class="action-btn">&#128202; Full Dashboard</a>
+        </div>
+
+        <p class="note" style="margin-top:10px;">Stats auto-refresh when opened via:</p>
+        <div class="cmd-block" onclick="copyCmd(this)" style="margin-top:5px;">
+          <code>cd ~/AJS_CTS/ClawTheSpire && bash open-launcher.sh</code>
+          <button class="copy-btn">copy</button>
+        </div>
+      </div>
+
+      <!-- Encounter Report card -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-icon stats">&#128270;</div>
+          <h2>Encounter Report</h2>
+        </div>
+        <p class="subtitle">Scan gameplay logs to find which enemies the bot has faced vs. what it's been trained on. Use this to identify training gaps.</p>
+
+        <div class="sub-card">
+          <h3>Full Report</h3>
+          <p class="desc">Shows all encounters: trained and untrained, with win rates and frequency.</p>
+          <div class="cmd-block" onclick="copyCmd(this)">
+            <code>cd ~/AJS_CTS/ClawTheSpire && python3 encounter-report.py</code>
+            <button class="copy-btn">copy</button>
+          </div>
+        </div>
+
+        <div class="sub-card">
+          <h3>Training Gaps Only</h3>
+          <p class="desc">Shows only encounters NOT in the training set — the highest-priority candidates for improvement.</p>
+          <div class="cmd-block" onclick="copyCmd(this)">
+            <code>cd ~/AJS_CTS/ClawTheSpire && python3 encounter-report.py --untrained</code>
+            <button class="copy-btn">copy</button>
+          </div>
+        </div>
+
+        <p class="note">Run after a play session to see new enemies. More games = more data = better insights.</p>
+      </div>
+
+    </div>
+
+    <!-- ════════ COLUMN 3: CODE ════════ -->
+    <div style="display:flex; flex-direction:column; gap:16px;">
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-icon code">&#128736;</div>
+          <h2>Code</h2>
+        </div>
+        <p class="subtitle">Use Claude Code in a Docker sandbox to safely modify the bot. Changes sync to your Mac and are tracked in git.</p>
+
+        <ol class="step-list">
+          <li>
+            <div>
+              Make sure <strong>Docker Desktop</strong> is running.
+            </div>
+          </li>
+          <li>
+            <div>
+              Start and enter the sandbox:
+              <div class="cmd-block" onclick="copyCmd(this)">
+                <code>cd ~/AJS_CTS/ClawTheSpire && docker compose up -d && docker compose exec sts2 bash</code>
+                <button class="copy-btn">copy</button>
+              </div>
+            </div>
+          </li>
+          <li>
+            <div>
+              Run Claude Code:
+              <div class="cmd-block" onclick="copyCmd(this)">
+                <code>claude --dangerously-skip-permissions</code>
+                <button class="copy-btn">copy</button>
+              </div>
+            </div>
+          </li>
+          <li>
+            <div>
+              When done, type <strong>exit</strong> to leave. Changes sync automatically.
+            </div>
+          </li>
+        </ol>
+
+        <!-- Git sub-card -->
+        <div class="sub-card" style="margin-top:14px;">
+          <h3>Save to GitHub</h3>
+          <p class="desc">Commit and push your changes to your fork.</p>
+          <div class="cmd-block" onclick="copyCmd(this)">
+            <code>cd ~/AJS_CTS/ClawTheSpire && git add -A && git commit -m "describe changes" && git push origin andrew-dev</code>
+            <button class="copy-btn">copy</button>
+          </div>
+        </div>
+
+        <div class="sub-card">
+          <h3>Pull Friend's Updates</h3>
+          <p class="desc">Get the latest changes from your friend's repo.</p>
+          <div class="cmd-block" onclick="copyCmd(this)">
+            <code>cd ~/AJS_CTS/ClawTheSpire && git fetch upstream && git merge upstream/main</code>
+            <button class="copy-btn">copy</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Config Profiles card -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-icon code">&#9881;</div>
+          <h2>Config Profiles</h2>
+        </div>
+        <p class="subtitle">A/B test different strategy configs. Edit the challenger, run games with each, compare results.</p>
+
+        <div class="profile-card champion">
+          <span class="profile-badge champion">A — Champion</span>
+          <h4>Baseline Config</h4>
+          <p class="profile-desc">The known-good settings. Don't edit this — it's your control group.</p>
+          <div class="profile-file">sts2-solver/src/sts2_solver/config_a.py</div>
+        </div>
+
+        <div class="profile-card challenger">
+          <span class="profile-badge challenger">B — Challenger</span>
+          <h4 id="challenger-name">Survive &amp; Scale</h4>
+          <p class="profile-desc" id="challenger-desc">+33% block weight, +40% Weak value, Leg Sweep/Noxious Fumes to S-tier, leaner deck target (10), more conservative resting. Hypothesis: surviving longer = winning more.</p>
+          <div class="profile-file">sts2-solver/src/sts2_solver/config_b.py</div>
+        </div>
+
+        <div class="sub-card" style="margin-top:8px;">
+          <h3>Promote Challenger</h3>
+          <p class="desc">When B outperforms A, copy it over to become the new champion:</p>
+          <div class="cmd-block" onclick="copyCmd(this)">
+            <code>cd ~/AJS_CTS/ClawTheSpire/sts2-solver/src/sts2_solver && cp config_b.py config_a.py</code>
+            <button class="copy-btn">copy</button>
+          </div>
+          <p class="note">Then reset config_b.py for the next experiment.</p>
+        </div>
+      </div>
+
+    </div>
+
+  </div>
+
+  <footer>
+    ClawTheSpire &mdash; Fork of <a href="https://github.com/dbyrne/ClawTheSpire">dbyrne/ClawTheSpire</a>
+    &nbsp;&middot;&nbsp; Branch: andrew-dev
+    &nbsp;&middot;&nbsp; <a href="/git-workflow-guide.md">Git Guide</a>
+  </footer>
+
+</div>
+
+<script>
+  // %%EMBEDDED_DATA_START%%
+  window.__STATS_DATA__ = [{"run_number": 1, "floor": 14, "gen": "current", "checkpoint": "gen_0160.pt", "run_id": "0AKBUQF37A", "character": "The Ironclad"}, {"run_number": 2, "floor": 9, "gen": "current", "checkpoint": "gen_0160.pt", "run_id": "MRJPM4Z2JE", "character": "The Silent"}, {"run_number": 3, "floor": 17, "gen": "current", "checkpoint": "gen_0160.pt", "run_id": "WHVXU045SJ", "character": "The Ironclad"}, {"run_number": 4, "floor": 14, "gen": "current", "checkpoint": "gen_0160.pt", "run_id": "VC3CWGLHF7", "character": "The Ironclad"}, {"run_number": 5, "floor": 17, "gen": "current", "checkpoint": "gen_0160.pt", "run_id": "K31S8U0QCQ", "character": "The Ironclad"}, {"run_number": 6, "floor": 17, "gen": "current", "checkpoint": "gen_0160.pt", "run_id": "HWRZZFKA9T", "character": "The Ironclad"}, {"run_number": 7, "floor": 13, "gen": "current", "checkpoint": "gen_0160.pt", "run_id": "35FMB2QHKY", "character": "The Ironclad"}, {"run_number": 8, "floor": 17, "gen": "current", "checkpoint": "gen_0160.pt", "run_id": "FPUMVJQQ17", "character": "The Ironclad"}, {"run_number": 9, "floor": 7, "gen": "gen12", "checkpoint": "gen_0160.pt", "run_id": "K34WYS7040", "character": "The Silent"}, {"run_number": 10, "floor": 8, "gen": "gen12", "checkpoint": "gen_0160.pt", "run_id": "V9DDVBMJEY", "character": "The Silent"}, {"run_number": 11, "floor": 6, "gen": "gen12", "checkpoint": "gen_0160.pt", "run_id": "QSXH13P543", "character": "The Silent"}, {"run_number": 12, "floor": 12, "gen": "gen12", "checkpoint": "gen_0160.pt", "run_id": "V45X2BKQL9", "character": "The Silent"}, {"run_number": 13, "floor": 9, "gen": "gen12", "checkpoint": "gen_0160.pt", "run_id": "V3Z4AKMBFD", "character": "The Silent"}, {"run_number": 14, "floor": 9, "gen": "gen12", "checkpoint": "gen_0050.pt", "run_id": "Z2YLK1QX6G", "character": "The Silent"}, {"run_number": 15, "floor": 9, "gen": "gen12", "checkpoint": "gen_0050.pt", "run_id": "TN2W7CVL4S", "character": "The Silent"}, {"run_number": 16, "floor": 7, "gen": "gen12", "checkpoint": "gen_0050.pt", "run_id": "V4XAX69KEH", "character": "The Silent"}, {"run_number": 17, "floor": 6, "gen": "gen12", "checkpoint": "gen_0050.pt", "run_id": "37RJRBH1U2", "character": "The Silent"}, {"run_number": 18, "floor": 12, "gen": "gen12", "checkpoint": "gen_0050.pt", "run_id": "Y4T6ADQF9F", "character": "The Silent"}, {"run_number": 19, "floor": 7, "gen": "gen12", "checkpoint": "gen_0050.pt", "run_id": "5ZRY5YS70Y", "character": "The Silent"}];
+  // %%EMBEDDED_DATA_END%%
+
+  function copyCmd(block) {
+    const code = block.querySelector('code').textContent;
+    navigator.clipboard.writeText(code).then(() => {
+      const btn = block.querySelector('.copy-btn');
+      btn.textContent = 'copied!';
+      btn.classList.add('copied');
+      setTimeout(() => { btn.textContent = 'copy'; btn.classList.remove('copied'); }, 1500);
+    });
+  }
+
+  async function checkHealth(url, dotId, lblId, okText, errText) {
+    const dot = document.getElementById(dotId);
+    const lbl = document.getElementById(lblId);
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(2000), mode: 'cors' });
+      if (res.ok) {
+        dot.className = 'status-dot ok';
+        const data = await res.json().catch(() => null);
+        lbl.textContent = data?.data?.mod_version
+          ? `${okText} (v${data.data.mod_version})` : okText;
+      } else { dot.className = 'status-dot err'; lbl.textContent = errText; }
+    } catch {
+      try {
+        await fetch(url, { signal: AbortSignal.timeout(2000), mode: 'no-cors' });
+        dot.className = 'status-dot ok'; lbl.textContent = okText;
+      } catch { dot.className = 'status-dot err'; lbl.textContent = errText; }
+    }
+  }
+
+  function checkStatuses() {
+    checkHealth('http://127.0.0.1:8080/health', 'dot-game', 'lbl-game',
+      'Game mod connected', 'Game not detected — launch STS2 on Steam');
+    checkHealth('http://127.0.0.1:11434/api/tags', 'dot-ollama', 'lbl-ollama',
+      'Ollama running', 'Ollama not running — open from Applications');
+  }
+
+  function avg(arr) {
+    if (!arr.length) return 0;
+    return arr.reduce((a, b) => a + b, 0) / arr.length;
+  }
+
+  async function loadStats() {
+    const msg = document.getElementById('stats-msg');
+    const statRuns = document.getElementById('stat-runs');
+    const statBest = document.getElementById('stat-best');
+    const statAvg = document.getElementById('stat-avg');
+    const perfBaseline = document.getElementById('perf-baseline');
+    const perfCurrent = document.getElementById('perf-current');
+    const perfDelta = document.getElementById('perf-delta');
+    const charTable = document.getElementById('char-breakdown');
+    const charTbody = document.getElementById('char-tbody');
+
+    msg.textContent = 'Loading stats...';
+
+    try {
+      let data;
+      if (window.__STATS_DATA__) {
+        data = window.__STATS_DATA__;
+      } else {
+        const res = await fetch('dashboard/data.json');
+        if (!res.ok) throw new Error('No data.json');
+        data = await res.json();
+      }
+
+      const runList = Array.isArray(data) ? data : (data.runs || []);
+      const runs = runList.length;
+
+      if (runs === 0) {
+        statRuns.textContent = '0';
+        statBest.textContent = '—';
+        statAvg.textContent = '—';
+        perfBaseline.textContent = '—';
+        perfCurrent.textContent = '—';
+        perfDelta.style.display = 'none';
+        charTable.style.display = 'none';
+        msg.textContent = 'No runs logged yet. Play some games first!';
+        return;
+      }
+
+      // Overall stats
+      let best = 0, total = 0;
+      const floors = [];
+      const byChar = {};
+
+      runList.forEach(d => {
+        const floor = d.floor || d.max_floor || d.floors_climbed || 0;
+        const char = d.character || 'Unknown';
+        floors.push(floor);
+        if (floor > best) best = floor;
+        total += floor;
+
+        if (!byChar[char]) byChar[char] = { runs: 0, best: 0, total: 0 };
+        byChar[char].runs++;
+        if (floor > byChar[char].best) byChar[char].best = floor;
+        byChar[char].total += floor;
+      });
+
+      statRuns.textContent = runs;
+      statBest.textContent = best;
+      statAvg.textContent = (total / runs).toFixed(1);
+
+      // Baseline (first 5) vs Current (last 5)
+      const baselineFloors = floors.slice(0, Math.min(5, floors.length));
+      const currentFloors = floors.slice(-Math.min(5, floors.length));
+      const baselineAvg = avg(baselineFloors);
+      const currentAvg = avg(currentFloors);
+
+      perfBaseline.textContent = baselineAvg.toFixed(1);
+      perfCurrent.textContent = currentAvg.toFixed(1);
+
+      // Color and delta
+      const delta = currentAvg - baselineAvg;
+      perfCurrent.className = 'perf-value';
+      if (delta < -0.5) perfCurrent.classList.add('worse');
+      else if (delta <= 0.5) perfCurrent.classList.add('same');
+
+      if (runs >= 2) {
+        perfDelta.style.display = 'inline-block';
+        const sign = delta >= 0 ? '+' : '';
+        perfDelta.textContent = `${sign}${delta.toFixed(1)} floors`;
+        perfDelta.className = 'delta-badge ' +
+          (delta > 0.5 ? 'positive' : delta < -0.5 ? 'negative' : 'neutral');
+      } else {
+        perfDelta.style.display = 'none';
+      }
+
+      // Character breakdown
+      const chars = Object.keys(byChar);
+      if (chars.length > 0) {
+        charTbody.innerHTML = '';
+        chars.forEach(c => {
+          const s = byChar[c];
+          const row = document.createElement('tr');
+          row.innerHTML = `<td>${c}</td><td>${s.runs}</td><td>${s.best}</td><td>${(s.total / s.runs).toFixed(1)}</td>`;
+          charTbody.appendChild(row);
+        });
+        charTable.style.display = '';
+      }
+
+      msg.textContent = `${runs} run${runs === 1 ? '' : 's'} logged`;
+
+    } catch {
+      statRuns.textContent = '—';
+      statBest.textContent = '—';
+      statAvg.textContent = '—';
+      perfBaseline.textContent = '—';
+      perfCurrent.textContent = '—';
+      perfDelta.style.display = 'none';
+      charTable.style.display = 'none';
+      msg.textContent = 'Open via: bash open-launcher.sh';
+    }
+  }
+
+  checkStatuses();
+  loadStats();
+  setInterval(checkStatuses, 10000);
+</script>
+</body>
+</html>

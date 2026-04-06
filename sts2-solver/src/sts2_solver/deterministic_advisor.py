@@ -566,6 +566,114 @@ def decide_shop(state: dict, game_data: GameDataDB) -> Decision:
 
 
 # ---------------------------------------------------------------------------
+# Neow event (starting bonus)
+# ---------------------------------------------------------------------------
+
+# Keyword-based scoring for Neow options.  Each entry maps a substring
+# (matched case-insensitively against the option description) to a base
+# score.  Higher is better.  The scorer also applies penalties for any
+# option that costs HP or Max HP, so the bot avoids fragile starts.
+
+_NEOW_KEYWORD_SCORES: list[tuple[str, float, str]] = [
+    # --- Top tier: deck thinning / card removal ---
+    ("remove",              9.0, "deck_thin"),
+    ("transform",           7.5, "deck_thin"),
+
+    # --- High tier: direct power ---
+    ("obtain a random relic", 7.0, "relic"),
+    ("obtain a relic",       7.0, "relic"),
+    ("random rare card",     6.5, "rare_card"),
+    ("enchant",              6.0, "enchant"),
+
+    # --- Mid tier: card/deck quality ---
+    ("card rewards you see are upgraded", 5.5, "upgrade_rewards"),
+    ("upgraded",             5.0, "upgrade_misc"),
+    ("colorless card",       5.0, "colorless"),
+    ("packs of cards",       4.5, "card_pack"),
+
+    # --- Situational: relic-dependent on boss ---
+    ("boss drops",           3.0, "boss_dependent"),
+
+    # --- Low tier: stats / gold ---
+    ("rest at a rest site",  4.0, "rest_bonus"),
+    ("raise your max hp",    3.5, "max_hp_gain"),
+    ("gain 150 gold",        3.0, "gold"),
+    ("gain",                 2.0, "gain_generic"),
+    ("draw",                 4.5, "draw"),
+
+    # --- Fallback ---
+    ("gold",                 2.0, "gold_generic"),
+]
+
+# Penalty keywords: options that cost HP are penalised heavily.
+_NEOW_HP_PENALTIES: list[tuple[str, float]] = [
+    ("lose max hp",          -4.0),
+    ("lose 10 max hp",       -5.0),
+    ("lose 7 max hp",        -4.0),
+    ("lose 5 max hp",        -3.0),
+    ("lose hp",              -3.0),
+    ("lose 7 hp",            -2.5),
+    ("lose 10 hp",           -3.0),
+    ("lose all gold",        -1.5),
+    ("treasure chest you open is empty", -1.0),
+]
+
+
+def decide_neow(state: dict) -> Decision | None:
+    """Deterministic Neow (starting bonus) picker.
+
+    Returns a Decision if the current screen is the Neow event, or None
+    if this isn't a Neow event (so the caller can fall through to the
+    LLM for other events).
+    """
+    event = state.get("event") or {}
+    if not event:
+        event = (state.get("agent_view") or {}).get("event") or {}
+
+    # Only handle Neow — detect by event name or floor-1 heuristic
+    event_name = (event.get("name") or event.get("event_id") or "").lower()
+    floor = _floor(state)
+    is_neow = "neow" in event_name or (floor <= 1 and event.get("options"))
+    if not is_neow:
+        return None
+
+    options = event.get("options") or []
+    if not options:
+        return None
+
+    best_idx, best_score, best_reason = 0, -999.0, "fallback"
+
+    for opt in options:
+        idx = opt.get("index", 0)
+        # Build a combined text from all available fields
+        name = opt.get("name") or opt.get("title") or ""
+        desc = opt.get("description") or opt.get("desc") or ""
+        text = f"{name} — {desc}".lower()
+
+        # Base score: find the first (highest-priority) keyword match
+        score = 1.0  # default for unrecognised options
+        tag = "unknown"
+        for keyword, kw_score, kw_tag in _NEOW_KEYWORD_SCORES:
+            if keyword in text:
+                score = kw_score
+                tag = kw_tag
+                break
+
+        # Apply HP / resource loss penalties
+        for penalty_kw, penalty_val in _NEOW_HP_PENALTIES:
+            if penalty_kw in text:
+                score += penalty_val
+
+        if score > best_score:
+            best_idx = idx
+            best_score = score
+            best_reason = f"{name} ({tag}, score={score:.1f})"
+
+    return Decision("choose_event_option", best_idx,
+                     f"Neow: {best_reason}")
+
+
+# ---------------------------------------------------------------------------
 # Boss relic
 # ---------------------------------------------------------------------------
 

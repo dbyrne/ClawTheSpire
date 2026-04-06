@@ -34,6 +34,7 @@ from .advisor import StrategicAdvisor
 from .advisor_prompts import AUTO_ACTIONS, detect_screen_type
 from .deterministic_advisor import (
     decide_boss_relic,
+    decide_neow,
     decide_card_reward,
     decide_deck_select,
     decide_map,
@@ -250,10 +251,13 @@ class Runner:
             network, self._mcts_vocabs, self._mcts_config,
             card_db=self.card_db, device="cpu",
         )
+        # Import here to avoid circular dependency — config.py is a thin router
+        from .config import get_active_profile
         self.logger.metadata = {
             "advisor_model": self.advisor.model,
             "advisor_local": self.advisor.is_local,
             "checkpoint": self._checkpoint_name or "none",
+            "config_profile": get_active_profile(),  # "a" (champion) or "b" (challenger)
         }
         try:
             health = self.client.get_health()
@@ -1401,6 +1405,15 @@ class Runner:
                 gs, decision, screen_type, actions, run,
             )
             return
+
+        # Neow event: use deterministic scorer instead of LLM (faster + smarter)
+        if screen_type == "event" and "choose_event_option" in actions:
+            neow_decision = decide_neow(gs)
+            if neow_decision is not None:
+                self._execute_deterministic(
+                    gs, neow_decision, screen_type, actions, run,
+                )
+                return
 
         # Events + generic: LLM-based decision (only remaining LLM usage)
         try:

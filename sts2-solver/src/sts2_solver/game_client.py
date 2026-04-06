@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 from urllib import request, error
 from typing import Any
 
@@ -53,6 +54,10 @@ class GameClient:
                 body = json.loads(resp.read().decode("utf-8"))
         except error.URLError as e:
             raise ConnectionError(f"Cannot reach game API at {url}: {e}") from e
+        except socket.timeout as e:
+            # socket.timeout is a TimeoutError, not a URLError — catch it
+            # explicitly so the retry logic in runner.py can handle it.
+            raise ConnectionError(f"Timed out reading from {url}") from e
         return self._unwrap(body)
 
     def _post(self, path: str, payload: dict) -> dict[str, Any]:
@@ -75,6 +80,10 @@ class GameClient:
             ) from e
         except error.URLError as e:
             raise ConnectionError(f"Cannot reach game API at {url}: {e}") from e
+        except socket.timeout as e:
+            # socket.timeout is a TimeoutError, not a URLError — catch it
+            # explicitly so the retry logic in runner.py can handle it.
+            raise ConnectionError(f"Timed out sending action to {url}") from e
         return self._unwrap(body)
 
     @staticmethod

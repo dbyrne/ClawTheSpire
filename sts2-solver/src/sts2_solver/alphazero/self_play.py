@@ -154,12 +154,45 @@ class ReplayBuffer:
 # Self-play game
 # ---------------------------------------------------------------------------
 
+# All Act 1 encounters for training. IDs must match encounters.json exactly.
+#
+# PREVIOUSLY: Used ENCOUNTER_* IDs that didn't exist in the game data,
+# causing the training to fall back to the first 5 alphabetical encounters
+# (Act 3 Axebots, event encounter, Act 2 Bowlbugs, etc.) — completely
+# misaligned with what the bot actually faces in Act 1.
+#
+# NOW: Every Act 1 encounter by real game data ID, grouped by difficulty.
+# The self-play loop picks randomly from this list each game.
 TRAINING_ENCOUNTERS = [
-    "ENCOUNTER_NIBBIT",
-    "ENCOUNTER_SHRINKER_BEETLE",
-    "ENCOUNTER_FUZZY_WURM_CRAWLER",
-    "ENCOUNTER_SLIME_PAIR",
-    "ENCOUNTER_RUBY_RAIDERS",
+    # ── Weak encounters (floors 1-3, easy early fights) ──
+    "NIBBITS_WEAK",                    # Single Nibbit
+    "SHRINKER_BEETLE_WEAK",            # Single Shrinker Beetle
+    "FUZZY_WURM_CRAWLER_WEAK",         # Single Fuzzy Wurm Crawler
+    "SLIMES_WEAK",                     # Leaf Slime (M/S) + Twig Slime (M/S)
+
+    # ── Normal encounters (floors 4-12, the bulk of Act 1) ──
+    "NIBBITS_NORMAL",                  # Nibbit (stronger variant)
+    "SLIMES_NORMAL",                   # 4 slimes (stronger variant)
+    "RUBY_RAIDERS_NORMAL",             # 5 raiders — multi-enemy, intent-varied
+    "INKLETS_NORMAL",                  # Multiple Inklets
+    "MAWLER_NORMAL",                   # Single tanky enemy
+    "CUBEX_CONSTRUCT_NORMAL",          # Single construct
+    "VINE_SHAMBLER_NORMAL",            # Single shambler
+    "FLYCONID_NORMAL",                 # Flyconid + 2 slimes (mixed group)
+    "SNAPPING_JAXFRUIT_NORMAL",        # Jaxfruit + Flyconid
+    "FOGMOG_NORMAL",                   # Eye With Teeth + Fogmog
+    "OVERGROWTH_CRAWLERS",             # Fuzzy Wurm Crawler + Shrinker Beetle
+    "SLITHERING_STRANGLER_NORMAL",     # 6-enemy fight — hardest normal encounter
+
+    # ── Elites (high-threat fights the bot currently struggles with) ──
+    "BYRDONIS_ELITE",                  # Single elite — high damage
+    "BYGONE_EFFIGY_ELITE",             # Single elite — 0% win rate in logs
+    "PHROG_PARASITE_ELITE",            # Phrog Parasite + Wriggler
+
+    # ── Bosses (0% win rate in logs — highest priority for improvement) ──
+    "VANTOM_BOSS",                     # Act 1 boss — long fight
+    "CEREMONIAL_BEAST_BOSS",           # Act 1 boss — high HP
+    "THE_KIN_BOSS",                    # Act 1 boss — Kin Follower + Kin Priest
 ]
 
 
