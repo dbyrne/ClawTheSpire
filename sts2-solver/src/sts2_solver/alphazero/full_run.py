@@ -101,26 +101,41 @@ def mcts_combat(
     relics: frozenset[str] | None = None,
     gauntlet_waves: int = 0,
     wave_pool: list[list[str]] | None = None,
+    wave_list: list[list[str]] | None = None,
     act_id: str = "",
     boss_id: str = "",
 ) -> tuple[list[TrainingSample], str, int, int, list[dict], float]:
     """Run one combat using MCTS. Returns (samples, outcome, turns, hp_after, remaining_potions, initial_value).
 
-    For Underdocks gauntlet encounters, gauntlet_waves > 0 means spawn that
-    many additional waves after the initial enemies die.
+    Supports three modes for enemy spawning:
+    - wave_list: explicit wave sequence from real game data (preferred)
+    - gauntlet_waves + wave_pool: synthetic random waves (legacy fallback)
+    - encounter_id only: single-wave combat from encounter data
     """
     _ensure_data_loaded()
-    if gauntlet_waves > 0:
-        max_turns = max(max_turns, 15 + gauntlet_waves * 6)
 
-    enc = _ENCOUNTERS_BY_ID.get(encounter_id, {})
-    monster_list = enc.get("monsters", [])
+    # Build initial enemies from wave_list or encounter data
     enemies: list[EnemyState] = []
     enemy_ais = []
-    for m in monster_list:
-        mid = m["id"]
-        enemies.append(_spawn_enemy(mid))
-        enemy_ais.append(_create_enemy_ai(mid))
+
+    if wave_list:
+        # Real encounter data: wave_list[0] is the initial enemies
+        for mid in wave_list[0]:
+            enemies.append(_spawn_enemy(mid))
+            enemy_ais.append(_create_enemy_ai(mid))
+        remaining_waves = list(wave_list[1:])  # Copy remaining waves
+        max_turns = max(max_turns, 15 + len(remaining_waves) * 6)
+    else:
+        # Legacy: use encounter_id to look up initial enemies
+        enc = _ENCOUNTERS_BY_ID.get(encounter_id, {})
+        monster_list = enc.get("monsters", [])
+        for m in monster_list:
+            mid = m["id"]
+            enemies.append(_spawn_enemy(mid))
+            enemy_ais.append(_create_enemy_ai(mid))
+        remaining_waves = []
+        if gauntlet_waves > 0:
+            max_turns = max(max_turns, 15 + gauntlet_waves * 6)
 
     if not enemies:
         return [], "win", 0, player_hp, potions or [], 0.0
@@ -139,21 +154,31 @@ def mcts_combat(
     samples: list[TrainingSample] = []
     initial_value_estimate = 0.0
     outcome = None
-    waves_remaining = gauntlet_waves
+    waves_remaining = gauntlet_waves  # legacy counter
 
     def _spawn_next_wave():
-        """Replace dead enemies with a new random wave."""
+        """Replace dead enemies with the next wave."""
         nonlocal waves_remaining
-        if waves_remaining <= 0 or not wave_pool:
-            return False
-        waves_remaining -= 1
-        wave = rng.choice(wave_pool)
-        state.enemies.clear()
-        enemy_ais.clear()
-        for mid in wave:
-            state.enemies.append(_spawn_enemy(mid))
-            enemy_ais.append(_create_enemy_ai(mid))
-        return True
+        if remaining_waves:
+            # Real encounter data: pop next wave from list
+            wave = remaining_waves.pop(0)
+            state.enemies.clear()
+            enemy_ais.clear()
+            for mid in wave:
+                state.enemies.append(_spawn_enemy(mid))
+                enemy_ais.append(_create_enemy_ai(mid))
+            return True
+        elif waves_remaining > 0 and wave_pool:
+            # Legacy: random wave from pool
+            waves_remaining -= 1
+            wave = rng.choice(wave_pool)
+            state.enemies.clear()
+            enemy_ais.clear()
+            for mid in wave:
+                state.enemies.append(_spawn_enemy(mid))
+                enemy_ais.append(_create_enemy_ai(mid))
+            return True
+        return False
 
     for turn_num in range(1, max_turns + 1):
         start_turn(state)
@@ -381,7 +406,8 @@ class MCTSStrategy:
         )
 
     def fight_combat(self, deck, hp, max_hp, max_energy, encounter_id, card_db,
-                     rng, potions, relics, gauntlet_waves=0, wave_pool=None):
+                     rng, potions, relics, gauntlet_waves=0, wave_pool=None,
+                     wave_list=None):
         samples, outcome, turns, hp_after, remaining_potions, initial_value = mcts_combat(
             deck=deck, player_hp=hp, player_max_hp=max_hp,
             player_max_energy=max_energy, encounter_id=encounter_id,
@@ -393,6 +419,7 @@ class MCTSStrategy:
             act_id=self.act_id, boss_id=self.boss_id,
             gauntlet_waves=gauntlet_waves,
             wave_pool=wave_pool,
+            wave_list=wave_list,
         )
         return StrategyCombatResult(
             outcome=outcome,

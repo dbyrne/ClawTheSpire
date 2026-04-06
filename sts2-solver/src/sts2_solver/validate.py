@@ -84,6 +84,11 @@ def _rebuild_profiles(logs_dir: Path) -> None:
     n_maps = build_maps(all_logs)
     print(f"  Map pool: {n_maps} total")
 
+    # Encounter pool
+    from .build_encounter_pool import main as build_encounters
+    n_enc = build_encounters(all_logs)
+    print(f"  Encounter pool: {n_enc} total")
+
 
 def main(logs_dir: Path | None = None) -> int:
     """Run all validators and return exit code (0 = all pass)."""

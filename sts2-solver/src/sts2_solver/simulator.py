@@ -898,42 +898,35 @@ _ENCOUNTER_POOL: list[dict] | None = None
 _ENCOUNTER_POOL_BY_FLOOR: dict[int, list[dict]] | None = None
 
 
-def _pick_encounter_from_pool(
-    floor: int, act_id: str, rng: random.Random,
-) -> dict | None:
-    """Pick a real encounter from the pool for this floor and act.
-
-    Returns an encounter dict with 'waves' (list of enemy ID lists),
-    or None if no pool data exists for this floor/act combination.
-    """
+def _load_encounter_pool() -> None:
     global _ENCOUNTER_POOL, _ENCOUNTER_POOL_BY_FLOOR
-    if _ENCOUNTER_POOL is None:
-        pool_path = Path(__file__).resolve().parent / "encounter_pool.json"
-        if pool_path.exists():
-            import json as _json
-            with open(pool_path, encoding="utf-8") as f:
-                _ENCOUNTER_POOL = _json.load(f)
-            # Index by (floor, act_id)
-            from collections import defaultdict as _dd
-            _ENCOUNTER_POOL_BY_FLOOR = _dd(list)
-            for enc in _ENCOUNTER_POOL:
-                key = (enc["floor"], enc.get("act_id", "UNKNOWN"))
-                _ENCOUNTER_POOL_BY_FLOOR[key].append(enc)
-        else:
-            _ENCOUNTER_POOL = []
-            _ENCOUNTER_POOL_BY_FLOOR = {}
+    pool_path = Path(__file__).resolve().parent / "encounter_pool.json"
+    if pool_path.exists():
+        import json as _json
+        with open(pool_path, encoding="utf-8") as f:
+            _ENCOUNTER_POOL = _json.load(f)
+        from collections import defaultdict as _dd
+        _ENCOUNTER_POOL_BY_FLOOR = _dd(list)
+        for enc in _ENCOUNTER_POOL:
+            _ENCOUNTER_POOL_BY_FLOOR[enc["floor"]].append(enc)
+    else:
+        _ENCOUNTER_POOL = []
+        _ENCOUNTER_POOL_BY_FLOOR = {}
 
-    # Try exact (floor, act_id) match first
-    candidates = _ENCOUNTER_POOL_BY_FLOOR.get((floor, act_id), [])
-    if not candidates:
-        # Fall back to any act for this floor
-        candidates = [
-            e for e in _ENCOUNTER_POOL
-            if e["floor"] == floor
-        ]
+
+def _pick_encounter_from_pool(
+    floor: int, rng: random.Random,
+) -> list[str] | None:
+    """Pick a real encounter from the pool for this floor.
+
+    Returns a list of enemy IDs, or None if no pool data for this floor.
+    """
+    if _ENCOUNTER_POOL is None:
+        _load_encounter_pool()
+    candidates = _ENCOUNTER_POOL_BY_FLOOR.get(floor, [])
     if not candidates:
         return None
-    return rng.choice(candidates)
+    return list(rng.choice(candidates)["enemies"])
 
 
 def _walk_real_map(map_data: dict, rng: random.Random) -> list:
@@ -1845,15 +1838,23 @@ def run_act1(
             room_type = room_entry
 
         if room_type in ("weak", "normal", "elite", "boss"):
-            enc_id = _pick_encounter(act_data, room_type, rng, seen_encounters)
-            if enc_id is None:
-                continue
+            # Try real encounter pool first, fall back to static data
+            pool_enemies = _pick_encounter_from_pool(floor_num, rng)
+            if pool_enemies:
+                enc_id = None
+                enemy_ids = pool_enemies
+            else:
+                enc_id = _pick_encounter(act_data, room_type, rng, seen_encounters)
+                if enc_id is None:
+                    continue
+                enemy_ids = None
 
             potions_before = len([p for p in potions if p])
             combat = strategy.fight_combat(
                 deck=deck, hp=hp, max_hp=max_hp, max_energy=max_energy,
-                encounter_id=enc_id, card_db=card_db, rng=rng,
+                encounter_id=enc_id or "", card_db=card_db, rng=rng,
                 potions=potions, relics=frozenset(relics),
+                wave_list=[enemy_ids] if enemy_ids else None,
             )
             potions = combat.potions_after
             potions_after = len([p for p in potions if p])
@@ -1871,14 +1872,16 @@ def run_act1(
                 result._boss_floors.add(floor_num)
 
             result.combat_log.append({
-                "floor": floor_num, "encounter": enc_id,
+                "floor": floor_num,
+                "encounter": enc_id or ",".join(enemy_ids or []),
                 "room_type": room_type, "outcome": combat.outcome,
                 "turns": combat.turns, "hp_before": hp, "hp_after": combat.hp_after,
+                "source": "pool" if pool_enemies else "static",
             })
 
             if combat.outcome == "lose":
                 result.outcome = "lose"
-                result.death_encounter = enc_id
+                result.death_encounter = enc_id or ",".join(enemy_ids or [])
                 result.final_hp = 0
                 result.max_hp = max_hp
                 result.gold = gold
