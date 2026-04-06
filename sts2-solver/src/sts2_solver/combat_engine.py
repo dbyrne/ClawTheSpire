@@ -72,6 +72,9 @@ def can_play_card(state: CombatState, card_idx: int) -> bool:
             and state.player.powers.get("Smoggy", 0) > 0
             and state.player.powers.get("_skills_played", 0) >= 1):
         return False
+    # Grand Finale: can only play when draw pile is empty
+    if card.id.rstrip("+") == "GRAND_FINALE" and len(state.player.draw_pile) > 0:
+        return False
     return True
 
 
