@@ -32,6 +32,7 @@ from ..combat_engine import (
     start_turn,
     tick_enemy_powers,
 )
+from ..constants import CardType
 from ..data_loader import CardDB, load_cards
 from ..models import Card, CombatState, EnemyState, PlayerState
 from ..simulator import (
@@ -412,7 +413,7 @@ class MCTSStrategy:
             deck_indices = [None]  # maps option idx -> deck idx
 
             for di, card in enumerate(deck):
-                if not card.upgraded and card.card_type not in ("Status", "Curse"):
+                if not card.upgraded and card.card_type not in (CardType.STATUS, CardType.CURSE):
                     up = card_db.get_upgraded(card.id)
                     if up:
                         opt_types.append(OPTION_SMITH)

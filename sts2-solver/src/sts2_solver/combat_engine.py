@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from .constants import CardType, TargetType
 from .effects import (
     apply_block,
+    apply_power_to_all_enemies,
     draw_cards,
     gain_block,
     get_alive_enemies,
@@ -34,12 +35,23 @@ def _tick_counted_relic(
     state.player.powers[counter_key] = count
 
 
-def _raw_damage_to_enemy(enemy: EnemyState, damage: int) -> None:
-    """Deal flat damage to an enemy, respecting block. No Strength/Weak/Vulnerable."""
+def _raw_damage_to_enemy(state: CombatState, enemy_idx: int, damage: int) -> None:
+    """Deal flat damage to an enemy, respecting block/Plating. No Strength/Weak/Vulnerable."""
+    from .effects import _on_enemy_death
+    enemy = state.enemies[enemy_idx]
     if not enemy.is_alive:
         return
+    had_block = enemy.block > 0
     dmg = apply_block(enemy, damage)
+    # Plating: lose 1 stack when hit through block
+    plating = enemy.powers.get("Plating", 0)
+    if plating > 0 and had_block and dmg > 0:
+        enemy.powers["Plating"] = plating - 1
+        if enemy.powers["Plating"] <= 0:
+            del enemy.powers["Plating"]
     enemy.hp -= dmg
+    if not enemy.is_alive:
+        _on_enemy_death(state, enemy_idx)
 
 
 # ---------------------------------------------------------------------------
@@ -198,8 +210,8 @@ def play_card(
     # Letter Opener: every 3 Skills, deal 5 damage to ALL enemies
     if card.card_type == CardType.SKILL and "LETTER_OPENER" in relics:
         def _opener():
-            for enemy in state.enemies:
-                _raw_damage_to_enemy(enemy, 5)
+            for i, enemy in enumerate(state.enemies):
+                _raw_damage_to_enemy(state, i, 5)
         _tick_counted_relic(state, "_letter_opener_count", 3, _opener)
 
     # Game Piece: draw 1 card when a Power is played
@@ -232,9 +244,7 @@ def use_potion(state: CombatState, potion_idx: int) -> None:
                 dmg = apply_block(e, pot["damage_all"])
                 e.hp -= dmg
     elif pot.get("enemy_weak"):
-        for e in state.enemies:
-            if e.is_alive:
-                e.powers["Weak"] = e.powers.get("Weak", 0) + pot["enemy_weak"]
+        apply_power_to_all_enemies(state, "Weak", pot["enemy_weak"])
 
     state.player.potions[potion_idx] = {}  # empty the slot
 
@@ -309,8 +319,8 @@ def start_combat(state: CombatState) -> None:
 
     # Festive Popper: deal 9 damage to ALL enemies
     if "FESTIVE_POPPER" in relics:
-        for enemy in state.enemies:
-            _raw_damage_to_enemy(enemy, 9)
+        for i, enemy in enumerate(state.enemies):
+            _raw_damage_to_enemy(state, i, 9)
 
     # Lantern: gain 1 Energy on turn 1
     if "LANTERN" in relics:
@@ -598,9 +608,9 @@ def _tick_start_of_turn_powers(state: CombatState) -> None:
     # Combust: lose HP, deal damage to all enemies
     if "Combust" in powers:
         state.player.hp -= 1
-        for enemy in state.enemies:
+        for i, enemy in enumerate(state.enemies):
             if enemy.is_alive:
-                enemy.hp -= powers["Combust"]
+                _raw_damage_to_enemy(state, i, powers["Combust"])
 
     # Brutality: lose HP, draw card
     if "Brutality" in powers:

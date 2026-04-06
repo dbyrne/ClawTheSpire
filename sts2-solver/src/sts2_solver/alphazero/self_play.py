@@ -307,6 +307,7 @@ def play_one_game(
                 state_tensors=state_tensors,
                 policy=policy,
                 value=0.0,
+                action_card_ids=action_card_ids,
                 action_features=action_features,
                 action_mask=action_mask,
                 num_actions=len(actions),

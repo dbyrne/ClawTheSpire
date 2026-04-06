@@ -885,7 +885,7 @@ class Runner:
 
         # Accumulate across re-entries (discard prompts break the play loop
         # and re-enter _handle_combat; we merge cards from the same turn).
-        if not hasattr(self, '_turn_cards_played') or self._turn_cards_played is None:
+        if self._turn_cards_played is None:
             self._turn_cards_played = []
             self._turn_targets_chosen = []
             self._turn_start_gs = gs
@@ -2047,7 +2047,7 @@ class Runner:
                     if not card_id or not name:
                         continue
                     opt_types.append(OPTION_SHOP_BUY)
-                    opt_cards.append(vocabs.cards.get(card_id.rstrip("+").rstrip("+")))
+                    opt_cards.append(vocabs.cards.get(card_id.rstrip("+")))
                     shop_actions.append(("buy_card", i, f"Buy {name} ({price}g)"))
 
             # Leave option

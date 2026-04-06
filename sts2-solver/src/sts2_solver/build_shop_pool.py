@@ -27,7 +27,8 @@ def extract_shops(logs_dir: Path) -> list[dict]:
 
     for f in sorted(logs_dir.rglob("*.jsonl")):
         try:
-            events = [json.loads(line) for line in open(f, encoding="utf-8")]
+            with open(f, encoding="utf-8") as fh:
+                events = [json.loads(line) for line in fh]
         except Exception:
             continue
 

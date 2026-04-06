@@ -146,8 +146,8 @@ class MCTS:
             noise_frac = 0.25
             alpha = 0.3
             noise = np.random.dirichlet([alpha] * len(root.children))
-            for i, child in root.children.items():
-                child.prior = (1 - noise_frac) * child.prior + noise_frac * noise[i]
+            for idx, (_, child) in enumerate(root.children.items()):
+                child.prior = (1 - noise_frac) * child.prior + noise_frac * noise[idx]
 
         deadline = None
         if time_limit_ms is not None:

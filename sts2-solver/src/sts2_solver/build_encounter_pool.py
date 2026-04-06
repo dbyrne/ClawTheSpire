@@ -75,10 +75,16 @@ def main(logs_dir: Path | None = None) -> int:
     encounters = extract_encounters(logs_dir)
     pool_path = _default_pool_path()
 
+    # Merge with existing pool
+    existing: list[dict] = []
+    if pool_path.exists():
+        with open(pool_path, encoding="utf-8") as f:
+            existing = json.load(f)
+
     # Deduplicate: same floor + same enemy set = same encounter type
     seen: set[tuple] = set()
     unique: list[dict] = []
-    for enc in encounters:
+    for enc in existing + encounters:
         key = (enc["floor"], tuple(enc["enemies"]))
         if key not in seen:
             seen.add(key)
