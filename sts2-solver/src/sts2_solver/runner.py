@@ -2703,16 +2703,12 @@ class Runner:
     # ------------------------------------------------------------------
 
     def _intercept_card_reward(self) -> None:
-        """Synchronously handle the entire reward screen after combat.
+        """Handle the reward screen after combat using resolve_rewards.
 
-        Flow:
-        1. Poll until reward screen appears
-        2. Claim all non-card rewards (gold, potion, relic) one at a time
-        3. Once only the card reward remains, ask the network to take or skip
-        4. Leave the reward screen
-
-        Card reward is always last — after skip/take, the screen dismisses
-        cleanly without needing collect_rewards_and_proceed.
+        Polls until the reward/card-selection screen appears, asks the
+        network which card to take (or skip), then calls the mod's
+        resolve_rewards action which claims gold/potion/relic and
+        takes/skips the card atomically.
         """
         deadline = time.monotonic() + 5.0
         polls = 0
@@ -2733,141 +2729,83 @@ class Runner:
                     f"  [dim]reward poll #{polls}: screen={screen} actions={actions[:4]}[/dim]"
                 )
 
-            # Card selection already open — go straight to card decision
-            # (must check before "left reward screen" because the game
-            # changes screen from REWARD to CARD_SELECTION when cards show)
-            if "choose_reward_card" in actions or "skip_reward_cards" in actions:
-                self._handle_card_reward_decision(gs, actions)
+            # Reward or card selection screen — resolve atomically
+            if "REWARD" in screen or "CARD_SELECTION" in screen:
+                self._resolve_rewards_atomic(gs)
                 return
 
             # Left the reward screen entirely — nothing to do
-            if "REWARD" not in screen and screen not in ("", "COMBAT"):
+            if screen not in ("", "COMBAT"):
                 self._log_action(
                     f"  [yellow]Left reward screen (screen={screen})[/yellow]"
                 )
                 return
 
-            if "claim_reward" not in actions:
-                continue
-
-            # --- Claim non-card rewards synchronously ---
-            reward = gs.get("reward") or {}
-            reward_items = reward.get("rewards") or []
-            claimed_any = False
-            for item in reward_items:
-                if not item.get("claimable", True):
-                    continue
-                if self._is_card_reward_item(item):
-                    continue  # Card is always last
-                idx = item.get("index", item.get("i"))
-                if idx is not None:
-                    rtype = str(item.get("reward_type", "")).lower()
-                    self._log_action(f"  [dim]auto: claim_reward({idx}) — {rtype}[/dim]")
-                    if not self.dry_run:
-                        try:
-                            self._execute_with_retry("claim_reward", option_index=idx)
-                        except Exception:
-                            pass
-                    claimed_any = True
-                    time.sleep(0.2)
-
-            if claimed_any:
-                # Re-poll — indices shift after claiming, and claiming the
-                # last non-card reward may auto-open the card selection.
-                continue
-
-            # Nothing was claimed — only the card reward is left (or nothing).
-            # Try to open it explicitly.
-            has_card = any(
-                self._is_card_reward_item(item) and item.get("claimable", True)
-                for item in reward_items
-            )
-            if has_card:
-                for item in reward_items:
-                    if self._is_card_reward_item(item) and item.get("claimable", True):
-                        idx = item.get("index", item.get("i"))
-                        if idx is not None:
-                            self._log_action(f"  [cyan]Opening card reward (index {idx})...[/cyan]")
-                            if not self.dry_run:
-                                try:
-                                    self._execute_with_retry("claim_reward", option_index=idx)
-                                    time.sleep(0.5)
-                                except Exception:
-                                    pass
-                            # Re-poll to pick up card selection screen
-                            break
-                continue
-
-            # No claimable items at all — leave via proceed/collect
-            if "proceed" in actions:
-                self._log_action("  [dim]auto: proceed (rewards done)[/dim]")
-                if not self.dry_run:
-                    try:
-                        self._execute_with_retry("proceed")
-                    except Exception:
-                        pass
-            elif "collect_rewards_and_proceed" in actions:
-                self._log_action("  [dim]auto: collect_rewards_and_proceed (no items)[/dim]")
-                if not self.dry_run:
-                    try:
-                        self._execute_with_retry("collect_rewards_and_proceed")
-                    except Exception:
-                        pass
-            return
-
-    def _handle_card_reward_decision(self, gs: dict, actions: list[str]) -> None:
-        """Ask the network to take or skip the card reward, then leave."""
-        self._log_action("  [green]Card selection — evaluating with network[/green]")
+    def _resolve_rewards_atomic(self, gs: dict) -> None:
+        """Use network to decide card reward, then call resolve_rewards."""
         self.game_state = gs
-        decision = self._az_decide_card_reward(gs)
-        if decision is None:
-            return
 
-        self._log_action(f"  [blue]{decision.reasoning}[/blue]")
-        self._track_decision("card_reward", "network")
-        if self.logger:
-            self.logger.log_decision(
-                game_state=gs, screen_type="card_reward",
-                options=actions,
-                choice={"action": decision.action,
-                        "option_index": decision.option_index,
-                        "reasoning": decision.reasoning},
-                source="network",
-                network_value=decision.network_value,
-                head_scores=decision.head_scores,
-            )
+        # Determine card choice: need card selection data.
+        # If we're on the REWARD screen, the card options aren't visible
+        # yet — resolve_rewards will open the picker internally.
+        # If we're on CARD_SELECTION, we can evaluate now.
+        card_index = None  # Default: skip
+        reward_data = gs.get("reward") or {}
+        av_reward = (gs.get("agent_view") or {}).get("reward") or {}
+        card_options = (
+            reward_data.get("card_options")
+            or av_reward.get("cards")
+            or (gs.get("selection") or {}).get("cards")
+            or []
+        )
+
+        if card_options:
+            # Network evaluates the card options
+            decision = self._az_decide_card_reward(gs)
+            if decision is not None:
+                self._log_action(f"  [blue]{decision.reasoning}[/blue]")
+                self._track_decision("card_reward", "network")
+                if self.logger:
+                    self.logger.log_decision(
+                        game_state=gs, screen_type="card_reward",
+                        options=gs.get("available_actions", []),
+                        choice={"action": decision.action,
+                                "option_index": decision.option_index,
+                                "reasoning": decision.reasoning},
+                        source="network",
+                        network_value=decision.network_value,
+                        head_scores=decision.head_scores,
+                    )
+                if decision.action == "choose_reward_card":
+                    card_index = decision.option_index
+                else:
+                    card_index = None  # Skip
+                    self._deck_size_after_skip = len(
+                        (gs.get("run") or {}).get("deck", [])
+                    )
+        else:
+            self._log_action("  [dim]No card options visible — resolve_rewards will handle[/dim]")
+
+        # Single atomic call: claims gold/potion/relic + takes/skips card
+        self._log_action(
+            f"  [green]resolve_rewards (card_index={card_index})[/green]"
+        )
+        self._card_reward_handled = True
         if not self.dry_run:
             try:
-                self._execute_with_retry(
-                    decision.action,
-                    option_index=decision.option_index,
-                )
+                if card_index is not None:
+                    self._execute_with_retry(
+                        "resolve_rewards", card_index=card_index)
+                else:
+                    self._execute_with_retry("resolve_rewards")
+                self.action_count += 1
             except Exception as e:
-                self._log_action(f"  [red]Card reward action failed: {e}[/red]")
-        self._card_reward_handled = True
-
-        if decision.action == "skip_reward_cards":
-            self._deck_size_after_skip = len(
-                (gs.get("run") or {}).get("deck", [])
-            )
-
-        # Wait for reward screen to dismiss, helping it along if needed
-        for _ in range(10):
-            time.sleep(0.3)
-            try:
-                gs2 = self.client.get_state()
-            except Exception:
-                break
-            if "REWARD" not in gs2.get("screen", "").upper():
-                break
-            a2 = gs2.get("available_actions", [])
-            if "proceed" in a2:
-                self._execute_with_retry("proceed")
-                break
-            if "collect_rewards_and_proceed" in a2:
-                # Card already handled — safe to proceed
-                self._execute_with_retry("collect_rewards_and_proceed")
-                break
+                self._log_action(f"  [red]resolve_rewards failed: {e}[/red]")
+                # Fall back to collect_rewards_and_proceed
+                try:
+                    self._execute_with_retry("collect_rewards_and_proceed")
+                except Exception:
+                    pass
 
     # ------------------------------------------------------------------
     # Action execution with retry
