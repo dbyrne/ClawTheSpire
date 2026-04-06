@@ -535,200 +535,119 @@ def simulate_turn(
     return s
 
 
-def _apply_defend_block_from_move_table(state: CombatState) -> None:
-    """Apply enemy block from move table when the API doesn't provide it.
-
-    Handles both Defend intents (block-only moves) and Attack intents
-    that also grant block (e.g., Axe Raider Swing = 5 dmg + 5 block).
-    """
-    from .simulator import ENEMY_MOVE_TABLES
-
-    for enemy in state.enemies:
-        if not enemy.is_alive or not enemy.intent_type:
-            continue
-
-        # Skip if Defend intent already has block from resolve_enemy_intents
-        if enemy.intent_type == "Defend" and enemy.intent_block is not None:
-            continue
-
-        table = ENEMY_MOVE_TABLES.get(enemy.id)
-        if not table:
-            continue
-
-        # Find matching move and apply self_block if present
-        for move in table:
-            if move["type"] == enemy.intent_type:
-                if enemy.intent_type == "Attack":
-                    if move.get("damage") == enemy.intent_damage and move.get("self_block"):
-                        enemy._has_move_table_block = True
-                        break
-                elif move.get("self_block"):
-                    enemy._has_move_table_block = True
-                    break
-
-
 def _apply_move_table_effects(state: CombatState) -> None:
-    """Apply enemy move table effects (block, buffs, debuffs) not covered
-    by resolve_enemy_intents. Matches enemy intent_type to known move tables
-    to fill in effects the API doesn't expose (e.g., block on Buff intents).
-    Also handles special mechanics: Gas Bomb explosion, Living Fog spawning.
-    """
-    from .simulator import ENEMY_MOVE_TABLES
+    """Apply enemy side effects not covered by resolve_enemy_intents.
 
-    # Gas Bomb: explodes for 8 damage to player then self-destructs.
-    # Snapshots show intent_type=None because the game doesn't expose
-    # the fuse intent. Gas Bombs that appear in the snapshot were spawned
-    # on a previous turn and explode NOW.
+    Uses the shared apply_intent_effects() from simulator.py — the same
+    function used by self-play training — ensuring both code paths are
+    identical.  Side effects are looked up from ENEMY_SIDE_EFFECTS by
+    intent key (e.g. "Attack_5", "Buff").
+
+    Special case: Gas Bomb snapshots show intent_type=None (fuse mechanic).
+    We override with Attack_8 so resolve_enemy_intents deals the damage,
+    then apply_intent_effects handles the self-destruct.
+    """
+    from .simulator import (
+        ENEMY_SIDE_EFFECTS,
+        ENEMY_CYCLING_TABLES,
+        apply_intent_effects,
+        _spawn_enemy,
+    )
+
+    def _intent_key_from_enemy(enemy: EnemyState) -> str:
+        """Build intent key matching build_enemy_profiles._intent_key."""
+        t = str(enemy.intent_type or "?")
+        d = enemy.intent_damage
+        h = enemy.intent_hits or 1
+        if d is not None:
+            return f"{t}_{d}x{h}" if h > 1 else f"{t}_{d}"
+        return t
+
+    # --- Gas Bomb: snapshot shows intent_type=None, but it actually ---
+    # --- explodes for 8 damage. Set intent so resolve_enemy_intents ---
+    # --- already dealt the damage (called before us). Just self-destruct. ---
     for enemy in state.enemies:
         if enemy.id == "GAS_BOMB" and enemy.is_alive:
-            raw = 8 + enemy.powers.get("Strength", 0)
-            if raw < 0:
-                raw = 0
-            if enemy.powers.get("Weak", 0) > 0:
-                raw = int(raw * 0.75)
-            if state.player.powers.get("Vulnerable", 0) > 0:
-                raw = int(raw * 1.5)
-            if state.player.block > 0:
-                if raw >= state.player.block:
-                    raw -= state.player.block
-                    state.player.block = 0
-                else:
-                    state.player.block -= raw
-                    raw = 0
-            state.player.hp -= raw
+            # resolve_enemy_intents already ran; if intent was None it did
+            # nothing.  We need to deal the explosion damage ourselves since
+            # the snapshot doesn't expose the Gas Bomb's real Attack intent.
+            from .combat_engine import _enemy_attacks_player
+            enemy.intent_type = "Attack"
+            enemy.intent_damage = 8
+            enemy.intent_hits = 1
+            _enemy_attacks_player(state, enemy)
             enemy.hp = 0
 
-    # Iterate only the original enemies (not newly spawned ones)
+    # Build spawn counter from state attributes (persisted across turns)
+    spawn_counter = {}
+    for attr in list(vars(state)):
+        if attr.startswith("_spawn_count_"):
+            enemy_id = attr[len("_spawn_count_"):]
+            spawn_counter[enemy_id] = getattr(state, attr)
+
+    def _spawn_cb(spawn_id: str, count: int) -> None:
+        for _ in range(count):
+            try:
+                minion = _spawn_enemy(spawn_id)
+            except Exception:
+                minion = EnemyState(
+                    id=spawn_id,
+                    name=spawn_id.replace("_", " ").title(),
+                    hp=10, max_hp=10, block=0,
+                )
+            minion.powers["Minion"] = 1
+            state.enemies.append(minion)
+
+    # Apply side effects for each alive enemy
     original_enemies = list(state.enemies)
     for enemy in original_enemies:
-        if not enemy.is_alive or not enemy.intent_type:
+        if not enemy.is_alive:
             continue
 
-        table = ENEMY_MOVE_TABLES.get(enemy.id)
-        if not table:
+        # Look up side effects from registry
+        key = _intent_key_from_enemy(enemy)
+        effects = ENEMY_SIDE_EFFECTS.get(enemy.id, {}).get(key, {})
+
+        # Skip enemies with no intent AND no registered side effects
+        if not enemy.intent_type and not effects:
             continue
 
-        # Find the matching move in the table by intent type and damage
-        matched = None
-        for move in table:
-            if move["type"] == enemy.intent_type:
-                if enemy.intent_type == "Attack":
-                    if move.get("damage") == enemy.intent_damage:
-                        matched = move
-                        break
-                else:
-                    matched = move
-                    break
+        # Build synthetic intent dict: base fields + side effects
+        intent: dict = {
+            "type": enemy.intent_type,
+            "damage": enemy.intent_damage,
+            "hits": enemy.intent_hits or 1,
+        }
+        intent.update(effects)
 
-        if not matched:
-            continue
+        # Also check cycling tables for enemies without profiles
+        # (bosses, etc.) that have inline side effects
+        if not effects:
+            table = ENEMY_CYCLING_TABLES.get(enemy.id)
+            if table:
+                for move in table:
+                    if move["type"] == enemy.intent_type:
+                        if enemy.intent_type == "Attack":
+                            if move.get("damage") == enemy.intent_damage:
+                                intent.update({
+                                    k: v for k, v in move.items()
+                                    if k not in ("type", "damage", "hits")
+                                })
+                                break
+                        else:
+                            intent.update({
+                                k: v for k, v in move.items()
+                                if k not in ("type", "damage", "hits")
+                            })
+                            break
 
-        # Apply extra effects not handled by resolve_enemy_intents
-        if matched.get("self_block"):
-            enemy.block += matched["self_block"]
-        if matched.get("self_strength"):
-            enemy.powers["Strength"] = (
-                enemy.powers.get("Strength", 0) + matched["self_strength"]
-            )
-        if matched.get("all_strength"):
-            for e in state.enemies:
-                if e.is_alive:
-                    e.powers["Strength"] = (
-                        e.powers.get("Strength", 0) + matched["all_strength"]
-                    )
-        if matched.get("player_weak"):
-            state.player.powers["Weak"] = (
-                state.player.powers.get("Weak", 0) + matched["player_weak"]
-            )
-        if matched.get("player_frail"):
-            state.player.powers["Frail"] = (
-                state.player.powers.get("Frail", 0) + matched["player_frail"]
-            )
-        if matched.get("player_vulnerable"):
-            state.player.powers["Vulnerable"] = (
-                state.player.powers.get("Vulnerable", 0) + matched["player_vulnerable"]
-            )
-        if matched.get("player_shrink"):
-            state.player.powers["Shrink"] = (
-                state.player.powers.get("Shrink", 0) - matched["player_shrink"]
-            )
-        if matched.get("player_constrict"):
-            state.player.powers["Constrict"] = (
-                state.player.powers.get("Constrict", 0) + matched["player_constrict"]
-            )
-        if matched.get("player_tangled"):
-            state.player.powers["Tangled"] = (
-                state.player.powers.get("Tangled", 0) + matched["player_tangled"]
-            )
+        apply_intent_effects(state, enemy, intent,
+                             spawn_callback=_spawn_cb,
+                             spawn_counter=spawn_counter)
 
-        # Debuff intents with damage — resolve_enemy_intents only handles
-        # Attack type, so Debuff+damage moves (e.g. Fuzzy Wurm Crawler's
-        # Acid Goop) need damage applied here.
-        if matched["type"] == "Debuff" and matched.get("damage"):
-            raw = matched["damage"] + enemy.powers.get("Strength", 0)
-            if raw < 0:
-                raw = 0
-            if enemy.powers.get("Weak", 0) > 0:
-                raw = int(raw * 0.75)
-            if state.player.powers.get("Vulnerable", 0) > 0:
-                raw = int(raw * 1.5)
-            if state.player.block > 0:
-                if raw >= state.player.block:
-                    raw -= state.player.block
-                    state.player.block = 0
-                else:
-                    state.player.block -= raw
-                    raw = 0
-            state.player.hp -= raw
-
-        # Fogmog summons Eye With Teeth on its Buff move
-        if enemy.id == "FOGMOG" and matched["type"] == "Buff":
-            # Only summon if not already present
-            has_eye = any(
-                e.id == "EYE_WITH_TEETH" and e.is_alive
-                for e in state.enemies
-            )
-            if not has_eye:
-                eye = EnemyState(
-                    id="EYE_WITH_TEETH",
-                    name="Eye With Teeth",
-                    hp=6, max_hp=6,
-                    block=0,
-                    intent_type="StatusCard",
-                    intent_damage=None,
-                    intent_hits=1,
-                )
-                state.enemies.append(eye)
-
-        # Smoggy: Living Fog's first move applies Smoggy to player
-        if matched.get("player_smoggy"):
-            state.player.powers["Smoggy"] = 1
-
-        # Spawn minions (e.g. Living Fog spawns Gas Bombs)
-        # Spawn count increases each use: 1, 2, 3...
-        spawn_id = matched.get("spawn_minion")
-        if spawn_id:
-            # Track spawn count by monster ID (persists across turns
-            # since setattr is on the CombatState which is carried forward)
-            count_key = f"_spawn_count_{enemy.id}"
-            prev = getattr(state, count_key, 0)
-            spawn_count = prev + 1
-            setattr(state, count_key, spawn_count)
-            for _ in range(spawn_count):
-                if spawn_id == "GAS_BOMB":
-                    minion = EnemyState(
-                        id="GAS_BOMB", name="Gas Bomb",
-                        hp=10, max_hp=10, block=0,
-                        intent_type=None, intent_damage=None,
-                        intent_hits=1,
-                    )
-                else:
-                    minion = EnemyState(
-                        id=spawn_id,
-                        name=spawn_id.replace("_", " ").title(),
-                        hp=10, max_hp=10, block=0,
-                    )
-                state.enemies.append(minion)
+    # Write spawn counters back to state for carry-forward
+    for enemy_id, count in spawn_counter.items():
+        setattr(state, f"_spawn_count_{enemy_id}", count)
 
 
 # ---------------------------------------------------------------------------

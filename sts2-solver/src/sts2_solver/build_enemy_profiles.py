@@ -186,6 +186,52 @@ def build_profile(monster_id: str, combats: list[list[dict]]) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# Profile enrichment: merge side effects from ENEMY_SIDE_EFFECTS registry
+# ---------------------------------------------------------------------------
+
+# Profile overrides for enemies whose API data is misleading.
+# Gas Bomb shows intent_type=None in snapshots (fuse mechanic), but
+# it actually performs Attack_8 then self-destructs every turn.
+PROFILE_OVERRIDES: dict[str, dict] = {
+    "GAS_BOMB": {
+        "fixed_opening": [{"type": "Attack", "damage": 8, "hits": 1}],
+        "moves": {"Attack_8": {"type": "Attack", "damage": 8, "hits": 1}},
+        "start_weights": {"Attack_8": 1.0},
+        "transitions": {"Attack_8": {"Attack_8": 1.0}},
+    },
+}
+
+
+def enrich_profile_with_effects(profile: dict) -> dict:
+    """Merge side effects from ENEMY_SIDE_EFFECTS into profile moves.
+
+    Modifies the profile in place and returns it.  For each move in the
+    profile's ``moves`` and ``fixed_opening``, looks up the corresponding
+    entry in ENEMY_SIDE_EFFECTS by intent key and merges any extra fields
+    (spawn_minion, player_weak, self_strength, etc.).
+    """
+    from .simulator import ENEMY_SIDE_EFFECTS
+
+    monster_id = profile["monster_id"]
+    effects = ENEMY_SIDE_EFFECTS.get(monster_id, {})
+    if not effects:
+        return profile
+
+    # Enrich moves dict
+    for move_key, move_data in profile["moves"].items():
+        if move_key in effects:
+            move_data.update(effects[move_key])
+
+    # Enrich fixed_opening
+    for intent in profile["fixed_opening"]:
+        key = _intent_key(intent)
+        if key in effects:
+            intent.update(effects[key])
+
+    return profile
+
+
 def build_all_profiles(
     logs_dir: Path,
     min_combats: int = DEFAULT_MIN_COMBATS,
@@ -210,12 +256,26 @@ def build_all_profiles(
                      monster_id, len(combats), min_combats)
             continue
         profile = build_profile(monster_id, combats)
+
+        # Apply overrides for enemies with misleading API data
+        if monster_id in PROFILE_OVERRIDES:
+            override = PROFILE_OVERRIDES[monster_id]
+            profile.update(override)
+            profile["monster_id"] = monster_id  # ensure ID preserved
+
+        # Merge side effects from the registry
+        enrich_profile_with_effects(profile)
+
         profiles[monster_id] = profile
         n_fixed = len(profile["fixed_opening"])
         n_moves = len(profile["moves"])
         n_trans = sum(len(v) for v in profile["transitions"].values())
         log.info("%s: %d combats, %d fixed opening, %d moves, %d transitions",
                  monster_id, len(combats), n_fixed, n_moves, n_trans)
+
+    # Also enrich any existing profiles that weren't rebuilt this run
+    for monster_id, profile in profiles.items():
+        enrich_profile_with_effects(profile)
 
     return profiles
 
