@@ -34,7 +34,7 @@ FIXED_THRESHOLD = 0.90
 
 
 def _to_monster_id(name: str) -> str:
-    return name.upper().replace(" ", "_").replace("(", "").replace(")", "")
+    return name.upper().replace(" ", "_").replace("-", "_").replace("(", "").replace(")", "")
 
 
 def _intent_key(intent: dict) -> str:
