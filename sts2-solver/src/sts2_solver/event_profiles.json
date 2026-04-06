@@ -24,6 +24,25 @@
         },
         "n_offered": 4,
         "n_chosen": 4
+      },
+      {
+        "title": "Exit Baths",
+        "description": "",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Linger",
+        "description": "Gain 2 Max HP. Take 3 damage.",
+        "option_type": 15,
+        "effects": {
+          "max_hp_delta": 2,
+          "hp_delta": -3
+        },
+        "n_offered": 0,
+        "n_chosen": 0
       }
     ]
   },
@@ -131,6 +150,14 @@
         },
         "n_offered": 11,
         "n_chosen": 7
+      },
+      {
+        "title": "Fight!",
+        "description": "",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
       }
     ]
   },
@@ -263,6 +290,44 @@
         },
         "n_offered": 1,
         "n_chosen": 1
+      },
+      {
+        "title": "Grab Fried Eel off the Belt",
+        "description": "Pay 35 Gold. Add a random Colorless Card to your Deck. Continue feasting!",
+        "option_type": 17,
+        "effects": {
+          "gold_delta": -35
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Grab Golden Fysh off the Belt",
+        "description": "LUCKY WINNER! Gain 75 Gold.",
+        "option_type": 17,
+        "effects": {
+          "gold_delta": 75
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Grab Seapunk Salad off the Belt",
+        "description": "Pay 35 Gold. Add Feeding Frenzy to your Deck. Continue feasting!",
+        "option_type": 17,
+        "effects": {
+          "gold_delta": -35
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Leave",
+        "description": "",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
       }
     ]
   },
@@ -318,6 +383,14 @@
           "relic_random": true
         },
         "n_offered": 4,
+        "n_chosen": 0
+      },
+      {
+        "title": "Locked",
+        "description": "Requires 149 Gold.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
         "n_chosen": 0
       }
     ]
@@ -629,6 +702,14 @@
         "effects": {},
         "n_offered": 3,
         "n_chosen": 1
+      },
+      {
+        "title": "Move On",
+        "description": "You don't have any cards that can be Enchanted.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
       }
     ]
   },
@@ -711,6 +792,57 @@
         },
         "n_offered": 7,
         "n_chosen": 7
+      },
+      {
+        "title": "Give Up",
+        "description": "Stop reading the text and leave.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Continue Deciphering",
+        "description": "Lose 3 Max HP. Upgrade a random card.",
+        "option_type": 19,
+        "effects": {
+          "max_hp_delta": -3,
+          "card_upgrade": 1
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Keep Deciphering",
+        "description": "Lose 3 Max HP. Upgrade a random card.",
+        "option_type": 19,
+        "effects": {
+          "max_hp_delta": -3,
+          "card_upgrade": 1
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "KEEP DECIPHERING",
+        "description": "Lose 3 Max HP. Upgrade a random card.",
+        "option_type": 19,
+        "effects": {
+          "max_hp_delta": -3,
+          "card_upgrade": 1
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Lose Everything",
+        "description": "Lose 3 Max HP. Upgrade ALL of your cards.",
+        "option_type": 19,
+        "effects": {
+          "max_hp_delta": -3
+        },
+        "n_offered": 0,
+        "n_chosen": 0
       }
     ]
   },
@@ -746,6 +878,14 @@
         "effects": {},
         "n_offered": 4,
         "n_chosen": 3
+      },
+      {
+        "title": "Locked",
+        "description": "Requires 50 Gold.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
       }
     ]
   },
@@ -951,6 +1091,14 @@
         },
         "n_offered": 0,
         "n_chosen": 0
+      },
+      {
+        "title": "Locked",
+        "description": "Requires 155 Gold.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
       }
     ]
   },
@@ -1015,6 +1163,14 @@
         },
         "n_offered": 16,
         "n_chosen": 0
+      },
+      {
+        "title": "Locked",
+        "description": "None of your cards can be Enchanted with [purple]Slither[/purple].",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
       }
     ]
   },
@@ -1040,6 +1196,14 @@
         "effects": {},
         "n_offered": 1,
         "n_chosen": 0
+      },
+      {
+        "title": "Fight",
+        "description": "",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
       }
     ]
   },
@@ -1064,6 +1228,16 @@
           "hp_delta": 23
         },
         "n_offered": 1,
+        "n_chosen": 0
+      },
+      {
+        "title": "Reach In",
+        "description": "Obtain a random Relic. Add Writhe to your Deck.",
+        "option_type": 21,
+        "effects": {
+          "relic_random": true
+        },
+        "n_offered": 0,
         "n_chosen": 0
       }
     ]
@@ -1257,6 +1431,16 @@
         },
         "n_offered": 0,
         "n_chosen": 0
+      },
+      {
+        "title": "Enter the Center",
+        "description": "Lose 7 HP. Obtain Pollinous Core.",
+        "option_type": 16,
+        "effects": {
+          "hp_delta": -7
+        },
+        "n_offered": 0,
+        "n_chosen": 0
       }
     ]
   },
@@ -1447,6 +1631,14 @@
         },
         "n_offered": 0,
         "n_chosen": 0
+      },
+      {
+        "title": "Continue",
+        "description": "",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
       }
     ]
   },
@@ -1500,6 +1692,22 @@
         },
         "n_offered": 0,
         "n_chosen": 0
+      },
+      {
+        "title": "RETURN_THE_KEY",
+        "description": "The stranger thanks you for your help, and rewards you handsomely.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Fight",
+        "description": "",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
       }
     ]
   },
@@ -1511,6 +1719,104 @@
       {
         "title": "Accept",
         "description": "Create a custom card to add to your Deck.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Weapon",
+        "description": "Make an Attack.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Gadget",
+        "description": "Make a Power.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Protector",
+        "description": "Make a Skill.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Chaos",
+        "description": "Add a random card into your Hand. It costs 0 [energy:1] this turn.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Choking",
+        "description": "Whenever you play a card this turn, the enemy loses [ChokingDamage] HP.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Curious",
+        "description": "Powers cost 1 [energy:1] less.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Energized",
+        "description": "Gain [energy:2].",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Expertise",
+        "description": "Gain [ExpertiseStrength] Strength. Gain [ExpertiseDexterity] Dexterity.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Improvement",
+        "description": "At the end of combat, Upgrade a random card.",
+        "option_type": 19,
+        "effects": {
+          "card_upgrade": 1
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Sapping",
+        "description": "Apply [SappingWeak] Weak. Apply [SappingVulnerable] Vulnerable.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Violence",
+        "description": "Hits 2 additional times.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Wisdom",
+        "description": "Draw 3 cards.",
         "option_type": 22,
         "effects": {},
         "n_offered": 0,
@@ -1534,6 +1840,34 @@
       {
         "title": "Reject",
         "description": "You are not allowed to Reject.",
+        "option_type": 22,
+        "effects": {},
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "DECIDE: Guilty",
+        "description": "Add Regret to your Deck. Obtain 2 random Relics.",
+        "option_type": 21,
+        "effects": {
+          "relic_random": true
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "DECIDE: Innocent",
+        "description": "Add Shame to your Deck. Upgrade 2 cards.",
+        "option_type": 19,
+        "effects": {
+          "card_upgrade": 2
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "Double Down",
+        "description": "Face lethal repercussions.",
         "option_type": 22,
         "effects": {},
         "n_offered": 0,
@@ -1644,6 +1978,16 @@
         "option_type": 16,
         "effects": {
           "hp_delta": -5
+        },
+        "n_offered": 0,
+        "n_chosen": 0
+      },
+      {
+        "title": "TAKE",
+        "description": "Receive a random Relic.",
+        "option_type": 21,
+        "effects": {
+          "relic_random": true
         },
         "n_offered": 0,
         "n_chosen": 0

@@ -342,7 +342,81 @@ def build_all_profiles(
             log.info("%s: %d observations, %d options",
                      event_id, len(obs_list), len(profile["options"]))
 
+    # Seed missing events and page options from events.json
+    _seed_from_game_data(profiles)
+
     return profiles
+
+
+def _seed_from_game_data(profiles: dict[str, dict]) -> None:
+    """Fill in missing events and multi-page options from events.json.
+
+    Ensures every act event and shared event has a profile, and every
+    page option (follow-up choices in multi-page events) is included.
+    """
+    from .simulator import _ensure_data_loaded, _ACTS_BY_ID
+
+    data_dir = Path(__file__).resolve().parents[3] / "STS2-Agent" / "mcp_server" / "data" / "eng"
+    events_path = data_dir / "events.json"
+    if not events_path.exists():
+        return
+
+    _ensure_data_loaded()
+    all_act_events = set()
+    for act in _ACTS_BY_ID.values():
+        for eid in act.get("events", []):
+            all_act_events.add(eid)
+
+    with open(events_path, encoding="utf-8") as f:
+        events = json.load(f)
+
+    for e in events:
+        eid = e["id"]
+        if eid == "NEOW":
+            continue
+        options = e.get("options") or []
+        # Only seed events that are in acts or shared (have options)
+        if not options and eid not in all_act_events:
+            continue
+
+        # Create profile if missing
+        if eid not in profiles and options:
+            profile_options = []
+            for opt in options:
+                title = strip_markup(opt.get("title", ""))
+                desc = strip_markup(opt.get("description", ""))
+                profile_options.append({
+                    "title": title,
+                    "description": desc,
+                    "option_type": categorize_event_option(desc),
+                    "effects": _parse_effects_from_description(desc),
+                    "n_offered": 0,
+                    "n_chosen": 0,
+                })
+            profiles[eid] = {
+                "event_id": eid,
+                "event_name": e.get("name", eid),
+                "n_observations": 0,
+                "options": profile_options,
+            }
+
+        # Add page options to existing profiles
+        if eid in profiles:
+            existing_titles = {o["title"] for o in profiles[eid].get("options", [])}
+            for page in (e.get("pages") or []):
+                for opt in (page.get("options") or []):
+                    title = strip_markup(opt.get("title", ""))
+                    if title and title not in existing_titles:
+                        desc = strip_markup(opt.get("description", ""))
+                        profiles[eid]["options"].append({
+                            "title": title,
+                            "description": desc,
+                            "option_type": categorize_event_option(desc),
+                            "effects": _parse_effects_from_description(desc),
+                            "n_offered": 0,
+                            "n_chosen": 0,
+                        })
+                        existing_titles.add(title)
 
 
 # ---------------------------------------------------------------------------
