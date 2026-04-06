@@ -120,3 +120,6 @@ class CombatState:
     floor: int = 0  # Current floor number (for scaling bonuses)
     gold: int = 0  # Current gold (used by non-combat decision heads)
     pending_choice: PendingChoice | None = None  # Sub-choice awaiting player input
+    act_id: str = ""  # "OVERGROWTH", "UNDERDOCKS", "HIVE", "GLORY"
+    boss_id: str = ""  # Boss encounter ID (known from run start)
+    map_path: tuple[str, ...] = ()  # Remaining room types on current path

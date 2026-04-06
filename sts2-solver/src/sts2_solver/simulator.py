@@ -723,7 +723,7 @@ def _generate_act1_map_with_choices(rng: random.Random,
     """
     real_map = _pick_real_map(rng, act_id=act_id)
     if real_map is not None:
-        return _walk_real_map(real_map, rng)
+        return _walk_real_map(real_map, rng), real_map
 
     # Synthetic fallback (used only if no map_pool.json exists)
     rooms: list = []
@@ -739,7 +739,7 @@ def _generate_act1_map_with_choices(rng: random.Random,
     rooms.append(rng.sample(["event", "shop"], k=2))
     rooms.append("rest")
     rooms.append("boss")
-    return rooms
+    return rooms, None
 
 
 # Node type → sim room type.  "Monster" is split into weak/normal by row.
@@ -756,6 +756,56 @@ _NODE_TYPE_MAP = {
 
 # Rows below this threshold map Monster → "weak" instead of "normal"
 _WEAK_ROW_THRESHOLD = 4
+
+def _bfs_downstream_path(
+    map_data: dict,
+    start_node: dict,
+    max_depth: int = 10,
+) -> tuple[str, ...]:
+    """BFS from a node to collect downstream room types in order.
+
+    Returns a tuple of game node types (Monster, Elite, RestSite, etc.)
+    representing the rooms reachable from start_node, in BFS order
+    (distance 1 first, then distance 2, etc.).
+    """
+    by_pos: dict[tuple[int, int], dict] = {}
+    for n in map_data.get("nodes", []):
+        by_pos[(n["row"], n["col"])] = n
+
+    result: list[str] = []
+    frontier = [start_node]
+    for _ in range(max_depth):
+        next_frontier: list[dict] = []
+        for node in frontier:
+            for c in node.get("children", []):
+                pos = (c["row"], c["col"])
+                child = by_pos.get(pos)
+                if child:
+                    next_frontier.append(child)
+        if not next_frontier:
+            break
+        # Deduplicate by position (multiple parents can reach same child)
+        seen_pos: set[tuple[int, int]] = set()
+        deduped: list[dict] = []
+        for n in next_frontier:
+            pos = (n["row"], n["col"])
+            if pos not in seen_pos:
+                seen_pos.add(pos)
+                deduped.append(n)
+        for n in deduped:
+            result.append(n.get("node_type", "Monster"))
+        frontier = deduped
+
+    return tuple(result)
+
+
+# Reverse mapping: sim room type → game node type (for path encoding)
+_NODE_TYPE_MAP_REVERSE = {
+    "weak": "Monster", "normal": "Monster",
+    "elite": "Elite", "boss": "Boss",
+    "event": "Event", "rest": "RestSite",
+    "shop": "Shop", "treasure": "Treasure",
+}
 
 
 _MAP_POOL: list[dict] | None = None
@@ -1407,7 +1457,8 @@ class RunStrategy(Protocol):
                      wave_pool: list[list[str]] | None = None) -> StrategyCombatResult: ...
 
     def pick_card_reward(self, offered: list, deck: list, hp: int, max_hp: int,
-                         floor: int, card_db, pools: dict) -> tuple: ...
+                         floor: int, card_db, pools: dict,
+                         relics: frozenset[str] = frozenset()) -> tuple: ...
         # Returns (Card | None, sample_or_None)
 
     def rest_or_smith(self, hp: int, max_hp: int, deck: list, card_db,
@@ -1420,7 +1471,8 @@ class RunStrategy(Protocol):
                        card_db, pools: dict, rng) -> ShopResult: ...
 
     def pick_map_path(self, choices: list[str], deck: list, hp: int, max_hp: int,
-                      gold: int, floor: int, relics: frozenset[str]) -> tuple: ...
+                      gold: int, floor: int, relics: frozenset[str],
+                      downstream_paths: list[tuple[str, ...]] | None = None) -> tuple: ...
         # Returns (chosen_index, list_of_samples)
 
     def decide_event(self, event_id: str, options: list[dict],
@@ -1428,6 +1480,14 @@ class RunStrategy(Protocol):
                      floor: int, card_db, rng,
                      relics: frozenset[str]) -> tuple: ...
         # Returns (chosen_option_idx: int, changes_dict: dict, samples: list)
+
+    def set_run_context(self, act_id: str, boss_id: str) -> None:
+        """Called once at run start with act and boss IDs."""
+        ...
+
+    def set_remaining_path(self, path: tuple[str, ...]) -> None:
+        """Called each floor with the remaining room types ahead."""
+        ...
 
 
 # ---------------------------------------------------------------------------
@@ -1531,7 +1591,21 @@ def run_act1(
     if not act_data:
         act_data = _ACTS_BY_ID.get("OVERGROWTH", {})
         act_id = "OVERGROWTH"
-    room_sequence = _generate_act1_map_with_choices(rng, act_id=act_id)
+    room_sequence, map_graph = _generate_act1_map_with_choices(rng, act_id=act_id)
+
+    # Build position lookup for BFS downstream paths
+    _map_by_pos: dict[tuple[int, int], dict] = {}
+    if map_graph:
+        for n in map_graph.get("nodes", []):
+            _map_by_pos[(n["row"], n["col"])] = n
+
+    # Pre-pick boss (visible on map from run start)
+    boss_encounters = [e for e in act_data.get("encounters", [])
+                       if _ENCOUNTERS_BY_ID.get(e, {}).get("room_type") == "Boss"]
+    boss_id = rng.choice(boss_encounters) if boss_encounters else ""
+
+    # Set run context on strategy
+    strategy.set_run_context(act_id, boss_id)
 
     # Starter relic
     relics: set[str] = set()
@@ -1553,13 +1627,54 @@ def run_act1(
     rng.shuffle(events_list)
     event_idx = 0
 
+    # Helper: map room types for remaining floors
+    def _remaining_room_types(from_floor: int) -> tuple[str, ...]:
+        result_rooms = []
+        for i in range(from_floor, len(room_sequence)):
+            entry = room_sequence[i]
+            if isinstance(entry, list):
+                result_rooms.append("Monster")  # Unknown until chosen
+            else:
+                result_rooms.append(
+                    _NODE_TYPE_MAP_REVERSE.get(entry, "Monster"))
+        return tuple(result_rooms)
+
     for floor_num, room_entry in enumerate(room_sequence, 1):
         result.floor_reached = floor_num
 
+        # Update remaining path context on strategy
+        strategy.set_remaining_path(_remaining_room_types(floor_num))
+
         # Resolve map choice nodes
         if isinstance(room_entry, list):
+            # Compute per-option downstream paths via BFS on the map graph
+            downstream_paths = None
+            if map_graph and _map_by_pos:
+                # Map rows are 0-indexed; floor_num is 1-indexed.
+                # Floor 1 = Neow (row 0), floor 2 = row 1, etc.
+                map_row = floor_num - 1
+                row_nodes = [n for pos, n in _map_by_pos.items()
+                             if pos[0] == map_row]
+                if row_nodes:
+                    # Match each choice to a distinct node by room type.
+                    # Track used nodes so duplicate types get different nodes.
+                    downstream_paths = []
+                    available = list(row_nodes)
+                    for choice_rt in room_entry:
+                        game_nt = _NODE_TYPE_MAP_REVERSE.get(choice_rt, "Monster")
+                        matched = next(
+                            (n for n in available
+                             if n.get("node_type") == game_nt),
+                            available[0] if available else row_nodes[0],
+                        )
+                        if matched in available:
+                            available.remove(matched)
+                        downstream_paths.append(
+                            _bfs_downstream_path(map_graph, matched))
+
             chosen_idx, map_samples = strategy.pick_map_path(
-                room_entry, deck, hp, max_hp, gold, floor_num, frozenset(relics))
+                room_entry, deck, hp, max_hp, gold, floor_num, frozenset(relics),
+                downstream_paths=downstream_paths)
             result.option_samples.extend(map_samples)
             room_type = room_entry[chosen_idx]
         else:
@@ -1639,7 +1754,8 @@ def run_act1(
             if room_type != "boss":
                 offered = _offer_card_rewards(pools, deck)
                 pick, deck_sample = strategy.pick_card_reward(
-                    offered, deck, hp, max_hp, floor_num, card_db, pools)
+                    offered, deck, hp, max_hp, floor_num, card_db, pools,
+                    relics=frozenset(relics))
                 if pick:
                     deck.append(pick)
                     result.cards_picked.append(pick.name)

@@ -552,10 +552,10 @@ def train_worker(
                     new_w[:old_w.shape[0]] = old_w
                     compatible[k] = new_w
                     skipped.discard(k)
-        # If trunk.0 was skipped (input dim changed), also skip trunk.2
-        # to avoid NaN from mismatched weight expectations
-        if any("trunk.0" in k for k in skipped):
-            trunk_keys = [k for k in compatible if k.startswith("trunk.")]
+        # If trunk input layer was skipped (input dim changed), also skip
+        # the rest of the trunk to avoid NaN from mismatched expectations
+        if any("trunk_in" in k or "trunk.0" in k for k in skipped):
+            trunk_keys = [k for k in compatible if k.startswith("trunk")]
             for k in trunk_keys:
                 compatible.pop(k)
                 skipped.add(k)

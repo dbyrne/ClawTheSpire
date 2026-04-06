@@ -108,16 +108,10 @@ def encode_state(
         enemy_power_amts_all.extend(e_pow_amts)
 
     # --- Relics ---
+    # Vocab uses UPPER_SNAKE (AKABEKO, RING_OF_THE_SNAKE, etc.)
     relic_ids = []
     for relic_name in list(state.relics)[:cfg.max_relics]:
-        # Relic IDs are stored as UPPER_SNAKE in the state, but vocab has display names
-        # Try both formats
-        idx = vocabs.relics.get(relic_name)
-        if idx <= 1:  # PAD or UNK
-            # Try converting from UPPER_SNAKE to display name
-            display = relic_name.replace("_", " ").title()
-            idx = vocabs.relics.get(display)
-        relic_ids.append(idx)
+        relic_ids.append(vocabs.relics.get(relic_name))
     relic_size = len(relic_ids)
     while len(relic_ids) < cfg.max_relics:
         relic_ids.append(PAD_IDX)
@@ -161,6 +155,18 @@ def encode_state(
         choice_type,
     ]
 
+    # --- Act / Boss / Map path ---
+    act_idx = vocabs.acts.get(state.act_id) if state.act_id else 0
+    boss_idx = vocabs.bosses.get(state.boss_id) if state.boss_id else 0
+
+    path_ids = []
+    for rt in state.map_path[:cfg.max_path_length]:
+        path_ids.append(vocabs.room_types.get(rt))
+    path_size = len(path_ids)
+    while len(path_ids) < cfg.max_path_length:
+        path_ids.append(PAD_IDX)
+    path_mask = [False] * path_size + [True] * (cfg.max_path_length - path_size)
+
     return {
         "hand_features": torch.tensor([hand_features], dtype=torch.float32),
         "hand_mask": torch.tensor([hand_mask], dtype=torch.bool),
@@ -181,7 +187,41 @@ def encode_state(
         "relic_mask": torch.tensor([relic_mask], dtype=torch.bool),
         "potion_features": torch.tensor([potion_features], dtype=torch.float32),
         "scalars": torch.tensor([scalars], dtype=torch.float32),
+        "act_id": torch.tensor([[act_idx]], dtype=torch.long),
+        "boss_id": torch.tensor([[boss_idx]], dtype=torch.long),
+        "path_ids": torch.tensor([path_ids], dtype=torch.long),
+        "path_mask": torch.tensor([path_mask], dtype=torch.bool),
     }
+
+
+def encode_option_paths(
+    option_paths: list[tuple[str, ...]],
+    vocabs: Vocabs,
+    config: EncoderConfig | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Encode per-option downstream room type paths.
+
+    Returns:
+        path_ids: (1, num_options, max_path_length) long
+        path_masks: (1, num_options, max_path_length) bool
+    """
+    cfg = config or EncoderConfig()
+    all_ids = []
+    all_masks = []
+    for path in option_paths:
+        ids = []
+        for rt in path[:cfg.max_path_length]:
+            ids.append(vocabs.room_types.get(rt))
+        size = len(ids)
+        while len(ids) < cfg.max_path_length:
+            ids.append(PAD_IDX)
+        mask = [False] * size + [True] * (cfg.max_path_length - size)
+        all_ids.append(ids)
+        all_masks.append(mask)
+    return (
+        torch.tensor([all_ids], dtype=torch.long),
+        torch.tensor([all_masks], dtype=torch.bool),
+    )
 
 
 def encode_actions(
