@@ -296,7 +296,7 @@ def play_one_game(
                 break
 
             state_tensors = encode_state(state, vocabs, config)
-            action_features, action_mask = encode_actions(actions, state, vocabs, config)
+            action_card_ids, action_features, action_mask = encode_actions(actions, state, vocabs, config, card_db=card_db)
 
             action, policy, _root_value = mcts.search(
                 state, num_simulations=mcts_simulations,

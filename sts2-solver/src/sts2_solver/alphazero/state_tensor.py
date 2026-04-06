@@ -230,6 +230,7 @@ def encode_actions(
     vocabs: Vocabs,
     config: EncoderConfig | None = None,
     max_actions: int = 30,
+    card_db=None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Encode a list of legal actions into tensors.
 
@@ -245,6 +246,14 @@ def encode_actions(
     base_feat_dim = cfg.max_enemies + 1 + 5 + 3
     feat_dim = base_feat_dim + cfg.card_stats_dim
     zero_stats = [0.0] * cfg.card_stats_dim
+
+    def _base_stats(card) -> list[float]:
+        """Get card stats from card_db (base values) to avoid runner/sim divergence."""
+        if card_db is not None:
+            base = card_db.get(card.id.rstrip("+"), upgraded=card.upgraded)
+            if base is not None:
+                return card_stats_vector(base)
+        return card_stats_vector(card)
 
     card_ids = []
     features = []
@@ -284,14 +293,14 @@ def encode_actions(
             if card is not None:
                 base_id = card.id.rstrip("+")
                 cid = vocabs.cards.get(base_id)
-                stats = card_stats_vector(card)
+                stats = _base_stats(card)
         else:
             # Card play — pass vocab ID for learned embedding lookup
             if action.card_idx is not None and action.card_idx < len(state.player.hand):
                 card = state.player.hand[action.card_idx]
                 base_id = card.id.rstrip("+")
                 cid = vocabs.cards.get(base_id)
-                stats = card_stats_vector(card)
+                stats = _base_stats(card)
 
             # Target one-hot
             if action.target_idx is not None and action.target_idx < cfg.max_enemies + 1:

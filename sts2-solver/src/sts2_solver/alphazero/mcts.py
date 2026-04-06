@@ -263,6 +263,7 @@ class MCTS:
 
             action_card_ids, action_features, action_mask = encode_actions(
                 node.legal_actions, node.state, self.vocabs, self.config,
+                card_db=self.card_db,
             )
             action_card_ids = action_card_ids.to(self.device)
             action_features = action_features.to(self.device)
