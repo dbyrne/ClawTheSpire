@@ -757,6 +757,14 @@ _NODE_TYPE_MAP = {
 # Rows below this threshold map Monster → "weak" instead of "normal"
 _WEAK_ROW_THRESHOLD = 4
 
+# Reverse mapping: sim room type → game node type (for path encoding)
+_NODE_TYPE_MAP_REVERSE = {
+    "weak": "Monster", "normal": "Monster",
+    "elite": "Elite", "boss": "Boss",
+    "event": "Event", "rest": "RestSite",
+    "shop": "Shop", "treasure": "Treasure",
+}
+
 
 _MAP_POOL: list[dict] | None = None
 
@@ -1420,7 +1428,8 @@ class RunStrategy(Protocol):
                        card_db, pools: dict, rng) -> ShopResult: ...
 
     def pick_map_path(self, choices: list[str], deck: list, hp: int, max_hp: int,
-                      gold: int, floor: int, relics: frozenset[str]) -> tuple: ...
+                      gold: int, floor: int, relics: frozenset[str],
+                      downstream_paths: list[tuple[str, ...]] | None = None) -> tuple: ...
         # Returns (chosen_index, list_of_samples)
 
     def decide_event(self, event_id: str, options: list[dict],
@@ -1533,6 +1542,17 @@ def run_act1(
         act_id = "OVERGROWTH"
     room_sequence = _generate_act1_map_with_choices(rng, act_id=act_id)
 
+    # Pre-pick boss (visible on map from run start)
+    boss_encounters = [e for e in act_data.get("encounters", [])
+                       if _ENCOUNTERS_BY_ID.get(e, {}).get("room_type") == "Boss"]
+    boss_id = rng.choice(boss_encounters) if boss_encounters else ""
+
+    # Set run context on strategy (if it supports it)
+    if hasattr(strategy, "act_id"):
+        strategy.act_id = act_id
+    if hasattr(strategy, "boss_id"):
+        strategy.boss_id = boss_id
+
     # Starter relic
     relics: set[str] = set()
     starter_relic = STARTER_RELICS.get(character)
@@ -1553,13 +1573,36 @@ def run_act1(
     rng.shuffle(events_list)
     event_idx = 0
 
+    # Helper: map room types for remaining floors
+    def _remaining_room_types(from_floor: int) -> tuple[str, ...]:
+        result_rooms = []
+        for i in range(from_floor, len(room_sequence)):
+            entry = room_sequence[i]
+            if isinstance(entry, list):
+                result_rooms.append("Monster")  # Unknown until chosen
+            else:
+                result_rooms.append(
+                    _NODE_TYPE_MAP_REVERSE.get(entry, "Monster"))
+        return tuple(result_rooms)
+
     for floor_num, room_entry in enumerate(room_sequence, 1):
         result.floor_reached = floor_num
 
+        # Update remaining path context on strategy
+        if hasattr(strategy, "remaining_path"):
+            strategy.remaining_path = _remaining_room_types(floor_num)
+
         # Resolve map choice nodes
         if isinstance(room_entry, list):
+            # Compute downstream paths per choice (for per-option encoding)
+            downstream_paths = []
+            for _choice in room_entry:
+                # Each choice leads to the same remaining floors (simplified:
+                # we don't track per-path branching, just remaining room types)
+                downstream_paths.append(_remaining_room_types(floor_num))
             chosen_idx, map_samples = strategy.pick_map_path(
-                room_entry, deck, hp, max_hp, gold, floor_num, frozenset(relics))
+                room_entry, deck, hp, max_hp, gold, floor_num, frozenset(relics),
+                downstream_paths=downstream_paths)
             result.option_samples.extend(map_samples)
             room_type = room_entry[chosen_idx]
         else:

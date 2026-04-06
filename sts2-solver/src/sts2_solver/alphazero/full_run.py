@@ -101,6 +101,8 @@ def mcts_combat(
     relics: frozenset[str] | None = None,
     gauntlet_waves: int = 0,
     wave_pool: list[list[str]] | None = None,
+    act_id: str = "",
+    boss_id: str = "",
 ) -> tuple[list[TrainingSample], str, int, int, list[dict], float]:
     """Run one combat using MCTS. Returns (samples, outcome, turns, hp_after, remaining_potions, initial_value).
 
@@ -131,7 +133,8 @@ def mcts_combat(
         draw_pile=draw_pile,
         potions=[dict(p) for p in (potions or [])],
     )
-    state = CombatState(player=player, enemies=enemies, relics=relics or frozenset())
+    state = CombatState(player=player, enemies=enemies, relics=relics or frozenset(),
+                        act_id=act_id, boss_id=boss_id)
     start_combat(state)
     samples: list[TrainingSample] = []
     initial_value_estimate = 0.0
@@ -254,6 +257,10 @@ def _network_pick_card(
     vocabs: Vocabs,
     config: EncoderConfig,
     card_db: CardDB,
+    act_id: str = "",
+    boss_id: str = "",
+    remaining_path: tuple[str, ...] = (),
+    relics: frozenset[str] = frozenset(),
 ) -> tuple[Card | None, OptionSample | None]:
     """Use the option evaluation head to pick a card reward.
 
@@ -267,12 +274,13 @@ def _network_pick_card(
 
     network = mcts.network
 
-    # Build a minimal combat state to encode the deck context
     player = PlayerState(
         hp=hp, max_hp=max_hp, energy=3, max_energy=3,
         hand=[], draw_pile=list(deck),
     )
-    dummy_state = CombatState(player=player, enemies=[], turn=0, floor=floor)
+    dummy_state = CombatState(player=player, enemies=[], turn=0, floor=floor,
+                              relics=relics, act_id=act_id, boss_id=boss_id,
+                              map_path=remaining_path)
 
     try:
         import torch
@@ -349,6 +357,21 @@ class MCTSStrategy:
         self.card_db = card_db
         self.mcts_simulations = mcts_simulations
         self.temperature = temperature
+        # Run context — set by run_act1 before the main loop
+        self.act_id: str = ""
+        self.boss_id: str = ""
+        self.remaining_path: tuple[str, ...] = ()
+
+    def _dummy_state(self, hp, max_hp, deck, floor, gold=0,
+                     relics=frozenset()) -> CombatState:
+        """Build a CombatState for non-combat decisions with full run context."""
+        player = PlayerState(hp=hp, max_hp=max_hp, energy=3, max_energy=3,
+                             draw_pile=list(deck))
+        return CombatState(
+            player=player, enemies=[], floor=floor, gold=gold,
+            relics=relics, act_id=self.act_id, boss_id=self.boss_id,
+            map_path=self.remaining_path,
+        )
 
     def fight_combat(self, deck, hp, max_hp, max_energy, encounter_id, card_db,
                      rng, potions, relics, gauntlet_waves=0, wave_pool=None):
@@ -360,6 +383,7 @@ class MCTSStrategy:
             mcts_simulations=self.mcts_simulations,
             temperature=self.temperature, potions=potions,
             relics=relics,
+            act_id=self.act_id, boss_id=self.boss_id,
             gauntlet_waves=gauntlet_waves,
             wave_pool=wave_pool,
         )
@@ -376,16 +400,15 @@ class MCTSStrategy:
         pick, sample = _network_pick_card(
             offered, deck, hp, max_hp, floor,
             self.mcts, self.vocabs, self.config, card_db,
+            act_id=self.act_id, boss_id=self.boss_id,
+            remaining_path=self.remaining_path,
         )
         return (pick, sample)
 
     def rest_or_smith(self, hp, max_hp, deck, card_db, rng, floor, gold, relics):
         try:
             network = self.mcts.network
-            player = PlayerState(hp=hp, max_hp=max_hp, energy=3, max_energy=3,
-                                 draw_pile=list(deck))
-            dummy = CombatState(player=player, enemies=[], floor=floor, gold=gold,
-                                relics=relics)
+            dummy = self._dummy_state(hp, max_hp, deck, floor, gold, relics)
             st = encode_state(dummy, self.vocabs, self.config)
             st = {k: v.to(self.mcts.device) for k, v in st.items()}
 
@@ -460,11 +483,8 @@ class MCTSStrategy:
             samples = []
 
             for _step in range(6):
-                player = PlayerState(hp=hp, max_hp=max_hp, energy=3,
-                                     max_energy=3, draw_pile=list(deck),
-                                     potions=[dict(p) for p in potions])
-                dummy = CombatState(player=player, enemies=[],
-                                    floor=floor, gold=gold)
+                dummy = self._dummy_state(hp, max_hp, deck, floor, gold, relics)
+                dummy.player.potions = [dict(p) for p in potions]
                 st = encode_state(dummy, self.vocabs, self.config)
                 st = {k: v.to(self.mcts.device) for k, v in st.items()}
 
@@ -564,23 +584,32 @@ class MCTSStrategy:
                 samples=[],
             )
 
-    def pick_map_path(self, choices, deck, hp, max_hp, gold, floor, relics):
+    def pick_map_path(self, choices, deck, hp, max_hp, gold, floor, relics,
+                      downstream_paths=None):
         try:
             network = self.mcts.network
-            player = PlayerState(hp=hp, max_hp=max_hp, energy=3, max_energy=3,
-                                 draw_pile=list(deck))
-            dummy = CombatState(player=player, enemies=[], floor=floor, gold=gold,
-                                relics=relics)
+            dummy = self._dummy_state(hp, max_hp, deck, floor, gold, relics)
             st = encode_state(dummy, self.vocabs, self.config)
             st = {k: v.to(self.mcts.device) for k, v in st.items()}
 
             opt_types = [ROOM_TYPE_TO_OPTION[rt] for rt in choices]
             opt_cards = [0] * len(choices)
 
+            # Per-option downstream path encoding
+            opt_path_ids, opt_path_mask = None, None
+            if downstream_paths:
+                from .state_tensor import encode_option_paths
+                opt_path_ids, opt_path_mask = encode_option_paths(
+                    downstream_paths, self.vocabs, self.config)
+                opt_path_ids = opt_path_ids.to(self.mcts.device)
+                opt_path_mask = opt_path_mask.to(self.mcts.device)
+
             with torch.no_grad():
                 hidden = network.encode_state(**st)
                 best_idx, scores = network.pick_best_option(
-                    hidden, opt_types, opt_cards)
+                    hidden, opt_types, opt_cards,
+                    option_path_ids=opt_path_ids,
+                    option_path_mask=opt_path_mask)
 
             sample = OptionSample(
                 state_tensors={k: v.cpu() for k, v in st.items()},
@@ -598,10 +627,7 @@ class MCTSStrategy:
         from ..simulator import _apply_profiled_effects
 
         network = self.mcts.network
-        player = PlayerState(hp=hp, max_hp=max_hp, energy=3, max_energy=3,
-                             draw_pile=list(deck))
-        dummy = CombatState(player=player, enemies=[], floor=floor, gold=gold,
-                            relics=relics)
+        dummy = self._dummy_state(hp, max_hp, deck, floor, gold, relics)
         st = encode_state(dummy, self.vocabs, self.config)
         st = {k: v.to(self.mcts.device) for k, v in st.items()}
 
