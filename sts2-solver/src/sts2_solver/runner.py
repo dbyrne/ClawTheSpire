@@ -2732,16 +2732,18 @@ class Runner:
                     f"  [dim]reward poll #{polls}: screen={screen} actions={actions[:4]}[/dim]"
                 )
 
+            # Card selection already open — go straight to card decision
+            # (must check before "left reward screen" because the game
+            # changes screen from REWARD to CARD_SELECTION when cards show)
+            if "choose_reward_card" in actions or "skip_reward_cards" in actions:
+                self._handle_card_reward_decision(gs, actions)
+                return
+
             # Left the reward screen entirely — nothing to do
             if "REWARD" not in screen and screen not in ("", "COMBAT"):
                 self._log_action(
                     f"  [yellow]Left reward screen (screen={screen})[/yellow]"
                 )
-                return
-
-            # Card selection already open — go straight to card decision
-            if "choose_reward_card" in actions or "skip_reward_cards" in actions:
-                self._handle_card_reward_decision(gs, actions)
                 return
 
             if "claim_reward" not in actions:
