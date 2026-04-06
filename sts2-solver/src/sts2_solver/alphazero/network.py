@@ -18,13 +18,15 @@ Architecture:
         hidden → Linear(256→64) → ReLU → Linear(64→1) (unbounded, no tanh)
 
     Policy head (action embedding similarity):
-        - Encode each legal action as: card_embed + features (target/flags)
+        - Encode each legal action as: card_embed + features (target/flags) + card_stats
         - Score = dot(hidden_projected, action_embed)
+        - card_stats (15-dim: damage/block/cost/type/target) enables feature-based
+          generalization to unseen/rare cards
         - Supports play_card, end_turn, use_potion, and choose_card actions
 
     Option evaluation head (all non-combat decisions):
-        hidden(256) + option_type_embed(16) + card_embed(32) + path_embed(16)
-        → Linear(320→64) → ReLU → Linear(64→1)
+        hidden(256) + option_type_embed(16) + card_embed(32) + card_stats(15) + path_embed(16)
+        → Linear(335→64) → ReLU → Linear(64→1)
         Handles card rewards, rest/smith, map pathing, shop, events.
         Type embedding carries context (free reward vs gold cost vs removal).
         Path embedding gives per-option downstream room context for map decisions.
@@ -246,10 +248,10 @@ class STS2Network(nn.Module):
         self.action_project = nn.Linear(policy_action_dim, policy_action_dim)
 
         # --- Option evaluation head ---
-        # Input: hidden(256) + option_type(16) + card(32) + path(16) = 320
+        # Input: hidden(256) + option_type(16) + card(32) + card_stats(15) + path(16) = 335
         self.option_type_embed = nn.Embedding(cfg.num_option_types, cfg.option_type_embed_dim, padding_idx=0)
         self.option_eval_head = nn.Sequential(
-            nn.Linear(256 + cfg.option_type_embed_dim + cfg.card_embed_dim + cfg.path_output_dim, 64),
+            nn.Linear(256 + cfg.option_type_embed_dim + cfg.card_embed_dim + cfg.card_stats_dim + cfg.path_output_dim, 64),
             nn.ReLU(),
             nn.Linear(64, 1),
         )
@@ -413,6 +415,7 @@ class STS2Network(nn.Module):
         option_mask: torch.Tensor,     # (batch, num_options) — True = invalid/padded
         option_path_ids: torch.Tensor | None = None,   # (B, N, max_path_length)
         option_path_mask: torch.Tensor | None = None,  # (B, N, max_path_length)
+        option_card_stats: torch.Tensor | None = None,  # (B, N, card_stats_dim)
     ) -> torch.Tensor:
         """Score a set of discrete options. Returns (batch, num_options) scores (unbounded)."""
         type_embeds = self.option_type_embed(option_types)      # (B, N, 16)
@@ -420,6 +423,13 @@ class STS2Network(nn.Module):
 
         batch, num_opts, _ = type_embeds.shape
         hidden_exp = hidden.unsqueeze(1).expand(-1, num_opts, -1)  # (B, N, 256)
+
+        # Card stats (base damage/block/cost/type for feature-based generalization)
+        if option_card_stats is not None:
+            card_stats = option_card_stats
+        else:
+            card_stats = torch.zeros(batch, num_opts, self.config.card_stats_dim,
+                                     device=hidden.device)
 
         # Per-option path encoding
         cfg = self.config
@@ -434,7 +444,7 @@ class STS2Network(nn.Module):
             path_vecs = torch.zeros(batch, num_opts, cfg.path_output_dim,
                                     device=hidden.device)
 
-        combined = torch.cat([hidden_exp, type_embeds, card_embeds, path_vecs], dim=-1)
+        combined = torch.cat([hidden_exp, type_embeds, card_embeds, card_stats, path_vecs], dim=-1)
         scores = self.option_eval_head(combined).squeeze(-1)      # (B, N)
 
         scores = scores.masked_fill(option_mask, -1e9)
@@ -447,6 +457,7 @@ class STS2Network(nn.Module):
         option_cards: list[int],
         option_path_ids: torch.Tensor | None = None,   # (1, N, max_path_length)
         option_path_mask: torch.Tensor | None = None,   # (1, N, max_path_length)
+        option_card_stats: list[list[float]] | None = None,  # N × card_stats_dim
     ) -> tuple[int, list[float]]:
         """Pick the highest-scoring option. Returns (best_index, all_scores)."""
         with torch.no_grad():
@@ -454,8 +465,12 @@ class STS2Network(nn.Module):
             types_t = torch.tensor([option_types], dtype=torch.long, device=device)
             cards_t = torch.tensor([option_cards], dtype=torch.long, device=device)
             mask = torch.zeros(1, len(option_types), dtype=torch.bool, device=device)
+            stats_t = None
+            if option_card_stats is not None:
+                stats_t = torch.tensor([option_card_stats], dtype=torch.float32, device=device)
             scores = self.evaluate_options(hidden, types_t, cards_t, mask,
-                                           option_path_ids, option_path_mask)
+                                           option_path_ids, option_path_mask,
+                                           stats_t)
             scores_list = scores[0].tolist()
             best_idx = max(range(len(scores_list)), key=lambda i: scores_list[i])
             return best_idx, scores_list

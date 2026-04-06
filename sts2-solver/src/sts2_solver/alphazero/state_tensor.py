@@ -238,17 +238,20 @@ def encode_actions(
         action_features: (1, max_actions, action_feat_dim) — target/flags
         action_mask: (1, max_actions) — True for invalid/padded slots
 
-    action_feat_dim = max_enemies + 1 (target one-hot) + 5 (potion type) + 3 (flags)
+    action_feat_dim = max_enemies + 1 (target one-hot) + 5 (potion type) + 3 (flags) + 15 (card stats)
     """
     cfg = config or EncoderConfig()
-    # Feature dims: target_onehot(max_enemies+1) + potion_type(5) + is_end_turn(1) + is_use_potion(1) + is_choose_card(1)
-    feat_dim = cfg.max_enemies + 1 + 5 + 3
+    # Feature dims: target_onehot(max_enemies+1) + potion_type(5) + flags(3) + card_stats(15)
+    base_feat_dim = cfg.max_enemies + 1 + 5 + 3
+    feat_dim = base_feat_dim + cfg.card_stats_dim
+    zero_stats = [0.0] * cfg.card_stats_dim
 
     card_ids = []
     features = []
     for action in actions[:max_actions]:
-        vec = [0.0] * feat_dim
+        vec = [0.0] * base_feat_dim
         cid = 0  # PAD = no card
+        stats = zero_stats  # Default: no card stats
 
         if action.action_type == "end_turn":
             vec[-3] = 1.0  # is_end_turn
@@ -267,35 +270,35 @@ def encode_actions(
         elif action.action_type == "choose_card":
             vec[-1] = 1.0  # is_choose_card
             # Use the card being chosen as the action's identity
+            card = None
             pc = state.pending_choice
             if pc and pc.choice_type == "discard_from_hand":
                 if action.choice_idx is not None and action.choice_idx < len(state.player.hand):
                     card = state.player.hand[action.choice_idx]
-                    base_id = card.id.rstrip("+")
-                    cid = vocabs.cards.get(base_id)
             elif pc and pc.choice_type == "choose_from_discard":
                 if action.choice_idx is not None and action.choice_idx < len(state.player.discard_pile):
                     card = state.player.discard_pile[action.choice_idx]
-                    base_id = card.id.rstrip("+")
-                    cid = vocabs.cards.get(base_id)
             elif pc and pc.choice_type == "choose_from_hand":
                 if action.choice_idx is not None and action.choice_idx < len(state.player.hand):
                     card = state.player.hand[action.choice_idx]
-                    base_id = card.id.rstrip("+")
-                    cid = vocabs.cards.get(base_id)
+            if card is not None:
+                base_id = card.id.rstrip("+")
+                cid = vocabs.cards.get(base_id)
+                stats = card_stats_vector(card)
         else:
             # Card play — pass vocab ID for learned embedding lookup
             if action.card_idx is not None and action.card_idx < len(state.player.hand):
                 card = state.player.hand[action.card_idx]
                 base_id = card.id.rstrip("+")
                 cid = vocabs.cards.get(base_id)
+                stats = card_stats_vector(card)
 
             # Target one-hot
             if action.target_idx is not None and action.target_idx < cfg.max_enemies + 1:
                 vec[action.target_idx] = 1.0
 
         card_ids.append(cid)
-        features.append(vec)
+        features.append(vec + stats)
 
     actual = len(features)
     while len(features) < max_actions:

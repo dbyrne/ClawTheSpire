@@ -313,8 +313,8 @@ class EncoderConfig:
     @property
     def action_feat_dim(self) -> int:
         """Action feature vector dimension (excluding learned card embedding)."""
-        # target_onehot(max_enemies+1) + potion_type(5) + is_end_turn(1) + is_use_potion(1) + is_choose_card(1)
-        return self.max_enemies + 1 + 5 + 3
+        # target_onehot(max_enemies+1) + potion_type(5) + is_end_turn(1) + is_use_potion(1) + is_choose_card(1) + card_stats(15)
+        return self.max_enemies + 1 + 5 + 3 + self.card_stats_dim
 
     @property
     def action_dim(self) -> int:

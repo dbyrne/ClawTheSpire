@@ -67,7 +67,7 @@ from ..simulator import (
     pick_shop_from_pool,
 )
 
-from .encoding import EncoderConfig, Vocabs
+from .encoding import EncoderConfig, Vocabs, card_stats_vector
 from .mcts import MCTS
 from .network import STS2Network
 from .self_play import (
@@ -273,15 +273,18 @@ def _network_pick_card(
         # Build options: one CARD_REWARD per offered card + one CARD_SKIP
         opt_types = [OPTION_CARD_REWARD] * len(offered) + [OPTION_CARD_SKIP]
         opt_cards = []
+        opt_stats = []
         for card in offered:
             base_id = card.id.rstrip("+")
             opt_cards.append(vocabs.cards.get(base_id))
+            opt_stats.append(card_stats_vector(card))
         opt_cards.append(0)  # PAD for skip
+        opt_stats.append([0.0] * 15)  # No card stats for skip
 
         with torch.no_grad():
             hidden = network.encode_state(**state_tensors)
             best_idx, scores = network.pick_best_option(
-                hidden, opt_types, opt_cards)
+                hidden, opt_types, opt_cards, option_card_stats=opt_stats)
 
         # Build training sample
         sample = OptionSample(
@@ -405,6 +408,7 @@ class MCTSStrategy:
 
             opt_types = [OPTION_REST]
             opt_cards = [0]
+            opt_stats = [[0.0] * 15]  # No card stats for rest
             deck_indices = [None]  # maps option idx -> deck idx
 
             for di, card in enumerate(deck):
@@ -413,12 +417,13 @@ class MCTSStrategy:
                     if up:
                         opt_types.append(OPTION_SMITH)
                         opt_cards.append(self.vocabs.cards.get(card.id.rstrip("+")))
+                        opt_stats.append(card_stats_vector(card))
                         deck_indices.append(di)
 
             with torch.no_grad():
                 hidden = network.encode_state(**st)
                 best_idx, scores = network.pick_best_option(
-                    hidden, opt_types, opt_cards)
+                    hidden, opt_types, opt_cards, option_card_stats=opt_stats)
 
             sample = OptionSample(
                 state_tensors={k: v.cpu() for k, v in st.items()},
@@ -496,6 +501,7 @@ class MCTSStrategy:
 
                 opt_types = []
                 opt_cards = []
+                opt_stats = []
                 actions = []
 
                 # Remove options (Strike/Defend only)
@@ -504,6 +510,7 @@ class MCTSStrategy:
                         if card.name in ("Strike", "Defend") and not card.upgraded:
                             opt_types.append(OPTION_SHOP_REMOVE)
                             opt_cards.append(self.vocabs.cards.get(card.id.rstrip("+")))
+                            opt_stats.append(card_stats_vector(card))
                             actions.append(("remove", di))
 
                 # Buy card options
@@ -511,6 +518,7 @@ class MCTSStrategy:
                     if sc is not None and gold >= cost:
                         opt_types.append(OPTION_SHOP_BUY)
                         opt_cards.append(self.vocabs.cards.get(sc.id.rstrip("+")))
+                        opt_stats.append(card_stats_vector(sc))
                         actions.append(("buy", si, cost))
 
                 # Buy potion options
@@ -519,11 +527,13 @@ class MCTSStrategy:
                         if pot is not None:
                             opt_types.append(OPTION_SHOP_BUY_POTION)
                             opt_cards.append(0)
+                            opt_stats.append([0.0] * 15)
                             actions.append(("potion", pi))
 
                 # Leave option (always available)
                 opt_types.append(OPTION_SHOP_LEAVE)
                 opt_cards.append(0)
+                opt_stats.append([0.0] * 15)
                 actions.append(("leave",))
 
                 if len(opt_types) == 1:
@@ -532,7 +542,7 @@ class MCTSStrategy:
                 with torch.no_grad():
                     hidden = network.encode_state(**st)
                     best_idx, scores = network.pick_best_option(
-                        hidden, opt_types, opt_cards)
+                        hidden, opt_types, opt_cards, option_card_stats=opt_stats)
 
                 samples.append(OptionSample(
                     state_tensors={k: v.cpu() for k, v in st.items()},
