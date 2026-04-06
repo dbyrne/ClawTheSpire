@@ -27,6 +27,54 @@ if TYPE_CHECKING:
     from .game_data import GameDataDB
 
 
+# ---------------------------------------------------------------------------
+# Screen type detection from available actions
+# ---------------------------------------------------------------------------
+
+AUTO_ACTIONS = {
+    "proceed",
+    "open_chest",
+    "open_shop_inventory",
+    "confirm_selection",
+    "confirm_bundle",
+    "choose_capstone_option",
+}
+
+_AMBIENT_ACTIONS = {"use_potion", "discard_potion"}
+
+
+def detect_screen_type(available_actions: list[str]) -> str:
+    """Detect screen type from available actions."""
+    # Filter ambient actions (potion use/discard available on many screens)
+    # so they don't cause misclassification as 'generic'.
+    actions_set = set(available_actions) - _AMBIENT_ACTIONS
+
+    if "choose_reward_card" in actions_set:
+        return "card_reward"
+    if "select_deck_card" in actions_set:
+        return "deck_select"
+    if "choose_map_node" in actions_set:
+        return "map"
+    if "choose_event_option" in actions_set:
+        return "event"
+    if "buy_card" in actions_set or "close_shop_inventory" in actions_set:
+        return "shop"
+    if "choose_rest_option" in actions_set:
+        return "rest"
+    if "choose_treasure_relic" in actions_set:
+        return "boss_relic"
+
+    for action in available_actions:
+        if action in AUTO_ACTIONS:
+            return "auto"
+
+    return "generic"
+
+
+# ---------------------------------------------------------------------------
+# Decision dataclass
+# ---------------------------------------------------------------------------
+
 @dataclass
 class Decision:
     action: str

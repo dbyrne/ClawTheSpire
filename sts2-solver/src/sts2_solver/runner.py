@@ -30,8 +30,9 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from .advisor_prompts import AUTO_ACTIONS, detect_screen_type
 from .deterministic_advisor import (
+    AUTO_ACTIONS,
+    detect_screen_type,
     decide_boss_relic,
     decide_card_reward,
     decide_deck_select,
