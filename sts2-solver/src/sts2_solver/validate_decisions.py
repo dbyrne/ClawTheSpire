@@ -678,6 +678,39 @@ def validate_run_decisions(events: list[dict]) -> list[DecisionAudit]:
 
             last_snapshot = None
 
+    # --- Action rejection checks ---
+    # Repeated rejections on the same action indicate the runner is offering
+    # the network an invalid option that self-play would never produce.
+    rejection_runs: list[list[dict]] = []
+    current_run: list[dict] = []
+    for event in events:
+        if event.get("type") == "action_rejected":
+            current_run.append(event)
+        else:
+            if len(current_run) >= 2:
+                rejection_runs.append(current_run)
+            current_run = []
+    if len(current_run) >= 2:
+        rejection_runs.append(current_run)
+
+    for run in rejection_runs:
+        action = run[0].get("action", "?")
+        count = len(run)
+        error = run[0].get("error", "")[:80]
+        audits.append(DecisionAudit(
+            run_id=run_id, floor=current_floor,
+            screen_type="action_rejected", source="runner",
+            action=f"{action} rejected {count}x",
+            reasoning=error,
+            issues=[DecisionIssue(
+                severity="error",
+                category="repeated_rejection",
+                message=f"Action '{action}' rejected {count} times consecutively. "
+                        f"Runner is offering an invalid option the network keeps picking.",
+                floor=current_floor,
+            )],
+        ))
+
     return audits, quality_audits
 
 

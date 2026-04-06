@@ -2879,12 +2879,33 @@ class Runner:
                     self._log_action(
                         f"  [yellow]rejected: {err_str[:120]}[/yellow]"
                     )
+                    if self.logger:
+                        self.logger._emit({
+                            "type": "action_rejected",
+                            "action": action,
+                            "card_index": card_index,
+                            "target_index": target_index,
+                            "option_index": option_index,
+                            "error": err_str[:200],
+                            "permanent": True,
+                        })
                     return {}
                 # Retriable (action not available — likely animating)
                 if attempt < retries:
                     wait = min(delay * (1.5 ** attempt), 2.0)
                     time.sleep(wait)
                     continue
+                if self.logger:
+                    self.logger._emit({
+                        "type": "action_rejected",
+                        "action": action,
+                        "card_index": card_index,
+                        "target_index": target_index,
+                        "option_index": option_index,
+                        "error": err_str[:200],
+                        "permanent": False,
+                        "retries_exhausted": True,
+                    })
                 self._log_action(
                     f"  [yellow]skipped (game busy after {retries} retries)[/yellow]"
                 )
