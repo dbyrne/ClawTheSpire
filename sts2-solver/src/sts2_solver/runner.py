@@ -1923,12 +1923,15 @@ class Runner:
                 cards = shop.get("cards", [])
                 for i, card_info in enumerate(cards):
                     price = card_info.get("price", card_info.get("cost", 999))
-                    if not isinstance(price, int) or price > gold:
+                    if not isinstance(price, int) or price > gold or price <= 0:
                         continue
+                    # Skip sold-out slots (empty name or missing card_id)
                     card_id = card_info.get("card_id") or card_info.get("id", "")
+                    name = card_info.get("name", "")
+                    if not card_id or not name:
+                        continue
                     opt_types.append(OPTION_SHOP_BUY)
                     opt_cards.append(vocabs.cards.get(card_id.rstrip("+").rstrip("+")))
-                    name = card_info.get("name", card_id)
                     shop_actions.append(("buy_card", i, f"Buy {name} ({price}g)"))
 
             # Leave option
