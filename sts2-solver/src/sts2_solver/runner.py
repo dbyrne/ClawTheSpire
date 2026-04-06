@@ -1510,7 +1510,20 @@ class Runner:
             )
             return
 
-        # No LLM fallback — all screen types must be handled above.
+        # Handle generic potion screens (use/discard when slots are full)
+        if set(actions) <= {"use_potion", "discard_potion"}:
+            # Discard the first potion to make room
+            if "discard_potion" in actions:
+                self._log_action("  [dim]auto: discard_potion(0) — making room[/dim]")
+                if not self.dry_run:
+                    try:
+                        self._execute_with_retry("discard_potion", potion_index=0)
+                        self.action_count += 1
+                    except Exception as e:
+                        self._log_action(f"  [red]Failed: {e}[/red]")
+                return
+
+        # No handler for this screen type.
         raise RuntimeError(
             f"Unhandled screen type {screen_type!r} — no network or "
             f"deterministic handler registered. Available actions: {actions}"
