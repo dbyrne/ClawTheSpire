@@ -1,15 +1,17 @@
 """Cross-validate self-play simulation against real game logs.
 
-Tests three things:
+Tests four things:
 1. **State encoding parity**: Does the same game state produce identical
-   tensors when built from a live game snapshot vs a simulated CombatState?
-2. **Combat engine parity**: After playing the same cards, do the runner's
-   combat engine and the self-play simulator produce the same resulting state?
-3. **Enemy phase parity**: After the player's turn, does the enemy phase
+   tensors when built via the runner path vs a simulated CombatState?
+2. **Enemy phase parity**: After the player's turn, does the enemy phase
    (intents + side effects) produce the same state in both paths?
+3. **Card play parity**: After playing the same cards, does the combat
+   engine produce a state matching the real game's next snapshot?
+4. **Decision parity** (optional, requires model): Does MCTS choose the
+   same first action as the runner actually played?
 
 Usage:
-    python -m sts2_solver.cross_validate [logs_dir]
+    python -m sts2_solver.cross_validate [logs_dir] [--checkpoint path]
 """
 
 from __future__ import annotations
@@ -161,16 +163,28 @@ def compare_combat_states(
 # Tensor comparison
 # ---------------------------------------------------------------------------
 
+# Tensor keys that depend on pile contents — these differ structurally
+# between snapshot reconstruction (knows pile contents) and self-play
+# (doesn't track individual cards in piles). Skip by default.
+_PILE_TENSOR_KEYS = frozenset({
+    "draw_card_ids", "draw_mask",
+    "discard_card_ids", "discard_mask",
+    "exhaust_card_ids", "exhaust_mask",
+})
+
+
 def compare_tensors(
     tensors_a: dict[str, torch.Tensor],
     tensors_b: dict[str, torch.Tensor],
-    label: str = "",
+    skip_keys: frozenset[str] = _PILE_TENSOR_KEYS,
 ) -> list[StateDiff]:
     """Compare two sets of state encoding tensors."""
     diffs: list[StateDiff] = []
 
     all_keys = set(tensors_a) | set(tensors_b)
     for key in sorted(all_keys):
+        if key in skip_keys:
+            continue
         if key not in tensors_a:
             diffs.append(StateDiff(f"tensor_{key}", "MISSING", "present"))
             continue
@@ -264,7 +278,11 @@ def test_encoding_parity(
                     log.debug("Encoding B failed: %s", e)
                     continue
 
-                diffs = compare_tensors(tensors_a, tensors_b)
+                # Compare tensors, skipping pile-dependent keys.
+                # Also skip 'scalars' which includes draw_pile_size —
+                # structurally different when piles are empty.
+                skip = _PILE_TENSOR_KEYS | {"scalars"}
+                diffs = compare_tensors(tensors_a, tensors_b, skip_keys=skip)
                 if diffs:
                     results.append({
                         "run": run.run_id,
@@ -410,8 +428,9 @@ def test_enemy_phase_parity(
                 tick_enemy_powers(state_a)
 
                 # Path B: Self-play enemy phase
+                # Use profile-based intents where available (as self-play
+                # would), falling back to snapshot intents otherwise.
                 state_b = deepcopy(base_state)
-                # Create EnemyAIs for self-play path
                 enemy_ais = []
                 for enemy in state_b.enemies:
                     if not enemy.is_alive:
@@ -422,18 +441,40 @@ def test_enemy_phase_parity(
                         ai = _create_enemy_ai(enemy.id)
                     except Exception:
                         ai = EnemyAI(monster_id=enemy.id, move_table=[])
-                    # Don't call pick_intent — use the snapshot's intent instead
-                    ai._pending_intent = {
-                        "type": enemy.intent_type,
-                        "damage": enemy.intent_damage,
-                        "hits": enemy.intent_hits or 1,
-                        "block": enemy.intent_block,
-                    }
-                    # Merge side effects from the enriched profile
-                    intent_key = _intent_key(enemy)
-                    effects = ENEMY_SIDE_EFFECTS.get(enemy.id, {}).get(
-                        intent_key, {})
-                    ai._pending_intent.update(effects)
+
+                    # Use profile's intent for this enemy's move.
+                    # pick_intent() returns the enriched dict (with side
+                    # effects) from the profile.  This is what self-play
+                    # actually does — it never sees API intent data.
+                    profile_intent = ai.pick_intent()
+
+                    # Match profile intent to snapshot intent by type+damage.
+                    # If they align, use the profile intent (has side effects).
+                    # If they don't align (profile is at wrong position),
+                    # fall back to snapshot intent + side effect lookup.
+                    snap_key = _intent_key(enemy)
+                    profile_key = _profile_intent_key(profile_intent)
+                    if profile_key == snap_key:
+                        ai._pending_intent = profile_intent
+                    else:
+                        ai._pending_intent = {
+                            "type": enemy.intent_type,
+                            "damage": enemy.intent_damage,
+                            "hits": enemy.intent_hits or 1,
+                            "block": enemy.intent_block,
+                        }
+                        effects = ENEMY_SIDE_EFFECTS.get(enemy.id, {}).get(
+                            snap_key, {})
+                        ai._pending_intent.update(effects)
+
+                    # Set enemy intent fields from the pending intent so
+                    # resolve_enemy_intents picks them up
+                    pi = ai._pending_intent
+                    enemy.intent_type = pi.get("type")
+                    enemy.intent_damage = pi.get("damage")
+                    enemy.intent_hits = pi.get("hits", 1)
+                    enemy.intent_block = pi.get("block")
+
                     enemy_ais.append(ai)
 
                 resolve_enemy_intents(state_b)
@@ -458,12 +499,22 @@ def test_enemy_phase_parity(
 
 
 def _intent_key(enemy: EnemyState) -> str:
-    """Build intent key matching build_enemy_profiles._intent_key."""
+    """Build intent key from EnemyState, matching build_enemy_profiles._intent_key."""
     t = str(enemy.intent_type or "?")
     d = enemy.intent_damage
     h = enemy.intent_hits or 1
     if d is not None:
         return f"{t}_{d}x{h}" if h > 1 else f"{t}_{d}"
+    return t
+
+
+def _profile_intent_key(intent: dict) -> str:
+    """Build intent key from an intent dict (profile/move table format)."""
+    t = str(intent.get("type", "?"))
+    d = intent.get("damage")
+    h = intent.get("hits", 1)
+    if d is not None:
+        return f"{t}_{d}x{h}" if h and h > 1 else f"{t}_{d}"
     return t
 
 
@@ -517,6 +568,20 @@ def test_card_play_parity(
                 except Exception as e:
                     log.debug("simulate_turn failed: %s", e)
                     continue
+
+                # Skip gauntlet wave transitions — enemy set changed between
+                # snapshots, meaning a wave was cleared and new enemies spawned.
+                # The sim can't model this (it's an Underdocks-specific mechanic).
+                curr_enemies = set(e.get("name") for e in snap.enemies)
+                next_enemies = set(e.get("name") for e in next_snap.enemies)
+                if curr_enemies != next_enemies:
+                    # Check if ALL current enemies died (wave clear)
+                    sim_alive = [e for e in simulated.enemies if e.is_alive]
+                    sim_names = set(e.name for e in sim_alive)
+                    if not sim_names & curr_enemies:
+                        # Wave cleared — new enemies are from a new wave
+                        count += 1
+                        continue
 
                 # Compare sim result against next snapshot
                 diffs = []
@@ -575,6 +640,155 @@ def test_card_play_parity(
 
 
 # ---------------------------------------------------------------------------
+# Test 4: Decision parity (optional — requires model checkpoint)
+# ---------------------------------------------------------------------------
+
+def test_decision_parity(
+    logs_dir: Path, card_db: CardDB,
+    checkpoint_path: Path | None = None,
+    max_turns: int = 50,
+) -> tuple[list[dict], int, int] | None:
+    """Compare MCTS action choice against what the runner actually played.
+
+    For each logged combat turn:
+    1. Reconstruct CombatState from snapshot
+    2. Run MCTS search (temperature=0 for deterministic pick)
+    3. Compare MCTS's chosen first action against the first card played
+
+    Requires a model checkpoint. Returns None if no checkpoint available.
+    Returns (disagreements, total_checked, total_matches) otherwise.
+    """
+    if checkpoint_path is None:
+        # Try to find latest checkpoint in alphazero_checkpoints/
+        ckpt_dir = Path(__file__).resolve().parents[3] / "alphazero_checkpoints"
+        if ckpt_dir.exists():
+            ckpts = sorted(ckpt_dir.glob("gen_*.pt"))
+            if ckpts:
+                checkpoint_path = ckpts[-1]
+    if checkpoint_path is None:
+        log.info("No checkpoint found — skipping decision parity test")
+        return None
+
+    try:
+        import torch
+        from .alphazero.mcts import MCTS
+        from .alphazero.network import STS2Network
+        from .alphazero.encoding import build_vocabs_from_card_db, EncoderConfig
+    except ImportError:
+        log.info("PyTorch not available — skipping decision parity test")
+        return None
+
+    vocabs = build_vocabs_from_card_db(card_db)
+    config = EncoderConfig()
+
+    # Load model
+    log.info("Loading checkpoint: %s", checkpoint_path)
+    try:
+        network = STS2Network(vocabs, config)
+        ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+        # Support different checkpoint formats
+        if "network_state_dict" in ckpt:
+            state_dict = ckpt["network_state_dict"]
+        elif "model_state" in ckpt:
+            state_dict = ckpt["model_state"]
+        elif isinstance(ckpt, dict) and any(k.startswith("trunk") or k.startswith("card_embed") for k in ckpt):
+            state_dict = ckpt
+        else:
+            log.warning("Unrecognized checkpoint format — keys: %s",
+                        list(ckpt.keys())[:5] if isinstance(ckpt, dict) else type(ckpt))
+            return None
+        network.load_state_dict(state_dict)
+        network.eval()
+        mcts = MCTS(network, vocabs, config, card_db=card_db)
+    except Exception as e:
+        log.warning("Failed to load checkpoint: %s", e)
+        return None
+
+    runs = extract_all_runs(logs_dir)
+    results = []
+    count = 0
+    matches = 0
+
+    for run in runs:
+        for combat in run.combats:
+            for turn in combat.turns:
+                if turn.snapshot is None:
+                    continue
+                if count >= max_turns:
+                    break
+                if not turn.cards_played:
+                    continue
+
+                snap = turn.snapshot
+                try:
+                    state = state_from_snapshot(snap, card_db)
+                except Exception:
+                    continue
+
+                # What the runner actually played first
+                first_card_played = turn.cards_played[0]
+                first_target = (
+                    turn.targets_chosen[0]
+                    if turn.targets_chosen else None
+                )
+
+                # What MCTS would choose
+                try:
+                    with torch.no_grad():
+                        mcts_action, policy, root_value = mcts.search(
+                            state, num_simulations=50, temperature=0,
+                        )
+                except Exception as e:
+                    log.debug("MCTS search failed: %s", e)
+                    continue
+
+                # Compare
+                mcts_card_name = None
+                if mcts_action.action_type == "play_card" and mcts_action.card_idx is not None:
+                    if mcts_action.card_idx < len(state.player.hand):
+                        mcts_card_name = state.player.hand[mcts_action.card_idx].name
+                elif mcts_action.action_type == "end_turn":
+                    mcts_card_name = "[end_turn]"
+                elif mcts_action.action_type == "use_potion":
+                    mcts_card_name = f"[potion_{mcts_action.potion_idx}]"
+
+                # Normalize runner's first play for comparison
+                runner_card = first_card_played.rstrip("+")
+                # Check for potion usage
+                if runner_card.startswith("Use ") and "(slot " in runner_card:
+                    runner_card = f"[potion]"
+
+                card_match = (mcts_card_name == runner_card)
+                target_match = (
+                    mcts_action.target_idx == first_target
+                    if first_target is not None and mcts_card_name == runner_card
+                    else True  # Don't penalize target if cards differ
+                )
+
+                if card_match:
+                    matches += 1
+                else:
+                    results.append({
+                        "run": run.run_id,
+                        "turn": turn.turn,
+                        "runner_card": runner_card,
+                        "runner_target": first_target,
+                        "mcts_card": mcts_card_name,
+                        "mcts_target": mcts_action.target_idx,
+                        "mcts_value": round(root_value, 3),
+                        "top_policy": round(max(policy), 3) if policy else 0,
+                    })
+
+                count += 1
+            if count >= max_turns:
+                break
+        if count >= max_turns:
+            break
+
+    return results, count, matches
+
+
+# ---------------------------------------------------------------------------
 # Report
 # ---------------------------------------------------------------------------
 
@@ -583,9 +797,12 @@ class CrossValidationReport:
     encoding_diffs: list[dict]
     enemy_phase_diffs: list[dict]
     card_play_diffs: list[dict]
+    decision_diffs: list[dict] = field(default_factory=list)
     encoding_turns_checked: int = 0
     enemy_combats_checked: int = 0
     card_play_turns_checked: int = 0
+    decision_turns_checked: int = 0
+    decision_matches: int = 0
 
 
 def print_report(report: CrossValidationReport) -> None:
@@ -643,6 +860,29 @@ def print_report(report: CrossValidationReport) -> None:
             print(f"    {fld}: {count}")
     print()
 
+    # Decision parity
+    n_dec = report.decision_turns_checked
+    if n_dec > 0:
+        n_dec_match = report.decision_matches
+        n_dec_fail = len(report.decision_diffs)
+        pct = n_dec_match / max(1, n_dec) * 100
+        print(f"  Decision Parity:       {n_dec_match}/{n_dec} first actions match ({pct:.0f}%)")
+        if report.decision_diffs:
+            # Summarize disagreements
+            from collections import Counter as _Counter
+            mcts_choices = _Counter()
+            runner_choices = _Counter()
+            for r in report.decision_diffs:
+                mcts_choices[r["mcts_card"]] += 1
+                runner_choices[r["runner_card"]] += 1
+            print(f"  Sample disagreements (first 5):")
+            for r in report.decision_diffs[:5]:
+                print(f"    {r['run']} T{r['turn']}: runner={r['runner_card']} "
+                      f"mcts={r['mcts_card']} (val={r['mcts_value']})")
+    else:
+        print(f"  Decision Parity:       skipped (no checkpoint)")
+    print()
+
     print(f"{'='*60}\n")
 
 
@@ -650,7 +890,8 @@ def print_report(report: CrossValidationReport) -> None:
 # Main
 # ---------------------------------------------------------------------------
 
-def main(logs_dir: Path | None = None) -> CrossValidationReport:
+def main(logs_dir: Path | None = None,
+         checkpoint: Path | None = None) -> CrossValidationReport:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     card_db = load_cards()
 
@@ -664,27 +905,52 @@ def main(logs_dir: Path | None = None) -> CrossValidationReport:
     # Test 1: State encoding
     print("  Running encoding parity test...")
     enc_diffs = test_encoding_parity(logs_dir, card_db, max_turns=200)
+    enc_checked = 200
 
     # Test 2: Enemy phase
     print("  Running enemy phase parity test...")
     ep_diffs = test_enemy_phase_parity(logs_dir, card_db, max_combats=50)
+    ep_checked = sum(
+        len(c.turns) for r in extract_all_runs(logs_dir)
+        for c in r.combats[:50]
+        if any(t.snapshot for t in c.turns)
+    )
 
     # Test 3: Card play
     print("  Running card play parity test...")
     cp_diffs = test_card_play_parity(logs_dir, card_db, max_turns=200)
+    cp_checked = 200
+
+    # Test 4: Decision parity (optional)
+    print("  Running decision parity test...")
+    dec_result = test_decision_parity(logs_dir, card_db,
+                                      checkpoint_path=checkpoint,
+                                      max_turns=50)
+    if dec_result is not None:
+        dec_diffs, dec_checked, dec_matches = dec_result
+    else:
+        dec_diffs, dec_checked, dec_matches = [], 0, 0
 
     report = CrossValidationReport(
         encoding_diffs=enc_diffs,
         enemy_phase_diffs=ep_diffs,
         card_play_diffs=cp_diffs,
-        encoding_turns_checked=200,
-        enemy_combats_checked=50,
-        card_play_turns_checked=200,
+        decision_diffs=dec_diffs or [],
+        encoding_turns_checked=enc_checked,
+        enemy_combats_checked=ep_checked,
+        card_play_turns_checked=cp_checked,
+        decision_turns_checked=dec_checked,
+        decision_matches=dec_matches,
     )
     print_report(report)
     return report
 
 
 if __name__ == "__main__":
-    dir_arg = Path(sys.argv[1]) if len(sys.argv) > 1 else None
-    main(dir_arg)
+    import argparse
+    parser = argparse.ArgumentParser(description="Cross-validate self-play vs real game")
+    parser.add_argument("logs_dir", nargs="?", type=Path, default=None)
+    parser.add_argument("--checkpoint", type=Path, default=None,
+                        help="Path to model checkpoint for decision parity test")
+    args = parser.parse_args()
+    main(args.logs_dir, args.checkpoint)

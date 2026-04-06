@@ -26,6 +26,10 @@ from .validate_move_tables import (
     main as move_table_main,
     print_report as move_table_report,
 )
+from .cross_validate import (
+    main as cross_validate_main,
+    print_report as cross_validate_report,
+)
 
 log = logging.getLogger(__name__)
 
@@ -100,10 +104,15 @@ def main(logs_dir: Path | None = None) -> int:
     # --- Move table validation ---
     mt_report = move_table_main(logs_dir)
 
+    # --- Cross-validation (self-play vs real game parity) ---
+    print()
+    xv_report = cross_validate_main(logs_dir)
+
     # --- Combined summary ---
     snap_ok = snap_report.failed == 0
     dec_ok = dec_report.failed == 0
     mt_ok = mt_report.total_mismatches == 0
+    xv_ep_ok = len(xv_report.enemy_phase_diffs) == 0
 
     print(f"{'='*60}")
     print(f"  COMBINED RESULTS")
@@ -115,6 +124,16 @@ def main(logs_dir: Path | None = None) -> int:
     print(f"  Move tables:  {'PASS' if mt_ok else 'FAIL'}"
           f"  ({mt_report.total_mismatches} mismatches"
           f", {len(mt_report.missing_enemies)} missing)")
+    xv_enc_pass = xv_report.encoding_turns_checked - len(xv_report.encoding_diffs)
+    xv_cp_pass = xv_report.card_play_turns_checked - len(xv_report.card_play_diffs)
+    print(f"  X-val encode: {xv_enc_pass}/{xv_report.encoding_turns_checked} turns")
+    print(f"  X-val enemy:  {'PASS' if xv_ep_ok else 'FAIL'}"
+          f"  ({xv_report.enemy_combats_checked - len(xv_report.enemy_phase_diffs)}"
+          f"/{xv_report.enemy_combats_checked} turns)")
+    print(f"  X-val cards:  {xv_cp_pass}/{xv_report.card_play_turns_checked} turns")
+    if xv_report.decision_turns_checked > 0:
+        print(f"  X-val decide: {xv_report.decision_matches}"
+              f"/{xv_report.decision_turns_checked} match")
     if dec_report.warnings:
         print(f"  Warnings:     {dec_report.warnings}")
     if dec_report.network_quality:
