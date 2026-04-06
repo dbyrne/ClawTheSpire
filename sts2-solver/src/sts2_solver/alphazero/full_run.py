@@ -77,7 +77,7 @@ from .self_play import (
     categorize_event_option,
 )
 from ..effects import discard_card_from_hand
-from .state_tensor import encode_state, encode_actions
+from .state_tensor import encode_state, encode_actions, encode_option_paths
 
 # ---------------------------------------------------------------------------
 # MCTS-based combat within a full run
@@ -357,10 +357,17 @@ class MCTSStrategy:
         self.card_db = card_db
         self.mcts_simulations = mcts_simulations
         self.temperature = temperature
-        # Run context — set by run_act1 before the main loop
+        # Run context — set via set_run_context / set_remaining_path
         self.act_id: str = ""
         self.boss_id: str = ""
         self.remaining_path: tuple[str, ...] = ()
+
+    def set_run_context(self, act_id: str, boss_id: str) -> None:
+        self.act_id = act_id
+        self.boss_id = boss_id
+
+    def set_remaining_path(self, path: tuple[str, ...]) -> None:
+        self.remaining_path = path
 
     def _dummy_state(self, hp, max_hp, deck, floor, gold=0,
                      relics=frozenset()) -> CombatState:
@@ -396,12 +403,14 @@ class MCTSStrategy:
             initial_value=initial_value,
         )
 
-    def pick_card_reward(self, offered, deck, hp, max_hp, floor, card_db, pools):
+    def pick_card_reward(self, offered, deck, hp, max_hp, floor, card_db, pools,
+                         relics=frozenset()):
         pick, sample = _network_pick_card(
             offered, deck, hp, max_hp, floor,
             self.mcts, self.vocabs, self.config, card_db,
             act_id=self.act_id, boss_id=self.boss_id,
             remaining_path=self.remaining_path,
+            relics=relics,
         )
         return (pick, sample)
 
@@ -598,7 +607,6 @@ class MCTSStrategy:
             # Per-option downstream path encoding
             opt_path_ids, opt_path_mask = None, None
             if downstream_paths:
-                from .state_tensor import encode_option_paths
                 opt_path_ids, opt_path_mask = encode_option_paths(
                     downstream_paths, self.vocabs, self.config)
                 opt_path_ids = opt_path_ids.to(self.mcts.device)

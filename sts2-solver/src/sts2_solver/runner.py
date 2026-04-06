@@ -16,7 +16,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
-from collections import deque
+from collections import Counter, deque
 import json
 import os
 import time
@@ -1614,11 +1614,10 @@ class Runner:
                     by_row[row] = []
                 by_row[row].append(nt)
 
-        # Take the most common type per row (simplified)
+        # Take the most common type per row (simplified — doesn't track
+        # which specific branch the player is on, just a statistical summary)
         for row in sorted(by_row.keys()):
-            types = by_row[row]
-            from collections import Counter
-            most_common = Counter(types).most_common(1)[0][0]
+            most_common = Counter(by_row[row]).most_common(1)[0][0]
             remaining.append(most_common)
 
         return tuple(remaining[:10])

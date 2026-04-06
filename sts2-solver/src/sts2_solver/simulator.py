@@ -1415,7 +1415,8 @@ class RunStrategy(Protocol):
                      wave_pool: list[list[str]] | None = None) -> StrategyCombatResult: ...
 
     def pick_card_reward(self, offered: list, deck: list, hp: int, max_hp: int,
-                         floor: int, card_db, pools: dict) -> tuple: ...
+                         floor: int, card_db, pools: dict,
+                         relics: frozenset[str] = frozenset()) -> tuple: ...
         # Returns (Card | None, sample_or_None)
 
     def rest_or_smith(self, hp: int, max_hp: int, deck: list, card_db,
@@ -1437,6 +1438,13 @@ class RunStrategy(Protocol):
                      floor: int, card_db, rng,
                      relics: frozenset[str]) -> tuple: ...
         # Returns (chosen_option_idx: int, changes_dict: dict, samples: list)
+
+    def set_run_context(self, act_id: str, boss_id: str) -> None: ...
+        # Called once at run start with act and boss IDs.
+        # Implementations should store these for use in state encoding.
+
+    def set_remaining_path(self, path: tuple[str, ...]) -> None: ...
+        # Called each floor with the remaining room types ahead.
 
 
 # ---------------------------------------------------------------------------
@@ -1547,11 +1555,8 @@ def run_act1(
                        if _ENCOUNTERS_BY_ID.get(e, {}).get("room_type") == "Boss"]
     boss_id = rng.choice(boss_encounters) if boss_encounters else ""
 
-    # Set run context on strategy (if it supports it)
-    if hasattr(strategy, "act_id"):
-        strategy.act_id = act_id
-    if hasattr(strategy, "boss_id"):
-        strategy.boss_id = boss_id
+    # Set run context on strategy
+    strategy.set_run_context(act_id, boss_id)
 
     # Starter relic
     relics: set[str] = set()
@@ -1589,20 +1594,17 @@ def run_act1(
         result.floor_reached = floor_num
 
         # Update remaining path context on strategy
-        if hasattr(strategy, "remaining_path"):
-            strategy.remaining_path = _remaining_room_types(floor_num)
+        strategy.set_remaining_path(_remaining_room_types(floor_num))
 
         # Resolve map choice nodes
         if isinstance(room_entry, list):
-            # Compute downstream paths per choice (for per-option encoding)
-            downstream_paths = []
-            for _choice in room_entry:
-                # Each choice leads to the same remaining floors (simplified:
-                # we don't track per-path branching, just remaining room types)
-                downstream_paths.append(_remaining_room_types(floor_num))
+            # TODO: compute true per-option downstream paths from the map graph.
+            # Currently the room_sequence is a flat list so we can't resolve
+            # which specific path each choice leads to.  Pass None so the
+            # network honestly sees zeros rather than identical fake paths.
             chosen_idx, map_samples = strategy.pick_map_path(
                 room_entry, deck, hp, max_hp, gold, floor_num, frozenset(relics),
-                downstream_paths=downstream_paths)
+                downstream_paths=None)
             result.option_samples.extend(map_samples)
             room_type = room_entry[chosen_idx]
         else:
@@ -1682,7 +1684,8 @@ def run_act1(
             if room_type != "boss":
                 offered = _offer_card_rewards(pools, deck)
                 pick, deck_sample = strategy.pick_card_reward(
-                    offered, deck, hp, max_hp, floor_num, card_db, pools)
+                    offered, deck, hp, max_hp, floor_num, card_db, pools,
+                    relics=frozenset(relics))
                 if pick:
                     deck.append(pick)
                     result.cards_picked.append(pick.name)
