@@ -71,13 +71,19 @@ All of these pieces get concatenated (joined end-to-end) into one long vector
        |
   Linear(451 -> 256) + ReLU        <-- compress to 256 dimensions
        |
-  Linear(256 -> 256) + ReLU        <-- refine
-       + residual connection        <-- add the input back (prevents vanishing gradients)
-       + LayerNorm                  <-- normalize values (stabilizes training)
-       + Dropout(10%)               <-- randomly zero out 10% of values (prevents overfitting)
+  ┌─ Residual Block (x3) ─────────────────────────────────────────┐
+  │  Linear(256 -> 256) + ReLU   <-- refine                       │
+  │       + residual connection  <-- add the input back            │
+  │       + LayerNorm            <-- normalize (stabilizes training)│
+  │       + Dropout(10%)         <-- prevents overfitting          │
+  └────────────────────────────────────────────────────────────────┘
        |
   [256-dim hidden state]            <-- this is the network's "understanding" of the position
 ```
+
+The trunk depth (3 blocks) is configurable via `num_trunk_blocks`. Deeper trunks
+let the network learn more complex feature interactions at the cost of more
+parameters and slower training.
 
 **Residual connection:** Instead of just `output = f(input)`, we do
 `output = input + f(input)`. This means the network can easily learn "do nothing"
@@ -119,16 +125,20 @@ This is the most architecturally interesting head. Instead of a simple
 action space changes every turn), we use **action embedding similarity**:
 
 ```
-State side:    hidden(256) -> Linear(256->40)         -> state_vector(40)
-Action side:   card_embed(32) + features(8) -> Linear  -> action_vector(40)
+State side:    hidden(256) -> Linear(256->61)          -> state_vector(61)
+Action side:   card_embed(32) + features(29) -> Linear -> action_vector(61)
 
 Score = dot_product(state_vector, action_vector)
 ```
 
 Each legal action (play card X on target Y, end turn, use potion) gets encoded as
-a 40-dimensional vector. The state also gets projected to 40 dimensions. The score
+a 61-dimensional vector. The state also gets projected to 61 dimensions. The score
 for each action is the **dot product** — how well the action "matches" what the
 state needs.
+
+Action features (29-dim) include: target one-hot (6), potion type (5), flags for
+end_turn/use_potion/choose_card (3), and card stats (15 — cost, damage, block,
+draw, magic number, etc.).
 
 *Why dot product?* It generalizes. The network learns that "Defend is good when
 facing high incoming damage" as a geometric relationship in 40-dimensional space.
@@ -139,14 +149,17 @@ Invalid actions get their scores set to negative infinity so they're never chose
 #### 3. Option Evaluation Head — "What should I do outside of combat?"
 
 ```
-hidden(256) + option_type_embed(16) + card_embed(32) + path_embed(16) = 320 -> Linear -> score
+hidden(256) + option_type_embed(16) + card_embed(32) + card_stats(15) + path_embed(16) = 335
+  -> Linear(335->64) -> ReLU -> Linear(64->1) -> score
 ```
 
-**One head for all non-combat decisions.** Each option is scored using four
+**One head for all non-combat decisions.** Each option is scored using five
 concatenated features:
 
 - **Option type embedding (16-dim):** What kind of choice this is
 - **Card embedding (32-dim):** Which card is involved (zeros for non-card options)
+- **Card stats (15-dim):** Normalized stats of the card (cost, damage, block, etc.)
+  Gives the network concrete numbers to work with alongside the learned embedding.
 - **Path embedding (16-dim):** What rooms lie ahead if this option is chosen
   (per-option for map decisions, shared global context for other decisions)
 
@@ -260,11 +273,11 @@ single-turn solver can't do.
 **File:** `sts2-solver/src/sts2_solver/alphazero/self_play.py`
 **File:** `sts2-solver/src/sts2_solver/alphazero/full_run.py`
 
-### One generation (10 games)
+### One generation (50 games)
 
 ```
-1. SELF-PLAY: Play 10 full Act 1 runs using MCTS + current network
-   - Each run: 15 floors, ~5 combats, card rewards, rest sites, shops, events
+1. SELF-PLAY: Play 50 full Act 1 runs using MCTS + current network
+   - Each run: ~17 floors, ~5 combats, card rewards, rest sites, shops, events
    - Each combat move: 50 MCTS simulations to pick an action
    - Record every decision: (state, MCTS_policy, action)
 
@@ -278,11 +291,20 @@ single-turn solver can't do.
    - Value loss: "your win probability prediction was X, the real outcome was Y"
    - Policy loss: "you predicted these move probabilities, but MCTS (with
      lookahead) said these were better"
-   - Deck/option loss: same idea for card rewards and non-combat decisions
-   - Repeat for 3 epochs
+   - Option loss: same idea for card rewards and non-combat decisions
+   - Combat and option losses are optimized in separate backward passes
+   - Repeat for 10 epochs
 
 4. Save progress, repeat
 ```
+
+### Encounter selection
+
+Each full run plays through one of two acts (Overgrowth or Underdocks), chosen
+randomly. Encounters are selected from `encounters.json` — the game's master
+encounter definitions — filtered by room type (weak, normal, elite, boss) and
+scoped to the act's encounter list. The simulator prefers unseen encounters to
+maximize variety within a single run.
 
 ### Value assignment — the key training signal
 
@@ -330,11 +352,11 @@ decisions and sample from it. This has two benefits:
 |-----------|-------|-----|
 | Learning rate | 1e-3 -> 1e-5 (cosine decay) | Start aggressive, fine-tune later. Cosine is smoother than step decay. |
 | Batch size | 64 | Balances noise (too small) vs memory (too large). |
-| Epochs per gen | 3 | Multiple passes over each batch for efficiency. |
+| Epochs per gen | 10 | Multiple passes over each batch for efficiency. |
 | Weight decay | 1e-4 (non-embedding) | L2 regularization — prevents weights from growing huge. Embeddings are exempt so rare cards can develop strong representations. |
 | Gradient clipping | norm <= 1.0 | Prevents exploding gradients from bad samples. |
 | MCTS simulations | 50 | Tradeoff: more = better play but slower. 50 is fast enough for training throughput. |
-| Temperature | 1.0 -> 0.5 | High early = explore diverse strategies. Low later = exploit what works. |
+| Temperature | 1.0 -> 0.3 (cosine) | Cosine decay with 0.3 floor. Stays above 0.5 for ~60% of training, then smoothly drops. |
 | c_puct | 1.5 | Standard AlphaZero exploration constant. |
 
 ### Loss functions
@@ -355,17 +377,21 @@ different the network's policy is from MCTS's policy. The network learns to
 match MCTS's output directly, so over time it needs fewer simulations to make
 good decisions.
 
-**Deck and option losses:** MSE between the chosen option's predicted score and
-the actual run outcome, weighted at 0.25x (auxiliary tasks).
+**Option loss:** MSE between the chosen option's predicted score and the actual
+run outcome, weighted at 0.25x (auxiliary task).
 
-### Total loss
+### Loss computation
+
+Combat and option losses are optimized in **separate backward passes**:
 
 ```
-total = 0.25 * value_loss + 1.0 * policy_loss + 0.25 * deck_loss + 0.25 * option_loss
+Combat step:   loss = 0.25 * value_loss + policy_loss
+Option step:   loss = 0.25 * option_loss  (accumulated across all option samples)
 ```
 
 Policy loss is weighted highest because accurate move selection is the most
-impactful skill.
+impactful skill. The separate steps prevent option gradients from interfering
+with combat learning and vice versa.
 
 ---
 
@@ -375,7 +401,7 @@ impactful skill.
 Generation 1:  Network is random. MCTS compensates somewhat (even random 
                evaluation + tree search beats pure random play). Wins are rare.
 
-Generation 50: Network has seen ~500 games. It's learned basics: "blocking 
+Generation 50: Network has seen ~2500 games. It's learned basics: "blocking 
                when an enemy attacks is good." MCTS is more efficient because 
                the policy prior focuses search on reasonable moves.
 

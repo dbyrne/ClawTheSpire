@@ -222,22 +222,68 @@ def train_batch(
             target_policies[i, :np_] = torch.tensor(s.policy[:np_], dtype=torch.float32)
             target_values[i, 0] = s.value
 
+        # Drop samples with NaN/Inf in any tensor (degenerate combat states)
+        valid_mask = torch.ones(n, dtype=torch.bool)
+        for key, t in batched_state.items():
+            if t.is_floating_point():
+                valid_mask &= t.view(n, -1).isfinite().all(dim=1).cpu()
+        valid_mask &= act_features.view(n, -1).isfinite().all(dim=1).cpu()
+        valid_mask &= target_policies.view(n, -1).isfinite().all(dim=1).cpu()
+        valid_mask &= target_values.view(n, -1).isfinite().all(dim=1).cpu()
+        if not valid_mask.all():
+            n_bad = (~valid_mask).sum().item()
+            print(f"  [debug] Dropping {n_bad}/{n} samples with NaN/Inf inputs", flush=True)
+            keep = valid_mask.nonzero(as_tuple=True)[0]
+            if len(keep) == 0:
+                nan_combat += 1
+                samples = []  # skip to option training
+            else:
+                batched_state = {k: v[keep] for k, v in batched_state.items()}
+                act_card_ids = act_card_ids[keep]
+                act_features = act_features[keep]
+                act_mask = act_mask[keep]
+                target_policies = target_policies[keep]
+                target_values = target_values[keep]
+                n = len(keep)
+
         hidden = network.encode_state(**batched_state)
-        values, logits = network.forward(hidden, act_card_ids, act_features, act_mask)
 
-        v_loss = F.mse_loss(values, target_values)
-        log_probs = F.log_softmax(logits, dim=1)
-        p_loss = -(target_policies * log_probs).nan_to_num(0.0).sum(dim=1).mean()
-
-        loss = 0.25 * v_loss + p_loss
-        if torch.isnan(loss):
+        # Diagnose NaN from encode_state (e.g. out-of-bounds embedding index)
+        if not hidden.isfinite().all():
             nan_combat += 1
+            if nan_combat == 1:
+                # Identify which state tensor keys have bad values
+                bad_keys = []
+                for key, t in batched_state.items():
+                    if t.dtype == torch.long:
+                        if t.min() < 0:
+                            bad_keys.append(f"{key}(neg={t.min().item()})")
+                    elif t.is_floating_point() and not t.isfinite().all():
+                        bad_keys.append(f"{key}(has_nan)")
+                print(f"  [debug] NaN in hidden state after encode_state. "
+                      f"Bad inputs: {bad_keys or 'none detected — likely embedding OOB'}",
+                      flush=True)
         else:
-            value_losses.append(v_loss.item())
-            policy_losses.append(p_loss.item())
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(network.parameters(), 1.0)
-            optimizer.step()
+            values, logits = network.forward(hidden, act_card_ids, act_features, act_mask)
+
+            v_loss = F.mse_loss(values, target_values)
+            log_probs = F.log_softmax(logits, dim=1)
+            p_loss = -(target_policies * log_probs).nan_to_num(0.0).sum(dim=1).mean()
+
+            loss = 0.25 * v_loss + p_loss
+            if torch.isnan(loss):
+                nan_combat += 1
+                if nan_combat == 1:
+                    print(f"  [debug] NaN combat loss: v={v_loss.item():.4f} p={p_loss.item():.4f} "
+                          f"logits_range=[{logits.min().item():.1f},{logits.max().item():.1f}] "
+                          f"values_range=[{values.min().item():.2f},{values.max().item():.2f}]",
+                          flush=True)
+            else:
+                value_losses.append(v_loss.item())
+                policy_losses.append(p_loss.item())
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(network.parameters(), 1.0)
+                optimizer.step()
 
     # --- Option samples (all non-combat decisions): accumulate gradients, step once ---
     optimizer.zero_grad()

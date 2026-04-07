@@ -85,18 +85,32 @@ class CardSetEncoder(nn.Module):
         """
         x = self.project_in(card_features)  # (batch, max_cards, embed_dim)
 
-        # Handle empty sets (all masked) — return zeros to avoid attention NaN
+        # Handle empty sets — rows where all positions are masked would produce
+        # NaN from MultiheadAttention.  Unmask one position for those rows so
+        # attention is well-defined, then zero out the result afterward.
         valid_mask = (~mask).unsqueeze(-1).float()  # (batch, max_cards, 1)
         num_valid = valid_mask.sum(dim=1)  # (batch, 1)
-        if (num_valid == 0).all():
+        empty_rows = (num_valid.squeeze(-1) == 0)  # (batch,)
+
+        if empty_rows.all():
             return torch.zeros(x.shape[0], self.card_embed_dim, device=x.device)
 
+        # For empty rows, unmask position 0 so attention doesn't NaN
+        safe_mask = mask.clone()
+        if empty_rows.any():
+            safe_mask[empty_rows, 0] = False
+
         # Self-attention with padding mask
-        attn_out, _ = self.attention(x, x, x, key_padding_mask=mask)
+        attn_out, _ = self.attention(x, x, x, key_padding_mask=safe_mask)
         x = self.layer_norm(x + attn_out)  # Residual + norm
 
         # Mean pool over non-padded positions
         pooled = (x * valid_mask).sum(dim=1) / num_valid.clamp(min=1)
+
+        # Zero out rows that had empty hands
+        if empty_rows.any():
+            pooled[empty_rows] = 0.0
+
         return pooled  # (batch, card_embed_dim)
 
 
