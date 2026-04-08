@@ -326,6 +326,7 @@ class FullRunResult:
     deck_samples: list  # OptionSample list (card rewards, routed through option head)
     option_samples: list  # OptionSample list (rest/map/shop)
     combat_log: list[dict]
+    _combat_value_estimates: dict = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -707,6 +708,7 @@ def play_full_run(
         deck_size=result.deck_size, samples=result.samples,
         deck_samples=result.deck_samples,
         option_samples=result.option_samples, combat_log=result.combat_log,
+        _combat_value_estimates=dict(result._combat_value_estimates),
     )
 
 
