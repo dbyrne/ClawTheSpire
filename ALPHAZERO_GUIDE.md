@@ -25,6 +25,47 @@ tree search gets better guidance, and the whole system improves.
 
 **File:** `sts2-solver/src/sts2_solver/alphazero/network.py`
 
+### Architecture overview
+
+```mermaid
+graph TD
+    subgraph Inputs["State Encoding (451-dim)"]
+        Hand["Hand Cards<br/><i>Self-Attention + Pool</i><br/>32-dim"]
+        Piles["Draw / Discard / Exhaust<br/><i>Mean Embed + Project</i><br/>32-dim each"]
+        Player["Player Scalars + Powers<br/>5 + power embeds"]
+        Enemies["Enemies x5 slots<br/><i>Linear Project</i><br/>32-dim each"]
+        Relics["Relics<br/><i>MLP + Pool (SetEncoder)</i><br/>16-dim"]
+        Potions["Potions<br/><i>Feature vectors</i><br/>6-dim x 3 slots"]
+        Context["Act(4) + Boss(8) + Path(16)<br/><i>Learned Embeddings</i>"]
+    end
+
+    subgraph Trunk["Shared Trunk"]
+        TrunkIn["Linear(451 → 256) + ReLU"]
+        Res1["Residual Block 1<br/><i>Linear(256→256) + ReLU + LayerNorm + Dropout</i>"]
+        Res2["Residual Block 2"]
+        Res3["Residual Block 3"]
+        Hidden["Hidden State (256-dim)"]
+    end
+
+    subgraph Heads["Three Output Heads"]
+        Value["Value Head<br/>Linear(256→64) → ReLU → Linear(64→1)<br/><i>Win probability</i>"]
+        Policy["Policy Head<br/>State→61-dim ·  Action→61-dim<br/><i>Dot product scoring</i>"]
+        Option["Option Head<br/>hidden(256)+type(16)+card(32)+stats(15)+path(16)=335<br/>Linear(335→64) → ReLU → Linear(64→1)<br/><i>Non-combat decisions</i>"]
+    end
+
+    Hand --> TrunkIn
+    Piles --> TrunkIn
+    Player --> TrunkIn
+    Enemies --> TrunkIn
+    Relics --> TrunkIn
+    Potions --> TrunkIn
+    Context --> TrunkIn
+    TrunkIn --> Res1 --> Res2 --> Res3 --> Hidden
+    Hidden --> Value
+    Hidden --> Policy
+    Hidden --> Option
+```
+
 ### What it does
 
 The network is a function that takes in a game state (your hand, HP, enemies, etc.)
@@ -223,7 +264,12 @@ exploration  = c_puct * prior * sqrt(parent_visits) / (1 + visits)
 - `prior`: the network's initial guess (guides search toward promising moves)
 - `sqrt(parent_visits) / (1 + visits)`: moves visited less get a bonus (try
   everything at least a few times before committing)
-- `c_puct = 1.5`: controls the exploitation/exploration balance
+- `c_puct = 2.5`: controls the exploitation/exploration balance (higher = explore more)
+
+**Minimum root visits:** Before PUCT selection kicks in, every legal action at the
+root gets at least 2 visits. With only 3-5 deduplicated actions per turn, this
+costs ~8 sims and guarantees every action gets a value estimate — preventing the
+network's prior from completely suppressing moves it hasn't learned to value yet.
 
 This is the key insight of AlphaZero: the network's policy prior makes the tree
 search **efficient**. Instead of exploring all moves equally (which is exponential),
@@ -315,20 +361,21 @@ do you assign credit — which decisions were good and which caused the loss?
 
 We blend two signals:
 
-**Per-combat signal (dense, local):**
+**Combat samples — pure HP conservation:**
 - Won the combat with 90% HP remaining? Good. Value ≈ +0.8
 - Won but lost 60% HP? Mediocre. Value ≈ +0.1
 - Used 2 potions to survive? Penalty applied.
-- Boss fights are special: HP conservation doesn't matter (it resets next act),
-  only winning matters.
+- Boss fights: pure win/lose (+1.0 / -1.0, minus potion penalty). HP
+  conservation is irrelevant since HP resets next act.
+- No run-level blending — combat decisions are judged solely on how well
+  that fight was played. Run outcome is noise for card-play decisions.
 
-**Run-level signal (sparse, global):**
-- Based on how far you got (floor_reached / total_floors) and final HP.
-- Range roughly [-0.5, +0.8].
-- Discounted by distance: the combat on floor 3 gets a weaker run signal than
-  the combat on floor 12, because many things happened in between.
-
-**Final value = 50% combat signal + 50% run signal** (30/70 for bosses).
+**Non-combat samples (card rewards, rest, shop, map) — mostly run outcome:**
+- 30% trajectory signal: did the value head's estimate improve between the
+  combat before and after this decision?
+- 70% run outcome: how far did the run get, final HP.
+- These are long-horizon decisions so the run result matters more than
+  local combat changes.
 
 Within a single combat, later turns get slightly higher values than earlier turns
 (temporal discount of 0.99 per step), since they contributed more directly to the
@@ -357,7 +404,8 @@ decisions and sample from it. This has two benefits:
 | Gradient clipping | norm <= 1.0 | Prevents exploding gradients from bad samples. |
 | MCTS simulations | 50 | Tradeoff: more = better play but slower. 50 is fast enough for training throughput. |
 | Temperature | 1.0 -> 0.3 (cosine) | Cosine decay with 0.3 floor. Stays above 0.5 for ~60% of training, then smoothly drops. |
-| c_puct | 1.5 | Standard AlphaZero exploration constant. |
+| c_puct | 2.5 | Higher than standard (1.5) to ensure MCTS explores minority actions. |
+| Min root visits | 2 | Every root action gets at least 2 visits before PUCT selection. |
 
 ### Loss functions
 

@@ -769,10 +769,10 @@ def _assign_run_values(
             else:
                 combat_value = 0.0
 
-            # Boss: weight toward win/lose outcome, less run-level blend
-            blended = 0.7 * combat_value + 0.3 * run_component
+            # Boss: pure win/lose — HP resets next act, run outcome is redundant
+            blended = combat_value
         else:
-            # Non-boss: HP conservation matters for surviving the run
+            # Non-boss: pure HP conservation — run outcome is noise for combat decisions
             if floor in combat_hp_data:
                 hp_before, hp_after, potions_used = combat_hp_data[floor]
                 if hp_before <= 0:
@@ -786,7 +786,7 @@ def _assign_run_values(
             else:
                 combat_value = 0.0
 
-            blended = 0.5 * combat_value + 0.5 * run_component
+            blended = combat_value
 
         floor_samples = combat_samples_by_floor[floor]
         n = len(floor_samples)
@@ -801,7 +801,7 @@ def _assign_run_values(
         combat_value_estimates = {}
 
     combat_floors_sorted = sorted(combat_value_estimates.keys())
-    trajectory_alpha = 0.6  # weight on local value trajectory vs run outcome
+    trajectory_alpha = 0.3  # weight on local value trajectory vs run outcome
 
     all_option_samples = list(deck_change_samples or []) + list(option_samples or [])
 

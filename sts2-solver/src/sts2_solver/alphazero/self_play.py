@@ -452,6 +452,8 @@ def train_worker(
 
         # --- Self-play: full Act 1 runs ---
         gen_wins = 0
+        gen_floors = []
+        gen_values = []  # initial value estimates from each combat
         for game_num in range(games_per_generation):
             # Cosine decay: smooth exploration → exploitation over full training.
             # Stays above 0.5 for ~60% of training, floors at 0.3 (not 0.1).
@@ -475,6 +477,8 @@ def train_worker(
                 option_buffer.add(os, is_win=is_win)
 
             total_games += 1
+            gen_floors.append(result.floor_reached)
+            gen_values.extend(result._combat_value_estimates.values())
             if result.outcome == "win":
                 gen_wins += 1
                 total_wins += 1
@@ -514,6 +518,13 @@ def train_worker(
             "games_played": total_games,
             "win_rate": total_wins / max(1, total_games),
             "gen_win_rate": gen_wins / max(1, games_per_generation),
+            "gen_avg_floor": round(sum(gen_floors) / max(1, len(gen_floors)), 1),
+            "gen_min_floor": min(gen_floors) if gen_floors else 0,
+            "gen_max_floor": max(gen_floors) if gen_floors else 0,
+            "value_head_mean": round(sum(gen_values) / max(1, len(gen_values)), 4) if gen_values else 0,
+            "value_head_min": round(min(gen_values), 4) if gen_values else 0,
+            "value_head_max": round(max(gen_values), 4) if gen_values else 0,
+            "value_head_spread": round(max(gen_values) - min(gen_values), 4) if gen_values else 0,
             "buffer_size": len(replay_buffer),
             "total_loss": round(total_loss, 4),
             "value_loss": round(v_loss, 4),
@@ -598,6 +609,7 @@ def train_monitor(progress_file: str | None = None, refresh_rate: float = 1.0):
         st.add_row("Games Played", str(stats.get("games_played", 0)))
         st.add_row("Win Rate", f"{stats.get('win_rate', 0):.1%}")
         st.add_row("Gen Win Rate", f"{stats.get('gen_win_rate', 0):.1%}")
+        st.add_row("Gen Avg Floor", f"{stats.get('gen_avg_floor', 0):.1f} (min {stats.get('gen_min_floor', 0)}, max {stats.get('gen_max_floor', 0)})")
         st.add_row("Buffer Size", f"{stats.get('buffer_size', 0):,}")
         st.add_row("", "")
         st.add_row("Total Loss", f"{stats.get('total_loss', 0):.4f}")

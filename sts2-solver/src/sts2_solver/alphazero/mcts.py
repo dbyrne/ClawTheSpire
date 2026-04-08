@@ -106,7 +106,7 @@ class MCTS:
         vocabs: Vocabs,
         config: EncoderConfig | None = None,
         card_db: CardDB | None = None,
-        c_puct: float = 1.5,
+        c_puct: float = 2.5,
         device: str = "cpu",
     ):
         self.network = network
@@ -201,12 +201,25 @@ class MCTS:
 
         return actions[action_idx], policy, root.value
 
+    MIN_ROOT_VISITS = 2  # Every root action gets at least this many visits
+
     def _select(self, root: Node) -> Node:
         """Walk tree from root to a leaf using PUCT selection."""
         node = root
         while node.is_expanded and not node.is_terminal:
             if not node.children:
                 break
+
+            # At root, force minimum visits on all actions before PUCT kicks in
+            if node is root:
+                undervisited = [i for i, c in node.children.items()
+                                if c.visit_count < self.MIN_ROOT_VISITS]
+                if undervisited:
+                    best_idx = min(undervisited,
+                                   key=lambda i: node.children[i].visit_count)
+                    node = node.children[best_idx]
+                    continue
+
             # Pick child with highest UCB score
             best_idx = max(
                 node.children.keys(),
