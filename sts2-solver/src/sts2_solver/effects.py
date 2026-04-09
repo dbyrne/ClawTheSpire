@@ -184,6 +184,13 @@ def deal_damage(state: CombatState, target_idx: int, base_damage: int, hits: int
         enemy.intent_damage = None
         enemy.powers.pop("Plow", None)  # One-time trigger
 
+    # Shriek: when HP drops to threshold, become Stunned (Terror Eel)
+    shriek = enemy.powers.get("Shriek", 0)
+    if shriek > 0 and enemy.hp <= shriek and enemy.is_alive:
+        enemy.intent_type = None  # Stunned: skip next intent
+        enemy.intent_damage = None
+        enemy.powers.pop("Shriek", None)  # One-time trigger
+
     # Check for death triggers
     if not enemy.is_alive:
         _on_enemy_death(state, target_idx)

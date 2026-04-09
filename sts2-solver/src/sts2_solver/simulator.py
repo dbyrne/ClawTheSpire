@@ -1127,7 +1127,7 @@ def apply_intent_effects(
     if intent.get("player_shrink"):
         state.player.powers["Shrink"] = (
             state.player.powers.get("Shrink", 0)
-            - intent["player_shrink"]  # Shrink is stored as negative value
+            + intent["player_shrink"]  # Positive value, consistent with Weak
         )
     if intent.get("player_constrict"):
         state.player.powers["Constrict"] = (

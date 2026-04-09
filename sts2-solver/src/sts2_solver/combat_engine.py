@@ -605,8 +605,8 @@ def _enemy_attacks_player(state: CombatState, enemy: EnemyState) -> None:
     for _ in range(hits):
         if state.player.hp <= 0:
             break
-        # Calculate damage: base + enemy Strength
-        raw = base_damage + enemy.powers.get("Strength", 0)
+        # Calculate damage: base + enemy Strength + Vigor
+        raw = base_damage + enemy.powers.get("Strength", 0) + enemy.powers.get("Vigor", 0)
         if raw < 0:
             raw = 0
         # Weak on enemy reduces their damage
@@ -632,6 +632,9 @@ def _enemy_attacks_player(state: CombatState, enemy: EnemyState) -> None:
         flame_barrier = state.player.powers.get("Flame Barrier", 0)
         if flame_barrier > 0:
             enemy.hp -= flame_barrier
+
+    # Vigor is consumed after attacking (one-time bonus)
+    enemy.powers.pop("Vigor", None)
 
 
 # ---------------------------------------------------------------------------
