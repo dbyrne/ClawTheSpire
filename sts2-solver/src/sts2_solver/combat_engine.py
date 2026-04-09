@@ -564,6 +564,26 @@ def end_turn(state: CombatState) -> None:
     _tick_end_of_turn_powers(state)
 
 
+def _status_card_for_enemy(enemy_id: str) -> Card:
+    """Return the status card that an enemy adds via its StatusCard intent.
+
+    Different enemies add different status cards:
+    - Phrog Parasite → Infection (unplayable, deals 3 damage per copy in hand at EOT)
+    - Slimes and others → Slimed (cost 1, draw 1, Exhaust)
+    """
+    if enemy_id == "PHROG_PARASITE":
+        return Card(
+            id="INFECTION", name="Infection", cost=-1,
+            card_type=CardType.STATUS, target=TargetType.SELF,
+        )
+    # Default: Slimed (used by slimes and other StatusCard enemies)
+    return Card(
+        id="SLIMED", name="Slimed", cost=1,
+        card_type=CardType.STATUS, target=TargetType.SELF,
+        cards_draw=1, keywords=frozenset({"Exhaust"}),
+    )
+
+
 def resolve_enemy_intents(state: CombatState) -> None:
     """Resolve all enemy intents (attacks, buffs, etc.)."""
     for i, enemy in enumerate(state.enemies):
@@ -574,14 +594,7 @@ def resolve_enemy_intents(state: CombatState) -> None:
         elif enemy.intent_type == "Defend" and enemy.intent_block is not None:
             enemy.block += enemy.intent_block
         elif enemy.intent_type == "StatusCard":
-            # Slimes add Slimed cards to the player's discard pile.
-            # Slimed: cost 1, draw 1 card, Exhaust.
-            slimed = Card(
-                id="SLIMED", name="Slimed", cost=1,
-                card_type=CardType.STATUS, target=TargetType.SELF,
-                cards_draw=1, keywords=frozenset({"Exhaust"}),
-            )
-            state.player.discard_pile.append(slimed)
+            state.player.discard_pile.append(_status_card_for_enemy(enemy.id))
 
 
 def _enemy_attacks_player(state: CombatState, enemy: EnemyState) -> None:

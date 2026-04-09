@@ -903,6 +903,11 @@ class Runner:
             try:
                 sim_state = state_from_mcp(gs, self.card_db,
                                           move_indices=self._combat_move_indices)
+                # Run context for value head (bridge doesn't set these)
+                sim_state.act_id = self._current_act_id
+                sim_state.boss_id = self._current_boss_id
+                sim_state.map_path = self._extract_remaining_path(
+                    gs, sim_state.floor)
                 # Mid-turn counters: bridge.py sets these from the mod API
                 # when available (Phase 1A).  Fall back to manual reconstruction
                 # only if the mod didn't provide them (old mod version).
