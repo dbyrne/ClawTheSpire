@@ -255,8 +255,11 @@ class EncoderConfig:
     option_type_embed_dim: int = 16
 
     # Card stats vector: upgraded(1) + cost(1) + damage(1) + block(1) +
-    # is_x_cost(1) + card_type_onehot(5) + target_type_onehot(5) = 15
-    card_stats_dim: int = 15
+    # is_x_cost(1) + card_type_onehot(5) + target_type_onehot(5) +
+    # hit_count(1) + cards_draw(1) + energy_gain(1) + hp_loss(1) +
+    # exhaust(1) + innate(1) + ethereal(1) + retain(1) +
+    # weak(1) + vuln(1) + poison(1) = 26
+    card_stats_dim: int = 26
     num_trunk_blocks: int = 3
 
     # Global scalars: floor, turn, gold, deck_size, has_pending_choice, choice_type
@@ -333,7 +336,11 @@ TARGET_TYPE_MAP = {"Self": 0, "AnyEnemy": 1, "AllEnemies": 2, "RandomEnemy": 3, 
 
 
 def card_stats_vector(card) -> list[float]:
-    """Extract numeric features from a Card object."""
+    """Extract numeric features from a Card object.
+
+    Returns a fixed-size vector (card_stats_dim) encoding all the
+    card properties that the network needs to evaluate the card.
+    """
     ct = CARD_TYPE_MAP.get(card.card_type.value, 0)
     tt = TARGET_TYPE_MAP.get(card.target.value, 0)
     card_type_oh = [0.0] * 5
@@ -341,14 +348,39 @@ def card_stats_vector(card) -> list[float]:
     target_oh = [0.0] * 5
     target_oh[tt] = 1.0
 
+    # Extract debuff amounts from powers_applied
+    weak_amt = 0.0
+    vuln_amt = 0.0
+    poison_amt = 0.0
+    for power_name, amount in (card.powers_applied or ()):
+        if power_name == "Weak":
+            weak_amt = amount
+        elif power_name == "Vulnerable":
+            vuln_amt = amount
+        elif power_name == "Poison":
+            poison_amt = amount
+
     return [
+        # Original 15 features
         float(card.upgraded),
-        card.cost / 5.0 if card.cost >= 0 else 0.0,  # Normalize cost
-        (card.damage or 0) / 30.0,  # Normalize damage
-        (card.block or 0) / 30.0,   # Normalize block
+        card.cost / 5.0 if card.cost >= 0 else 0.0,
+        (card.damage or 0) / 30.0,
+        (card.block or 0) / 30.0,
         float(card.is_x_cost),
         *card_type_oh,
         *target_oh,
+        # New 11 features (total: 26)
+        card.hit_count / 5.0,
+        card.cards_draw / 5.0,
+        card.energy_gain / 3.0,
+        card.hp_loss / 10.0,
+        float(card.exhausts),
+        float(card.innate),
+        float(card.ethereal),
+        float(card.retain),
+        weak_amt / 3.0,
+        vuln_amt / 3.0,
+        poison_amt / 10.0,
     ]
 
 

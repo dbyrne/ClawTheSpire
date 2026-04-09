@@ -3,7 +3,7 @@
 Architecture:
     State encoder (shared trunk, 451-dim → 256-dim hidden):
         - Card embeddings (learned, 32-dim per card ID)
-        - Hand: card embed (32) + stats (15) → self-attention → mean pool → 32-dim
+        - Hand: card embed (32) + stats (26) → self-attention → mean pool → 32-dim
         - Piles (draw/discard/exhaust): mean card embeddings → project → 32-dim each
         - Player: scalar features (HP, block, energy) + power embeddings
         - Enemies: per-slot features → linear projection → 32-dim × max_enemies
@@ -20,12 +20,12 @@ Architecture:
     Policy head (action embedding similarity):
         - Encode each legal action as: card_embed + features (target/flags) + card_stats
         - Score = dot(hidden_projected, action_embed)
-        - card_stats (15-dim: damage/block/cost/type/target) enables feature-based
+        - card_stats (26-dim: damage/block/cost/type/target/draw/exhaust/etc) enables feature-based
           generalization to unseen/rare cards
         - Supports play_card, end_turn, use_potion, and choose_card actions
 
     Option evaluation head (all non-combat decisions):
-        hidden(256) + option_type_embed(16) + card_embed(32) + card_stats(15) + path_embed(16)
+        hidden(256) + option_type_embed(16) + card_embed(32) + card_stats(26) + path_embed(16)
         → Linear(335→64) → ReLU → Linear(64→1)
         Handles card rewards, rest/smith, map pathing, shop, events.
         Type embedding carries context (free reward vs gold cost vs removal).
@@ -47,6 +47,7 @@ from .encoding import (
     CARD_TYPE_MAP,
     TARGET_TYPE_MAP,
     PAD_IDX,
+    card_stats_vector,
 )
 
 if TYPE_CHECKING:
@@ -222,6 +223,11 @@ class STS2Network(nn.Module):
         self.room_type_embed = nn.Embedding(
             len(vocabs.room_types), cfg.room_type_embed_dim, padding_idx=PAD_IDX
         )
+
+        # --- Stats-based embedding initializer ---
+        # Projects card stats → embedding space so rare cards start with
+        # meaningful representations instead of random noise.
+        self._stats_init_proj = nn.Linear(cfg.card_stats_dim, cfg.card_embed_dim, bias=False)
 
         # --- Hand encoder (set attention) ---
         self.hand_encoder = CardSetEncoder(cfg)
@@ -422,6 +428,29 @@ class STS2Network(nn.Module):
             )
             probs = F.softmax(logits[0], dim=0)
             return value.item(), probs.tolist()
+
+    # ------------------------------------------------------------------
+    # Stats-based card embedding initialization
+    # ------------------------------------------------------------------
+
+    def init_card_embeddings_from_stats(self, card_db) -> None:
+        """Initialize card embeddings from stats vectors.
+
+        Projects each card's stats (damage, block, cost, etc.) into the
+        embedding space so that even unseen/rare cards start with a
+        meaningful representation instead of random noise.
+
+        Call once at the start of training (before any checkpoint load).
+        """
+        with torch.no_grad():
+            for card in card_db.all_cards():
+                base_id = card.id.rstrip("+")
+                idx = self.vocabs.cards.get(base_id)
+                if idx <= 1:  # Skip PAD and UNK
+                    continue
+                stats = torch.tensor(card_stats_vector(card), dtype=torch.float32)
+                projected = self._stats_init_proj(stats)
+                self.card_embed.weight.data[idx] = projected
 
     # ------------------------------------------------------------------
     # Option evaluation (all non-combat decisions)

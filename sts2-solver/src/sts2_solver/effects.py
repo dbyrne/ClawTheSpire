@@ -65,7 +65,7 @@ def calculate_attack_damage(base: int, state: CombatState, target: EnemyState) -
     if player.powers.get("Weak", 0) > 0:
         raw = math.floor(raw * 0.75)
     # Shrink: 30% damage reduction per stack (like Weak but on player output)
-    if player.powers.get("Shrink", 0) < 0:
+    if player.powers.get("Shrink", 0) > 0:
         raw = math.floor(raw * 0.7)
     if target.powers.get("Vulnerable", 0) > 0:
         raw = math.floor(raw * 1.5)
@@ -146,10 +146,10 @@ def deal_damage(state: CombatState, target_idx: int, base_damage: int, hits: int
         if enemy.powers.get("Slow", 0) > 0 and per_hit > 0:
             slow_mult = 1.0 + 0.1 * max(0, state.cards_played_this_turn - 1)
             per_hit = math.floor(per_hit * slow_mult)
-        # Skittish: enemy gains 1 block on first hit each turn
+        # Skittish: enemy gains block equal to Skittish stacks on first hit each turn
         skittish = enemy.powers.get("Skittish", 0)
         if skittish > 0 and not enemy.powers.get("_skittish_triggered"):
-            enemy.block += 1
+            enemy.block += skittish
             enemy.powers["_skittish_triggered"] = 1
 
         per_hit = apply_block_and_plating(enemy, per_hit)
@@ -269,7 +269,7 @@ def draw_cards(state: CombatState, count: int) -> None:
                     per_hit = calculate_attack_damage(
                         card.damage or 0, state, state.enemies[target]
                     )
-                    per_hit = apply_block(state.enemies[target], per_hit)
+                    per_hit = apply_block_and_plating(state.enemies[target], per_hit)
                     state.enemies[target].hp -= per_hit
                 state.player.discard_pile.append(card)
             else:
@@ -291,6 +291,26 @@ def exhaust_from_hand(state: CombatState, card: Card) -> None:
     if card in state.player.hand:
         state.player.hand.remove(card)
         state.player.exhaust_pile.append(card)
+
+
+def retrieve_from_discard(state: CombatState, count: int, filter_fn=None) -> list[Card]:
+    """Move random cards from discard pile to hand.
+
+    Args:
+        count: Number of cards to retrieve.
+        filter_fn: Optional predicate to filter eligible cards.
+
+    Returns:
+        List of cards actually moved (may be fewer than count if discard is small).
+    """
+    import random
+    eligible = [c for c in state.player.discard_pile if (filter_fn is None or filter_fn(c))]
+    random.shuffle(eligible)
+    moved = eligible[:count]
+    for c in moved:
+        state.player.discard_pile.remove(c)
+        state.player.hand.append(c)
+    return moved
 
 
 def add_card_to_discard(state: CombatState, card: Card) -> None:

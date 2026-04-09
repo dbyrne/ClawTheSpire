@@ -344,6 +344,26 @@ def _write_progress(path: Path, stats: dict) -> None:
         json.dump(stats, f, indent=2)
     tmp.replace(path)
 
+    # Append per-generation history line (JSONL) for dashboard charts
+    history_path = path.with_name("alphazero_history.jsonl")
+    history_entry = {
+        "gen": stats.get("generation"),
+        "games_played": stats.get("games_played"),
+        "win_rate": stats.get("win_rate"),
+        "gen_win_rate": stats.get("gen_win_rate"),
+        "gen_avg_floor": stats.get("gen_avg_floor"),
+        "total_loss": stats.get("total_loss"),
+        "value_loss": stats.get("value_loss"),
+        "policy_loss": stats.get("policy_loss"),
+        "option_loss": stats.get("option_loss"),
+        "value_head_spread": stats.get("value_head_spread"),
+        "lr": stats.get("lr"),
+        "gen_time": stats.get("gen_time"),
+        "timestamp": stats.get("timestamp"),
+    }
+    with open(history_path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(history_entry) + "\n")
+
 
 def _read_progress(path: Path) -> dict:
     """Read progress from JSON file."""
@@ -360,8 +380,8 @@ def _read_progress(path: Path) -> dict:
 
 def train_worker(
     num_generations: int = 100,
-    games_per_generation: int = 50,
-    mcts_simulations: int = 50,
+    games_per_generation: int = 20,
+    mcts_simulations: int = 100,
     batch_size: int = 64,
     train_epochs: int = 10,
     lr: float = 1e-3,
@@ -375,6 +395,7 @@ def train_worker(
     vocabs = build_vocabs_from_card_db(card_db)
     config = EncoderConfig(num_trunk_blocks=num_trunk_blocks)
     network = STS2Network(vocabs, config)
+    network.init_card_embeddings_from_stats(card_db)
     # Exclude embedding tables from weight decay so rare cards/powers
     # can develop strong representations (#12)
     embed_params = [p for n, p in network.named_parameters() if "embed" in n]
@@ -675,8 +696,8 @@ if __name__ == "__main__":
     # Train command
     train_parser = subparsers.add_parser("train", help="Run headless training worker")
     train_parser.add_argument("--generations", type=int, default=100)
-    train_parser.add_argument("--games-per-gen", type=int, default=50)
-    train_parser.add_argument("--sims", type=int, default=50)
+    train_parser.add_argument("--games-per-gen", type=int, default=20)
+    train_parser.add_argument("--sims", type=int, default=100)
     train_parser.add_argument("--batch-size", type=int, default=64)
     train_parser.add_argument("--epochs", type=int, default=10)
     train_parser.add_argument("--lr", type=float, default=1e-3)

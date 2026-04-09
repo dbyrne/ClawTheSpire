@@ -579,7 +579,56 @@ def test_card_play_parity(
                         delta=simulated.player.hp - next_snap.player_hp,
                     ))
 
-                # Enemy HP
+                # Player block
+                if simulated.player.block != next_snap.player_block:
+                    diffs.append(StateDiff(
+                        "player_block", next_snap.player_block,
+                        simulated.player.block,
+                        delta=simulated.player.block - next_snap.player_block,
+                    ))
+
+                # Player powers
+                sim_powers = {k: v for k, v in simulated.player.powers.items()
+                              if not k.startswith("_")}  # Skip internal trackers
+                snap_powers = next_snap.player_powers or {}
+                all_powers = set(sim_powers) | set(snap_powers)
+                for p in sorted(all_powers):
+                    sv = sim_powers.get(p, 0)
+                    rv = snap_powers.get(p, 0)
+                    if sv != rv:
+                        diffs.append(StateDiff(
+                            f"player_power_{p}", rv, sv, delta=sv - rv,
+                        ))
+
+                # Pile sizes
+                sim_draw = len(simulated.player.draw_pile)
+                sim_discard = len(simulated.player.discard_pile)
+                sim_exhaust = len(simulated.player.exhaust_pile)
+                if sim_draw != next_snap.draw_pile_size:
+                    diffs.append(StateDiff(
+                        "draw_pile_size", next_snap.draw_pile_size,
+                        sim_draw, delta=sim_draw - next_snap.draw_pile_size,
+                    ))
+                if sim_discard != next_snap.discard_pile_size:
+                    diffs.append(StateDiff(
+                        "discard_pile_size", next_snap.discard_pile_size,
+                        sim_discard, delta=sim_discard - next_snap.discard_pile_size,
+                    ))
+                if sim_exhaust != next_snap.exhaust_pile_size:
+                    diffs.append(StateDiff(
+                        "exhaust_pile_size", next_snap.exhaust_pile_size,
+                        sim_exhaust, delta=sim_exhaust - next_snap.exhaust_pile_size,
+                    ))
+
+                # Hand contents (sorted card names)
+                sim_hand = sorted(c.name for c in simulated.player.hand)
+                snap_hand = sorted(
+                    c.get("name", "") for c in next_snap.hand
+                ) if next_snap.hand else []
+                if sim_hand != snap_hand:
+                    diffs.append(StateDiff("hand", snap_hand, sim_hand))
+
+                # Enemy HP and powers
                 sim_alive = [e for e in simulated.enemies if e.is_alive]
                 for si, se in enumerate(next_snap.enemies):
                     snap_name = se.get("name", "")
@@ -593,6 +642,30 @@ def test_card_play_parity(
                                     snap_hp, sim_e.hp,
                                     delta=sim_e.hp - snap_hp,
                                 ))
+                            # Enemy block
+                            snap_block = se.get("block", 0)
+                            if sim_e.block != snap_block:
+                                diffs.append(StateDiff(
+                                    f"enemy_{si}_block ({snap_name})",
+                                    snap_block, sim_e.block,
+                                    delta=sim_e.block - snap_block,
+                                ))
+                            # Enemy powers
+                            snap_epowers = {}
+                            for ep in (se.get("powers") or []):
+                                if isinstance(ep, dict):
+                                    snap_epowers[ep.get("name", "")] = ep.get("amount", 0)
+                            sim_epowers = {k: v for k, v in sim_e.powers.items()
+                                           if not k.startswith("_")}
+                            all_ep = set(sim_epowers) | set(snap_epowers)
+                            for p in sorted(all_ep):
+                                spv = sim_epowers.get(p, 0)
+                                rpv = snap_epowers.get(p, 0)
+                                if spv != rpv:
+                                    diffs.append(StateDiff(
+                                        f"enemy_{si}_power_{p} ({snap_name})",
+                                        rpv, spv,
+                                    ))
                             matched = True
                             break
                     if not matched:

@@ -33,6 +33,7 @@ from .effects import (
     lose_hp,
     add_card_to_discard,
     add_card_to_hand,
+    retrieve_from_discard,
 )
 from .models import Card, CombatState, PendingChoice
 
@@ -182,12 +183,13 @@ def _rage(card: Card, card_db: CardDB | None) -> CardEffect:
 def _stoke(card: Card, card_db: CardDB | None) -> CardEffect:
     """Exhaust hand. Draw a card per card exhausted."""
     def effect(state: CombatState, target_idx: int | None = None) -> None:
-        # Count cards in hand (excluding this card which was already removed)
+        from .combat_engine import _on_exhaust
         hand_cards = list(state.player.hand)
         count = len(hand_cards)
         for c in hand_cards:
             state.player.hand.remove(c)
             state.player.exhaust_pile.append(c)
+            _on_exhaust(state)
         draw_cards(state, count)
     return effect
 
@@ -1025,4 +1027,162 @@ def _blur(card: Card, card_db: CardDB | None) -> CardEffect:
         # Blur effect: retain block for 1 turn (tracked as a counter,
         # decremented at start of turn in combat_engine)
         apply_power_to_player(state, "Blur", 1)
+    return effect
+
+
+# ---------------------------------------------------------------------------
+# Cards with wrong/missing effects in the generic handler
+# ---------------------------------------------------------------------------
+
+@register("NEOWS_FURY")
+def _neows_fury(card: Card, card_db: CardDB | None) -> CardEffect:
+    """Deal 10(14) damage. Put 2 random cards from Discard into Hand. Exhaust."""
+    dmg = 10 if not card.upgraded else 14
+    count = 2
+
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        if target_idx is not None:
+            deal_damage(state, target_idx, dmg)
+        retrieve_from_discard(state, count)
+    return effect
+
+
+@register("BEAT_DOWN")
+def _beat_down(card: Card, card_db: CardDB | None) -> CardEffect:
+    """Play 3(4) random Attacks from Discard Pile."""
+    count = 3 if not card.upgraded else 4
+
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        attacks = retrieve_from_discard(
+            state, count,
+            filter_fn=lambda c: c.card_type == CardType.ATTACK,
+        )
+        alive = get_alive_enemies(state)
+        if alive:
+            for atk in attacks:
+                # Play each attack against a random alive enemy
+                t = alive[0]  # Deterministic for solver
+                atk_effect = get_effect(atk, card_db)
+                atk_effect(state, t)
+                state.player.discard_pile.append(atk)
+                # Remove from hand (retrieve_from_discard put it there)
+                if atk in state.player.hand:
+                    state.player.hand.remove(atk)
+    return effect
+
+
+@register("FLECHETTES")
+def _flechettes(card: Card, card_db: CardDB | None) -> CardEffect:
+    """Deal 5(7) damage per Skill in hand."""
+    dmg_per = 5 if not card.upgraded else 7
+
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        if target_idx is not None:
+            skill_count = sum(
+                1 for c in state.player.hand
+                if c.card_type == CardType.SKILL
+            )
+            if skill_count > 0:
+                deal_damage(state, target_idx, dmg_per, hits=skill_count)
+    return effect
+
+
+@register("MURDER")
+def _murder(card: Card, card_db: CardDB | None) -> CardEffect:
+    """Deal 2 + 1 per card drawn this combat."""
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        if target_idx is not None:
+            # cards_drawn_this_turn tracks draw effects; we use a broader
+            # combat-level counter if available, else approximate
+            drawn = getattr(state, "total_cards_drawn", 0) or state.cards_drawn_this_turn
+            total = 2 + drawn
+            deal_damage(state, target_idx, total)
+    return effect
+
+
+@register("ECHOING_SLASH")
+def _echoing_slash(card: Card, card_db: CardDB | None) -> CardEffect:
+    """Deal 10(13) damage to ALL enemies. Repeat for each enemy killed."""
+    dmg = 10 if not card.upgraded else 13
+
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        alive_before = sum(1 for e in state.enemies if e.is_alive)
+        deal_damage_all(state, dmg)
+        alive_after = sum(1 for e in state.enemies if e.is_alive)
+        killed = alive_before - alive_after
+        for _ in range(killed):
+            deal_damage_all(state, dmg)
+    return effect
+
+
+@register("PINPOINT")
+def _pinpoint(card: Card, card_db: CardDB | None) -> CardEffect:
+    """Deal 17(22) damage. Cost reduced by 1 per Skill played this turn.
+
+    Cost reduction is handled by effective_cost in combat_engine; this
+    just does the damage. The data field already has the base damage.
+    """
+    dmg = 17 if not card.upgraded else 22
+
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        if target_idx is not None:
+            deal_damage(state, target_idx, dmg)
+    return effect
+
+
+@register("REND")
+def _rend(card: Card, card_db: CardDB | None) -> CardEffect:
+    """Deal 15(18) + 5(8) per unique debuff on enemy."""
+    calc_base = 15 if not card.upgraded else 18
+    extra_per = 5 if not card.upgraded else 8
+
+    _DEBUFFS = {"Weak", "Vulnerable", "Poison", "Frail", "Slow", "Constrict"}
+
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        if target_idx is not None:
+            enemy = state.enemies[target_idx]
+            unique_debuffs = sum(
+                1 for p in enemy.powers
+                if p in _DEBUFFS and enemy.powers[p] > 0
+            )
+            total = calc_base + unique_debuffs * extra_per
+            deal_damage(state, target_idx, total)
+    return effect
+
+
+@register("GANG_UP")
+def _gang_up(card: Card, card_db: CardDB | None) -> CardEffect:
+    """Deal 10(12) + 5(7) per co-op attack. Solo: just base damage."""
+    calc_base = 10 if not card.upgraded else 12
+
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        # In singleplayer, no other players attack, so just deal base damage
+        if target_idx is not None:
+            deal_damage(state, target_idx, calc_base)
+    return effect
+
+
+@register("BOLAS")
+def _bolas(card: Card, card_db: CardDB | None) -> CardEffect:
+    """Deal 3(4) damage. Returns to hand at start of next turn."""
+    dmg = 3 if not card.upgraded else 4
+
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        if target_idx is not None:
+            deal_damage(state, target_idx, dmg)
+        # Track return via power; combat_engine start_turn handles it
+        apply_power_to_player(state, "_bolas_return", 1)
+    return effect
+
+
+@register("ENTROPY")
+def _entropy(card: Card, card_db: CardDB | None) -> CardEffect:
+    """Power: at start of turn, Transform 1 card in hand.
+
+    Transform is too complex to simulate accurately (random card from
+    pool). Approximate: draw 1 card (net card advantage is similar).
+    """
+    def effect(state: CombatState, target_idx: int | None = None) -> None:
+        # Approximate transform as a draw-1 power
+        apply_power_to_player(state, "_entropy_transform", 1)
     return effect

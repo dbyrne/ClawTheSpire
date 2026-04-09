@@ -104,6 +104,10 @@ def effective_cost(state: CombatState, card: Card) -> int:
     # Tangled: Attacks cost 1 more energy
     if card.card_type == CardType.ATTACK and state.player.powers.get("Tangled", 0) > 0:
         cost += 1
+    # Pinpoint: costs 1 less per Skill played this turn
+    if card.id.rstrip("+") == "PINPOINT":
+        skills_played = state.player.powers.get("_skills_played", 0)
+        cost = max(0, cost - skills_played)
     return cost
 
 
@@ -160,11 +164,18 @@ def play_card(
     if afterimage > 0:
         state.player.block += afterimage
 
-    # Rage: gain block when playing an Attack
+    # Rage: gain flat block when playing an Attack (power trigger, not card)
     if card.card_type == CardType.ATTACK:
         rage_amount = state.player.powers.get("Rage", 0)
         if rage_amount > 0:
-            state.player.block += calculate_block_gain(rage_amount, state)
+            state.player.block += rage_amount
+
+    # Strike Dummy: +3 damage for Strike cards (applied as temporary Vigor)
+    _strike_dummy_bonus = 0
+    if (state.player.powers.get("_strike_dummy", 0) > 0
+            and ("Strike" in card.tags or "Strike" in card.name)):
+        _strike_dummy_bonus = state.player.powers["_strike_dummy"]
+        state.player.powers["Vigor"] = state.player.powers.get("Vigor", 0) + _strike_dummy_bonus
 
     # --- Execute card effect ---
     effect_fn = get_effect(card, card_db)
@@ -193,7 +204,7 @@ def play_card(
             def _kunai(): state.player.powers["Dexterity"] = state.player.powers.get("Dexterity", 0) + 1
             _tick_counted_relic(state, "_kunai_count", 3, _kunai)
         if "ORNAMENTAL_FAN" in relics:
-            def _fan(): state.player.block += calculate_block_gain(4, state)
+            def _fan(): state.player.block += 4  # Flat block, not affected by Dex/Frail
             _tick_counted_relic(state, "_fan_count", 3, _fan)
         if "NUNCHAKU" in relics:
             def _nunchaku(): state.player.energy += 1
@@ -329,11 +340,11 @@ def start_combat(state: CombatState) -> None:
     if "AKABEKO" in relics:
         state.player.powers["Vigor"] = state.player.powers.get("Vigor", 0) + 8
 
-    # Strike Dummy: gain 1 Strength for each Strike in deck
+    # Strike Dummy: cards containing "Strike" deal 3 additional damage.
+    # Tracked as a power; damage bonus applied in calculate_attack_damage via
+    # a check on the card being played (handled in deal_damage path).
     if "STRIKE_DUMMY" in relics:
-        strikes = sum(1 for c in state.player.draw_pile if "Strike" in c.name or "Strike" in getattr(c, 'tags', set()))
-        if strikes > 0:
-            state.player.powers["Strength"] = state.player.powers.get("Strength", 0) + strikes
+        state.player.powers["_strike_dummy"] = 3
 
 
 def start_turn(state: CombatState) -> None:
@@ -344,12 +355,20 @@ def start_turn(state: CombatState) -> None:
     state.discards_this_turn = 0
     state.player.powers.pop("_skills_played", None)
 
+    # Reset per-turn relic counters
+    for counter in ("_kunai_count", "_fan_count", "_shuriken_count",
+                    "_nunchaku_count", "_letter_opener_count"):
+        state.player.powers.pop(counter, None)
+
     # Reset energy
     state.player.energy = state.player.max_energy
     # Berserk: bonus energy
     berserk = state.player.powers.get("Berserk", 0)
     if berserk > 0:
         state.player.energy += berserk
+    # Velvet Choker: +1 energy each turn (6-card limit enforced in can_play_card)
+    if "VELVET_CHOKER" in state.relics:
+        state.player.energy += 1
 
     # Remove block (unless Barricade or Blur)
     blur = state.player.powers.get("Blur", 0)
@@ -362,8 +381,16 @@ def start_turn(state: CombatState) -> None:
 
     # Remove enemy block and reset per-turn triggers
     for enemy in state.enemies:
-        # Plating: block resets to Plating amount each turn
+        if not enemy.is_alive:
+            continue
+        # Plating: loses 1 stack at start of turn, block resets to new amount
         plating = enemy.powers.get("Plating", 0)
+        if plating > 0:
+            plating -= 1
+            if plating <= 0:
+                enemy.powers.pop("Plating", None)
+            else:
+                enemy.powers["Plating"] = plating
         enemy.block = plating
         enemy.powers.pop("_skittish_triggered", None)
         enemy.powers.pop("_shell_damage_taken", None)
@@ -400,6 +427,20 @@ def start_turn(state: CombatState) -> None:
         draw_cards(state, predator_draw)
 
     # Nunchaku: tracked via _nunchaku_count power (triggers in play_card)
+
+    # Bolas: return to hand from discard
+    bolas_return = state.player.powers.pop("_bolas_return", 0)
+    if bolas_return > 0:
+        for _ in range(bolas_return):
+            for i, c in enumerate(state.player.discard_pile):
+                if c.id.rstrip("+") == "BOLAS":
+                    state.player.discard_pile.pop(i)
+                    state.player.hand.append(c)
+                    break
+
+    # Entropy: transform a random card in hand (approximated as no-op;
+    # transform is too complex to simulate accurately)
+    state.player.powers.pop("_entropy_transform", None)
 
     # Clear turn-duration powers from previous turn
     for power_name in ("Rage", "OneTwoPunch"):
@@ -623,6 +664,15 @@ def _tick_start_of_turn_powers(state: CombatState) -> None:
         from .card_registry import _make_shiv
         for _ in range(powers["Infinite Blades"]):
             state.player.hand.append(_make_shiv())
+
+    # Tools of the Trade: draw 1 card, discard 1 card
+    if "Tools of the Trade" in powers:
+        draw_cards(state, 1)
+        # Simplified: discard the last drawn card (real game lets player choose)
+        if state.player.hand:
+            worst = state.player.hand[-1]
+            state.player.hand.remove(worst)
+            state.player.discard_pile.append(worst)
 
     # Aggression: move a random Attack from discard to hand
     if "Aggression" in powers:

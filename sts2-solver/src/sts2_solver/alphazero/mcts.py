@@ -106,7 +106,7 @@ class MCTS:
         vocabs: Vocabs,
         config: EncoderConfig | None = None,
         card_db: CardDB | None = None,
-        c_puct: float = 2.5,
+        c_puct: float = 1.0,
         device: str = "cpu",
     ):
         self.network = network
