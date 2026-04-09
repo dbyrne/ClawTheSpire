@@ -2049,30 +2049,41 @@ class Runner:
             if not rewards:
                 return None
 
-            # Build option types and card IDs
+            # Build option types, card IDs, and card stats
+            from .alphazero.encoding import card_stats_vector
             opt_types = []
             opt_cards = []
+            opt_stats = []
             option_labels = []
             game_indices = []
 
             for card_info in rewards:
                 name = card_info.get("name") or card_info.get("card_id", "?")
                 card_id = (card_info.get("card_id") or name).rstrip("+")
+                upgraded = card_info.get("upgraded", False)
                 idx = card_info.get("index", len(opt_types))
                 opt_types.append(OPTION_CARD_REWARD)
                 opt_cards.append(vocabs.cards.get(card_id))
+                # Get card stats for the option head
+                card_def = self.card_db.get(card_id, upgraded=upgraded)
+                if card_def:
+                    opt_stats.append(card_stats_vector(card_def))
+                else:
+                    opt_stats.append([0.0] * self._mcts_config.card_stats_dim)
                 option_labels.append(name)
                 game_indices.append(idx)
 
             # Add skip option
             opt_types.append(OPTION_CARD_SKIP)
             opt_cards.append(0)
+            opt_stats.append([0.0] * self._mcts_config.card_stats_dim)
             option_labels.append("Skip")
             game_indices.append(None)
 
             with torch.no_grad():
                 best_idx, scores = network.pick_best_option(
-                    hidden, opt_types, opt_cards)
+                    hidden, opt_types, opt_cards,
+                    option_card_stats=opt_stats)
 
             nv = network.value_head(hidden).item()
             hs = {
