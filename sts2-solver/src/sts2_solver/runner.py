@@ -59,6 +59,28 @@ from .alphazero.self_play import (
 DEFAULT_CHARACTER = "Ironclad"
 MAX_LOG_LINES = 50
 
+# Actions that are safe to auto-execute without network evaluation.
+# These are either choiceless (no option_index needed) or confirmations
+# of an already-made choice. Anything NOT in this set that gets auto-picked
+# with an option_index is a bug — the network should have been asked.
+SAFE_AUTO_ACTIONS = {
+    # Choiceless progression
+    "proceed",
+    "open_chest",
+    "open_shop_inventory",
+    "close_shop_inventory",
+    "collect_rewards_and_proceed",
+    "return_to_main_menu",
+    # Confirmations of already-made choices
+    "confirm_selection",
+    "confirm_bundle",
+    "confirm_modal",
+    # Reward claiming (items, not card selection)
+    "claim_reward",
+    # Skip actions (when decision was already made)
+    "skip_reward_cards",
+}
+
 
 class Runner:
     """Autonomous game runner with static TUI."""
@@ -503,25 +525,27 @@ class Runner:
             self._last_screen_key = screen_key
             self._screen_repeat_count = 0
 
-        # If stuck on the same screen for too many ticks, force a default action
+        # If stuck on the same screen for too many ticks, force a default action.
+        # Only safe escapes are allowed — anything else is a bug.
         if self._screen_repeat_count > 5 and not in_combat:
-            self._log_action(
-                f"[yellow]Stuck on {screen}/{screen_type} for {self._screen_repeat_count} ticks — forcing default[/yellow]"
-            )
             self._screen_repeat_count = 0  # Reset to avoid infinite force loops
-            if not self.dry_run:
-                try:
-                    if screen_type == "map" and "choose_map_node" in actions:
-                        self._execute_with_retry("choose_map_node", option_index=0)
-                    elif screen_type == "shop" and "close_shop_inventory" in actions:
+            if screen_type == "shop" and "close_shop_inventory" in actions:
+                self._log_action(
+                    f"[yellow]Stuck on shop for {self._screen_repeat_count} ticks — closing[/yellow]"
+                )
+                if not self.dry_run:
+                    try:
                         self._execute_with_retry("close_shop_inventory")
                         self._shop_visited = True
-                    else:
-                        # First available action with option_index=0
-                        self._execute_with_retry(actions[0], option_index=0)
-                    self.action_count += 1
-                except Exception as e:
-                    self._log_action(f"  [red]Forced action failed: {e}[/red]")
+                        self.action_count += 1
+                    except Exception as e:
+                        self._log_action(f"  [red]Forced action failed: {e}[/red]")
+            else:
+                raise RuntimeError(
+                    f"Stuck on {screen}/{screen_type} for >5 ticks. "
+                    f"Actions: {actions}. This likely means a screen handler is "
+                    f"missing or broken — investigate instead of blindly forcing."
+                )
             return False
 
         if in_combat:
@@ -656,13 +680,19 @@ class Runner:
 
     def _handle_capstone_selection(self, actions: list[str]) -> None:
         """Handle capstone/relic pack selection screens."""
-        self._log_action("[dim]auto: choose_capstone_option 0[/dim]")
-        if not self.dry_run:
-            try:
-                self._execute_with_retry("choose_capstone_option", option_index=0)
-                time.sleep(1.0)
-            except Exception:
-                pass
+        import json as _json
+        gs = self.game_state
+        self._log_action(
+            "[red]UNHANDLED AUTO: choose_capstone_option — game state dumped below[/red]"
+        )
+        for key in ("selection", "chest", "reward", "agent_view"):
+            val = gs.get(key)
+            if val:
+                self._log_action(f"  [yellow]gs[{key}]: {_json.dumps(val)[:500]}[/yellow]")
+        raise RuntimeError(
+            "choose_capstone_option requires network evaluation but was about to be "
+            "auto-picked. Investigate game state to wire up network decision."
+        )
 
     def _handle_bundle_selection(self) -> None:
         """Handle card pack/bundle selection screens (e.g. Neow's Scroll Boxes)."""
@@ -670,13 +700,19 @@ class Runner:
         actions = gs.get("available_actions", [])
 
         if "choose_bundle" in actions:
-            self._log_action("[dim]auto: choose_bundle 0[/dim]")
-            if not self.dry_run:
-                try:
-                    self._execute_with_retry("choose_bundle", option_index=0)
-                    time.sleep(1.0)
-                except Exception:
-                    pass
+            import json as _json
+            self._log_action(
+                f"[red]UNHANDLED AUTO: choose_bundle — game state dumped below[/red]"
+            )
+            # Dump relevant state for investigation
+            for key in ("selection", "bundles", "cards", "options", "reward", "agent_view"):
+                val = gs.get(key)
+                if val:
+                    self._log_action(f"  [yellow]gs[{key}]: {_json.dumps(val)[:500]}[/yellow]")
+            raise RuntimeError(
+                "choose_bundle requires network evaluation but was about to be "
+                "auto-picked. Investigate game state to wire up network decision."
+            )
         elif "confirm_bundle" in actions:
             self._log_action("[dim]auto: confirm_bundle[/dim]")
             if not self.dry_run:
