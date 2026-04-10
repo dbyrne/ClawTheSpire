@@ -553,7 +553,7 @@ def train_worker(
     total_games = 0
     recent_games: list[dict] = []
 
-    from .full_run import play_full_run
+    from .full_run import play_full_run, _rust_state_to_tensors
 
     effective_workers = min(num_workers, games_per_generation)
 
@@ -564,40 +564,77 @@ def train_worker(
     print(f"Progress: {progress_path}", flush=True)
 
     # Check for Rust engine availability
-    use_rust = False
+    use_rust_full = False  # Full Rust simulator (play_all_games)
+    use_rust = False       # Rust combat only (fight_combat)
     onnx_dir = str(save_path / "onnx")
     try:
         import sts2_engine
-        use_rust = True
-        print("Rust engine available — using ONNX inference for combat", flush=True)
+        if hasattr(sts2_engine, 'play_all_games'):
+            use_rust_full = True
+            print("Rust full simulator available — all self-play in Rust", flush=True)
+        else:
+            use_rust = True
+            print("Rust combat engine available — using ONNX for combat", flush=True)
     except ImportError:
         print("Rust engine not available — using Python MCTS", flush=True)
 
-    # Export ONNX models and vocabs (once at startup, re-exported each gen)
-    if use_rust:
+    # Export ONNX models and vocabs
+    if use_rust or use_rust_full:
         from .onnx_export import export_onnx, export_vocabs_json
         export_onnx(network, config, onnx_dir)
         export_vocabs_json(vocabs, str(Path(onnx_dir) / "vocabs.json"))
 
-    # Prepare Rust data JSONs (monster data + enemy profiles)
-    rust_monster_json = "{}"
-    rust_profiles_json = "{}"
-    if use_rust:
+    # Prepare all Rust data JSONs
+    rust_data = {}
+    if use_rust or use_rust_full:
         import json as _json
-        from ..simulator import _ensure_data_loaded, _MONSTERS_BY_ID, _load_enemy_profiles
+        from ..simulator import (_ensure_data_loaded, _MONSTERS_BY_ID,
+                                 _load_enemy_profiles, _ENCOUNTERS_BY_ID,
+                                 _load_event_profiles, _build_card_pool)
         _ensure_data_loaded()
-        # Monster HP data for spawning
-        monsters = {}
-        for mid, m in _MONSTERS_BY_ID.items():
-            monsters[mid] = {
-                "name": m.get("name", mid),
-                "min_hp": m.get("min_hp") or 20,
-                "max_hp": m.get("max_hp") or m.get("min_hp") or 20,
-            }
-        rust_monster_json = _json.dumps(monsters)
-        # Enemy AI profiles
-        profiles = _load_enemy_profiles()
-        rust_profiles_json = _json.dumps(profiles)
+
+        monsters = {mid: {"name": m.get("name", mid),
+                          "min_hp": m.get("min_hp") or 20,
+                          "max_hp": m.get("max_hp") or m.get("min_hp") or 20}
+                    for mid, m in _MONSTERS_BY_ID.items()}
+
+        encounters = {eid: {"id": eid, "monsters": enc.get("monsters", []),
+                            "room_type": enc.get("room_type", "Normal"),
+                            "is_weak": enc.get("is_weak", False)}
+                      for eid, enc in _ENCOUNTERS_BY_ID.items()}
+
+        pools = _build_card_pool(card_db, "silent")
+        from .full_run import _card_to_dict
+        pool_data = []
+        for rarity, cards in pools.items():
+            for card in cards:
+                d = _card_to_dict(card)
+                d["rarity"] = rarity
+                pool_data.append(d)
+
+        all_cards = [_card_to_dict(c) for c in card_db.all_cards()]
+
+        # Map pool
+        map_pool_path = Path(__file__).resolve().parents[1] / "simulator" / ".." / "map_pool.json"
+        # Find map_pool.json relative to simulator.py
+        sim_dir = Path(__file__).resolve().parents[1]
+        map_pool_file = sim_dir / "map_pool.json"
+        if not map_pool_file.exists():
+            map_pool_file = sim_dir / "sts2_solver" / "map_pool.json"
+        map_pool_json = "[]"
+        if map_pool_file.exists():
+            map_pool_json = map_pool_file.read_text(encoding="utf-8")
+
+        rust_data = {
+            "vocab_json": Path(onnx_dir, "vocabs.json").read_text(encoding="utf-8") if Path(onnx_dir, "vocabs.json").exists() else "{}",
+            "monster_json": _json.dumps(monsters),
+            "profiles_json": _json.dumps(_load_enemy_profiles()),
+            "encounters_json": _json.dumps(encounters),
+            "event_profiles_json": _json.dumps(_load_event_profiles()),
+            "card_pool_json": _json.dumps(pool_data),
+            "card_db_json": _json.dumps(all_cards),
+            "map_pool_json": map_pool_json,
+        }
 
     # Create worker pool
     # With Rust engine: use ThreadPoolExecutor (GIL released during combat)
@@ -605,21 +642,21 @@ def train_worker(
     pool = None
     thread_pool = None
     weights_path = str(save_path / "_worker_weights.pt")
-    if effective_workers > 1:
+    if use_rust_full:
+        print(f"Using Rust play_all_games (rayon parallelism, no Python workers)", flush=True)
+    elif effective_workers > 1:
         if use_rust:
-            # Threads: Rust releases GIL for combat, threads parallelize full runs.
-            # GIL contention on Python option head is minor (<10ms/game).
             from concurrent.futures import ThreadPoolExecutor
             thread_pool = ThreadPoolExecutor(max_workers=effective_workers)
             print(f"Using ThreadPoolExecutor ({effective_workers} threads)", flush=True)
         else:
-            # Without Rust: need multiprocessing (GIL blocks PyTorch MCTS)
             torch.save(network.state_dict(), weights_path)
             pool = mp.Pool(
                 processes=effective_workers,
                 initializer=_worker_init,
                 initargs=(config.num_trunk_blocks, weights_path,
-                          rust_monster_json, rust_profiles_json),
+                          rust_data.get("profiles_json", "{}"),
+                          rust_data.get("profiles_json", "{}")),
             )
 
     for gen in range(1, num_generations + 1):
@@ -676,21 +713,75 @@ def train_worker(
             if len(recent_games) > 50:
                 del recent_games[:-50]
 
-        # Build Rust kwargs (shared across all threads/sequential games)
-        rust_kwargs = {}
-        if use_rust:
-            _vocab_json_content = Path(onnx_dir, "vocabs.json").read_text(encoding="utf-8")
-            rust_kwargs = dict(
-                rust_engine=sts2_engine,
+        if use_rust_full:
+            # === FULL RUST PATH: single call, rayon parallelism ===
+            export_onnx(network, config, onnx_dir)
+            rust_data["vocab_json"] = Path(onnx_dir, "vocabs.json").read_text(encoding="utf-8")
+
+            game_seeds = [rng.randint(0, 2**63) for _ in range(games_per_generation)]
+
+            rust_results = sts2_engine.play_all_games(
+                num_games=games_per_generation,
                 onnx_full_path=str(Path(onnx_dir) / "full_model.onnx"),
                 onnx_value_path=str(Path(onnx_dir) / "value_model.onnx"),
-                vocab_json=_vocab_json_content,
-                monster_data_json=rust_monster_json,
-                enemy_profiles_json=rust_profiles_json,
-                gen_id=gen,
+                onnx_option_path=str(Path(onnx_dir) / "option_model.onnx"),
+                vocab_json=rust_data["vocab_json"],
+                monster_data_json=rust_data["monster_json"],
+                enemy_profiles_json=rust_data["profiles_json"],
+                encounter_pool_json=rust_data["encounters_json"],
+                event_profiles_json=rust_data["event_profiles_json"],
+                card_pool_json=rust_data["card_pool_json"],
+                card_db_json=rust_data["card_db_json"],
+                map_pool_json=rust_data["map_pool_json"],
+                mcts_sims=mcts_simulations,
+                temperature=game_temp,
+                seeds=game_seeds,
             )
 
-        if thread_pool is not None:
+            # Convert Rust results to training samples
+            for r in rust_results:
+                is_win = r["outcome"] == "win"
+                # Combat samples
+                for s in r["combat_samples"]:
+                    st = s["state_tensors"]
+                    sample = TrainingSample(
+                        state_tensors=_rust_state_to_tensors(st),
+                        policy=s["policy"],
+                        value=s["value"],
+                        action_card_ids=torch.tensor([s["action_card_ids"]], dtype=torch.long),
+                        action_features=torch.tensor(s["action_features"], dtype=torch.float32).view(1, 30, -1),
+                        action_mask=torch.tensor([s["action_mask"]], dtype=torch.bool),
+                        num_actions=s["num_actions"],
+                    )
+                    replay_buffer.add(sample, is_win=is_win)
+
+                # Option samples (need state_tensors for option head training)
+                for s in r.get("option_samples", []):
+                    # Build dummy state tensors — the option head only needs
+                    # encode_state output, so we create minimal tensors.
+                    # In practice, we'd need to collect state tensors from Rust.
+                    # For now, skip option samples without state tensors.
+                    # TODO: have Rust return state tensors in option samples
+                    pass
+
+                total_games += 1
+                gen_floors.append(r["floor_reached"])
+                gen_values.extend(r.get("combat_value_estimates", {}).values())
+                if is_win:
+                    gen_wins += 1
+                    total_wins += 1
+
+                recent_games.append({
+                    "num": total_games,
+                    "encounter": f"Act1 ({r['combats_won']}/{r['combats_fought']})",
+                    "outcome": r["outcome"],
+                    "floor": r["floor_reached"],
+                    "hp": r["final_hp"],
+                })
+                if len(recent_games) > 50:
+                    del recent_games[:-50]
+
+        elif thread_pool is not None:
             # Rust + threads: combat releases GIL, threads parallelize runs
             import threading
             _collect_lock = threading.Lock()
