@@ -758,24 +758,31 @@ def train_worker(
                 seeds=game_seeds,
             )
 
-            # Convert Rust results to training samples
+            # Convert Rust results to training samples with value assignment
+            from .full_run import _assign_run_values
             for r in rust_results:
                 is_win = r["outcome"] == "win"
-                # Combat samples
+                floor_reached = r["floor_reached"]
+                final_hp = r["final_hp"]
+                max_hp_r = r.get("max_hp", 70)
+
+                # Convert combat samples
+                combat_samples = []
                 for s in r["combat_samples"]:
                     st = s["state_tensors"]
                     sample = TrainingSample(
                         state_tensors=_rust_state_to_tensors(st),
                         policy=s["policy"],
-                        value=s["value"],
+                        value=0.0,  # Assigned below
                         action_card_ids=torch.tensor([s["action_card_ids"]], dtype=torch.long),
                         action_features=torch.tensor(s["action_features"], dtype=torch.float32).view(1, 30, -1),
                         action_mask=torch.tensor([s["action_mask"]], dtype=torch.bool),
                         num_actions=s["num_actions"],
                     )
-                    replay_buffer.add(sample, is_win=is_win)
+                    combat_samples.append(sample)
 
-                # Option samples (with state tensors for option head training)
+                # Convert option samples
+                option_samples_list = []
                 for s in r.get("option_samples", []):
                     st = s.get("state_tensors")
                     if not st:
@@ -785,14 +792,56 @@ def train_worker(
                         option_types=s["option_types"],
                         option_cards=s["option_cards"],
                         chosen_idx=s["chosen_idx"],
-                        value=s["value"],
+                        value=0.0,  # Assigned below
                         floor=s.get("floor", 0),
                     )
+                    option_samples_list.append(osample)
+
+                # Value assignment — same logic as Python full_run path
+                combat_value_estimates = {
+                    int(k): v for k, v in r.get("combat_value_estimates", {}).items()
+                }
+
+                # Simple run-level value for all samples
+                base = floor_reached / 17.0
+                hp_bonus = final_hp / max(1, max_hp_r) * 0.3
+                run_value = max(-1.0, min(1.0, base + hp_bonus - 0.5))
+
+                # Assign run_value to combat samples (simplified — no per-floor HP data from Rust yet)
+                for sample in combat_samples:
+                    sample.value = run_value
+
+                # Assign trajectory-based values to option samples
+                combat_floors = sorted(combat_value_estimates.keys())
+                for osample in option_samples_list:
+                    floor = osample.floor
+                    if not combat_floors:
+                        osample.value = run_value
+                        continue
+                    v_before = 0.0
+                    for cf in combat_floors:
+                        if cf <= floor:
+                            v_before = combat_value_estimates[cf]
+                        else:
+                            break
+                    v_after = run_value
+                    for cf in combat_floors:
+                        if cf > floor:
+                            v_after = combat_value_estimates[cf]
+                            break
+                    delta = v_after - v_before
+                    osample.value = max(-1.0, min(1.0,
+                        0.3 * delta + 0.7 * run_value))
+
+                # Add to buffers
+                for sample in combat_samples:
+                    replay_buffer.add(sample, is_win=is_win)
+                for osample in option_samples_list:
                     option_buffer.add(osample, is_win=is_win)
 
                 total_games += 1
-                gen_floors.append(r["floor_reached"])
-                gen_values.extend(r.get("combat_value_estimates", {}).values())
+                gen_floors.append(floor_reached)
+                gen_values.extend(combat_value_estimates.values())
                 if is_win:
                     gen_wins += 1
                     total_wins += 1
@@ -801,8 +850,8 @@ def train_worker(
                     "num": total_games,
                     "encounter": f"Act1 ({r['combats_won']}/{r['combats_fought']})",
                     "outcome": r["outcome"],
-                    "floor": r["floor_reached"],
-                    "hp": r["final_hp"],
+                    "floor": floor_reached,
+                    "hp": final_hp,
                 })
                 if len(recent_games) > 50:
                     del recent_games[:-50]
