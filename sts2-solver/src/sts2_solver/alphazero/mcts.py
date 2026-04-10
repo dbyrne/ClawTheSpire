@@ -234,9 +234,11 @@ class MCTS:
         Returns the network's value estimate for this state.
         """
         # Lazy state computation: compute on first visit
+        turn_already_ended = False
         if node.state is None and node.parent is not None and node.parent_action is not None:
             result = step(node.parent.state, node.parent_action, self.card_db)
             node.state = result.state
+            turn_already_ended = result.turn_ended
             if result.done:
                 node.is_terminal = True
                 node.terminal_value = 1.0 if result.outcome == "win" else -1.0
@@ -288,30 +290,41 @@ class MCTS:
             probs = torch.nn.functional.softmax(logits[0, :len(node.legal_actions)], dim=0)
             probs = probs.cpu().tolist()
 
-            # Value from end-of-turn state (simulate end_turn + enemy attacks).
-            # This ensures the value head sees post-attack HP, not transient
-            # block, preventing overvaluation of unnecessary blocking.
-            from copy import deepcopy as _dc
-            from ..combat_engine import (
-                end_turn as _end_turn,
-                resolve_enemy_intents as _resolve_intents,
-                tick_enemy_powers as _tick_powers,
-                start_turn as _start_turn,
-            )
-            eot = _dc(node.state)
-            _end_turn(eot)
-            _resolve_intents(eot)
-            _tick_powers(eot)
-
-            eot_outcome = is_combat_over(eot)
-            if eot_outcome is not None:
-                value = 1.0 if eot_outcome == "win" else -1.0
+            # Value estimation: evaluate a post-enemy-attack state so the
+            # value head sees realized HP, not transient block.
+            #
+            # If the turn already ended (node reached via end_turn action),
+            # the state is already post-attacks at the start of the next
+            # turn — evaluate it directly. Otherwise simulate end-of-turn
+            # to get the post-attack state. This ensures card-play children
+            # and end-turn children are compared at the same depth.
+            if turn_already_ended:
+                value_tensors = encode_state(node.state, self.vocabs, self.config)
+                value_tensors = {k: v.to(self.device) for k, v in value_tensors.items()}
+                value_hidden = self.network.encode_state(**value_tensors)
+                value = self.network.value_head(value_hidden).item()
             else:
-                _start_turn(eot)
-                eot_tensors = encode_state(eot, self.vocabs, self.config)
-                eot_tensors = {k: v.to(self.device) for k, v in eot_tensors.items()}
-                eot_hidden = self.network.encode_state(**eot_tensors)
-                value = self.network.value_head(eot_hidden).item()
+                from copy import deepcopy as _dc
+                from ..combat_engine import (
+                    end_turn as _end_turn,
+                    resolve_enemy_intents as _resolve_intents,
+                    tick_enemy_powers as _tick_powers,
+                    start_turn as _start_turn,
+                )
+                eot = _dc(node.state)
+                _end_turn(eot)
+                _resolve_intents(eot)
+                _tick_powers(eot)
+
+                eot_outcome = is_combat_over(eot)
+                if eot_outcome is not None:
+                    value = 1.0 if eot_outcome == "win" else -1.0
+                else:
+                    _start_turn(eot)
+                    eot_tensors = encode_state(eot, self.vocabs, self.config)
+                    eot_tensors = {k: v.to(self.device) for k, v in eot_tensors.items()}
+                    eot_hidden = self.network.encode_state(**eot_tensors)
+                    value = self.network.value_head(eot_hidden).item()
 
         # Create child nodes lazily — state computed on first visit
         for i, action in enumerate(node.legal_actions):
