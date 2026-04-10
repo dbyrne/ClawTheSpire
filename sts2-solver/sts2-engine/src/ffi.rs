@@ -520,6 +520,50 @@ pub fn play_all_games(
     Ok(py_results.into())
 }
 
+/// Deterministic step: apply one action to a state, return the new state as JSON.
+/// Used for parity testing against the Python combat engine.
+#[pyfunction]
+pub fn step(state_json: &str, action_json: &str, seed: u64) -> PyResult<String> {
+    let mut state: CombatState = serde_json::from_str(state_json)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("state: {e}")))?;
+    let action_data: serde_json::Value = serde_json::from_str(action_json)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("action: {e}")))?;
+
+    let card_db = CardDB::default();
+    let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+    use rand::SeedableRng;
+
+    // Parse action
+    let action_type = action_data["action_type"].as_str().unwrap_or("");
+    match action_type {
+        "play_card" => {
+            let card_idx = action_data["card_idx"].as_u64().unwrap_or(0) as usize;
+            let target_idx = action_data["target_idx"].as_u64().map(|v| v as usize);
+            if combat::can_play_card(&state, card_idx) {
+                combat::play_card(&mut state, card_idx, target_idx, &card_db, &mut rng);
+            }
+        }
+        "end_turn" => {
+            combat::end_turn(&mut state, &card_db, &mut rng);
+            combat::resolve_enemy_intents(&mut state);
+            combat::tick_enemy_powers(&mut state);
+            let outcome = combat::is_combat_over(&state);
+            if outcome.is_none() {
+                combat::start_turn(&mut state, &mut rng);
+            }
+        }
+        "use_potion" => {
+            let potion_idx = action_data["potion_idx"].as_u64().unwrap_or(0) as usize;
+            combat::use_potion(&mut state, potion_idx);
+        }
+        _ => {}
+    }
+
+    // Serialize result
+    serde_json::to_string(&state)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("serialize: {e}")))
+}
+
 /// Health check.
 #[pyfunction]
 pub fn health_check() -> String {

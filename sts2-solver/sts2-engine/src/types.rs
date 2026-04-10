@@ -186,6 +186,11 @@ pub struct Potion {
 impl Potion {
     pub fn is_empty(&self) -> bool {
         self.name.is_empty()
+            && self.heal == 0
+            && self.block == 0
+            && self.strength == 0
+            && self.damage_all == 0
+            && self.enemy_weak == 0
     }
 }
 
