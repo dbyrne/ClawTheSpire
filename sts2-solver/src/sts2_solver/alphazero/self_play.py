@@ -599,18 +599,25 @@ def train_worker(
         profiles = _load_enemy_profiles()
         rust_profiles_json = _json.dumps(profiles)
 
-    # Create persistent worker pool (avoids respawning processes each generation)
+    # Create worker pool
+    # With Rust engine: use ThreadPoolExecutor (GIL released during combat)
+    # Without Rust: use multiprocessing Pool (need separate processes for GIL)
     pool = None
+    thread_pool = None
     weights_path = str(save_path / "_worker_weights.pt")
     if effective_workers > 1:
-        # Write initial weights for workers to read
-        torch.save(network.state_dict(), weights_path)
-        pool = mp.Pool(
-            processes=effective_workers,
-            initializer=_worker_init,
-            initargs=(config.num_trunk_blocks, weights_path,
-                      rust_monster_json, rust_profiles_json),
-        )
+        if use_rust:
+            from concurrent.futures import ThreadPoolExecutor
+            thread_pool = ThreadPoolExecutor(max_workers=effective_workers)
+            print(f"Using ThreadPoolExecutor ({effective_workers} threads, GIL released in Rust)", flush=True)
+        else:
+            torch.save(network.state_dict(), weights_path)
+            pool = mp.Pool(
+                processes=effective_workers,
+                initializer=_worker_init,
+                initargs=(config.num_trunk_blocks, weights_path,
+                          rust_monster_json, rust_profiles_json),
+            )
 
     for gen in range(1, num_generations + 1):
         gen_t0 = time.time()
@@ -666,22 +673,56 @@ def train_worker(
             if len(recent_games) > 50:
                 del recent_games[:-50]
 
-        if pool is not None:
+        # Build Rust kwargs (shared across all threads/sequential games)
+        rust_kwargs = {}
+        if use_rust:
+            _vocab_json_content = Path(onnx_dir, "vocabs.json").read_text(encoding="utf-8")
+            rust_kwargs = dict(
+                rust_engine=sts2_engine,
+                onnx_full_path=str(Path(onnx_dir) / "full_model.onnx"),
+                onnx_value_path=str(Path(onnx_dir) / "value_model.onnx"),
+                vocab_json=_vocab_json_content,
+                monster_data_json=rust_monster_json,
+                enemy_profiles_json=rust_profiles_json,
+            )
+
+        if thread_pool is not None:
+            # Rust + threads: each thread gets its own MCTS for non-combat
+            # option head calls, but combat runs in Rust (GIL released)
+            import threading
+            _collect_lock = threading.Lock()
+
+            def _thread_game(args):
+                seed, temp, sims, sd_id, _onnx = args
+                # Each thread needs its own network copy for option head
+                t_network = STS2Network(vocabs, config)
+                t_network.load_state_dict(network.state_dict())
+                t_network.eval()
+                t_mcts = MCTS(t_network, vocabs, config, card_db=card_db, device="cpu")
+                t_mcts.add_noise = True
+
+                local_rng = random.Random(seed)
+                return play_full_run(
+                    t_mcts, card_db, vocabs, config,
+                    character="SILENT",
+                    mcts_simulations=sims,
+                    temperature=temp,
+                    rng=local_rng,
+                    **rust_kwargs,
+                )
+
+            futures = [thread_pool.submit(_thread_game, args) for args in game_args]
+            for future in futures:
+                result = future.result()
+                with _collect_lock:
+                    _collect_result(result)
+
+        elif pool is not None:
+            # Python multiprocessing (no Rust)
             for result in pool.imap_unordered(_play_one_game, game_args):
                 _collect_result(result)
         else:
             # Sequential fallback (for debugging or --workers 1)
-            rust_kwargs = {}
-            if use_rust:
-                _vocab_json_content = Path(onnx_dir, "vocabs.json").read_text(encoding="utf-8")
-                rust_kwargs = dict(
-                    rust_engine=sts2_engine,
-                    onnx_full_path=str(Path(onnx_dir) / "full_model.onnx"),
-                    onnx_value_path=str(Path(onnx_dir) / "value_model.onnx"),
-                    vocab_json=_vocab_json_content,
-                    monster_data_json=rust_monster_json,
-                    enemy_profiles_json=rust_profiles_json,
-                )
             for args in game_args:
                 seed, temp, sims, sd_id, _onnx = args
                 local_rng = random.Random(seed)
@@ -767,6 +808,8 @@ def train_worker(
             }, ckpt_path)
             print(f"  Saved checkpoint: {ckpt_path.name}")
 
+    if thread_pool is not None:
+        thread_pool.shutdown(wait=True)
     if pool is not None:
         pool.close()
         pool.join()

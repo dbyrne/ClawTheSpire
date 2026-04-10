@@ -10,8 +10,8 @@ use crate::actions::enumerate_actions;
 use crate::combat;
 use crate::encode::{self, Vocabs, EncodedState, EncodedActions};
 use crate::enemy;
-use crate::inference::{OnnxInference, StubInference};
-use crate::mcts::{self, Inference, MCTS};
+use crate::inference::OnnxInference;
+use crate::mcts::MCTS;
 use crate::types::*;
 
 // ---------------------------------------------------------------------------
@@ -26,18 +26,22 @@ struct RustTrainingSample {
 }
 
 // ---------------------------------------------------------------------------
+// Combat result (GIL-free)
+// ---------------------------------------------------------------------------
+
+struct CombatResultRust {
+    samples: Vec<RustTrainingSample>,
+    outcome: String,
+    turns: i32,
+    hp_after: i32,
+    initial_value: f32,
+    potions_after: Vec<Potion>,
+}
+
+// ---------------------------------------------------------------------------
 // fight_combat: main entry point
 // ---------------------------------------------------------------------------
 
-/// Run one MCTS combat entirely in Rust.
-///
-/// Returns a Python dict with:
-///   samples: list of dicts (state_tensors + policy + action_tensors)
-///   outcome: "win" or "lose"
-///   turns: int
-///   hp_after: int
-///   potions_after: list of dicts
-///   initial_value: float
 #[pyfunction]
 #[pyo3(signature = (
     deck_json,
@@ -79,7 +83,7 @@ pub fn fight_combat(
     seed: u64,
     add_noise: bool,
 ) -> PyResult<PyObject> {
-    // Parse inputs
+    // Parse inputs (with GIL — need Python error types)
     let vocabs: Vocabs = serde_json::from_str(vocab_json)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("vocabs: {e}")))?;
     let deck: Vec<Card> = serde_json::from_str(deck_json)
@@ -92,32 +96,80 @@ pub fn fight_combat(
         .unwrap_or_default();
 
     let relic_set: HashSet<String> = relics.into_iter().collect();
-    let card_db = CardDB::default(); // TODO: load from JSON
+    let onnx_full = onnx_full_path.to_string();
+    let onnx_value = onnx_value_path.to_string();
+    let act = act_id.to_string();
+    let boss = boss_id.to_string();
 
-    // Create RNG
+    // Release GIL for the heavy computation
+    let combat_result = py.allow_threads(move || {
+        run_combat_nogil(
+            deck, player_hp, player_max_hp, player_max_energy,
+            &enemy_ids, relic_set, potions, floor, gold,
+            &act, &boss, map_path,
+            &onnx_full, &onnx_value, vocabs,
+            &monsters, &profiles,
+            mcts_sims, temperature, seed,
+        )
+    });
+
+    let cr = combat_result
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))?;
+
+    // Build Python result (with GIL)
+    build_python_result(py, &cr)
+}
+
+// ---------------------------------------------------------------------------
+// GIL-free combat execution
+// ---------------------------------------------------------------------------
+
+fn run_combat_nogil(
+    deck: Vec<Card>,
+    player_hp: i32,
+    player_max_hp: i32,
+    player_max_energy: i32,
+    enemy_ids: &[String],
+    relic_set: HashSet<String>,
+    potions: Vec<Potion>,
+    floor: i32,
+    gold: i32,
+    act_id: &str,
+    boss_id: &str,
+    map_path: Vec<String>,
+    onnx_full_path: &str,
+    onnx_value_path: &str,
+    vocabs: Vocabs,
+    monsters: &HashMap<String, enemy::MonsterData>,
+    profiles: &HashMap<String, enemy::EnemyProfile>,
+    mcts_sims: usize,
+    temperature: f32,
+    seed: u64,
+) -> Result<CombatResultRust, String> {
+    let card_db = CardDB::default();
     let mut rng = StdRng::seed_from_u64(seed);
 
     // Create ONNX inference
     let inference = OnnxInference::new(onnx_full_path, onnx_value_path, vocabs.clone())
-        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("ONNX: {e}")))?;
+        .map_err(|e| format!("ONNX: {e}"))?;
 
     // Spawn enemies
     let mut enemies = Vec::new();
     let mut enemy_ais = Vec::new();
-    for mid in &enemy_ids {
-        enemies.push(enemy::spawn_enemy(mid, &monsters, &mut rng));
-        enemy_ais.push(enemy::create_enemy_ai(mid, &profiles));
+    for mid in enemy_ids {
+        enemies.push(enemy::spawn_enemy(mid, monsters, &mut rng));
+        enemy_ais.push(enemy::create_enemy_ai(mid, profiles));
     }
 
     if enemies.is_empty() {
-        let result = PyDict::new(py);
-        result.set_item("samples", PyList::empty(py))?;
-        result.set_item("outcome", "win")?;
-        result.set_item("turns", 0)?;
-        result.set_item("hp_after", player_hp)?;
-        result.set_item("potions_after", PyList::empty(py))?;
-        result.set_item("initial_value", 0.0f32)?;
-        return Ok(result.into());
+        return Ok(CombatResultRust {
+            samples: vec![],
+            outcome: "win".to_string(),
+            turns: 0,
+            hp_after: player_hp,
+            initial_value: 0.0,
+            potions_after: vec![],
+        });
     }
 
     // Build combat state
@@ -148,7 +200,6 @@ pub fn fight_combat(
 
     combat::start_combat(&mut state);
 
-    // MCTS instance
     let mcts_engine = MCTS::new(&card_db, &inference);
 
     let mut samples: Vec<RustTrainingSample> = Vec::new();
@@ -157,7 +208,6 @@ pub fn fight_combat(
     let mut turn_num = 0;
     let max_turns = 30;
 
-    // Combat loop
     for t in 1..=max_turns {
         turn_num = t;
         combat::start_turn(&mut state, &mut rng);
@@ -171,19 +221,15 @@ pub fn fight_combat(
             let actions = enumerate_actions(&state);
             if actions.is_empty() { break; }
 
-            // Encode state + actions for training sample
             let enc_state = encode::encode_state(&state, &vocabs);
             let enc_actions = encode::encode_actions(&actions, &state, &vocabs);
 
-            // MCTS search
             let result = mcts_engine.search(&state, mcts_sims, temperature, &mut rng);
 
-            // Capture initial value estimate
             if t == 1 && cards_this_turn == 0 {
                 initial_value = result.root_value as f32;
             }
 
-            // Collect training sample
             samples.push(RustTrainingSample {
                 state: enc_state,
                 actions: enc_actions,
@@ -191,25 +237,20 @@ pub fn fight_combat(
                 num_actions: actions.len(),
             });
 
-            // Execute action
             match &result.action {
                 Action::EndTurn => break,
                 Action::ChooseCard { choice_idx } => {
-                    // Resolve pending choice — extract info before mutating
                     let should_discard = state.pending_choice.as_ref()
                         .map(|pc| pc.choice_type == "discard_from_hand")
                         .unwrap_or(false);
                     if should_discard && *choice_idx < state.player.hand.len() {
                         crate::effects::discard_card_from_hand(&mut state, *choice_idx, &mut rng);
                     }
-                    // Update pending choice tracking
                     let should_clear = if let Some(ref mut pc) = state.pending_choice {
                         pc.chosen_so_far.push(*choice_idx);
                         pc.chosen_so_far.len() >= pc.num_choices
                     } else { false };
-                    if should_clear {
-                        state.pending_choice = None;
-                    }
+                    if should_clear { state.pending_choice = None; }
                 }
                 Action::UsePotion { potion_idx } => {
                     combat::use_potion(&mut state, *potion_idx);
@@ -231,56 +272,67 @@ pub fn fight_combat(
 
         combat::end_turn(&mut state, &card_db, &mut rng);
         combat::resolve_enemy_intents(&mut state);
-        // TODO: resolve_intent_side_effects for buffs/debuffs/spawns
         combat::tick_enemy_powers(&mut state);
 
         outcome = combat::is_combat_over(&state);
         if outcome.is_some() { break; }
     }
 
-    let outcome_str = outcome.unwrap_or("lose");
+    let outcome_str = outcome.unwrap_or("lose").to_string();
     let hp_after = if outcome_str == "win" { state.player.hp.max(0) } else { 0 };
+    let potions_after = state.player.potions.iter()
+        .filter(|p| !p.is_empty())
+        .cloned()
+        .collect();
 
-    // Build Python result
+    Ok(CombatResultRust {
+        samples,
+        outcome: outcome_str,
+        turns: turn_num,
+        hp_after,
+        initial_value,
+        potions_after,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Build Python result (requires GIL)
+// ---------------------------------------------------------------------------
+
+fn build_python_result(py: Python<'_>, cr: &CombatResultRust) -> PyResult<PyObject> {
     let result = PyDict::new(py);
 
-    // Convert samples to Python list of dicts
     let py_samples = PyList::empty(py);
-    for sample in &samples {
+    for sample in &cr.samples {
         let s = sample_to_py(py, sample)?;
         py_samples.append(s)?;
     }
 
     result.set_item("samples", py_samples)?;
-    result.set_item("outcome", outcome_str)?;
-    result.set_item("turns", turn_num)?;
-    result.set_item("hp_after", hp_after)?;
-    result.set_item("initial_value", initial_value)?;
+    result.set_item("outcome", &cr.outcome)?;
+    result.set_item("turns", cr.turns)?;
+    result.set_item("hp_after", cr.hp_after)?;
+    result.set_item("initial_value", cr.initial_value)?;
 
-    // Potions after
     let py_potions = PyList::empty(py);
-    for pot in &state.player.potions {
-        if !pot.is_empty() {
-            let d = PyDict::new(py);
-            d.set_item("name", &pot.name)?;
-            if pot.heal > 0 { d.set_item("heal", pot.heal)?; }
-            if pot.block > 0 { d.set_item("block", pot.block)?; }
-            if pot.strength > 0 { d.set_item("strength", pot.strength)?; }
-            if pot.damage_all > 0 { d.set_item("damage_all", pot.damage_all)?; }
-            if pot.enemy_weak > 0 { d.set_item("enemy_weak", pot.enemy_weak)?; }
-            py_potions.append(d)?;
-        }
+    for pot in &cr.potions_after {
+        let d = PyDict::new(py);
+        d.set_item("name", &pot.name)?;
+        if pot.heal > 0 { d.set_item("heal", pot.heal)?; }
+        if pot.block > 0 { d.set_item("block", pot.block)?; }
+        if pot.strength > 0 { d.set_item("strength", pot.strength)?; }
+        if pot.damage_all > 0 { d.set_item("damage_all", pot.damage_all)?; }
+        if pot.enemy_weak > 0 { d.set_item("enemy_weak", pot.enemy_weak)?; }
+        py_potions.append(d)?;
     }
     result.set_item("potions_after", py_potions)?;
 
     Ok(result.into())
 }
 
-/// Convert a training sample to a Python dict with numpy-compatible lists.
 fn sample_to_py(py: Python<'_>, sample: &RustTrainingSample) -> PyResult<Py<PyDict>> {
     let d = PyDict::new(py);
 
-    // State tensors as a nested dict of lists (Python side converts to torch tensors)
     let st = PyDict::new(py);
     let s = &sample.state;
     st.set_item("hand_card_ids", &s.hand_card_ids)?;
@@ -308,14 +360,11 @@ fn sample_to_py(py: Python<'_>, sample: &RustTrainingSample) -> PyResult<Py<PyDi
     st.set_item("path_mask", bool_list(py, &s.path_mask))?;
     d.set_item("state_tensors", st)?;
 
-    // Action tensors
     d.set_item("action_card_ids", &sample.actions.card_ids)?;
     d.set_item("action_features", &sample.actions.features)?;
     d.set_item("action_mask", bool_list(py, &sample.actions.mask))?;
-
-    // Policy and metadata
     d.set_item("policy", &sample.policy)?;
-    d.set_item("value", 0.0f32)?; // Filled after run ends
+    d.set_item("value", 0.0f32)?;
     d.set_item("num_actions", sample.num_actions)?;
 
     Ok(d.into())
