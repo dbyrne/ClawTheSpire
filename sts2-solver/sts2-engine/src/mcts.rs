@@ -16,6 +16,7 @@ use crate::types::*;
 
 struct Node {
     state: Option<CombatState>,
+    enemy_ais: Option<Vec<crate::enemy::EnemyAI>>,
     parent: Option<usize>,      // Arena index
     parent_action_idx: usize,   // Index into parent's legal_actions
     visit_count: u32,
@@ -32,6 +33,7 @@ impl Node {
     fn new(state: Option<CombatState>, parent: Option<usize>, parent_action_idx: usize) -> Self {
         Node {
             state,
+            enemy_ais: None,
             parent,
             parent_action_idx,
             visit_count: 0,
@@ -127,10 +129,24 @@ impl<'a> MCTS<'a> {
         temperature: f32,
         rng: &mut impl Rng,
     ) -> SearchResult {
+        self.search_with_ais(state, None, num_simulations, temperature, rng)
+    }
+
+    /// Run MCTS search with enemy AI profiles for multi-turn intent updates.
+    pub fn search_with_ais(
+        &self,
+        state: &CombatState,
+        enemy_ais: Option<&[crate::enemy::EnemyAI]>,
+        num_simulations: usize,
+        temperature: f32,
+        rng: &mut impl Rng,
+    ) -> SearchResult {
         let mut arena = Arena::with_capacity(num_simulations * 2);
 
         // Create and expand root
-        let root_idx = arena.alloc(Node::new(Some(state.clone()), None, 0));
+        let mut root = Node::new(Some(state.clone()), None, 0);
+        root.enemy_ais = enemy_ais.map(|ais| ais.to_vec());
+        let root_idx = arena.alloc(root);
         let root_value = self.expand(&mut arena, root_idx, rng);
 
         if arena.nodes[root_idx].is_terminal || arena.nodes[root_idx].legal_actions.is_empty() {
@@ -253,11 +269,14 @@ impl<'a> MCTS<'a> {
             let parent_idx = arena.nodes[node_idx].parent.unwrap();
             let action_idx = arena.nodes[node_idx].parent_action_idx;
             let parent_state = arena.nodes[parent_idx].state.as_ref().unwrap();
+            let parent_ais = arena.nodes[parent_idx].enemy_ais.clone();
             let action = &arena.nodes[parent_idx].legal_actions[action_idx];
 
             let mut new_state = parent_state.clone();
-            self.apply_action(&mut new_state, action, rng);
+            let mut new_ais = parent_ais;
+            self.apply_action(&mut new_state, &mut new_ais, action, rng);
             arena.nodes[node_idx].state = Some(new_state);
+            arena.nodes[node_idx].enemy_ais = new_ais;
         }
 
         let state = arena.nodes[node_idx].state.as_ref().unwrap();
@@ -357,7 +376,13 @@ impl<'a> MCTS<'a> {
     }
 
     // --- Apply action to state ---
-    fn apply_action(&self, state: &mut CombatState, action: &Action, rng: &mut impl Rng) {
+    fn apply_action(
+        &self,
+        state: &mut CombatState,
+        enemy_ais: &mut Option<Vec<crate::enemy::EnemyAI>>,
+        action: &Action,
+        rng: &mut impl Rng,
+    ) {
         match action {
             Action::PlayCard { card_idx, target_idx } => {
                 if combat::can_play_card(state, *card_idx) {
@@ -370,6 +395,11 @@ impl<'a> MCTS<'a> {
                 combat::tick_enemy_powers(state);
                 if is_combat_over(state).is_none() {
                     combat::start_turn(state, rng);
+                    // Update enemy intents for the new turn if AI profiles available
+                    if let Some(ais) = enemy_ais {
+                        crate::enemy::sync_enemy_ais(state, ais, &std::collections::HashMap::new());
+                        crate::enemy::set_enemy_intents(state, ais, rng);
+                    }
                 }
             }
             Action::UsePotion { potion_idx } => {

@@ -1023,7 +1023,7 @@ fn run_combat_internal(
 
             let enc_state = encode::encode_state(&state, &game_data.vocabs);
             let enc_actions = encode::encode_actions(&actions, &state, &game_data.vocabs);
-            let result = mcts_engine.search(&state, mcts_sims, temperature, rng);
+            let result = mcts_engine.search_with_ais(&state, Some(&enemy_ais), mcts_sims, temperature, rng);
 
             if t == 1 && cards == 0 { initial_value = result.root_value as f32; }
             samples.push(RustTrainingSample {

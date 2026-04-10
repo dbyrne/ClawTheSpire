@@ -248,7 +248,7 @@ fn run_combat_nogil(
 
                 let enc_state = encode::encode_state(&state, &vocabs);
                 let enc_actions = encode::encode_actions(&actions, &state, &vocabs);
-                let result = mcts_engine.search(&state, mcts_sims, temperature, &mut rng);
+                let result = mcts_engine.search_with_ais(&state, Some(&enemy_ais), mcts_sims, temperature, &mut rng);
 
                 if t == 1 && cards_this_turn == 0 {
                     initial_value = result.root_value as f32;
