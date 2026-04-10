@@ -83,6 +83,20 @@ const RARITY_RARE: f64 = 3.0;
 // Run result
 // ---------------------------------------------------------------------------
 
+/// Per-combat HP data for value assignment.
+pub struct CombatHpData {
+    pub floor: i32,
+    pub hp_before: i32,
+    pub hp_after: i32,
+    pub potions_used: i32,
+}
+
+/// Floor-tagged combat samples for per-floor value assignment.
+pub struct FloorSamples {
+    pub floor: i32,
+    pub samples: Vec<RustTrainingSample>,
+}
+
 pub struct FullRunResult {
     pub outcome: String,
     pub floor_reached: i32,
@@ -91,9 +105,11 @@ pub struct FullRunResult {
     pub combats_won: i32,
     pub combats_fought: i32,
     pub deck_size: i32,
-    pub combat_samples: Vec<RustTrainingSample>,
+    pub combat_samples_by_floor: Vec<FloorSamples>,
     pub option_samples: Vec<RustOptionSample>,
     pub combat_value_estimates: HashMap<i32, f32>,
+    pub combat_hp_data: Vec<CombatHpData>,
+    pub is_boss_floor: HashSet<i32>,
 }
 
 // ---------------------------------------------------------------------------
@@ -258,8 +274,10 @@ pub fn run_act1(
         outcome: "lose".into(), floor_reached: 0,
         final_hp: hp, max_hp, combats_won: 0, combats_fought: 0,
         deck_size: deck.len() as i32,
-        combat_samples: Vec::new(), option_samples: Vec::new(),
+        combat_samples_by_floor: Vec::new(), option_samples: Vec::new(),
         combat_value_estimates: HashMap::new(),
+        combat_hp_data: Vec::new(),
+        is_boss_floor: HashSet::new(),
     };
 
     let mut seen_encounters: HashSet<String> = HashSet::new();
@@ -317,8 +335,15 @@ pub fn run_act1(
                 );
 
                 result.combats_fought += 1;
-                result.combat_samples.extend(combat_result.samples);
+                let hp_before = hp;
+                result.combat_samples_by_floor.push(FloorSamples {
+                    floor: floor_num,
+                    samples: combat_result.samples,
+                });
                 result.combat_value_estimates.insert(floor_num, combat_result.initial_value);
+                if room_type == "boss" {
+                    result.is_boss_floor.insert(floor_num);
+                }
 
                 if combat_result.outcome == "lose" {
                     result.outcome = "lose".into();
@@ -329,7 +354,15 @@ pub fn run_act1(
 
                 result.combats_won += 1;
                 hp = combat_result.hp_after;
+                let potions_before = potions.iter().filter(|p| !p.is_empty()).count() as i32;
                 potions = combat_result.potions_after;
+                let potions_after_count = potions.iter().filter(|p| !p.is_empty()).count() as i32;
+                result.combat_hp_data.push(CombatHpData {
+                    floor: floor_num,
+                    hp_before,
+                    hp_after: hp,
+                    potions_used: (potions_before - potions_after_count).max(0),
+                });
 
                 // End-of-combat relic healing
                 if relics.contains("BURNING_BLOOD") { hp = (hp + 6).min(max_hp); }

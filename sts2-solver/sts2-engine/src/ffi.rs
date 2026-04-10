@@ -516,12 +516,32 @@ pub fn play_all_games(
         d.set_item("combats_fought", result.combats_fought)?;
         d.set_item("deck_size", result.deck_size)?;
 
-        // Combat samples
+        // Combat samples (flat list + per-floor mapping)
         let py_samples = PyList::empty(py);
-        for sample in &result.combat_samples {
-            py_samples.append(sample_to_py(py, sample)?)?;
+        let py_floor_map = PyDict::new(py);
+        for fs in &result.combat_samples_by_floor {
+            let floor_start = py_samples.len();
+            for sample in &fs.samples {
+                py_samples.append(sample_to_py(py, sample)?)?;
+            }
+            py_floor_map.set_item(fs.floor, (floor_start, py_samples.len()))?;
         }
         d.set_item("combat_samples", py_samples)?;
+        d.set_item("combat_samples_floor_map", py_floor_map)?;
+
+        // Per-combat HP data
+        let py_hp_data = PyDict::new(py);
+        for hp in &result.combat_hp_data {
+            py_hp_data.set_item(hp.floor, (hp.hp_before, hp.hp_after, hp.potions_used))?;
+        }
+        d.set_item("combat_hp_data", py_hp_data)?;
+
+        // Boss floors
+        let py_boss = PyList::empty(py);
+        for f in &result.is_boss_floor {
+            py_boss.append(*f)?;
+        }
+        d.set_item("boss_floors", py_boss)?;
 
         // Option samples (include state tensors for option head training)
         let py_opt_samples = PyList::empty(py);

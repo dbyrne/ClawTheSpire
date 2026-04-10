@@ -758,7 +758,7 @@ def train_worker(
                 seeds=game_seeds,
             )
 
-            # Convert Rust results to training samples with value assignment
+            # Convert Rust results to training samples with full value assignment
             from .full_run import _assign_run_values
             for r in rust_results:
                 is_win = r["outcome"] == "win"
@@ -766,20 +766,30 @@ def train_worker(
                 final_hp = r["final_hp"]
                 max_hp_r = r.get("max_hp", 70)
 
-                # Convert combat samples
-                combat_samples = []
-                for s in r["combat_samples"]:
-                    st = s["state_tensors"]
-                    sample = TrainingSample(
-                        state_tensors=_rust_state_to_tensors(st),
-                        policy=s["policy"],
-                        value=0.0,  # Assigned below
-                        action_card_ids=torch.tensor([s["action_card_ids"]], dtype=torch.long),
-                        action_features=torch.tensor(s["action_features"], dtype=torch.float32).view(1, 30, -1),
-                        action_mask=torch.tensor([s["action_mask"]], dtype=torch.bool),
-                        num_actions=s["num_actions"],
-                    )
-                    combat_samples.append(sample)
+                # Build combat_samples_by_floor from Rust floor map
+                floor_map = r.get("combat_samples_floor_map", {})
+                all_combat_samples = []
+                combat_samples_by_floor = {}
+
+                raw_samples = r["combat_samples"]
+                for floor_key, (start, end) in floor_map.items():
+                    floor_int = int(floor_key)
+                    floor_samples = []
+                    for idx in range(start, end):
+                        s = raw_samples[idx]
+                        st = s["state_tensors"]
+                        sample = TrainingSample(
+                            state_tensors=_rust_state_to_tensors(st),
+                            policy=s["policy"],
+                            value=0.0,
+                            action_card_ids=torch.tensor([s["action_card_ids"]], dtype=torch.long),
+                            action_features=torch.tensor(s["action_features"], dtype=torch.float32).view(1, 30, -1),
+                            action_mask=torch.tensor([s["action_mask"]], dtype=torch.bool),
+                            num_actions=s["num_actions"],
+                        )
+                        floor_samples.append(sample)
+                        all_combat_samples.append(sample)
+                    combat_samples_by_floor[floor_int] = floor_samples
 
                 # Convert option samples
                 option_samples_list = []
@@ -792,49 +802,38 @@ def train_worker(
                         option_types=s["option_types"],
                         option_cards=s["option_cards"],
                         chosen_idx=s["chosen_idx"],
-                        value=0.0,  # Assigned below
+                        value=0.0,
                         floor=s.get("floor", 0),
                     )
                     option_samples_list.append(osample)
 
-                # Value assignment — same logic as Python full_run path
+                # Per-combat HP data
+                combat_hp_data = {}
+                for floor_key, (hp_before, hp_after, pots_used) in r.get("combat_hp_data", {}).items():
+                    combat_hp_data[int(floor_key)] = (hp_before, hp_after, pots_used)
+
+                boss_floors = set(int(f) for f in r.get("boss_floors", []))
+
                 combat_value_estimates = {
                     int(k): v for k, v in r.get("combat_value_estimates", {}).items()
                 }
 
-                # Simple run-level value for all samples
-                base = floor_reached / 17.0
-                hp_bonus = final_hp / max(1, max_hp_r) * 0.3
-                run_value = max(-1.0, min(1.0, base + hp_bonus - 0.5))
-
-                # Assign run_value to combat samples (simplified — no per-floor HP data from Rust yet)
-                for sample in combat_samples:
-                    sample.value = run_value
-
-                # Assign trajectory-based values to option samples
-                combat_floors = sorted(combat_value_estimates.keys())
-                for osample in option_samples_list:
-                    floor = osample.floor
-                    if not combat_floors:
-                        osample.value = run_value
-                        continue
-                    v_before = 0.0
-                    for cf in combat_floors:
-                        if cf <= floor:
-                            v_before = combat_value_estimates[cf]
-                        else:
-                            break
-                    v_after = run_value
-                    for cf in combat_floors:
-                        if cf > floor:
-                            v_after = combat_value_estimates[cf]
-                            break
-                    delta = v_after - v_before
-                    osample.value = max(-1.0, min(1.0,
-                        0.3 * delta + 0.7 * run_value))
+                # Full value assignment (same as Python path)
+                _assign_run_values(
+                    combat_samples_by_floor,
+                    floor_reached,
+                    17,  # total floors in act 1
+                    final_hp,
+                    max_hp_r,
+                    deck_change_samples=[],
+                    option_samples=option_samples_list,
+                    combat_hp_data=combat_hp_data,
+                    boss_floors=boss_floors,
+                    combat_value_estimates=combat_value_estimates,
+                )
 
                 # Add to buffers
-                for sample in combat_samples:
+                for sample in all_combat_samples:
                     replay_buffer.add(sample, is_win=is_win)
                 for osample in option_samples_list:
                     option_buffer.add(osample, is_win=is_win)
