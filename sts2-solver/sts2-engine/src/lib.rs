@@ -6,16 +6,16 @@ pub mod combat;
 pub mod cards;
 pub mod actions;
 pub mod enemy;
+pub mod encode;
 pub mod mcts;
+pub mod inference;
+pub mod ffi;
 
 /// STS2 combat engine — Rust implementation for fast self-play.
 #[pymodule]
 fn sts2_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(health_check, m)?)?;
+    m.add_function(wrap_pyfunction!(ffi::health_check, m)?)?;
+    m.add_function(wrap_pyfunction!(ffi::engine_info, m)?)?;
+    m.add_class::<ffi::CombatResult>()?;
     Ok(())
-}
-
-#[pyfunction]
-fn health_check() -> String {
-    "sts2_engine OK".to_string()
 }
