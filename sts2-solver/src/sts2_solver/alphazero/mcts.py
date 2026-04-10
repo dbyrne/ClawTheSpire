@@ -286,9 +286,37 @@ class MCTS:
 
             _, logits = self.network.forward(hidden, action_card_ids, action_features, action_mask)
 
-            # Softmax over legal actions
-            probs = torch.nn.functional.softmax(logits[0, :len(node.legal_actions)], dim=0)
-            probs = probs.cpu().tolist()
+            # Separate end_turn from card plays in the policy prior.
+            # The policy head learns "which card to play next" — whether
+            # to STOP playing is a value question answered by MCTS.
+            # end_turn gets a fixed uniform prior so it's always explored
+            # but can't dominate through a learned bias.
+            n = len(node.legal_actions)
+            raw_logits = logits[0, :n]
+
+            # Find which action indices are end_turn vs card/potion plays
+            end_turn_indices = [i for i, a in enumerate(node.legal_actions)
+                                if a.action_type == "end_turn"]
+            play_indices = [i for i in range(n) if i not in end_turn_indices]
+
+            if play_indices and end_turn_indices:
+                # Softmax over card/potion plays only
+                play_logits = raw_logits[play_indices]
+                play_probs = torch.nn.functional.softmax(play_logits, dim=0).cpu().tolist()
+
+                # end_turn gets uniform share: 1/num_actions
+                et_prior = 1.0 / n
+                # Scale card priors to fill the remaining probability
+                card_share = 1.0 - et_prior * len(end_turn_indices)
+
+                probs = [0.0] * n
+                for idx, p in zip(play_indices, play_probs):
+                    probs[idx] = p * card_share
+                for idx in end_turn_indices:
+                    probs[idx] = et_prior
+            else:
+                # All end_turn or all card plays — standard softmax
+                probs = torch.nn.functional.softmax(raw_logits, dim=0).cpu().tolist()
 
             # Value estimation: evaluate a post-enemy-attack state so the
             # value head sees realized HP, not transient block.

@@ -270,8 +270,20 @@ def train_batch(
             values, logits = network.forward(hidden, act_card_ids, act_features, act_mask)
 
             v_loss = F.mse_loss(values, target_values)
+
+            # Mask end_turn from policy target so the policy head only
+            # learns card selection, not when to stop. The stop decision
+            # is handled by MCTS value comparison at search time.
+            # is_end_turn flag is at feature index 11 in action_features.
+            is_end_turn = act_features[:, :, 11] > 0.5  # (batch, max_actions)
+            masked_policies = target_policies.clone()
+            masked_policies[is_end_turn] = 0.0
+            # Renormalize over card plays only
+            policy_sums = masked_policies.sum(dim=1, keepdim=True).clamp(min=1e-8)
+            masked_policies = masked_policies / policy_sums
+
             log_probs = F.log_softmax(logits, dim=1)
-            p_loss = -(target_policies * log_probs).nan_to_num(0.0).sum(dim=1).mean()
+            p_loss = -(masked_policies * log_probs).nan_to_num(0.0).sum(dim=1).mean()
 
             loss = 0.25 * v_loss + p_loss
             if torch.isnan(loss):
