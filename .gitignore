@@ -17,3 +17,5 @@ supabase/.temp/
 runs.db
 runs.db-wal
 runs.db-shm
+onnx_models/
+sts2-solver/tests/_test_onnx/

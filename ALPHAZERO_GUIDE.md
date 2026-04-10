@@ -187,6 +187,14 @@ It doesn't need to memorize every specific (state, action) pair.
 
 Invalid actions get their scores set to negative infinity so they're never chosen.
 
+*End-turn exclusion:* The `end_turn` action is deliberately excluded from the
+policy head's softmax. The policy head learns "which card to play" — whether to
+STOP playing is a value question that MCTS answers through lookahead. `end_turn`
+gets a fixed uniform prior (`1/num_actions`) so it's always explored but can't
+dominate through a learned bias. This prevents the network from learning to
+always end turn early (a local optimum that avoids bad plays but also avoids
+good ones).
+
 #### 3. Option Evaluation Head — "What should I do outside of combat?"
 
 ```
@@ -233,7 +241,8 @@ gives each map option its own downstream context.
 
 ## Part 2: Monte Carlo Tree Search (MCTS)
 
-**File:** `sts2-solver/src/sts2_solver/alphazero/mcts.py`
+**Python file:** `sts2-solver/src/sts2_solver/alphazero/mcts.py`
+**Rust file:** `sts2-solver/sts2-engine/src/mcts.rs`
 
 ### The problem with using the network alone
 
@@ -245,7 +254,7 @@ MCTS adds this lookahead by building a **search tree** of possible futures.
 
 ### How MCTS works (one search)
 
-Starting from the current game state, we run 50 **simulations**. Each simulation
+Starting from the current game state, we run 100 **simulations**. Each simulation
 has three phases:
 
 #### 1. SELECT — Walk down the tree
@@ -316,32 +325,64 @@ single-turn solver can't do.
 
 ## Part 3: The Training Loop
 
-**File:** `sts2-solver/src/sts2_solver/alphazero/self_play.py`
-**File:** `sts2-solver/src/sts2_solver/alphazero/full_run.py`
+**Training orchestrator:** `sts2-solver/src/sts2_solver/alphazero/self_play.py`
+**Rust self-play engine:** `sts2-solver/sts2-engine/` (entire crate)
+**Value assignment:** `sts2-solver/src/sts2_solver/alphazero/full_run.py`
 
-### One generation (50 games)
+### Architecture: Python trains, Rust plays
 
 ```
-1. SELF-PLAY: Play 50 full Act 1 runs using MCTS + current network
-   - Each run: ~17 floors, ~5 combats, card rewards, rest sites, shops, events
-   - Each combat move: 50 MCTS simulations to pick an action
-   - Record every decision: (state, MCTS_policy, action)
+Python (training only)              Rust (all self-play via rayon)
++----------------------+           +-----------------------------+
+| 1. Export ONNX models|---.onnx-->| Combat engine (Clone states)|
+| 2. Collect samples   |<--numpy---| Card effects (65+ cards)    |
+| 3. Assign values     |           | MCTS (arena-allocated)      |
+| 4. Train network     |           | ONNX Runtime inference      |
+| 5. Save checkpoint   |           | Enemy AI (profiles)         |
++----------------------+           | Full Act 1 simulator:       |
+                                   |   Real maps (559 from pool) |
+                                   |   Events (profiled)         |
+                                   |   Shops (164 real shops)    |
+                                   |   Card rewards (146 cards)  |
+                                   |   Rest/smith decisions      |
+                                   | ALL decisions via network   |
+                                   +-----------------------------+
+```
 
-2. ASSIGN VALUES: After each run ends (win or lose), go back and label every
-   decision with a value reflecting how the run went
-   - Won the run with lots of HP?  Earlier moves get high values
-   - Died on floor 8?  Moves from that fatal combat get negative values
-   - Earlier combats get slightly discounted values (uncertainty)
+Self-play runs entirely in Rust with rayon thread parallelism. Python's only
+role is ONNX model export, value assignment, and gradient updates. No Python
+GIL contention during game play.
 
-3. TRAIN: Sample 64 decisions from the replay buffer, update the network
-   - Value loss: "your win probability prediction was X, the real outcome was Y"
-   - Policy loss: "you predicted these move probabilities, but MCTS (with
-     lookahead) said these were better"
-   - Option loss: same idea for card rewards and non-combat decisions
-   - Combat and option losses are optimized in separate backward passes
-   - Repeat for 10 epochs
+### One generation (40 games)
 
-4. Save progress, repeat
+```
+1. EXPORT: Convert PyTorch network to three ONNX models:
+   - full_model.onnx: state + actions -> (value, policy_logits) for MCTS
+   - value_model.onnx: state -> value for end-of-turn estimation
+   - option_model.onnx: state + options -> scores for non-combat decisions
+
+2. SELF-PLAY (Rust, parallel via rayon):
+   Play 40 full Act 1 runs using the ONNX models
+   - Each run: real map from map_pool.json, ~17 floors, ~5-8 combats
+   - Combat: MCTS with 100 simulations per card decision
+   - Non-combat: option head scores all choices (card rewards, rest/smith,
+     shop buy/remove/leave, event options, map path choices)
+   - ALL decisions via neural network -- no heuristic fallbacks
+   - Dynamic map walking: chosen paths affect future room availability
+
+3. ASSIGN VALUES (Python): Label every decision with outcome-based values
+   - Combat: per-floor HP conservation (hp_retained - damage*0.5 - potions)
+   - Boss: pure win/lose (+1.0/-1.0)
+   - Non-combat: trajectory credit (value change between adjacent combats)
+   - Temporal discount within combat (later turns get fuller signal)
+
+4. TRAIN: Sample 64 decisions from replay buffer, update network (10 epochs)
+   - Value loss: MSE between predicted and actual outcome
+   - Policy loss: cross-entropy between network policy and MCTS visit policy
+   - Option loss: MSE between option score and trajectory value
+   - Separate backward passes for combat and option heads
+
+5. Save checkpoint (every 10 gens), repeat
 ```
 
 ### Encounter selection
@@ -383,15 +424,14 @@ outcome.
 
 ### The replay buffer
 
-We don't just train on the latest games — we keep a buffer of 50,000 past combat
-decisions and sample from it. This has two benefits:
+We keep a buffer of 2,000 past combat decisions and sample from it. This is
+intentionally small (~50 generations of history) to keep the network focused
+on recent experience, preventing long-term drift where weak older games pollute
+training.
 
-1. **Stability:** Training on only the latest data can cause catastrophic
-   forgetting. The buffer provides a mix of old and new experience.
-
-2. **Win prioritization:** At 2-3% win rate, most data is from losses. We
-   maintain a separate win reservoir and mix 25% winning samples into each batch
-   so the network keeps learning from positive examples.
+**Win prioritization:** At low win rates, most data is from losses. We maintain
+a separate win reservoir (10,000 capacity) and mix 25% winning samples into
+each batch so the network keeps learning from positive examples.
 
 ### Hyperparameters
 
@@ -402,9 +442,11 @@ decisions and sample from it. This has two benefits:
 | Epochs per gen | 10 | Multiple passes over each batch for efficiency. |
 | Weight decay | 1e-4 (non-embedding) | L2 regularization — prevents weights from growing huge. Embeddings are exempt so rare cards can develop strong representations. |
 | Gradient clipping | norm <= 1.0 | Prevents exploding gradients from bad samples. |
-| MCTS simulations | 50 | Tradeoff: more = better play but slower. 50 is fast enough for training throughput. |
+| Games per gen | 40 | Enough variety per generation, keeps gen time reasonable. |
+| MCTS simulations | 100 | Per card-play decision. Higher than standard for better training signal. |
+| Replay buffer | 2,000 | ~50 gens of history. Tight buffer prevents drift from stale games. |
 | Temperature | 1.0 -> 0.3 (cosine) | Cosine decay with 0.3 floor. Stays above 0.5 for ~60% of training, then smoothly drops. |
-| c_puct | 2.5 | Higher than standard (1.5) to ensure MCTS explores minority actions. |
+| c_puct | 1.0 | Standard PUCT exploration constant. |
 | Min root visits | 2 | Every root action gets at least 2 visits before PUCT selection. |
 
 ### Loss functions
@@ -481,15 +523,75 @@ Generation 500+: Network and MCTS reinforce each other. Better network = better
 
 ---
 
+## Running Training
+
+### Prerequisites
+
+1. Install Rust: `winget install Rustlang.Rustup`
+2. Build the Rust engine: `cd sts2-solver/sts2-engine && pip install -e .`
+3. Install Python deps: `pip install torch onnx onnxruntime`
+
+### Cold start (fresh training)
+
+```bash
+cd sts2-solver
+python -m sts2_solver.alphazero.self_play train --generations 2000 --games-per-gen 40 --sims 100
+```
+
+### Resume from checkpoint
+
+The training loop automatically warm-starts from the latest checkpoint in
+`alphazero_checkpoints/`. Just run the same command — it picks up where it
+left off.
+
+### Monitor (live dashboard in separate terminal)
+
+```bash
+python -m sts2_solver.alphazero.self_play monitor
+```
+
+---
+
 ## Key Files
+
+### Python (training + orchestration)
 
 | File | Role |
 |------|------|
-| `alphazero/network.py` | Neural network architecture (the brain) |
-| `alphazero/mcts.py` | Tree search (the thinking process) |
-| `alphazero/self_play.py` | Training loop + replay buffers + TUI monitor |
-| `alphazero/full_run.py` | Full Act 1 run simulation + value assignment |
+| `alphazero/network.py` | Neural network architecture (3 heads, ~270K params) |
+| `alphazero/mcts.py` | Python MCTS (fallback when Rust unavailable) |
+| `alphazero/self_play.py` | Training loop + ONNX export + replay buffers + TUI monitor |
+| `alphazero/full_run.py` | Value assignment + Python→Rust bridge helpers |
+| `alphazero/onnx_export.py` | Export PyTorch models to ONNX format |
 | `alphazero/encoding.py` | Vocabularies + encoder config + feature extraction |
 | `alphazero/state_tensor.py` | Game state -> tensor conversion |
+
+### Rust (self-play engine — `sts2-engine/src/`)
+
+| File | Role |
+|------|------|
+| `types.rs` | Card, PlayerState, EnemyState, CombatState, Action structs |
+| `effects.rs` | Damage calculation, block, powers, draw, discard, Sly triggers |
+| `combat.rs` | Turn lifecycle: play_card, start/end_turn, enemy intents, relics |
+| `cards.rs` | 50+ custom card effects (match dispatch + generic fallback) |
+| `actions.rs` | Legal action enumeration with deduplication |
+| `enemy.rs` | Profile-based enemy AI, intent selection, spawning |
+| `encode.rs` | CombatState -> 20 ONNX input tensors |
+| `mcts.rs` | Arena-based MCTS (no allocation per simulation) |
+| `inference.rs` | ONNX Runtime wrapper with thread-local session caching |
+| `option_eval.rs` | ONNX option head for non-combat decisions |
+| `simulator.rs` | Full Act 1 run: real maps, shops, events, card rewards |
+| `ffi.rs` | PyO3 bindings: fight_combat(), play_all_games(), step() |
+
+### Data files
+
+| File | Role |
+|------|------|
 | `alphazero_progress.json` | Live training telemetry (read by monitor) |
+| `alphazero_history.jsonl` | Per-generation metrics for trend analysis |
 | `alphazero_checkpoints/` | Saved model weights (every 10 generations) |
+| `map_pool.json` | 559 real maps from game logs |
+| `shop_pool.json` | 164 real shop inventories |
+| `encounter_pool.json` | Encounter groupings |
+| `enemy_profiles.json` | Profile-based enemy AI (51 enemies) |
+| `event_profiles.json` | Event options and effects |
