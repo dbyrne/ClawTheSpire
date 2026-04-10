@@ -396,7 +396,7 @@ fn bool_list<'py>(py: Python<'py>, v: &[bool]) -> Bound<'py, PyList> {
     num_games,
     onnx_full_path, onnx_value_path, onnx_option_path,
     vocab_json, monster_data_json, enemy_profiles_json,
-    encounter_pool_json,
+    encounter_pool_json, event_profiles_json,
     mcts_sims, temperature, seeds
 ))]
 pub fn play_all_games(
@@ -409,6 +409,7 @@ pub fn play_all_games(
     monster_data_json: &str,
     enemy_profiles_json: &str,
     encounter_pool_json: &str,
+    event_profiles_json: &str,
     mcts_sims: usize,
     temperature: f32,
     seeds: Vec<u64>,
@@ -428,9 +429,10 @@ pub fn play_all_games(
         monsters,
         profiles,
         encounters,
-        event_profiles: HashMap::new(), // TODO: load from JSON
+        event_profiles: serde_json::from_str(event_profiles_json).unwrap_or_default(),
         vocabs: vocabs.clone(),
         card_pool: Vec::new(), // TODO: build from cards.json
+        card_pool_rarities: Vec::new(),
     });
 
     let onnx_full = onnx_full_path.to_string();
