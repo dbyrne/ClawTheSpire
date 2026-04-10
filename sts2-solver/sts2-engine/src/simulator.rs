@@ -9,7 +9,7 @@
 
 use rand::Rng;
 use rand::seq::IndexedRandom;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 
 use crate::combat;
@@ -38,15 +38,6 @@ fn gold_rewards(room_type: &str) -> (i32, i32) {
         "elite" => (25, 35),
         "boss" => (50, 75),
         _ => (10, 20),
-    }
-}
-
-fn shop_card_cost(rarity: &str) -> i32 {
-    match rarity {
-        "Common" => 50,
-        "Uncommon" => 75,
-        "Rare" => 150,
-        _ => 75,
     }
 }
 
@@ -489,7 +480,7 @@ pub fn run_act1(
             // =============================================================
             "event" => {
                 let is_neow = floor_num == 1;
-                let (eid, options) = if is_neow {
+                let (_eid, options) = if is_neow {
                     let neow = game_data.event_profiles.get("NEOW");
                     if let Some(profile) = neow {
                         let pool = &profile.neow_pool;
@@ -733,7 +724,7 @@ fn shop_decisions_network(
 
     // Pick a real shop from pool (or generate synthetic)
     let shop = game_data.shop_pool.choose(rng).cloned().unwrap_or_default();
-    let remove_cost = shop.remove_cost.unwrap_or(75);
+    let mut remove_cost = shop.remove_cost.unwrap_or(SHOP_REMOVE_COST);
 
     // Resolve shop cards from card_db
     let mut shop_cards: Vec<(Card, i32)> = Vec::new(); // (card, price)
@@ -807,6 +798,7 @@ fn shop_decisions_network(
                         if *deck_idx < deck.len() {
                             deck.remove(*deck_idx);
                             *gold -= remove_cost;
+                            remove_cost += SHOP_REMOVE_COST; // Each removal costs 75 more
                         }
                     }
                     ShopAction::Buy(shop_idx, price) => {
@@ -1012,7 +1004,8 @@ fn run_combat_internal(
     };
 
     combat::start_combat(&mut state);
-    let mcts_engine = MCTS::new(card_db, inference);
+    let mut mcts_engine = MCTS::new(card_db, inference);
+    mcts_engine.add_noise = true; // Self-play always explores
     let mut samples = Vec::new();
     let mut initial_value = 0.0f32;
     let mut outcome: Option<&str> = None;
@@ -1132,7 +1125,7 @@ struct MapWalker {
 struct FloorInfo {
     room_type: String,           // Resolved room type
     choices: Option<Vec<String>>, // None if no choice, Some(types) if choice needed
-    choice_nodes: Vec<(i32, i32)>, // Positions of nodes for each choice
+    _choice_nodes: Vec<(i32, i32)>, // Positions of nodes for each choice
 }
 
 impl MapWalker {
@@ -1187,13 +1180,13 @@ impl MapWalker {
             Some(FloorInfo {
                 room_type: unique_types[0].clone(),
                 choices: None,
-                choice_nodes: unique_positions,
+                _choice_nodes: unique_positions,
             })
         } else {
             Some(FloorInfo {
                 room_type: String::new(),
                 choices: Some(unique_types),
-                choice_nodes: unique_positions,
+                _choice_nodes: unique_positions,
             })
         }
     }

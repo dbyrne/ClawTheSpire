@@ -199,7 +199,7 @@ impl OptionEvaluator {
             ("option_mask".into(), arr2_bool(&om, 1, MAX_OPTIONS)),
             ("option_card_stats".into(), arr3_f32(&opt_stats, 1, MAX_OPTIONS, CARD_STATS_DIM)),
             ("option_path_ids".into(), arr3_i64(&opt_path_ids, 1, MAX_OPTIONS, MAX_PATH_LENGTH)),
-            ("option_path_mask".into(), arr3_bool(&bool_to_u8(&opt_path_mask_flat), 1, MAX_OPTIONS, MAX_PATH_LENGTH)),
+            ("option_path_mask".into(), arr3_bool(&opm, 1, MAX_OPTIONS, MAX_PATH_LENGTH)),
         ];
 
         let mut sess = self.session.borrow_mut();

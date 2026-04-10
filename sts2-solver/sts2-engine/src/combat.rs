@@ -175,12 +175,11 @@ pub fn play_card(
     }
 
     // Strike Dummy: temporary Vigor for Strike cards
-    let mut strike_dummy_bonus = 0;
     if state.player.get_power("_strike_dummy") > 0
         && (card.tags.contains("Strike") || card.name.contains("Strike"))
     {
-        strike_dummy_bonus = state.player.get_power("_strike_dummy");
-        state.player.add_power("Vigor", strike_dummy_bonus);
+        let bonus = state.player.get_power("_strike_dummy");
+        state.player.add_power("Vigor", bonus);
     }
 
     // --- Execute card effect ---

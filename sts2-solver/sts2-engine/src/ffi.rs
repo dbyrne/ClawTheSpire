@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::actions::enumerate_actions;
 use crate::combat;
-use crate::encode::{self, Vocabs, EncodedState, EncodedActions, CARD_STATS_DIM};
+use crate::encode::{self, Vocabs, EncodedState, EncodedActions};
 use crate::enemy;
 use crate::inference::OnnxInference;
 use crate::mcts::{MCTS, SearchResult};
@@ -125,7 +125,7 @@ pub fn fight_combat(
             &act, &boss, map_path,
             &onnx_full, &onnx_value, vocabs,
             &monsters, &profiles,
-            mcts_sims, temperature, seed, gen_id,
+            mcts_sims, temperature, seed, add_noise, gen_id,
         )
     });
 
@@ -161,6 +161,7 @@ fn run_combat_nogil(
     mcts_sims: usize,
     temperature: f32,
     seed: u64,
+    add_noise: bool,
     gen_id: i64,
 ) -> Result<CombatResultRust, String> {
     let card_db = CardDB::default();
@@ -224,7 +225,8 @@ fn run_combat_nogil(
 
         combat::start_combat(&mut state);
 
-        let mcts_engine = MCTS::new(&card_db, inference);
+        let mut mcts_engine = MCTS::new(&card_db, inference);
+        mcts_engine.add_noise = add_noise;
 
         let mut samples: Vec<RustTrainingSample> = Vec::new();
         let mut initial_value: f32 = 0.0;
@@ -395,7 +397,7 @@ fn bool_list<'py>(py: Python<'py>, v: &[bool]) -> Bound<'py, PyList> {
 ))]
 pub fn play_all_games(
     py: Python<'_>,
-    num_games: usize,
+    #[allow(unused)] num_games: usize,
     onnx_full_path: &str,
     onnx_value_path: &str,
     onnx_option_path: &str,

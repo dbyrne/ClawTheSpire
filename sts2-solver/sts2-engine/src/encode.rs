@@ -47,9 +47,6 @@ impl Vocabs {
     fn get_card(&self, id: &str) -> i64 {
         *self.cards.get(id).unwrap_or(&1) // 1 = UNK
     }
-    fn get_power(&self, name: &str) -> i64 {
-        *self.powers.get(name).unwrap_or(&0) // 0 = PAD
-    }
     fn get_relic(&self, name: &str) -> i64 {
         *self.relics.get(name).unwrap_or(&0)
     }
