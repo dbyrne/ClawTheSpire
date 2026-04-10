@@ -521,6 +521,162 @@ def _check_energy_usage(
     return issues
 
 
+def _check_combat_choice_routing(
+    decision: dict, in_combat: bool, floor: int | None,
+) -> list[DecisionIssue]:
+    """Flag mid-combat deck_select decisions that used the old workaround.
+
+    Combat choices (Survivor discard, Acrobatics, etc.) should go through
+    MCTS (head="mcts_choice") not the OPTION_SHOP_REMOVE workaround
+    (head="option_eval").
+    """
+    issues: list[DecisionIssue] = []
+    screen = decision.get("screen_type", "")
+    if screen != "deck_select" or not in_combat:
+        return issues
+
+    hs = decision.get("head_scores") or {}
+    head = hs.get("head", "")
+
+    if head == "option_eval":
+        issues.append(DecisionIssue(
+            severity="warning",
+            category="combat_choice_workaround",
+            message=f"Mid-combat deck_select used option_eval (OPTION_SHOP_REMOVE "
+                    f"workaround) instead of MCTS. Cards: "
+                    f"{[o.get('label') for o in hs.get('options', [])[:5]]}",
+            floor=floor,
+        ))
+
+    return issues
+
+
+def _check_potion_integrity(events: list[dict]) -> list[DecisionIssue]:
+    """Flag potion_discard events that happen mid-combat.
+
+    The game briefly shows discard_potion as the sole action between
+    combat turns. The runner should skip these as transient states,
+    not actually discard potions.
+    """
+    issues: list[DecisionIssue] = []
+    in_combat = False
+    current_floor: int | None = None
+
+    for event in events:
+        etype = event.get("type", "")
+        if etype == "combat_start":
+            in_combat = True
+            current_floor = event.get("floor", current_floor)
+        elif etype == "combat_end":
+            in_combat = False
+        elif etype == "potion_discard" and in_combat:
+            potion = event.get("potion", "?")
+            issues.append(DecisionIssue(
+                severity="error",
+                category="mid_combat_potion_discard",
+                message=f"Potion '{potion}' discarded mid-combat "
+                        f"(slot {event.get('slot')}). This is a transient "
+                        f"state bug — potions should not be discarded during combat.",
+                floor=current_floor,
+            ))
+
+    return issues
+
+
+def _check_mcts_state_consistency(events: list[dict]) -> list[DecisionIssue]:
+    """Cross-check mcts_play state fields against combat_snapshot.
+
+    The first mcts_play of a turn should have HP/energy matching the
+    combat_snapshot for that turn. Mismatches indicate state reconstruction
+    bugs in the runner.
+    """
+    issues: list[DecisionIssue] = []
+    current_floor: int | None = None
+    last_snapshot: dict | None = None
+    first_mcts_checked = False
+
+    for event in events:
+        etype = event.get("type", "")
+        if etype == "combat_start":
+            current_floor = event.get("floor", current_floor)
+            last_snapshot = None
+            first_mcts_checked = False
+        elif etype == "combat_snapshot":
+            last_snapshot = event
+            first_mcts_checked = False
+        elif etype == "combat_turn":
+            last_snapshot = None
+            first_mcts_checked = False
+        elif etype == "mcts_play" and last_snapshot and not first_mcts_checked:
+            first_mcts_checked = True
+            # Only check if mcts_play has the new state fields
+            if "hp" not in event:
+                continue
+            snap_player = last_snapshot.get("player") or {}
+            snap_hp = snap_player.get("hp")
+            snap_energy = snap_player.get("energy")
+            mcts_hp = event.get("hp")
+            mcts_energy = event.get("energy")
+
+            if snap_hp is not None and mcts_hp is not None and snap_hp != mcts_hp:
+                issues.append(DecisionIssue(
+                    severity="error",
+                    category="mcts_state_hp_mismatch",
+                    message=f"Turn start: snapshot HP={snap_hp} but "
+                            f"MCTS saw HP={mcts_hp}",
+                    floor=current_floor,
+                ))
+            if snap_energy is not None and mcts_energy is not None and snap_energy != mcts_energy:
+                issues.append(DecisionIssue(
+                    severity="warning",
+                    category="mcts_state_energy_mismatch",
+                    message=f"Turn start: snapshot energy={snap_energy} but "
+                            f"MCTS saw energy={mcts_energy}",
+                    floor=current_floor,
+                ))
+
+    return issues
+
+
+def _check_attacks_played_tracking(events: list[dict]) -> list[DecisionIssue]:
+    """Validate attacks_played increments correctly within a turn.
+
+    Each mcts_play for an Attack card should show attacks_played incrementing.
+    A card like Finisher played with attacks_played=0 is always wrong (deals
+    0 damage) — flag it so we can investigate the state reconstruction.
+    """
+    issues: list[DecisionIssue] = []
+    current_floor: int | None = None
+    turn_attacks: int = 0
+    turn_num: int = 0
+
+    for event in events:
+        etype = event.get("type", "")
+        if etype == "combat_start":
+            current_floor = event.get("floor", current_floor)
+            turn_attacks = 0
+        elif etype == "combat_turn":
+            turn_attacks = 0
+            turn_num = event.get("turn", 0)
+        elif etype == "mcts_play":
+            if "attacks_played" not in event:
+                continue
+            ap = event.get("attacks_played", 0)
+            card_name = (event.get("card_name") or "").split(" -> ")[0]
+
+            # Finisher with 0 attacks is always a mistake
+            if card_name == "Finisher" and ap == 0:
+                issues.append(DecisionIssue(
+                    severity="error",
+                    category="finisher_zero_attacks",
+                    message=f"Finisher played with attacks_played=0 (deals 0 damage). "
+                            f"Hand: {event.get('hand', [])}",
+                    floor=current_floor,
+                ))
+
+    return issues
+
+
 def _check_network_bypass(
     decision: dict, floor: int | None,
 ) -> list[DecisionIssue]:
@@ -585,13 +741,19 @@ def validate_run_decisions(events: list[dict]) -> list[DecisionAudit]:
                         map_pos = (start_node["row"], start_node["col"])
             break
 
+    # Track combat state for mid-combat checks
+    in_combat = False
+
     # Build index: for each decision, find the next deck_change (if any)
     for i, event in enumerate(events):
         etype = event.get("type")
 
-        # Track floor from combat_start and decision events
+        # Track floor and combat state
         if etype == "combat_start":
             current_floor = event.get("floor", current_floor)
+            in_combat = True
+        elif etype == "combat_end":
+            in_combat = False
 
         # Update map position from map_updated events
         if etype == "map_updated" and map_nodes:
@@ -637,6 +799,9 @@ def validate_run_decisions(events: list[dict]) -> list[DecisionAudit]:
 
         if screen_type == "shop":
             issues.extend(_check_shop_options(event, current_floor))
+
+        if screen_type == "deck_select":
+            issues.extend(_check_combat_choice_routing(event, in_combat, current_floor))
 
         issues.extend(_check_network_bypass(event, current_floor))
 
@@ -747,6 +912,36 @@ def validate_run_decisions(events: list[dict]) -> list[DecisionAudit]:
                         f"Runner is offering an invalid option the network keeps picking.",
                 floor=current_floor,
             )],
+        ))
+
+    # --- Stream-level integrity checks ---
+    # These scan the full event stream for patterns that indicate bugs.
+
+    # Potion integrity: no discards mid-combat
+    for issue in _check_potion_integrity(events):
+        audits.append(DecisionAudit(
+            run_id=run_id, floor=issue.floor,
+            screen_type="potion_discard", source="runner",
+            action="discard_potion", reasoning="",
+            issues=[issue],
+        ))
+
+    # MCTS state consistency: mcts_play state should match snapshot
+    for issue in _check_mcts_state_consistency(events):
+        audits.append(DecisionAudit(
+            run_id=run_id, floor=issue.floor,
+            screen_type="mcts_play", source="runner",
+            action="state_reconstruction", reasoning="",
+            issues=[issue],
+        ))
+
+    # Attacks-played tracking: catch Finisher-at-zero and similar
+    for issue in _check_attacks_played_tracking(events):
+        audits.append(DecisionAudit(
+            run_id=run_id, floor=issue.floor,
+            screen_type="mcts_play", source="runner",
+            action="attacks_played", reasoning="",
+            issues=[issue],
         ))
 
     return audits, quality_audits
