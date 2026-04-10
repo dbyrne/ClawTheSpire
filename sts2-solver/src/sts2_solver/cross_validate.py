@@ -992,6 +992,8 @@ class CrossValidationReport:
     decision_matches: int = 0
     midturn_diffs: list[dict] = field(default_factory=list)
     midturn_turns_checked: int = 0
+    bridge_warnings: list[dict] = field(default_factory=list)
+    bridge_turns_checked: int = 0
 
 
 def print_report(report: CrossValidationReport) -> None:
@@ -1068,6 +1070,22 @@ def print_report(report: CrossValidationReport) -> None:
                 print(f"    relevant powers: {relevant}")
     print()
 
+    # Bridge conventions
+    n_bridge = report.bridge_turns_checked
+    n_bridge_fail = len(report.bridge_warnings)
+    print(f"  Bridge Conventions:    {n_bridge - n_bridge_fail}/{n_bridge} turns clean")
+    if report.bridge_warnings:
+        issue_counts: Counter[str] = Counter()
+        for w in report.bridge_warnings:
+            for issue in w["issues"]:
+                # Bucket by issue type (first word before '=')
+                key = issue.split("=")[0].strip().rsplit(" ", 1)[-1]
+                issue_counts[key] += 1
+        print(f"  Issues by type:")
+        for issue_type, cnt in issue_counts.most_common(10):
+            print(f"    {issue_type}: {cnt}")
+    print()
+
     # Decision parity
     n_dec = report.decision_turns_checked
     if n_dec > 0:
@@ -1092,6 +1110,89 @@ def print_report(report: CrossValidationReport) -> None:
     print()
 
     print(f"{'='*60}\n")
+
+
+# ---------------------------------------------------------------------------
+# Test 5: Bridge convention parity
+# ---------------------------------------------------------------------------
+
+# Powers that the simulator stores positive but the game may store negative.
+_BRIDGE_POSITIVE_POWERS = {"Shrink", "Weak", "Vulnerable", "Frail"}
+
+
+def test_bridge_conventions(
+    logs_dir: Path, card_db: CardDB, max_turns: int = 200,
+) -> tuple[list[dict], int]:
+    """Validate that snapshot data matches simulator sign/value conventions.
+
+    Checks every combat snapshot for:
+    - Power sign convention (debuffs should be positive in our model)
+    - Potion classification (occupied slots should have known effects)
+    - Card presence in card_db
+
+    Returns (warnings_list, turns_checked).
+    """
+    runs = extract_all_runs(logs_dir)
+    warnings = []
+    count = 0
+
+    for run in runs:
+        for combat in run.combats:
+            for turn in combat.turns:
+                if turn.snapshot is None:
+                    continue
+                if count >= max_turns:
+                    break
+
+                snap = turn.snapshot
+                turn_warnings = []
+
+                # Check player power signs
+                for name in _BRIDGE_POSITIVE_POWERS:
+                    val = snap.player_powers.get(name, 0)
+                    if val < 0:
+                        turn_warnings.append(
+                            f"player power {name}={val} (should be positive)")
+
+                # Check enemy power signs
+                for i, e in enumerate(snap.enemies):
+                    e_powers = {}
+                    for p in (e.get("powers") or []):
+                        if isinstance(p, dict):
+                            e_powers[p["name"]] = p["amount"]
+                    for name in _BRIDGE_POSITIVE_POWERS:
+                        val = e_powers.get(name, 0)
+                        if val < 0:
+                            turn_warnings.append(
+                                f"enemy {i} ({e.get('name','?')}) power "
+                                f"{name}={val} (should be positive)")
+
+                # Check hand cards resolve from card_db
+                for hc in snap.hand:
+                    card_id = hc.get("card_id", "")
+                    name = hc.get("name", "")
+                    upgraded = hc.get("upgraded", False)
+                    card = card_db.get(card_id, upgraded=upgraded)
+                    if card is None:
+                        card = card_db.get_by_name(name, upgraded=upgraded)
+                    if card is None:
+                        turn_warnings.append(
+                            f"card {name!r} (id={card_id}) not in card_db")
+
+                if turn_warnings:
+                    warnings.append({
+                        "run": run.run_id,
+                        "turn": turn.turn,
+                        "issues": turn_warnings,
+                    })
+
+                count += 1
+            if count >= max_turns:
+                break
+        if count >= max_turns:
+            break
+
+    return warnings, count
 
 
 # ---------------------------------------------------------------------------
@@ -1133,7 +1234,12 @@ def main(logs_dir: Path | None = None,
     print("  Running mid-turn parity test...")
     mt_diffs, mt_checked = test_midturn_parity(logs_dir, card_db, max_turns=100)
 
-    # Test 4: Decision parity (optional)
+    # Test 4: Bridge convention parity
+    print("  Running bridge convention test...")
+    bridge_warnings, bridge_checked = test_bridge_conventions(
+        logs_dir, card_db, max_turns=200)
+
+    # Test 5: Decision parity (optional)
     print("  Running decision parity test...")
     dec_result = test_decision_parity(logs_dir, card_db,
                                       checkpoint_path=checkpoint,
@@ -1155,6 +1261,8 @@ def main(logs_dir: Path | None = None,
         decision_matches=dec_matches,
         midturn_diffs=mt_diffs,
         midturn_turns_checked=mt_checked,
+        bridge_warnings=bridge_warnings,
+        bridge_turns_checked=bridge_checked,
     )
     print_report(report)
     return report

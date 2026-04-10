@@ -1196,7 +1196,7 @@ class Runner:
             try:
                 post = self.client.get_state()
                 post_screen = post.get("screen", "").upper()
-                if "COMBAT" not in post_screen:
+                if post_screen not in ("COMBAT",):
                     # Verify enemies are actually dead (not a mid-combat phase transition)
                     combat = post.get("combat") or {}
                     enemies = combat.get("enemies") or []
@@ -1289,7 +1289,21 @@ class Runner:
                             pass
                     return
 
-            # Only card rewards or nothing left.  Proceed safely.
+            # Only card rewards or nothing left.
+            # If the card reward hasn't been handled yet, claim the card
+            # item to open card selection instead of skipping.
+            if not self._card_reward_handled:
+                # Claim the first available reward (index 0) to open
+                # card selection.  Don't use stored indices — they shift.
+                self._log_action("  [dim]auto: claim_reward(0) — opening card selection[/dim]")
+                if not self.dry_run:
+                    try:
+                        self._execute_with_retry("claim_reward", option_index=0)
+                        self.action_count += 1
+                    except Exception:
+                        pass
+                return  # Next tick will see card selection screen
+
             if "proceed" in actions:
                 self._log_action("  [dim]auto: proceed (rewards done)[/dim]")
                 if not self.dry_run:
@@ -1299,10 +1313,8 @@ class Runner:
                     except Exception:
                         pass
             elif "collect_rewards_and_proceed" in actions:
-                # Safe if card was already handled by intercept, or no card
-                # reward exists.  Either way the intercept owns card decisions.
                 if self._card_reward_handled:
-                    self._log_action("  [dim]auto: collect_rewards_and_proceed (card handled by intercept)[/dim]")
+                    self._log_action("  [dim]auto: collect_rewards_and_proceed (card handled)[/dim]")
                 else:
                     self._log_action("  [dim]auto: collect_rewards_and_proceed[/dim]")
                 if not self.dry_run:
@@ -2173,16 +2185,27 @@ class Runner:
                     opt.get("title") or opt.get("name", ""))
                 label = title or strip_markup(desc)[:40] or f"Option {i}"
 
-                # Match against profile to get trained option_type
+                # Match against profile to get trained option_type.
+                # Dynamic events (e.g. potion-based) generate option titles
+                # at runtime.  Try prefix matching as a fallback before
+                # giving up — "Insert Uncommon Potion" matches "Insert".
                 profiled = pool_by_title.get(title)
+                if not profiled:
+                    # Prefix fallback: match the longest profile key that
+                    # is a prefix of the runtime title (or vice versa).
+                    for pkey, pval in pool_by_title.items():
+                        if title.startswith(pkey.split(" ")[0]):
+                            profiled = pval
+                            break
                 if profiled and "option_type" in profiled:
                     opt_types.append(profiled["option_type"])
                 else:
-                    raise RuntimeError(
-                        f"Event option {title!r} not in profile for "
-                        f"{event_name!r} — run build_event_profiles.py "
-                        f"to update it"
+                    # Unknown option — use generic type so we don't crash.
+                    self._log_action(
+                        f"  [yellow]Unknown event option {title!r} for "
+                        f"{event_name!r} — using default option_type[/yellow]"
                     )
+                    opt_types.append(19)  # 19 = misc event option
 
                 opt_cards.append(0)
                 option_labels.append(label)
@@ -2758,14 +2781,18 @@ class Runner:
                 return
 
     def _resolve_rewards_atomic(self, gs: dict) -> None:
-        """Use network to decide card reward, then call resolve_rewards."""
+        """Use network to decide card reward, then claim rewards.
+
+        On NCardRewardSelectionScreen (card_options visible): evaluate with
+        the network and call resolve_rewards atomically.
+
+        On NRewardsScreen (card_options empty): card options aren't visible
+        yet.  Claim non-card rewards individually, then open the card
+        selection screen via claim_reward on the card item, wait for card
+        options, and let the network decide.
+        """
         self.game_state = gs
 
-        # Determine card choice: need card selection data.
-        # If we're on the REWARD screen, the card options aren't visible
-        # yet — resolve_rewards will open the picker internally.
-        # If we're on CARD_SELECTION, we can evaluate now.
-        card_index = None  # Default: skip
         reward_data = gs.get("reward") or {}
         av_reward = (gs.get("agent_view") or {}).get("reward") or {}
         card_options = (
@@ -2776,52 +2803,145 @@ class Runner:
         )
 
         if card_options:
-            # Network evaluates the card options
-            decision = self._az_decide_card_reward(gs)
-            if decision is not None:
-                self._log_action(f"  [blue]{decision.reasoning}[/blue]")
-                self._track_decision("card_reward", "network")
-                if self.logger:
-                    self.logger.log_decision(
-                        game_state=gs, screen_type="card_reward",
-                        options=gs.get("available_actions", []),
-                        choice={"action": decision.action,
-                                "option_index": decision.option_index,
-                                "reasoning": decision.reasoning},
-                        source="network",
-                        network_value=decision.network_value,
-                        head_scores=decision.head_scores,
-                    )
-                if decision.action == "choose_reward_card":
-                    card_index = decision.option_index
-                else:
-                    card_index = None  # Skip
-                    self._deck_size_after_skip = len(
-                        (gs.get("run") or {}).get("deck", [])
-                    )
-        else:
-            self._log_action("  [dim]No card options visible — resolve_rewards will handle[/dim]")
+            # Already on card selection screen — decide and resolve atomically
+            card_index = self._evaluate_card_reward(gs, card_options)
+            self._log_action(
+                f"  [green]resolve_rewards (card_index={card_index})[/green]"
+            )
+            self._card_reward_handled = True
+            if not self.dry_run:
+                try:
+                    if card_index is not None:
+                        self._execute_with_retry(
+                            "resolve_rewards", card_index=card_index)
+                    else:
+                        self._execute_with_retry("resolve_rewards")
+                    self.action_count += 1
+                except Exception as e:
+                    self._log_action(f"  [red]resolve_rewards failed: {e}[/red]")
+                    try:
+                        self._execute_with_retry("collect_rewards_and_proceed")
+                    except Exception:
+                        pass
+            return
 
-        # Single atomic call: claims gold/potion/relic + takes/skips card
-        self._log_action(
-            f"  [green]resolve_rewards (card_index={card_index})[/green]"
-        )
-        self._card_reward_handled = True
+        # On NRewardsScreen — card options aren't visible yet.
+        # Claim rewards one at a time (always index 0, since indices shift
+        # after each claim), then wait for the card selection screen.
+        self._log_action("  [dim]On reward screen — claiming rewards to reach card selection[/dim]")
+
+        # Claim up to 10 reward items (gold, potions, relics, then card).
+        # Each claim removes an item so we always use index 0.
         if not self.dry_run:
+            for _ in range(10):
+                try:
+                    fresh = self.client.get_state()
+                except Exception:
+                    break
+                self.game_state = fresh
+                fresh_screen = fresh.get("screen", "").upper()
+
+                # Reached card selection — stop claiming
+                if "CARD_SELECTION" in fresh_screen:
+                    break
+                # Left rewards entirely — no card reward exists
+                if "REWARD" not in fresh_screen:
+                    break
+
+                fresh_reward = fresh.get("reward") or {}
+                fresh_items = fresh_reward.get("rewards") or []
+                if not fresh_items:
+                    break
+
+                try:
+                    self._execute_with_retry("claim_reward", option_index=0)
+                    self.action_count += 1
+                    time.sleep(0.2)
+                except Exception:
+                    break
+
+        # Poll for card options on the card selection screen
+        card_options = []
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            time.sleep(0.3)
             try:
-                if card_index is not None:
+                gs = self.client.get_state()
+            except Exception:
+                break
+            self.game_state = gs
+            screen = gs.get("screen", "").upper()
+
+            reward_data = gs.get("reward") or {}
+            av_reward = (gs.get("agent_view") or {}).get("reward") or {}
+            card_options = (
+                reward_data.get("card_options")
+                or av_reward.get("cards")
+                or (gs.get("selection") or {}).get("cards")
+                or []
+            )
+            if card_options:
+                break
+            # Left the reward flow entirely (no card reward existed)
+            if "REWARD" not in screen and "CARD_SELECTION" not in screen:
+                break
+
+        # Step 4: Decide and pick/skip
+        self._card_reward_handled = True
+        if card_options and not self.dry_run:
+            card_index = self._evaluate_card_reward(gs, card_options)
+            if card_index is not None:
+                self._log_action(
+                    f"  [green]choose_reward_card (card_index={card_index})[/green]"
+                )
+                try:
                     self._execute_with_retry(
-                        "resolve_rewards", card_index=card_index)
-                else:
-                    self._execute_with_retry("resolve_rewards")
-                self.action_count += 1
-            except Exception as e:
-                self._log_action(f"  [red]resolve_rewards failed: {e}[/red]")
-                # Fall back to collect_rewards_and_proceed
+                        "choose_reward_card", option_index=card_index)
+                    self.action_count += 1
+                except Exception as e:
+                    self._log_action(f"  [red]choose_reward_card failed: {e}[/red]")
+            else:
+                self._log_action("  [dim]skip_reward_cards[/dim]")
+                try:
+                    self._execute_with_retry("skip_reward_cards")
+                    self.action_count += 1
+                except Exception as e:
+                    self._log_action(f"  [red]skip_reward_cards failed: {e}[/red]")
+        elif not card_options:
+            self._log_action("  [dim]No card options found — proceeding[/dim]")
+            if not self.dry_run:
                 try:
                     self._execute_with_retry("collect_rewards_and_proceed")
                 except Exception:
                     pass
+
+    def _evaluate_card_reward(
+        self, gs: dict, card_options: list,
+    ) -> int | None:
+        """Ask the network which card to take. Returns card_index or None (skip)."""
+        decision = self._az_decide_card_reward(gs)
+        if decision is not None:
+            self._log_action(f"  [blue]{decision.reasoning}[/blue]")
+            self._track_decision("card_reward", "network")
+            if self.logger:
+                self.logger.log_decision(
+                    game_state=gs, screen_type="card_reward",
+                    options=gs.get("available_actions", []),
+                    choice={"action": decision.action,
+                            "option_index": decision.option_index,
+                            "reasoning": decision.reasoning},
+                    source="network",
+                    network_value=decision.network_value,
+                    head_scores=decision.head_scores,
+                )
+            if decision.action == "choose_reward_card":
+                return decision.option_index
+            else:
+                self._deck_size_after_skip = len(
+                    (gs.get("run") or {}).get("deck", [])
+                )
+                return None
+        return None
 
     # ------------------------------------------------------------------
     # Action execution with retry

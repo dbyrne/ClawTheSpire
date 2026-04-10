@@ -137,7 +137,72 @@ def state_from_mcp(raw: dict, card_db: CardDB,
         if skills > 0:
             state.player.powers["_skills_played"] = skills
 
+    _validate_bridge_state(state, raw)
+
     return state
+
+
+# ---------------------------------------------------------------------------
+# Bridge invariant checks
+# ---------------------------------------------------------------------------
+
+# Powers the simulator always stores as positive (debuff magnitude).
+# If the bridge produces a negative value for any of these, the network
+# will see an inverted feature vs training.
+_POSITIVE_SIGN_POWERS = {"Shrink", "Weak", "Vulnerable", "Frail"}
+
+# Known potion effect keys the simulator and encoding understand.
+_KNOWN_POTION_EFFECTS = {"heal", "block", "strength", "damage_all", "enemy_weak"}
+
+import logging as _logging
+_bridge_log = _logging.getLogger("sts2_solver.bridge")
+
+
+def _validate_bridge_state(state: "CombatState", raw: dict) -> None:
+    """Check bridge output for divergences from simulator conventions.
+
+    These are cheap assertions that catch the class of bugs where
+    the game API represents data differently than the simulator.
+    Warnings are logged, not raised, so the runner keeps going.
+    """
+    # 1. Power sign convention: debuffs should be positive in our model
+    for name in _POSITIVE_SIGN_POWERS:
+        val = state.player.powers.get(name, 0)
+        if val < 0:
+            _bridge_log.warning(
+                "BRIDGE_DIVERGENCE: player power %s=%d (expected positive). "
+                "Network sees inverted feature vs training.", name, val)
+
+    # 2. Potion classification: occupied slots should have known effects
+    run = raw.get("run") or {}
+    potions_raw = run.get("potions") or []
+    for i, (pot_raw, pot_state) in enumerate(
+        zip(potions_raw, state.player.potions)
+    ):
+        if not pot_raw.get("occupied"):
+            continue
+        if not pot_state or not any(k in pot_state for k in _KNOWN_POTION_EFFECTS):
+            name = pot_raw.get("name", "?")
+            pid = pot_raw.get("potion_id", "?")
+            _bridge_log.warning(
+                "BRIDGE_DIVERGENCE: potion slot %d (%s / %s) has no "
+                "classified effect — network sees empty slot.", i, name, pid)
+
+    # 3. Hand cards: every card should resolve from card_db (not fallback)
+    for card in state.player.hand:
+        if card.id == "" or card.id.startswith("UNKNOWN"):
+            _bridge_log.warning(
+                "BRIDGE_DIVERGENCE: hand card %r not found in card_db. "
+                "Network sees fallback stats.", card.name)
+
+    # 4. Enemy powers: check for unexpected negative values
+    for j, enemy in enumerate(state.enemies):
+        for name in _POSITIVE_SIGN_POWERS:
+            val = enemy.powers.get(name, 0)
+            if val < 0:
+                _bridge_log.warning(
+                    "BRIDGE_DIVERGENCE: enemy %d (%s) power %s=%d "
+                    "(expected positive).", j, enemy.name, name, val)
 
 
 def action_to_mcp(action: Action) -> dict:
@@ -205,13 +270,24 @@ def _classify_potion(potion_id: str, name: str) -> dict | None:
 
 
 def _parse_powers(powers_raw: list[dict]) -> dict[str, int]:
-    """Parse runtime powers list into {power_name: amount} dict."""
+    """Parse runtime powers list into {power_name: amount} dict.
+
+    The game stores some debuffs as negative amounts (e.g. Shrink=-1)
+    while the simulator stores them as positive (Shrink=+1, matching
+    Weak/Vulnerable convention).  Normalize here so the network sees
+    consistent signs between training and real games.
+    """
+    # Powers the game stores negative but the simulator stores positive
+    _FLIP_SIGN = {"Shrink"}
+
     result: dict[str, int] = {}
     for p in powers_raw:
         # Runtime format: {"power_id": "VULNERABLE_POWER", "name": "Vulnerable", "amount": 2}
         name = p.get("name", "")
         amount = p.get("amount", 0)
         if name and amount != 0:
+            if name in _FLIP_SIGN and amount < 0:
+                amount = -amount
             result[name] = amount
     return result
 

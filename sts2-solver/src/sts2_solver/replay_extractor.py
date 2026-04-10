@@ -215,7 +215,8 @@ def extract_run(path: Path) -> RunReplay | None:
                 player_block=p.get("block", 0),
                 player_energy=p.get("energy", 0),
                 player_powers={
-                    pw["name"]: pw["amount"]
+                    pw["name"]: (-pw["amount"] if pw["name"] == "Shrink" and pw["amount"] < 0
+                                 else pw["amount"])
                     for pw in (p.get("powers") or [])
                 },
                 hand=list(event.get("hand") or []),
