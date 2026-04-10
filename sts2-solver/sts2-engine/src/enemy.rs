@@ -295,6 +295,7 @@ pub fn set_enemy_intents(state: &mut CombatState, ais: &mut [EnemyAI], rng: &mut
 pub fn resolve_intent_side_effects(
     state: &mut CombatState,
     ais: &mut [EnemyAI],
+    new_ais: &mut Vec<EnemyAI>,
     side_effects: &HashMap<String, HashMap<String, Intent>>,
     monsters: &HashMap<String, MonsterData>,
     profiles: &HashMap<String, EnemyProfile>,
@@ -387,7 +388,21 @@ pub fn resolve_intent_side_effects(
     for (mut enemy, ai) in new_enemies {
         enemy.powers.insert("Minion".to_string(), 1);
         state.enemies.push(enemy);
-        ais.to_vec().push(ai); // Note: caller must handle extending AIs vec
+        new_ais.push(ai);
+    }
+}
+
+/// Ensure enemy_ais vec has an entry for every enemy in state.
+/// Spawned minions (e.g. Wrigglers from Infested) get a default AI.
+pub fn sync_enemy_ais(
+    state: &CombatState,
+    enemy_ais: &mut Vec<EnemyAI>,
+    profiles: &HashMap<String, EnemyProfile>,
+) {
+    while enemy_ais.len() < state.enemies.len() {
+        let idx = enemy_ais.len();
+        let ai = create_enemy_ai(&state.enemies[idx].id, profiles);
+        enemy_ais.push(ai);
     }
 }
 

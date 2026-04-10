@@ -454,9 +454,11 @@ def start_turn(state: CombatState) -> None:
     if state.player.powers.pop("_thrumming_hatchet", 0) > 0:
         stash = getattr(state, '_thrumming_stash', [])
         for card in stash:
-            # Remove from discard pile (where _move_card_after_play put it)
-            for j, d in enumerate(state.player.discard_pile):
-                if d is card:
+            # Remove from discard pile (where _move_card_after_play put it).
+            # Use id match (not identity) so this survives deepcopy.
+            for j in range(len(state.player.discard_pile) - 1, -1, -1):
+                d = state.player.discard_pile[j]
+                if d.id == card.id:
                     state.player.discard_pile.pop(j)
                     break
             state.player.hand.append(card)
@@ -741,7 +743,7 @@ def tick_enemy_powers(state: CombatState) -> None:
     Order matters: Weak/Vulnerable must be active during enemy attacks,
     then expire afterward. Poison deals damage after enemies act.
     """
-    for enemy in state.enemies:
+    for enemy_idx, enemy in enumerate(state.enemies):
         if not enemy.is_alive:
             continue
         # Territorial: gain Strength equal to stacks at end of turn
@@ -767,7 +769,6 @@ def tick_enemy_powers(state: CombatState) -> None:
                 if was_alive:
                     # Death from poison: triggers with from_poison=True
                     from .effects import _on_enemy_death
-                    enemy_idx = state.enemies.index(enemy)
                     _on_enemy_death(state, enemy_idx, from_poison=True)
 
 

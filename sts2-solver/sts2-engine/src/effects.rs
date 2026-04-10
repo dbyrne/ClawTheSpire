@@ -353,6 +353,39 @@ pub fn lose_hp(state: &mut CombatState, amount: i32) {
 }
 
 // ---------------------------------------------------------------------------
+// Execute a pending choice action
+// ---------------------------------------------------------------------------
+
+/// Resolve a ChooseCard action: discard, choose-from-hand, or choose-from-discard.
+pub fn execute_choice(state: &mut CombatState, choice_idx: usize, rng: &mut impl Rng) {
+    let choice_type = match state.pending_choice {
+        Some(ref pc) => pc.choice_type.clone(),
+        None => return,
+    };
+    match choice_type.as_str() {
+        "discard_from_hand" => {
+            if choice_idx < state.player.hand.len() {
+                discard_card_from_hand(state, choice_idx, rng);
+            }
+        }
+        "choose_from_hand" => {
+            // Generic pick-from-hand (e.g. Headbutt choosing card to put on draw pile)
+            // For now just mark as chosen; specific card effects handle the rest.
+        }
+        "choose_from_discard" => {
+            // Generic pick-from-discard (e.g. retrieval effects)
+            // For now just mark as chosen; specific card effects handle the rest.
+        }
+        _ => {}
+    }
+    let should_clear = if let Some(ref mut pc) = state.pending_choice {
+        pc.chosen_so_far.push(choice_idx);
+        pc.chosen_so_far.len() >= pc.num_choices
+    } else { false };
+    if should_clear { state.pending_choice = None; }
+}
+
+// ---------------------------------------------------------------------------
 // Discard from hand (with Sly triggers)
 // ---------------------------------------------------------------------------
 

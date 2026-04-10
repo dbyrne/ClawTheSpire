@@ -317,8 +317,8 @@ impl<'a> MCTS<'a> {
             vec![]
         };
 
-        // Value from end-of-turn state
-        let value = self.estimate_eot_value(state, rng);
+        // Value from current state (symmetric: no simulation for any action type)
+        let value = self.estimate_leaf_value(state);
 
         // Create child nodes (lazy — state=None)
         let mut children = Vec::with_capacity(actions.len());
@@ -348,19 +348,12 @@ impl<'a> MCTS<'a> {
         }
     }
 
-    // --- End-of-turn value estimation ---
-    fn estimate_eot_value(&self, state: &CombatState, rng: &mut impl Rng) -> f32 {
-        let mut eot = state.clone();
-        combat::end_turn(&mut eot, self.card_db, rng);
-        combat::resolve_enemy_intents(&mut eot);
-        combat::tick_enemy_powers(&mut eot);
-
-        if let Some(outcome) = is_combat_over(&eot) {
+    // --- Leaf value estimation ---
+    fn estimate_leaf_value(&self, state: &CombatState) -> f32 {
+        if let Some(outcome) = is_combat_over(state) {
             return if outcome == "win" { 1.0 } else { -1.0 };
         }
-
-        combat::start_turn(&mut eot, rng);
-        self.inference.value_only(&eot)
+        self.inference.value_only(state)
     }
 
     // --- Apply action to state ---
@@ -382,8 +375,8 @@ impl<'a> MCTS<'a> {
             Action::UsePotion { potion_idx } => {
                 combat::use_potion(state, *potion_idx);
             }
-            Action::ChooseCard { choice_idx: _ } => {
-                // TODO: resolve pending choice
+            Action::ChooseCard { choice_idx } => {
+                crate::effects::execute_choice(state, *choice_idx, rng);
             }
         }
     }

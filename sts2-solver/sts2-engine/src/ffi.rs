@@ -260,17 +260,7 @@ fn run_combat_nogil(
                 match &result.action {
                     Action::EndTurn => break,
                     Action::ChooseCard { choice_idx } => {
-                        let should_discard = state.pending_choice.as_ref()
-                            .map(|pc| pc.choice_type == "discard_from_hand")
-                            .unwrap_or(false);
-                        if should_discard && *choice_idx < state.player.hand.len() {
-                            crate::effects::discard_card_from_hand(&mut state, *choice_idx, &mut rng);
-                        }
-                        let should_clear = if let Some(ref mut pc) = state.pending_choice {
-                            pc.chosen_so_far.push(*choice_idx);
-                            pc.chosen_so_far.len() >= pc.num_choices
-                        } else { false };
-                        if should_clear { state.pending_choice = None; }
+                        crate::effects::execute_choice(&mut state, *choice_idx, &mut rng);
                     }
                     Action::UsePotion { potion_idx } => {
                         combat::use_potion(&mut state, *potion_idx);
@@ -291,8 +281,10 @@ fn run_combat_nogil(
             if outcome.is_some() { break; }
 
             combat::end_turn(&mut state, &card_db, &mut rng);
+            enemy::sync_enemy_ais(&state, &mut enemy_ais, &profiles);
             combat::resolve_enemy_intents(&mut state);
             combat::tick_enemy_powers(&mut state);
+            enemy::sync_enemy_ais(&state, &mut enemy_ais, &profiles);
 
             outcome = combat::is_combat_over(&state);
             if outcome.is_some() { break; }

@@ -292,6 +292,13 @@ When we reach a position we haven't seen before (a leaf node), we:
 - Create child nodes for each legal action (lazily — we don't compute their
   game states until we actually visit them, saving time)
 
+**Symmetric leaf evaluation:** All actions are evaluated the same way — apply the
+action's immediate effect, then ask the NN to evaluate the resulting state. EndTurn
+does **not** simulate enemy attacks, poison ticks, or card draw. The NN learns to
+predict those outcomes from the visible state (enemy intents, poison stacks, block,
+HP). This keeps credit assignment clean: poison damage is credited to the cards that
+applied it, not to the EndTurn action that happened to trigger the tick.
+
 #### 3. BACKUP — Propagate the value back up
 
 Walk back up to the root, adding the value estimate to every node along the path.
