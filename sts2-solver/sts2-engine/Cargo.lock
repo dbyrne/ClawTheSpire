@@ -657,6 +657,7 @@ dependencies = [
 name = "sts2_engine"
 version = "0.1.0"
 dependencies = [
+ "ndarray",
  "ort",
  "pyo3",
  "rand",
