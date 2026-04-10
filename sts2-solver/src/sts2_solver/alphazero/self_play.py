@@ -384,7 +384,8 @@ def _read_progress(path: Path) -> dict:
 _worker_state: dict[str, Any] = {}
 
 
-def _worker_init(num_trunk_blocks: int, weights_path: str, rust_data_json: str = "") -> None:
+def _worker_init(num_trunk_blocks: int, weights_path: str,
+                 rust_monster_json: str = "{}", rust_profiles_json: str = "{}") -> None:
     """Per-worker initialization. Builds card_db, vocabs, config (once per process)."""
     card_db = load_cards()
     vocabs = build_vocabs_from_card_db(card_db)
@@ -401,7 +402,8 @@ def _worker_init(num_trunk_blocks: int, weights_path: str, rust_data_json: str =
         weights_path=weights_path,
         current_sd_id=None,
         rust_engine=rust_engine,
-        rust_data_json=rust_data_json,
+        rust_monster_json=rust_monster_json,
+        rust_profiles_json=rust_profiles_json,
     )
 
 
@@ -444,8 +446,8 @@ def _play_one_game(args: tuple) -> Any:
             onnx_full_path=str(onnx_path / "full_model.onnx"),
             onnx_value_path=str(onnx_path / "value_model.onnx"),
             vocab_json=vocab_json_str,
-            monster_data_json="{}",
-            enemy_profiles_json=_worker_state.get("rust_data_json", "{}"),
+            monster_data_json=_worker_state.get("rust_monster_json", "{}"),
+            enemy_profiles_json=_worker_state.get("rust_profiles_json", "{}"),
         )
 
     from .full_run import play_full_run
@@ -578,12 +580,24 @@ def train_worker(
         export_vocabs_json(vocabs, str(Path(onnx_dir) / "vocabs.json"))
 
     # Prepare Rust data JSONs (monster data + enemy profiles)
-    rust_data_json = "{}"
+    rust_monster_json = "{}"
+    rust_profiles_json = "{}"
     if use_rust:
         import json as _json
-        from ..simulator import _load_enemy_profiles
+        from ..simulator import _ensure_data_loaded, _MONSTERS_BY_ID, _load_enemy_profiles
+        _ensure_data_loaded()
+        # Monster HP data for spawning
+        monsters = {}
+        for mid, m in _MONSTERS_BY_ID.items():
+            monsters[mid] = {
+                "name": m.get("name", mid),
+                "min_hp": m.get("min_hp") or 20,
+                "max_hp": m.get("max_hp") or m.get("min_hp") or 20,
+            }
+        rust_monster_json = _json.dumps(monsters)
+        # Enemy AI profiles
         profiles = _load_enemy_profiles()
-        rust_data_json = _json.dumps(profiles)
+        rust_profiles_json = _json.dumps(profiles)
 
     # Create persistent worker pool (avoids respawning processes each generation)
     pool = None
@@ -594,7 +608,8 @@ def train_worker(
         pool = mp.Pool(
             processes=effective_workers,
             initializer=_worker_init,
-            initargs=(config.num_trunk_blocks, weights_path, rust_data_json),
+            initargs=(config.num_trunk_blocks, weights_path,
+                      rust_monster_json, rust_profiles_json),
         )
 
     for gen in range(1, num_generations + 1):
@@ -664,8 +679,8 @@ def train_worker(
                     onnx_full_path=str(Path(onnx_dir) / "full_model.onnx"),
                     onnx_value_path=str(Path(onnx_dir) / "value_model.onnx"),
                     vocab_json=_vocab_json_content,
-                    monster_data_json="{}",
-                    enemy_profiles_json=rust_data_json,
+                    monster_data_json=rust_monster_json,
+                    enemy_profiles_json=rust_profiles_json,
                 )
             for args in game_args:
                 seed, temp, sims, sd_id, _onnx = args
