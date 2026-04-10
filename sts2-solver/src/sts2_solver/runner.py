@@ -980,6 +980,12 @@ class Runner:
                 cards_played.append(label)
                 targets_chosen.append(first_action.target_idx)
                 self._potions_used_this_turn.add(first_action.potion_idx)
+                self.logger._emit({
+                    "type": "potion_use",
+                    "slot": first_action.potion_idx,
+                    "potion": pot_name,
+                    "target": first_action.target_idx,
+                })
 
                 if not self.dry_run:
                     mcp_action = action_to_mcp(first_action)
@@ -1236,15 +1242,33 @@ class Runner:
 
         # discard_potion as sole action: game is forcing a potion discard
         # (e.g. potions full after a reward). Just discard slot 0.
-        # But if the player has no potions, this is a transient state —
-        # the game hasn't populated real actions yet. Skip this tick.
+        # But this is often a transient state where real actions haven't
+        # loaded yet. Skip if: no potions held, OR mid-combat (between
+        # turns the game briefly shows only discard_potion before combat
+        # actions populate).
         if actions == ["discard_potion"]:
             potions = (run.get("potions") or [])
             has_potions = any(p.get("occupied") for p in potions if isinstance(p, dict))
             if not has_potions:
                 self._log_action("  [dim]skip: discard_potion but no potions (transient)[/dim]")
                 return
-            self._log_action("  [dim]auto: discard_potion (slot 0)[/dim]")
+            if self._combat_logged:
+                self._log_action("  [dim]skip: discard_potion mid-combat (transient)[/dim]")
+                return
+            # Identify which potion is in slot 0
+            potion_name = None
+            for p in potions:
+                if isinstance(p, dict) and p.get("index", p.get("slot")) == 0:
+                    potion_name = p.get("name", "unknown")
+                    break
+            self._log_action(f"  [dim]auto: discard_potion (slot 0: {potion_name})[/dim]")
+            self.logger._emit({
+                "type": "potion_discard",
+                "slot": 0,
+                "potion": potion_name,
+                "reason": "forced",
+                "screen_type": screen_type,
+            })
             if not self.dry_run:
                 try:
                     self._execute_with_retry("discard_potion", option_index=0)
@@ -2805,6 +2829,14 @@ class Runner:
         if card_options:
             # Already on card selection screen — decide and resolve atomically
             card_index = self._evaluate_card_reward(gs, card_options)
+            # Log non-card reward items that will be claimed atomically
+            reward_items = reward_data.get("rewards") or av_reward.get("rewards") or []
+            if reward_items:
+                self.logger._emit({
+                    "type": "reward_claim_atomic",
+                    "items": reward_items,
+                    "card_index": card_index,
+                })
             self._log_action(
                 f"  [green]resolve_rewards (card_index={card_index})[/green]"
             )
@@ -2852,6 +2884,16 @@ class Runner:
                 fresh_items = fresh_reward.get("rewards") or []
                 if not fresh_items:
                     break
+
+                # Log what we're about to claim
+                item = fresh_items[0]
+                item_type = item.get("type", "unknown") if isinstance(item, dict) else str(item)
+                item_desc = item if isinstance(item, str) else item.get("name", item.get("type", "?"))
+                self._log_action(f"  [dim]claim_reward[0]: {item_desc}[/dim]")
+                self.logger._emit({
+                    "type": "reward_claim",
+                    "item": item if isinstance(item, (str, dict)) else str(item),
+                })
 
                 try:
                     self._execute_with_retry("claim_reward", option_index=0)
