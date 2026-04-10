@@ -514,8 +514,7 @@ def train_worker(
     scheduler = CosineAnnealingLR(optimizer, T_max=num_generations, eta_min=1e-5)
     replay_buffer = ReplayBuffer(capacity=15_000)
     option_buffer = ReplayBuffer(capacity=15_000)  # All non-combat decisions (cards, rest, map, shop)
-    mcts = _legacy_mcts(network, vocabs, config, card_db=card_db, device="cpu")
-    mcts.add_noise = True  # Dirichlet noise for exploration during training
+    mcts = None  # Python MCTS removed; Rust engine handles all self-play
 
     save_path = Path(save_dir) if save_dir else Path(__file__).resolve().parents[4] / "alphazero_checkpoints"
     save_path.mkdir(parents=True, exist_ok=True)
