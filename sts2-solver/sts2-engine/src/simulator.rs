@@ -267,8 +267,10 @@ pub fn run_act1(
     let mut potions: Vec<Potion> = Vec::new();
 
     let act_id = "OVERGROWTH".to_string();
-    let room_sequence = generate_room_sequence(&game_data.map_pool, &act_id, &mut rng);
     let boss_id = String::new();
+
+    // Pick a map and create dynamic walker
+    let map_idx = pick_map_idx(&game_data.map_pool, &act_id, &mut rng);
 
     let mut result = FullRunResult {
         outcome: "lose".into(), floor_reached: 0,
@@ -291,29 +293,61 @@ pub fn run_act1(
     }
     let mut event_idx = 0;
 
-    for (floor_idx, room_entry) in room_sequence.iter().enumerate() {
-        let floor_num = (floor_idx + 1) as i32;
+    // Dynamic map walking: floor 1 is always Neow (event)
+    let mut walker: Option<MapWalker> = map_idx.map(|i| MapWalker::new(&game_data.map_pool[i]));
+    let fallback = fallback_rooms();
+    let mut fallback_idx = 0;
+
+    for floor_num in 1..=17 {
         result.floor_reached = floor_num;
 
-        // Build remaining path (single room types only, choices shown as "normal")
-        let remaining_path: Vec<String> = room_sequence[floor_idx..].iter()
-            .map(|r| r.as_single().to_string()).collect();
+        // Get remaining path from walker (for state encoding)
+        let remaining_path: Vec<String> = walker.as_ref()
+            .map(|w| w.remaining_room_types())
+            .unwrap_or_default();
 
-        // Resolve map choices via ONNX option head
-        let room_type: String = match room_entry {
-            RoomEntry::Single(rt) => rt.clone(),
-            RoomEntry::Choice(choices) => {
-                let (chosen_idx, sample) = pick_map_path_network(
-                    choices, &deck, hp, max_hp, floor_num, gold,
-                    &relics, &act_id, &boss_id, &remaining_path,
-                    game_data, option_eval,
-                );
-                if let Some(s) = sample {
-                    result.option_samples.push(s);
+        // Determine room type for this floor
+        let (room_type, chosen_idx) = if floor_num == 1 {
+            // Floor 1 is always Neow event
+            ("event".to_string(), 0)
+        } else if let Some(ref w) = walker {
+            match w.current_floor() {
+                Some(info) => {
+                    if let Some(ref choices) = info.choices {
+                        // Choice node — network decides
+                        let (idx, sample) = pick_map_path_network(
+                            choices, &deck, hp, max_hp, floor_num, gold,
+                            &relics, &act_id, &boss_id, &remaining_path,
+                            game_data, option_eval,
+                        );
+                        if let Some(s) = sample {
+                            result.option_samples.push(s);
+                        }
+                        let rt = choices.get(idx).cloned().unwrap_or("normal".into());
+                        (rt, idx)
+                    } else {
+                        (info.room_type.clone(), 0)
+                    }
                 }
-                choices.get(chosen_idx).cloned().unwrap_or_else(|| "normal".into())
+                None => break, // Map exhausted
+            }
+        } else {
+            // Fallback: use hardcoded sequence
+            if fallback_idx < fallback.len() {
+                let (rt, _) = fallback[fallback_idx];
+                fallback_idx += 1;
+                (rt.to_string(), 0)
+            } else {
+                break;
             }
         };
+
+        // Advance walker to reflect the chosen path
+        if floor_num > 1 {
+            if let Some(ref mut w) = walker {
+                w.advance(chosen_idx, &mut rng);
+            }
+        }
 
         match room_type.as_str() {
             // =============================================================
@@ -1077,20 +1111,6 @@ fn build_starter_deck(card_db: &CardDB) -> Vec<Card> {
     deck
 }
 
-enum RoomEntry {
-    Single(String),
-    Choice(Vec<String>),
-}
-
-impl RoomEntry {
-    fn as_single(&self) -> &str {
-        match self {
-            RoomEntry::Single(s) => s,
-            RoomEntry::Choice(v) => v.first().map(|s| s.as_str()).unwrap_or("normal"),
-        }
-    }
-}
-
 const WEAK_ROW_THRESHOLD: i32 = 4;
 
 fn node_type_to_room(node_type: &str, row: i32) -> String {
@@ -1107,91 +1127,155 @@ fn node_type_to_room(node_type: &str, row: i32) -> String {
     }
 }
 
-fn walk_map(map_data: &MapData, rng: &mut impl Rng) -> Vec<RoomEntry> {
-    let mut by_pos: HashMap<(i32, i32), &MapNode> = HashMap::new();
-    for n in &map_data.nodes {
-        by_pos.insert((n.row, n.col), n);
-    }
+/// Dynamic map walker: tracks current position, advances after each choice.
+/// This ensures future rooms reflect the actual path taken, so the network
+/// can learn that early map choices influence what's available later.
+struct MapWalker {
+    by_pos: HashMap<(i32, i32), MapNode>,
+    current_positions: Vec<(i32, i32)>,
+    floor: i32,
+}
 
-    // Find start (row 0)
-    let start = map_data.nodes.iter().find(|n| n.row == 0);
-    if start.is_none() { return vec![RoomEntry::Single("boss".into())]; }
+struct FloorInfo {
+    room_type: String,           // Resolved room type
+    choices: Option<Vec<String>>, // None if no choice, Some(types) if choice needed
+    choice_nodes: Vec<(i32, i32)>, // Positions of nodes for each choice
+}
 
-    let mut rooms = Vec::new();
-    rooms.push(RoomEntry::Single("event".into())); // Floor 1 = Neow
-
-    // Advance to row 1
-    let mut current_nodes: Vec<&MapNode> = Vec::new();
-    if let Some(s) = start {
-        for c in &s.children {
-            if let Some(n) = by_pos.get(&(c.row, c.col)) {
-                current_nodes.push(n);
-            }
+impl MapWalker {
+    fn new(map_data: &MapData) -> Self {
+        let mut by_pos = HashMap::new();
+        for n in &map_data.nodes {
+            by_pos.insert((n.row, n.col), n.clone());
         }
-    }
-
-    while !current_nodes.is_empty() {
-        let row = current_nodes[0].row;
-        let mut choices: Vec<String> = Vec::new();
-        for n in &current_nodes {
-            choices.push(node_type_to_room(&n.node_type, row));
-        }
-
-        // Deduplicate
-        let mut unique: Vec<String> = Vec::new();
-        for c in &choices {
-            if !unique.contains(c) { unique.push(c.clone()); }
-        }
-
-        let chosen_node = if unique.len() == 1 {
-            rooms.push(RoomEntry::Single(unique[0].clone()));
-            // Pick a random node from current
-            current_nodes.choose(rng).copied()
-        } else {
-            rooms.push(RoomEntry::Choice(unique));
-            None // Choice resolved at play time
-        };
-
-        // Advance to children
-        let mut children_set: HashSet<(i32, i32)> = HashSet::new();
-        if let Some(node) = chosen_node {
-            for c in &node.children {
-                children_set.insert((c.row, c.col));
-            }
-        } else {
-            // Multiple choices — collect all children
-            for n in &current_nodes {
-                for c in &n.children {
-                    children_set.insert((c.row, c.col));
+        // Start at row 0, advance to row 1 children
+        let start_nodes: Vec<&MapNode> = map_data.nodes.iter()
+            .filter(|n| n.row == 0).collect();
+        let mut row1_pos: Vec<(i32, i32)> = Vec::new();
+        let mut seen = HashSet::new();
+        for s in &start_nodes {
+            for c in &s.children {
+                let pos = (c.row, c.col);
+                if by_pos.contains_key(&pos) && seen.insert(pos) {
+                    row1_pos.push(pos);
                 }
             }
         }
-
-        current_nodes = children_set.iter()
-            .filter_map(|pos| by_pos.get(pos).copied())
-            .collect();
+        MapWalker { by_pos, current_positions: row1_pos, floor: 1 }
     }
 
-    rooms
+    fn current_nodes(&self) -> Vec<&MapNode> {
+        self.current_positions.iter()
+            .filter_map(|pos| self.by_pos.get(pos))
+            .collect()
+    }
+
+    fn current_floor(&self) -> Option<FloorInfo> {
+        let nodes = self.current_nodes();
+        if nodes.is_empty() { return None; }
+        let row = nodes[0].row;
+        let mut room_types: Vec<String> = Vec::new();
+        let mut positions: Vec<(i32, i32)> = Vec::new();
+        for n in &nodes {
+            let rt = node_type_to_room(&n.node_type, row);
+            room_types.push(rt);
+            positions.push((n.row, n.col));
+        }
+        // Deduplicate
+        let mut unique_types: Vec<String> = Vec::new();
+        let mut unique_positions: Vec<(i32, i32)> = Vec::new();
+        for (rt, pos) in room_types.iter().zip(positions.iter()) {
+            if !unique_types.contains(rt) {
+                unique_types.push(rt.clone());
+                unique_positions.push(*pos);
+            }
+        }
+        if unique_types.len() == 1 {
+            Some(FloorInfo {
+                room_type: unique_types[0].clone(),
+                choices: None,
+                choice_nodes: unique_positions,
+            })
+        } else {
+            Some(FloorInfo {
+                room_type: String::new(),
+                choices: Some(unique_types),
+                choice_nodes: unique_positions,
+            })
+        }
+    }
+
+    /// Advance: follow only the chosen node's children.
+    fn advance(&mut self, chosen_idx: usize, rng: &mut impl Rng) {
+        self.floor += 1;
+        let nodes = self.current_nodes();
+        if nodes.is_empty() { return; }
+
+        let chosen = if chosen_idx < nodes.len() {
+            nodes[chosen_idx]
+        } else {
+            nodes.choose(rng).copied().unwrap_or(nodes[0])
+        };
+
+        let mut next_pos = Vec::new();
+        let mut seen = HashSet::new();
+        for c in &chosen.children {
+            let pos = (c.row, c.col);
+            if self.by_pos.contains_key(&pos) && seen.insert(pos) {
+                next_pos.push(pos);
+            }
+        }
+        self.current_positions = next_pos;
+    }
+
+    fn remaining_room_types(&self) -> Vec<String> {
+        let mut result = Vec::new();
+        let mut frontier = self.current_positions.clone();
+        for _ in 0..20 {
+            if frontier.is_empty() { break; }
+            let mut next = Vec::new();
+            let mut seen = HashSet::new();
+            for pos in &frontier {
+                if let Some(n) = self.by_pos.get(pos) {
+                    result.push(node_type_to_room(&n.node_type, n.row));
+                    for c in &n.children {
+                        let cp = (c.row, c.col);
+                        if self.by_pos.contains_key(&cp) && seen.insert(cp) {
+                            next.push(cp);
+                        }
+                    }
+                }
+            }
+            frontier = next;
+        }
+        result
+    }
 }
 
-fn generate_room_sequence(map_pool: &[MapData], act_id: &str, rng: &mut impl Rng) -> Vec<RoomEntry> {
-    // Try to pick a real map from pool
-    let filtered: Vec<&MapData> = map_pool.iter()
-        .filter(|m| m.act_id == act_id || act_id.is_empty())
-        .collect();
-    if let Some(&&ref map) = filtered.choose(rng) {
-        return walk_map(map, rng);
+fn pick_map_idx(map_pool: &[MapData], act_id: &str, rng: &mut impl Rng) -> Option<usize> {
+    let filtered: Vec<usize> = map_pool.iter().enumerate()
+        .filter(|(_, m)| m.act_id == act_id || act_id.is_empty())
+        .map(|(i, _)| i).collect();
+    if let Some(&idx) = filtered.choose(rng) {
+        return Some(idx);
     }
-    if let Some(map) = map_pool.choose(rng) {
-        return walk_map(map, rng);
+    if !map_pool.is_empty() {
+        Some(rng.random_range(0..map_pool.len()))
+    } else {
+        None
     }
-    // Fallback: hardcoded sequence
+}
+
+/// Fallback room sequence when no map pool available.
+fn fallback_rooms() -> Vec<(&'static str, bool)> {
+    // (room_type, is_choice)
     vec![
-        "event", "weak", "weak", "weak", "event", "normal", "normal",
-        "elite", "rest", "normal", "normal", "event", "shop",
-        "normal", "elite", "rest", "boss",
-    ].into_iter().map(|s| RoomEntry::Single(s.into())).collect()
+        ("event", false), ("weak", false), ("weak", false), ("weak", false),
+        ("event", false), ("normal", false), ("normal", false),
+        ("elite", false), ("rest", false), ("normal", false), ("normal", false),
+        ("event", false), ("shop", false), ("normal", false),
+        ("elite", false), ("rest", false), ("boss", false),
+    ]
 }
 
 fn pick_encounter(
