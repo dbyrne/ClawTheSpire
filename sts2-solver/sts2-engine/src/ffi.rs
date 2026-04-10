@@ -345,11 +345,8 @@ fn build_python_result(py: Python<'_>, cr: &CombatResultRust) -> PyResult<PyObje
     Ok(result.into())
 }
 
-fn sample_to_py(py: Python<'_>, sample: &RustTrainingSample) -> PyResult<Py<PyDict>> {
-    let d = PyDict::new(py);
-
+fn state_to_py<'py>(py: Python<'py>, s: &crate::encode::EncodedState) -> PyResult<Bound<'py, PyDict>> {
     let st = PyDict::new(py);
-    let s = &sample.state;
     st.set_item("hand_card_ids", &s.hand_card_ids)?;
     st.set_item("hand_features", &s.hand_features)?;
     st.set_item("hand_mask", bool_list(py, &s.hand_mask))?;
@@ -373,15 +370,18 @@ fn sample_to_py(py: Python<'_>, sample: &RustTrainingSample) -> PyResult<Py<PyDi
     st.set_item("boss_id", s.boss_id)?;
     st.set_item("path_ids", &s.path_ids)?;
     st.set_item("path_mask", bool_list(py, &s.path_mask))?;
-    d.set_item("state_tensors", st)?;
+    Ok(st)
+}
 
+fn sample_to_py(py: Python<'_>, sample: &RustTrainingSample) -> PyResult<Py<PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item("state_tensors", state_to_py(py, &sample.state)?)?;
     d.set_item("action_card_ids", &sample.actions.card_ids)?;
     d.set_item("action_features", &sample.actions.features)?;
     d.set_item("action_mask", bool_list(py, &sample.actions.mask))?;
     d.set_item("policy", &sample.policy)?;
     d.set_item("value", 0.0f32)?;
     d.set_item("num_actions", sample.num_actions)?;
-
     Ok(d.into())
 }
 
@@ -523,10 +523,11 @@ pub fn play_all_games(
         }
         d.set_item("combat_samples", py_samples)?;
 
-        // Option samples
+        // Option samples (include state tensors for option head training)
         let py_opt_samples = PyList::empty(py);
         for sample in &result.option_samples {
             let s = PyDict::new(py);
+            s.set_item("state_tensors", state_to_py(py, &sample.state)?)?;
             s.set_item("option_types", &sample.option_types)?;
             s.set_item("option_cards", &sample.option_cards)?;
             s.set_item("chosen_idx", sample.chosen_idx)?;

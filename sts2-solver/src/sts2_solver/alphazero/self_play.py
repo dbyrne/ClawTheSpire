@@ -763,14 +763,20 @@ def train_worker(
                     )
                     replay_buffer.add(sample, is_win=is_win)
 
-                # Option samples (need state_tensors for option head training)
+                # Option samples (with state tensors for option head training)
                 for s in r.get("option_samples", []):
-                    # Build dummy state tensors — the option head only needs
-                    # encode_state output, so we create minimal tensors.
-                    # In practice, we'd need to collect state tensors from Rust.
-                    # For now, skip option samples without state tensors.
-                    # TODO: have Rust return state tensors in option samples
-                    pass
+                    st = s.get("state_tensors")
+                    if not st:
+                        continue
+                    osample = OptionSample(
+                        state_tensors=_rust_state_to_tensors(st),
+                        option_types=s["option_types"],
+                        option_cards=s["option_cards"],
+                        chosen_idx=s["chosen_idx"],
+                        value=s["value"],
+                        floor=s.get("floor", 0),
+                    )
+                    option_buffer.add(osample, is_win=is_win)
 
                 total_games += 1
                 gen_floors.append(r["floor_reached"])
