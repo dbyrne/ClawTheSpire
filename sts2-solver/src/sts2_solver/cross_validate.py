@@ -849,26 +849,29 @@ def test_decision_parity(
         # Try to find latest checkpoint in alphazero_checkpoints/
         ckpt_dir = Path(__file__).resolve().parents[3] / "alphazero_checkpoints"
         if ckpt_dir.exists():
-            ckpts = sorted(ckpt_dir.glob("gen_*.pt"))
+            ckpts = list(ckpt_dir.glob("gen_*.pt"))
             if ckpts:
-                checkpoint_path = ckpts[-1]
+                checkpoint_path = max(ckpts, key=lambda p: p.stat().st_mtime)
     if checkpoint_path is None:
         log.info("No checkpoint found — skipping decision parity test")
         return None
 
     try:
         import torch
-        from .alphazero.mcts import MCTS
+        import sts2_engine
         from .alphazero.network import STS2Network
         from .alphazero.encoding import build_vocabs_from_card_db, EncoderConfig
-    except ImportError:
-        log.info("PyTorch not available — skipping decision parity test")
+        from .alphazero.onnx_export import export_onnx, export_vocabs_json
+        from .state_serializer import combat_state_to_json
+        from .actions import Action
+    except ImportError as exc:
+        log.info("Dependencies not available — skipping decision parity test: %s", exc)
         return None
 
     vocabs = build_vocabs_from_card_db(card_db)
     config = EncoderConfig()
 
-    # Load model
+    # Load model and export ONNX for Rust MCTS
     log.info("Loading checkpoint: %s", checkpoint_path)
     try:
         network = STS2Network(vocabs, config)
@@ -886,7 +889,14 @@ def test_decision_parity(
             return None
         network.load_state_dict(state_dict)
         network.eval()
-        mcts = MCTS(network, vocabs, config, card_db=card_db)
+
+        import tempfile
+        onnx_dir = tempfile.mkdtemp(prefix="sts2_cv_onnx_")
+        onnx_full_path, onnx_value_path, _ = export_onnx(network, config, onnx_dir)
+        vocab_path = Path(onnx_dir) / "vocabs.json"
+        export_vocabs_json(vocabs, str(vocab_path))
+        with open(vocab_path) as f:
+            vocab_json = f.read()
     except Exception as e:
         log.warning("Failed to load checkpoint: %s", e)
         return None
@@ -919,12 +929,30 @@ def test_decision_parity(
                     if turn.targets_chosen else None
                 )
 
-                # What MCTS would choose
+                # What MCTS would choose (via Rust engine)
                 try:
-                    with torch.no_grad():
-                        mcts_action, policy, root_value = mcts.search(
-                            state, num_simulations=50, temperature=0,
-                        )
+                    import time as _time
+                    state_json = combat_state_to_json(state)
+                    result = sts2_engine.mcts_search(
+                        state_json, onnx_full_path, onnx_value_path,
+                        vocab_json, 50, 0.0,
+                        int(_time.time() * 1000) & 0xFFFFFFFF,
+                    )
+                    at = result["action_type"]
+                    if at == "play_card":
+                        mcts_action = Action("play_card",
+                                             card_idx=result["card_idx"],
+                                             target_idx=result.get("target_idx"))
+                    elif at == "use_potion":
+                        mcts_action = Action("use_potion",
+                                             potion_idx=result["potion_idx"])
+                    elif at == "choose_card":
+                        mcts_action = Action("choose_card",
+                                             choice_idx=result["choice_idx"])
+                    else:
+                        mcts_action = Action("end_turn")
+                    policy = list(result["policy"])
+                    root_value = float(result["root_value"])
                 except Exception as e:
                     log.debug("MCTS search failed: %s", e)
                     continue

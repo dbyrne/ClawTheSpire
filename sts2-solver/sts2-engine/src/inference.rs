@@ -19,7 +19,7 @@ pub struct StubInference;
 impl Inference for StubInference {
     fn evaluate(&self, _state: &CombatState, actions: &[Action]) -> (Vec<f32>, f32) {
         let n = actions.len();
-        (if n > 0 { vec![1.0 / n as f32; n] } else { vec![] }, 0.0)
+        (vec![0.0; n], 0.0)
     }
     fn value_only(&self, _state: &CombatState) -> f32 { 0.0 }
 }
@@ -110,12 +110,12 @@ impl Inference for OnnxInference {
                 let (_, logits_data) = logits_tensor.try_extract_tensor::<f32>().unwrap();
                 let value = value_data[0];
                 let logits: Vec<f32> = logits_data.iter().take(actions.len()).copied().collect();
-                (softmax(&logits), value)
+                (logits, value)
             }
             Err(e) => {
                 eprintln!("ONNX error: {e}");
                 let n = actions.len();
-                (if n > 0 { vec![1.0 / n as f32; n] } else { vec![] }, 0.0)
+                (vec![0.0; n], 0.0)
             }
         }
     }

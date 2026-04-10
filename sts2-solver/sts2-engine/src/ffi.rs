@@ -12,7 +12,7 @@ use crate::combat;
 use crate::encode::{self, Vocabs, EncodedState, EncodedActions, CARD_STATS_DIM};
 use crate::enemy;
 use crate::inference::OnnxInference;
-use crate::mcts::MCTS;
+use crate::mcts::{MCTS, SearchResult};
 use crate::types::*;
 
 // ---------------------------------------------------------------------------
@@ -612,6 +612,99 @@ pub fn step(state_json: &str, action_json: &str, seed: u64) -> PyResult<String> 
     // Serialize result
     serde_json::to_string(&state)
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("serialize: {e}")))
+}
+
+// ---------------------------------------------------------------------------
+// mcts_search: single-decision MCTS for live runner
+// ---------------------------------------------------------------------------
+
+#[pyfunction]
+#[pyo3(signature = (
+    state_json,
+    onnx_full_path, onnx_value_path,
+    vocab_json,
+    mcts_sims,
+    temperature,
+    seed
+))]
+pub fn mcts_search(
+    py: Python<'_>,
+    state_json: &str,
+    onnx_full_path: &str,
+    onnx_value_path: &str,
+    vocab_json: &str,
+    mcts_sims: usize,
+    temperature: f32,
+    seed: u64,
+) -> PyResult<PyObject> {
+    let state: CombatState = serde_json::from_str(state_json)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("state: {e}")))?;
+    let vocabs: Vocabs = serde_json::from_str(vocab_json)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("vocabs: {e}")))?;
+
+    let onnx_full = onnx_full_path.to_string();
+    let onnx_value = onnx_value_path.to_string();
+
+    let result = py.allow_threads(move || {
+        ONNX_CACHE.with(|cache| {
+            let mut cache = cache.borrow_mut();
+
+            let cache_key = onnx_full.clone();
+            let needs_reload = match &*cache {
+                Some(c) => c.cache_key != cache_key,
+                None => true,
+            };
+            if needs_reload {
+                let inf = OnnxInference::new(&onnx_full, &onnx_value, vocabs.clone())
+                    .map_err(|e| format!("ONNX: {e}"))?;
+                *cache = Some(CachedInference {
+                    cache_key,
+                    inference: inf,
+                });
+            }
+
+            let inference = &cache.as_ref().unwrap().inference;
+            let card_db = CardDB::default();
+            let mcts_engine = MCTS::new(&card_db, inference);
+            let mut rng = StdRng::seed_from_u64(seed);
+
+            Ok(mcts_engine.search(&state, mcts_sims, temperature, &mut rng))
+        })
+    });
+
+    let sr: SearchResult = result
+        .map_err(|e: String| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+
+    // Build Python dict result
+    let dict = PyDict::new(py);
+
+    // Action
+    match &sr.action {
+        Action::EndTurn => {
+            dict.set_item("action_type", "end_turn")?;
+        }
+        Action::PlayCard { card_idx, target_idx } => {
+            dict.set_item("action_type", "play_card")?;
+            dict.set_item("card_idx", *card_idx)?;
+            match target_idx {
+                Some(t) => dict.set_item("target_idx", *t)?,
+                None => dict.set_item("target_idx", py.None())?,
+            }
+        }
+        Action::UsePotion { potion_idx } => {
+            dict.set_item("action_type", "use_potion")?;
+            dict.set_item("potion_idx", *potion_idx)?;
+        }
+        Action::ChooseCard { choice_idx } => {
+            dict.set_item("action_type", "choose_card")?;
+            dict.set_item("choice_idx", *choice_idx)?;
+        }
+    }
+
+    dict.set_item("policy", sr.policy)?;
+    dict.set_item("root_value", sr.root_value)?;
+
+    Ok(dict.into())
 }
 
 /// Health check.

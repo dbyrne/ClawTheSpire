@@ -20,7 +20,7 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-from .alphazero.self_play import categorize_event_option
+from .option_types import categorize_event_option
 from .game_data import strip_markup
 
 log = logging.getLogger(__name__)

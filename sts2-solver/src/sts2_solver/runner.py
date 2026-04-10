@@ -48,12 +48,12 @@ from .game_data import load_game_data
 from .run_logger import RunLogger
 from .alphazero.encoding import build_vocabs_from_card_db, EncoderConfig
 from .alphazero.network import STS2Network
-from .alphazero.mcts import MCTS as AlphaZeroMCTS
 from .alphazero.state_tensor import encode_state as az_encode_state
-from .alphazero.self_play import (
+from .option_types import (
     OPTION_REST, OPTION_SMITH, OPTION_SHOP_REMOVE, OPTION_SHOP_BUY,
     OPTION_SHOP_LEAVE, ROOM_TYPE_TO_OPTION,
 )
+from .state_serializer import combat_state_to_json
 
 
 DEFAULT_CHARACTER = "Ironclad"
@@ -120,10 +120,13 @@ class Runner:
         self._turn_targets_chosen = None
         self._turn_start_gs = None
 
-        # AlphaZero MCTS (initialized lazily after card_db is loaded)
-        self._mcts: AlphaZeroMCTS | None = None
+        # Neural network + Rust MCTS (initialized lazily after card_db is loaded)
+        self._network: STS2Network | None = None
         self._mcts_vocabs = None
         self._mcts_config = None
+        self._onnx_full_path: str | None = None
+        self._onnx_value_path: str | None = None
+        self._vocab_json: str | None = None
         self._card_reward_handled = False  # Reset when leaving reward screen
         self._deck_select_stuck = False  # Track stuck deck_select screens
         self._stuck_since: float | None = None  # Timestamp when we got stuck
@@ -323,8 +326,8 @@ class Runner:
         self.console.print(f"[dim]Loaded {len(self.card_db)} cards[/dim]")
         self.console.print("[dim]Loading game data...[/dim]")
         self.game_data = load_game_data()
-        # Initialize AlphaZero MCTS
-        self.console.print("[dim]Initializing AlphaZero MCTS...[/dim]")
+        # Initialize network + Rust MCTS
+        self.console.print("[dim]Initializing neural network + Rust MCTS...[/dim]")
         self._mcts_vocabs = build_vocabs_from_card_db(self.card_db)
         self._mcts_config = EncoderConfig()
         import torch
@@ -349,10 +352,20 @@ class Runner:
             self.console.print(f"[dim]Loaded checkpoint: {self._checkpoint_name} ({len(compatible)}/{len(saved)} params)[/dim]")
         else:
             self.console.print("[dim]No checkpoint found — using random network[/dim]")
-        self._mcts = AlphaZeroMCTS(
-            network, self._mcts_vocabs, self._mcts_config,
-            card_db=self.card_db, device="cpu",
+        self._network = network
+
+        # Export ONNX for Rust MCTS engine
+        import tempfile
+        from .alphazero.onnx_export import export_onnx, export_vocabs_json
+        self._onnx_dir = tempfile.mkdtemp(prefix="sts2_onnx_")
+        self._onnx_full_path, self._onnx_value_path, _ = export_onnx(
+            network, self._mcts_config, self._onnx_dir,
         )
+        vocab_path = str(_Path(self._onnx_dir) / "vocabs.json")
+        export_vocabs_json(self._mcts_vocabs, vocab_path)
+        with open(vocab_path) as f:
+            self._vocab_json = f.read()
+        self.console.print(f"[dim]Exported ONNX models to {self._onnx_dir}[/dim]")
         self.logger.metadata = {
             "checkpoint": self._checkpoint_name or "none",
         }
@@ -362,6 +375,42 @@ class Runner:
             self.console.print(f"[green]Connected to game v{self.logger.game_version}[/green]")
         except ConnectionError:
             self.console.print("[yellow]Game not reachable yet — will retry[/yellow]")
+
+    def _rust_mcts_search(self, sim_state, num_simulations=200, temperature=0):
+        """Run MCTS via Rust engine. Returns (Action, policy, root_value)."""
+        import sts2_engine
+        from .actions import Action
+
+        state_json = combat_state_to_json(sim_state)
+        result = sts2_engine.mcts_search(
+            state_json,
+            self._onnx_full_path,
+            self._onnx_value_path,
+            self._vocab_json,
+            num_simulations,
+            float(temperature),
+            int(time.time() * 1000) & 0xFFFFFFFF,
+        )
+
+        action_type = result["action_type"]
+        if action_type == "end_turn":
+            action = Action(action_type="end_turn")
+        elif action_type == "play_card":
+            action = Action(action_type="play_card",
+                            card_idx=result["card_idx"],
+                            target_idx=result.get("target_idx"))
+        elif action_type == "use_potion":
+            action = Action(action_type="use_potion",
+                            potion_idx=result["potion_idx"])
+        elif action_type == "choose_card":
+            action = Action(action_type="choose_card",
+                            choice_idx=result["choice_idx"])
+        else:
+            action = Action(action_type="end_turn")
+
+        policy = list(result["policy"])
+        root_value = float(result["root_value"])
+        return action, policy, root_value
 
     def run(self) -> None:
         self._init_deps()
@@ -969,7 +1018,7 @@ class Runner:
                         sim_state.player.potions[pidx] = {}
                 hand = list(sim_state.player.hand)
                 t0 = time.perf_counter()
-                first_action, policy, root_value = self._mcts.search(
+                first_action, policy, root_value = self._rust_mcts_search(
                     sim_state, num_simulations=200, temperature=0,
                 )
                 solve_ms = (time.perf_counter() - t0) * 1000
@@ -1749,7 +1798,7 @@ class Runner:
         st = az_encode_state(dummy, self._mcts_vocabs, self._mcts_config)
 
         with torch.no_grad():
-            hidden = self._mcts.network.encode_state(**st)
+            hidden = self._network.encode_state(**st)
 
         return st, hidden, hp, max_hp, gold, floor, deck_cards
 
@@ -1876,7 +1925,7 @@ class Runner:
 
         # Run MCTS — enumerate_actions will return only choose_card actions
         try:
-            first_action, policy, root_value = self._mcts.search(
+            first_action, policy, root_value = self._rust_mcts_search(
                 sim_state, num_simulations=200, temperature=0,
             )
         except Exception as e:
@@ -1977,14 +2026,14 @@ class Runner:
         """
         import torch
         from .deterministic_advisor import Decision
-        from .alphazero.self_play import OPTION_SHOP_REMOVE
+        from .option_types import OPTION_SHOP_REMOVE
 
-        if not self._mcts or not self._mcts_vocabs:
+        if not self._network or not self._mcts_vocabs:
             return None
 
         try:
             st, hidden, hp, max_hp, gold, floor, deck = self._az_run_state_tensors(gs)
-            network = self._mcts.network
+            network = self._network
             vocabs = self._mcts_vocabs
 
             cards = sel.get("cards", [])
@@ -2049,7 +2098,7 @@ class Runner:
 
         try:
             st, hidden, hp, max_hp, gold, floor, deck = self._az_run_state_tensors(gs)
-            network = self._mcts.network
+            network = self._network
             vocabs = self._mcts_vocabs
 
             opt_types = [OPTION_REST]
@@ -2116,7 +2165,7 @@ class Runner:
 
         try:
             st, hidden, hp, max_hp, gold, floor, deck = self._az_run_state_tensors(gs)
-            network = self._mcts.network
+            network = self._network
 
             map_data = gs.get("map") or (gs.get("agent_view") or {}).get("map") or {}
             nodes = map_data.get("available_nodes") or map_data.get("nodes") or []
@@ -2181,7 +2230,7 @@ class Runner:
 
         try:
             st, hidden, hp, max_hp, gold, floor, deck = self._az_run_state_tensors(gs)
-            network = self._mcts.network
+            network = self._network
             vocabs = self._mcts_vocabs
             actions = gs.get("available_actions", [])
 
@@ -2281,11 +2330,11 @@ class Runner:
         """Use network option head to pick a card reward (or skip)."""
         import torch
         from .deterministic_advisor import Decision
-        from .alphazero.self_play import OPTION_CARD_REWARD, OPTION_CARD_SKIP
+        from .option_types import OPTION_CARD_REWARD, OPTION_CARD_SKIP
 
         try:
             st, hidden, hp, max_hp, gold, floor, deck = self._az_run_state_tensors(gs)
-            network = self._mcts.network
+            network = self._network
             vocabs = self._mcts_vocabs
 
             # Get offered cards from the game state.
@@ -2374,13 +2423,13 @@ class Runner:
         """
         import torch
         from .deterministic_advisor import Decision
-        from .alphazero.self_play import categorize_event_option
+        from .option_types import categorize_event_option
         from .game_data import strip_markup
         from .simulator import _load_event_profiles
 
         try:
             st, hidden, hp, max_hp, gold, floor, deck = self._az_run_state_tensors(gs)
-            network = self._mcts.network
+            network = self._network
 
             event = gs.get("event") or (gs.get("agent_view") or {}).get("event") or {}
             options = event.get("options") or []
@@ -2490,11 +2539,11 @@ class Runner:
         """Use network option head for card selection (removal/upgrade/transform)."""
         import torch
         from .deterministic_advisor import Decision
-        from .alphazero.self_play import OPTION_SHOP_REMOVE, OPTION_SMITH, OPTION_CARD_REWARD, OPTION_EVENT_TRANSFORM
+        from .option_types import OPTION_SHOP_REMOVE, OPTION_SMITH, OPTION_CARD_REWARD, OPTION_EVENT_TRANSFORM
 
         try:
             st, hidden, hp, max_hp, gold, floor, deck = self._az_run_state_tensors(gs)
-            network = self._mcts.network
+            network = self._network
             vocabs = self._mcts_vocabs
 
             sel = gs.get("selection") or {}
@@ -2746,16 +2795,16 @@ class Runner:
         Raises if the network is unavailable.
         """
         import torch
-        from .alphazero.self_play import (
+        from .option_types import (
             OPTION_SHOP_REMOVE, OPTION_SMITH,
             OPTION_CARD_REWARD, OPTION_EVENT_TRANSFORM,
         )
 
-        if not self._mcts or not self._mcts_vocabs:
-            raise RuntimeError("Network required for deck_select but _mcts not initialized")
+        if not self._network or not self._mcts_vocabs:
+            raise RuntimeError("Network required for deck_select but not initialized")
 
         st, hidden, hp, max_hp, gold, floor, deck = self._az_run_state_tensors(gs)
-        network = self._mcts.network
+        network = self._network
         vocabs = self._mcts_vocabs
 
         sel = gs.get("selection") or {}
@@ -2831,7 +2880,7 @@ class Runner:
             try:
                 import torch
                 st, hidden, *_ = self._az_run_state_tensors(gs)
-                nv = self._mcts.network.value_head(hidden).item()
+                nv = self._network.value_head(hidden).item()
             except Exception:
                 pass
             hs = {

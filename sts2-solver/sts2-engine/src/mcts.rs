@@ -7,6 +7,7 @@ use rand::Rng;
 
 use crate::actions::enumerate_actions;
 use crate::combat::{self, is_combat_over};
+use crate::inference::softmax;
 use crate::types::*;
 
 // ---------------------------------------------------------------------------
@@ -92,8 +93,8 @@ pub struct SearchResult {
 
 /// Trait for neural network inference. Implemented by ONNX wrapper.
 pub trait Inference {
-    /// Encode state + actions → (policy_priors, value).
-    /// policy_priors has one entry per legal action.
+    /// Encode state + actions → (logits, value).
+    /// logits has one entry per legal action (raw, pre-softmax).
     fn evaluate(&self, state: &CombatState, actions: &[Action]) -> (Vec<f32>, f32);
 
     /// Encode state → value only (for end-of-turn estimation).
@@ -280,7 +281,41 @@ impl<'a> MCTS<'a> {
         }
 
         // Neural network evaluation for policy
-        let (priors, _policy_value) = self.inference.evaluate(state, &actions);
+        let (logits, _policy_value) = self.inference.evaluate(state, &actions);
+
+        // Decouple end_turn from card/potion plays in the policy prior.
+        // The policy head learns "which card to play next" — whether to STOP
+        // playing is a value question answered by MCTS. end_turn gets a fixed
+        // uniform prior so it's always explored but can't dominate.
+        let n = actions.len();
+        let priors = if n > 0 {
+            let play_indices: Vec<usize> = actions.iter().enumerate()
+                .filter(|(_, a)| !matches!(a, Action::EndTurn))
+                .map(|(i, _)| i)
+                .collect();
+            let et_count = n - play_indices.len();
+
+            if !play_indices.is_empty() && et_count > 0 {
+                let play_logits: Vec<f32> = play_indices.iter().map(|&i| logits[i]).collect();
+                let play_probs = softmax(&play_logits);
+                let et_prior = 1.0 / n as f32;
+                let card_share = 1.0 - et_prior * et_count as f32;
+                let mut priors = vec![0.0f32; n];
+                for (j, &idx) in play_indices.iter().enumerate() {
+                    priors[idx] = play_probs[j] * card_share;
+                }
+                for (i, action) in actions.iter().enumerate() {
+                    if matches!(action, Action::EndTurn) {
+                        priors[i] = et_prior;
+                    }
+                }
+                priors
+            } else {
+                softmax(&logits)
+            }
+        } else {
+            vec![]
+        };
 
         // Value from end-of-turn state
         let value = self.estimate_eot_value(state, rng);

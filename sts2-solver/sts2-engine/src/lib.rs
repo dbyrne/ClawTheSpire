@@ -21,5 +21,6 @@ fn sts2_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(ffi::fight_combat, m)?)?;
     m.add_function(wrap_pyfunction!(ffi::play_all_games, m)?)?;
     m.add_function(wrap_pyfunction!(ffi::step, m)?)?;
+    m.add_function(wrap_pyfunction!(ffi::mcts_search, m)?)?;
     Ok(())
 }
