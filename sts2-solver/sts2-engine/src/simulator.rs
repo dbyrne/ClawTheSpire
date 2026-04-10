@@ -168,6 +168,49 @@ pub struct MapChild {
     pub col: i32,
 }
 
+// Shop data (from shop_pool.json)
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ShopData {
+    #[serde(default)]
+    pub floor: i32,
+    #[serde(default)]
+    pub cards: Vec<ShopCard>,
+    #[serde(default)]
+    pub relics: Vec<ShopRelic>,
+    #[serde(default)]
+    pub potions: Vec<ShopPotion>,
+    #[serde(default)]
+    pub remove_cost: Option<i32>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ShopCard {
+    pub card_id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub price: i32,
+    #[serde(default)]
+    pub rarity: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ShopRelic {
+    pub relic_id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub price: i32,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ShopPotion {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub price: i32,
+}
+
 pub struct GameData {
     pub card_db: CardDB,
     pub monsters: HashMap<String, enemy::MonsterData>,
@@ -178,6 +221,7 @@ pub struct GameData {
     pub card_pool: Vec<Card>,
     pub card_pool_rarities: Vec<String>,
     pub map_pool: Vec<MapData>,
+    pub shop_pool: Vec<ShopData>,
 }
 
 // ---------------------------------------------------------------------------
@@ -610,7 +654,7 @@ fn pick_map_path_network(
     }
 }
 
-/// Shop: multi-step loop, network decides each action.
+/// Shop: multi-step loop with real shop data, network decides each action.
 fn shop_decisions_network(
     deck: &mut Vec<Card>, gold: &mut i32, potions: &mut Vec<Potion>,
     hp: i32, max_hp: i32, floor: i32,
@@ -620,9 +664,18 @@ fn shop_decisions_network(
 ) -> Vec<RustOptionSample> {
     let mut samples = Vec::new();
 
-    // Offer 3 cards from pool for purchase
-    let (shop_cards, shop_rarities) = offer_card_rewards_with_rarity(
-        &game_data.card_pool, &game_data.card_pool_rarities, deck, rng);
+    // Pick a real shop from pool (or generate synthetic)
+    let shop = game_data.shop_pool.choose(rng).cloned().unwrap_or_default();
+    let remove_cost = shop.remove_cost.unwrap_or(75);
+
+    // Resolve shop cards from card_db
+    let mut shop_cards: Vec<(Card, i32)> = Vec::new(); // (card, price)
+    let mut bought: HashSet<usize> = HashSet::new();
+    for sc in &shop.cards {
+        if let Some(card) = game_data.card_db.get(&sc.card_id) {
+            shop_cards.push((card.clone(), sc.price));
+        }
+    }
 
     for _step in 0..6 {
         let state = make_dummy_state(deck, hp, max_hp, floor, *gold, relics, act_id, boss_id, remaining_path);
@@ -630,27 +683,30 @@ fn shop_decisions_network(
         let mut opt_types = Vec::new();
         let mut opt_cards = Vec::new();
         let mut opt_stats = Vec::new();
+        // Track what each option index maps to
+        let mut opt_actions: Vec<ShopAction> = Vec::new();
 
-        // Remove options (Strike/Defend only, non-upgraded)
-        if *gold >= SHOP_REMOVE_COST {
+        // Remove options (any non-upgraded Strike/Defend)
+        if *gold >= remove_cost {
             for (i, card) in deck.iter().enumerate() {
                 let base = card.base_id();
                 if !card.upgraded && (base.contains("STRIKE") || base.contains("DEFEND")) {
                     opt_types.push(OPTION_SHOP_REMOVE);
                     opt_cards.push(game_data.vocabs.cards.get(base).copied().unwrap_or(1));
                     opt_stats.push(card_stats_vector(card).to_vec());
+                    opt_actions.push(ShopAction::Remove(i));
                 }
             }
         }
 
-        // Buy card options
-        for (ci, card) in shop_cards.iter().enumerate() {
-            let rarity = if ci < shop_rarities.len() { shop_rarities[ci].as_str() } else { "Uncommon" };
-            let cost = shop_card_cost(rarity);
-            if *gold >= cost {
+        // Buy card options (from real shop inventory)
+        for (ci, (card, price)) in shop_cards.iter().enumerate() {
+            if bought.contains(&ci) { continue; }
+            if *gold >= *price {
                 opt_types.push(OPTION_SHOP_BUY);
                 opt_cards.push(game_data.vocabs.cards.get(card.base_id()).copied().unwrap_or(1));
                 opt_stats.push(card_stats_vector(card).to_vec());
+                opt_actions.push(ShopAction::Buy(ci, *price));
             }
         }
 
@@ -659,16 +715,16 @@ fn shop_decisions_network(
             opt_types.push(OPTION_SHOP_BUY_POTION);
             opt_cards.push(0);
             opt_stats.push(vec![0.0; CARD_STATS_DIM]);
+            opt_actions.push(ShopAction::BuyPotion);
         }
 
-        // Leave (always available)
+        // Leave
         opt_types.push(OPTION_SHOP_LEAVE);
         opt_cards.push(0);
         opt_stats.push(vec![0.0; CARD_STATS_DIM]);
+        opt_actions.push(ShopAction::Leave);
 
-        if opt_types.len() <= 1 {
-            break; // Only "leave" available
-        }
+        if opt_types.len() <= 1 { break; }
 
         match option_eval.evaluate(&state, &opt_types, &opt_cards, &opt_stats, None, None) {
             Ok(result) => {
@@ -678,44 +734,24 @@ fn shop_decisions_network(
                     chosen_idx: result.best_idx, value: 0.0, floor,
                 });
 
-                let chosen_type = opt_types[result.best_idx];
-                if chosen_type == OPTION_SHOP_LEAVE {
-                    break;
-                } else if chosen_type == OPTION_SHOP_REMOVE {
-                    // Find and remove the card
-                    // The option index maps back to a deck card
-                    let mut remove_count = 0;
-                    for opt_idx in 0..result.best_idx {
-                        if opt_types[opt_idx] == OPTION_SHOP_REMOVE { remove_count += 1; }
-                    }
-                    // Find the Nth removable card
-                    let mut found = 0;
-                    for i in 0..deck.len() {
-                        let base = deck[i].base_id().to_string();
-                        if !deck[i].upgraded && (base.contains("STRIKE") || base.contains("DEFEND")) {
-                            if found == remove_count {
-                                deck.remove(i);
-                                *gold -= SHOP_REMOVE_COST;
-                                break;
-                            }
-                            found += 1;
+                match &opt_actions[result.best_idx] {
+                    ShopAction::Leave => break,
+                    ShopAction::Remove(deck_idx) => {
+                        if *deck_idx < deck.len() {
+                            deck.remove(*deck_idx);
+                            *gold -= remove_cost;
                         }
                     }
-                } else if chosen_type == OPTION_SHOP_BUY {
-                    // Buy the chosen card
-                    let mut buy_count = 0;
-                    for opt_idx in 0..result.best_idx {
-                        if opt_types[opt_idx] == OPTION_SHOP_BUY { buy_count += 1; }
+                    ShopAction::Buy(shop_idx, price) => {
+                        deck.push(shop_cards[*shop_idx].0.clone());
+                        *gold -= price;
+                        bought.insert(*shop_idx);
                     }
-                    if buy_count < shop_cards.len() {
-                        deck.push(shop_cards[buy_count].clone());
-                        let rarity = if buy_count < shop_rarities.len() { shop_rarities[buy_count].as_str() } else { "Uncommon" };
-                        *gold -= shop_card_cost(rarity);
+                    ShopAction::BuyPotion => {
+                        let pot = potion_types().choose(rng).unwrap().clone();
+                        potions.push(pot);
+                        *gold -= SHOP_POTION_COST;
                     }
-                } else if chosen_type == OPTION_SHOP_BUY_POTION {
-                    let pot = potion_types().choose(rng).unwrap().clone();
-                    potions.push(pot);
-                    *gold -= SHOP_POTION_COST;
                 }
             }
             Err(_) => break,
@@ -723,6 +759,13 @@ fn shop_decisions_network(
     }
 
     samples
+}
+
+enum ShopAction {
+    Remove(usize),     // deck index to remove
+    Buy(usize, i32),   // shop card index, price
+    BuyPotion,
+    Leave,
 }
 
 // ---------------------------------------------------------------------------

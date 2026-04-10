@@ -634,7 +634,14 @@ def train_worker(
             "card_pool_json": _json.dumps(pool_data),
             "card_db_json": _json.dumps(all_cards),
             "map_pool_json": map_pool_json,
+            "shop_pool_json": "[]",
         }
+        # Load shop pool
+        shop_pool_file = sim_dir / "shop_pool.json"
+        if not shop_pool_file.exists():
+            shop_pool_file = sim_dir / "sts2_solver" / "shop_pool.json"
+        if shop_pool_file.exists():
+            rust_data["shop_pool_json"] = shop_pool_file.read_text(encoding="utf-8")
 
     # Create worker pool
     # With Rust engine: use ThreadPoolExecutor (GIL released during combat)
@@ -733,6 +740,7 @@ def train_worker(
                 card_pool_json=rust_data["card_pool_json"],
                 card_db_json=rust_data["card_db_json"],
                 map_pool_json=rust_data["map_pool_json"],
+                shop_pool_json=rust_data["shop_pool_json"],
                 mcts_sims=mcts_simulations,
                 temperature=game_temp,
                 seeds=game_seeds,
