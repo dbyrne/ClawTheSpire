@@ -384,21 +384,30 @@ def _read_progress(path: Path) -> dict:
 _worker_state: dict[str, Any] = {}
 
 
-def _worker_init(num_trunk_blocks: int, weights_path: str) -> None:
+def _worker_init(num_trunk_blocks: int, weights_path: str, rust_data_json: str = "") -> None:
     """Per-worker initialization. Builds card_db, vocabs, config (once per process)."""
     card_db = load_cards()
     vocabs = build_vocabs_from_card_db(card_db)
     config = EncoderConfig(num_trunk_blocks=num_trunk_blocks)
+    # Try to import Rust engine
+    rust_engine = None
+    try:
+        import sts2_engine
+        rust_engine = sts2_engine
+    except ImportError:
+        pass
     _worker_state.update(
         card_db=card_db, vocabs=vocabs, config=config,
         weights_path=weights_path,
-        current_sd_id=None,  # Track which weights are loaded
+        current_sd_id=None,
+        rust_engine=rust_engine,
+        rust_data_json=rust_data_json,
     )
 
 
 def _play_one_game(args: tuple) -> Any:
     """Worker function: plays one full Act 1 run. Returns FullRunResult."""
-    game_seed, temperature, mcts_simulations, sd_id = args
+    game_seed, temperature, mcts_simulations, sd_id, onnx_dir = args
     # Rebuild network only when weights change (once per generation)
     if _worker_state.get("current_sd_id") != sd_id:
         vocabs = _worker_state["vocabs"]
@@ -418,6 +427,27 @@ def _play_one_game(args: tuple) -> Any:
     random.seed(game_seed)
     np.random.seed(game_seed % (2**32))
     rng = random.Random(game_seed)
+
+    # Rust engine params
+    rust_engine = _worker_state.get("rust_engine")
+    rust_kwargs = {}
+    if rust_engine and onnx_dir:
+        from pathlib import Path
+        onnx_path = Path(onnx_dir)
+        vocab_path = onnx_path / "vocabs.json"
+        # Read vocab JSON from file (small — ~16KB)
+        vocab_json_str = ""
+        if vocab_path.exists():
+            vocab_json_str = vocab_path.read_text(encoding="utf-8")
+        rust_kwargs = dict(
+            rust_engine=rust_engine,
+            onnx_full_path=str(onnx_path / "full_model.onnx"),
+            onnx_value_path=str(onnx_path / "value_model.onnx"),
+            vocab_json=vocab_json_str,
+            monster_data_json="{}",
+            enemy_profiles_json=_worker_state.get("rust_data_json", "{}"),
+        )
+
     from .full_run import play_full_run
     return play_full_run(
         _worker_state["mcts"],
@@ -428,6 +458,7 @@ def _play_one_game(args: tuple) -> Any:
         mcts_simulations=mcts_simulations,
         temperature=temperature,
         rng=rng,
+        **rust_kwargs,
     )
 
 
@@ -530,6 +561,30 @@ def train_worker(
     print(f"Checkpoints: {save_path}", flush=True)
     print(f"Progress: {progress_path}", flush=True)
 
+    # Check for Rust engine availability
+    use_rust = False
+    onnx_dir = str(save_path / "onnx")
+    try:
+        import sts2_engine
+        use_rust = True
+        print("Rust engine available — using ONNX inference for combat", flush=True)
+    except ImportError:
+        print("Rust engine not available — using Python MCTS", flush=True)
+
+    # Export ONNX models and vocabs (once at startup, re-exported each gen)
+    if use_rust:
+        from .onnx_export import export_onnx, export_vocabs_json
+        export_onnx(network, config, onnx_dir)
+        export_vocabs_json(vocabs, str(Path(onnx_dir) / "vocabs.json"))
+
+    # Prepare Rust data JSONs (monster data + enemy profiles)
+    rust_data_json = "{}"
+    if use_rust:
+        import json as _json
+        from ..simulator import _load_enemy_profiles
+        profiles = _load_enemy_profiles()
+        rust_data_json = _json.dumps(profiles)
+
     # Create persistent worker pool (avoids respawning processes each generation)
     pool = None
     weights_path = str(save_path / "_worker_weights.pt")
@@ -539,7 +594,7 @@ def train_worker(
         pool = mp.Pool(
             processes=effective_workers,
             initializer=_worker_init,
-            initargs=(config.num_trunk_blocks, weights_path),
+            initargs=(config.num_trunk_blocks, weights_path, rust_data_json),
         )
 
     for gen in range(1, num_generations + 1):
@@ -553,10 +608,14 @@ def train_worker(
         if pool is not None:
             torch.save(network.state_dict(), weights_path)
 
+        # Export ONNX models with updated weights each generation
+        if use_rust:
+            export_onnx(network, config, onnx_dir)
+
         # Generate unique seeds for each game from the master RNG
         game_seeds = [rng.randint(0, 2**31) for _ in range(games_per_generation)]
         game_args = [
-            (seed, game_temp, mcts_simulations, gen)
+            (seed, game_temp, mcts_simulations, gen, onnx_dir if use_rust else "")
             for seed in game_seeds
         ]
 
@@ -597,8 +656,19 @@ def train_worker(
                 _collect_result(result)
         else:
             # Sequential fallback (for debugging or --workers 1)
+            rust_kwargs = {}
+            if use_rust:
+                _vocab_json_content = Path(onnx_dir, "vocabs.json").read_text(encoding="utf-8")
+                rust_kwargs = dict(
+                    rust_engine=sts2_engine,
+                    onnx_full_path=str(Path(onnx_dir) / "full_model.onnx"),
+                    onnx_value_path=str(Path(onnx_dir) / "value_model.onnx"),
+                    vocab_json=_vocab_json_content,
+                    monster_data_json="{}",
+                    enemy_profiles_json=rust_data_json,
+                )
             for args in game_args:
-                seed, temp, sims, sd_id = args
+                seed, temp, sims, sd_id, _onnx = args
                 local_rng = random.Random(seed)
                 result = play_full_run(
                     mcts, card_db, vocabs, config,
@@ -606,6 +676,7 @@ def train_worker(
                     mcts_simulations=sims,
                     temperature=temp,
                     rng=local_rng,
+                    **rust_kwargs,
                 )
                 _collect_result(result)
 

@@ -338,13 +338,26 @@ class MCTSStrategy:
 
     def __init__(self, mcts: MCTS, vocabs: Vocabs, config: EncoderConfig,
                  card_db: CardDB, mcts_simulations: int = 100,
-                 temperature: float = 1.0):
+                 temperature: float = 1.0,
+                 rust_engine=None,
+                 onnx_full_path: str = "",
+                 onnx_value_path: str = "",
+                 vocab_json: str = "",
+                 monster_data_json: str = "{}",
+                 enemy_profiles_json: str = "{}"):
         self.mcts = mcts
         self.vocabs = vocabs
         self.config = config
         self.card_db = card_db
         self.mcts_simulations = mcts_simulations
         self.temperature = temperature
+        # Rust engine (optional — falls back to Python if None)
+        self.rust_engine = rust_engine
+        self.onnx_full_path = onnx_full_path
+        self.onnx_value_path = onnx_value_path
+        self.vocab_json = vocab_json
+        self.monster_data_json = monster_data_json
+        self.enemy_profiles_json = enemy_profiles_json
         # Run context — set via set_run_context / set_remaining_path
         self.act_id: str = ""
         self.boss_id: str = ""
@@ -370,6 +383,13 @@ class MCTSStrategy:
 
     def fight_combat(self, deck, hp, max_hp, max_energy, encounter_id, card_db,
                      rng, potions, relics, enemy_ids=None):
+        # Use Rust engine if available
+        if self.rust_engine is not None:
+            return self._fight_combat_rust(
+                deck, hp, max_hp, max_energy, encounter_id, card_db,
+                rng, potions, relics, enemy_ids,
+            )
+
         samples, outcome, turns, hp_after, remaining_potions, initial_value = mcts_combat(
             deck=deck, player_hp=hp, player_max_hp=max_hp,
             player_max_energy=max_energy, encounter_id=encounter_id,
@@ -388,6 +408,81 @@ class MCTSStrategy:
             potions_after=remaining_potions,
             samples=samples,
             initial_value=initial_value,
+        )
+
+    def _fight_combat_rust(self, deck, hp, max_hp, max_energy, encounter_id,
+                           card_db, rng, potions, relics, enemy_ids):
+        """Run combat using the Rust engine with ONNX inference."""
+        import json as _json
+
+        # Serialize deck
+        deck_json = _json.dumps([_card_to_dict(c) for c in deck])
+
+        # Serialize potions
+        potions_list = []
+        for p in (potions or []):
+            if p:
+                potions_list.append(dict(p) if isinstance(p, dict) else {
+                    "name": getattr(p, "name", ""),
+                    "heal": getattr(p, "heal", 0),
+                    "block": getattr(p, "block", 0),
+                    "strength": getattr(p, "strength", 0),
+                    "damage_all": getattr(p, "damage_all", 0),
+                    "enemy_weak": getattr(p, "enemy_weak", 0),
+                })
+            else:
+                potions_list.append({"name": ""})
+        potions_json = _json.dumps(potions_list)
+
+        # Get enemy IDs
+        if not enemy_ids:
+            from ..simulator import _ensure_data_loaded, _ENCOUNTERS_BY_ID
+            _ensure_data_loaded()
+            enc = _ENCOUNTERS_BY_ID.get(encounter_id, {})
+            enemy_ids = [m["id"] for m in enc.get("monsters", [])]
+
+        seed = rng.randint(0, 2**63)
+        result = self.rust_engine.fight_combat(
+            deck_json=deck_json,
+            player_hp=hp, player_max_hp=max_hp, player_max_energy=max_energy,
+            enemy_ids=enemy_ids or [],
+            relics=list(relics) if relics else [],
+            potions_json=potions_json,
+            floor=0, gold=0,
+            act_id=self.act_id, boss_id=self.boss_id,
+            map_path=list(self.remaining_path),
+            onnx_full_path=self.onnx_full_path,
+            onnx_value_path=self.onnx_value_path,
+            vocab_json=self.vocab_json,
+            monster_data_json=self.monster_data_json,
+            enemy_profiles_json=self.enemy_profiles_json,
+            mcts_sims=self.mcts_simulations,
+            temperature=self.temperature,
+            seed=seed,
+            add_noise=True,
+        )
+
+        # Convert Rust result dicts to TrainingSamples
+        samples = []
+        for s in result["samples"]:
+            st = s["state_tensors"]
+            samples.append(TrainingSample(
+                state_tensors=_rust_state_to_tensors(st),
+                policy=s["policy"],
+                value=s["value"],
+                action_card_ids=torch.tensor([s["action_card_ids"]], dtype=torch.long),
+                action_features=torch.tensor(s["action_features"], dtype=torch.float32).view(1, 30, -1),
+                action_mask=torch.tensor([s["action_mask"]], dtype=torch.bool),
+                num_actions=s["num_actions"],
+            ))
+
+        return StrategyCombatResult(
+            outcome=result["outcome"],
+            turns=result["turns"],
+            hp_after=result["hp_after"],
+            potions_after=result.get("potions_after", []),
+            samples=samples,
+            initial_value=result["initial_value"],
         )
 
     def pick_card_reward(self, offered, deck, hp, max_hp, floor, card_db, pools,
@@ -673,6 +768,58 @@ class MCTSStrategy:
         return (best_idx, changes, [sample])
 
 
+def _card_to_dict(card) -> dict:
+    """Serialize a Card object to a dict for Rust JSON parsing."""
+    return {
+        "id": card.id,
+        "name": card.name,
+        "cost": card.cost,
+        "card_type": card.card_type.value if hasattr(card.card_type, 'value') else str(card.card_type),
+        "target": card.target.value if hasattr(card.target, 'value') else str(card.target),
+        "upgraded": card.upgraded,
+        "damage": card.damage,
+        "block": card.block,
+        "hit_count": card.hit_count,
+        "powers_applied": list(card.powers_applied) if card.powers_applied else [],
+        "cards_draw": card.cards_draw,
+        "energy_gain": card.energy_gain,
+        "hp_loss": card.hp_loss,
+        "keywords": list(card.keywords) if card.keywords else [],
+        "tags": list(card.tags) if card.tags else [],
+        "spawns_cards": list(card.spawns_cards) if card.spawns_cards else [],
+        "is_x_cost": card.is_x_cost,
+    }
+
+
+def _rust_state_to_tensors(st: dict) -> dict:
+    """Convert Rust state tensor dict (lists) to PyTorch tensors."""
+    return {
+        "hand_features": torch.tensor(st["hand_features"], dtype=torch.float32).view(1, 15, 26),
+        "hand_mask": torch.tensor(st["hand_mask"], dtype=torch.bool).view(1, 15),
+        "hand_card_ids": torch.tensor(st["hand_card_ids"], dtype=torch.long).view(1, 15),
+        "draw_card_ids": torch.tensor(st["draw_card_ids"], dtype=torch.long).view(1, 30),
+        "draw_mask": torch.tensor(st["draw_mask"], dtype=torch.bool).view(1, 30),
+        "discard_card_ids": torch.tensor(st["discard_card_ids"], dtype=torch.long).view(1, 30),
+        "discard_mask": torch.tensor(st["discard_mask"], dtype=torch.bool).view(1, 30),
+        "exhaust_card_ids": torch.tensor(st["exhaust_card_ids"], dtype=torch.long).view(1, 30),
+        "exhaust_mask": torch.tensor(st["exhaust_mask"], dtype=torch.bool).view(1, 30),
+        "player_scalars": torch.tensor(st["player_scalars"], dtype=torch.float32).view(1, 5),
+        "player_power_ids": torch.tensor(st["player_power_ids"], dtype=torch.long).view(1, 10),
+        "player_power_amts": torch.tensor(st["player_power_amts"], dtype=torch.float32).view(1, 10),
+        "enemy_scalars": torch.tensor(st["enemy_scalars"], dtype=torch.float32).view(1, 5, 6),
+        "enemy_power_ids": torch.tensor(st["enemy_power_ids"], dtype=torch.long).view(1, 30),
+        "enemy_power_amts": torch.tensor(st["enemy_power_amts"], dtype=torch.float32).view(1, 30),
+        "relic_ids": torch.tensor(st["relic_ids"], dtype=torch.long).view(1, 10),
+        "relic_mask": torch.tensor(st["relic_mask"], dtype=torch.bool).view(1, 10),
+        "potion_features": torch.tensor(st["potion_features"], dtype=torch.float32).view(1, 18),
+        "scalars": torch.tensor(st["scalars"], dtype=torch.float32).view(1, 6),
+        "act_id": torch.tensor([[st["act_id"]]], dtype=torch.long),
+        "boss_id": torch.tensor([[st["boss_id"]]], dtype=torch.long),
+        "path_ids": torch.tensor(st["path_ids"], dtype=torch.long).view(1, 10),
+        "path_mask": torch.tensor(st["path_mask"], dtype=torch.bool).view(1, 10),
+    }
+
+
 def play_full_run(
     mcts: MCTS,
     card_db: CardDB,
@@ -682,11 +829,23 @@ def play_full_run(
     mcts_simulations: int = 100,
     temperature: float = 1.0,
     rng: random.Random | None = None,
+    rust_engine=None,
+    onnx_full_path: str = "",
+    onnx_value_path: str = "",
+    vocab_json: str = "",
+    monster_data_json: str = "{}",
+    enemy_profiles_json: str = "{}",
 ) -> FullRunResult:
     """Play a full Act 1 run. Returns result with training samples."""
     strategy = MCTSStrategy(
         mcts=mcts, vocabs=vocabs, config=config, card_db=card_db,
         mcts_simulations=mcts_simulations, temperature=temperature,
+        rust_engine=rust_engine,
+        onnx_full_path=onnx_full_path,
+        onnx_value_path=onnx_value_path,
+        vocab_json=vocab_json,
+        monster_data_json=monster_data_json,
+        enemy_profiles_json=enemy_profiles_json,
     )
     result = run_act1(strategy, character=character, seed=None, card_db=card_db)
 
