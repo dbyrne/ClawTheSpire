@@ -1076,6 +1076,14 @@ class Runner:
             # Execute the single card play
             mcp_action = action_to_mcp(first_action)
             if self.logger:
+                enemies_compact = [
+                    {"name": e.name, "hp": e.hp, "block": e.block,
+                     "intent": e.intent_type, "dmg": e.intent_damage,
+                     "hits": e.intent_hits}
+                    for e in sim_state.enemies if e.is_alive
+                ]
+                powers_compact = {k: v for k, v in sim_state.player.powers.items()
+                                  if not k.startswith("_") and v != 0}
                 self.logger._emit({
                     "type": "mcts_play",
                     "card_idx": first_action.card_idx,
@@ -1084,6 +1092,12 @@ class Runner:
                     "hand": [c.name for c in hand],
                     "policy": [round(p, 4) for p in policy[:5]],
                     "value": round(root_value, 4),
+                    "hp": sim_state.player.hp,
+                    "energy": sim_state.player.energy,
+                    "block": sim_state.player.block,
+                    "powers": powers_compact if powers_compact else None,
+                    "enemies": enemies_compact,
+                    "attacks_played": sim_state.attacks_played_this_turn,
                 })
             try:
                 self._execute_with_retry(
@@ -1107,10 +1121,24 @@ class Runner:
             except Exception:
                 break
 
-            # If we left combat (enemy died, screen changed), stop
+            # If we left combat (enemy died, screen changed), stop —
+            # UNLESS the game is showing a mid-combat choice (discard,
+            # exhaust, pick from pile). Handle those inline via MCTS.
             actions = gs.get("available_actions", [])
             if "play_card" not in actions:
-                break
+                if "select_deck_card" in actions and self._combat_logged:
+                    self._resolve_combat_choice_via_mcts(gs, cards_played, targets_chosen)
+                    # After resolving, refresh and continue the play loop
+                    try:
+                        gs = self.client.get_state()
+                        self.game_state = gs
+                    except Exception:
+                        break
+                    actions = gs.get("available_actions", [])
+                    if "play_card" not in actions:
+                        break
+                else:
+                    break
 
             # Update combat locals for next iteration
             combat = gs.get("combat") or {}
@@ -1774,6 +1802,162 @@ class Runner:
 
         return _bfs_downstream_path(
             {"nodes": nodes}, current_node, max_depth=10)
+
+    def _resolve_combat_choice_via_mcts(
+        self, gs: dict,
+        cards_played: list[str], targets_chosen: list[int | None],
+    ) -> None:
+        """Handle mid-combat choices (Survivor discard, Acrobatics, etc.) via MCTS.
+
+        When a card creates a pending choice, MCTS naturally explores each
+        option as a branch in the search tree. This runs a fresh MCTS search
+        on the current state with a pending_choice set, letting MCTS evaluate
+        the tactical consequences of each choice (what to draw, block vs damage
+        tradeoffs, etc.) rather than using the strategic OPTION_SHOP_REMOVE
+        workaround.
+        """
+        from .models import PendingChoice
+
+        sel = gs.get("selection") or {}
+        kind = (sel.get("kind") or "").lower()
+        prompt = strip_markup(sel.get("prompt") or "").lower()
+        sel_cards = sel.get("cards") or []
+
+        if not sel_cards:
+            self._log_action("  [yellow]Combat choice: no cards in selection, falling back[/yellow]")
+            return
+
+        # Determine choice type from selection kind and prompt
+        if "discard" in prompt or "exhaust" in prompt:
+            choice_type = "discard_from_hand"
+        elif "draw pile" in prompt or "put on top" in prompt:
+            choice_type = "discard_from_hand"  # mechanically same: pick card from hand
+        elif "choose" in prompt and "hand" in prompt:
+            choice_type = "choose_from_hand"
+        else:
+            choice_type = "discard_from_hand"  # default for combat_hand kinds
+
+        # Determine source card (the card that triggered this choice)
+        source_card_id = ""
+        if cards_played:
+            last_played = cards_played[-1]
+            if not last_played.startswith("Use "):
+                card_def = self.card_db.get_by_name(last_played.rstrip("+"))
+                if card_def:
+                    source_card_id = card_def.id
+
+        # Determine num_choices from selection data
+        num_choices = sel.get("num_choices", sel.get("max_choices", 1))
+
+        # Build sim state from fresh game state
+        try:
+            sim_state = state_from_mcp(gs, self.card_db,
+                                       move_indices=self._combat_move_indices)
+        except Exception as e:
+            self._log_action(f"  [red]Failed to build sim state for choice: {e}[/red]")
+            return
+
+        # Build a mapping from hand card identity to game selection indices
+        # so we can translate MCTS's choice back to the game's option_index.
+        game_idx_by_card: dict[tuple[str, int], int] = {}
+        for ci, card_info in enumerate(sel_cards):
+            card_id = card_info.get("card_id") or card_info.get("id", "")
+            game_idx = card_info.get("index", ci)
+            # Use (card_id, occurrence_count) as key to handle duplicates
+            occ = sum(1 for k in game_idx_by_card if k[0] == card_id)
+            game_idx_by_card[(card_id, occ)] = game_idx
+
+        # Set pending choice on sim state
+        sim_state.pending_choice = PendingChoice(
+            choice_type=choice_type,
+            num_choices=num_choices,
+            source_card_id=source_card_id,
+        )
+
+        # Run MCTS — enumerate_actions will return only choose_card actions
+        try:
+            first_action, policy, root_value = self._mcts.search(
+                sim_state, num_simulations=200, temperature=0,
+            )
+        except Exception as e:
+            self._log_action(f"  [red]MCTS choice search failed: {e}[/red]")
+            return
+
+        if first_action.action_type != "choose_card" or first_action.choice_idx is None:
+            self._log_action(
+                f"  [yellow]MCTS returned {first_action.action_type} for choice, "
+                f"expected choose_card[/yellow]"
+            )
+            return
+
+        # Map MCTS choice_idx (hand index) to game option_index
+        chosen_card = sim_state.player.hand[first_action.choice_idx]
+        chosen_id = chosen_card.id.rstrip("+")
+        # Count occurrences of this card_id before the chosen index to handle dupes
+        occ = sum(1 for i in range(first_action.choice_idx)
+                  if sim_state.player.hand[i].id.rstrip("+") == chosen_id)
+        game_idx = game_idx_by_card.get((chosen_id, occ))
+
+        if game_idx is None:
+            # Fallback: try matching by name
+            for ci, card_info in enumerate(sel_cards):
+                if card_info.get("name") == chosen_card.name:
+                    game_idx = card_info.get("index", ci)
+                    break
+
+        if game_idx is None:
+            self._log_action(
+                f"  [red]Could not map MCTS choice {chosen_card.name} "
+                f"(idx={first_action.choice_idx}) to game index[/red]"
+            )
+            return
+
+        verb = "discard" if "discard" in choice_type else "choose"
+        self._log_action(
+            f"  [blue]MCTS {verb}: {chosen_card.name} "
+            f"(value={root_value:.2f})[/blue]"
+        )
+
+        # Log the decision
+        if self.logger:
+            option_labels = [c.get("name", "?") for c in sel_cards]
+            self.logger.log_decision(
+                game_state=gs, screen_type="deck_select",
+                options=["select_deck_card"],
+                choice={"action": "select_deck_card",
+                        "option_index": game_idx,
+                        "reasoning": f"MCTS {verb} {chosen_card.name} (value={root_value:.2f})"},
+                source="network",
+                network_value=root_value,
+                head_scores={
+                    "head": "mcts_choice",
+                    "chosen": first_action.choice_idx,
+                    "options": [
+                        {"label": lbl, "score": round(p, 4)}
+                        for lbl, p in zip(option_labels, policy)
+                    ],
+                },
+            )
+
+        # Execute the choice
+        if not self.dry_run:
+            try:
+                self._execute_with_retry("select_deck_card", option_index=game_idx)
+                self.action_count += 1
+            except Exception as e:
+                self._log_action(f"  [red]Failed to submit choice: {e}[/red]")
+
+        # For multi-select, handle additional choices recursively
+        if num_choices > 1:
+            self._wait_for_ready()
+            try:
+                gs2 = self.client.get_state()
+                self.game_state = gs2
+                actions2 = gs2.get("available_actions", [])
+                if "select_deck_card" in actions2 and self._combat_logged:
+                    self._resolve_combat_choice_via_mcts(gs2, cards_played, targets_chosen)
+            except Exception:
+                pass
 
     def _az_decide_combat_discard(self, gs: dict, sel: dict,
                                     pick_worst: bool = True) -> "Decision | None":
