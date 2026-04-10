@@ -137,6 +137,17 @@ pub struct PlayerState {
 
 fn three() -> i32 { 3 }
 
+impl Default for PlayerState {
+    fn default() -> Self {
+        PlayerState {
+            hp: 70, max_hp: 70, block: 0, energy: 3, max_energy: 3,
+            powers: HashMap::new(),
+            hand: vec![], draw_pile: vec![], discard_pile: vec![],
+            exhaust_pile: vec![], potions: vec![],
+        }
+    }
+}
+
 impl PlayerState {
     pub fn get_power(&self, name: &str) -> i32 {
         self.powers.get(name).copied().unwrap_or(0)
@@ -274,6 +285,22 @@ pub struct CombatState {
     // RNG for shuffle/random effects during combat
     #[serde(skip)]
     pub rng_seed: u64,
+}
+
+impl Default for CombatState {
+    fn default() -> Self {
+        CombatState {
+            player: PlayerState::default(),
+            enemies: vec![], turn: 0,
+            cards_played_this_turn: 0, attacks_played_this_turn: 0,
+            cards_drawn_this_turn: 0, discards_this_turn: 0,
+            last_x_cost: 0,
+            relics: HashSet::new(), floor: 0, gold: 0,
+            pending_choice: None,
+            act_id: String::new(), boss_id: String::new(),
+            map_path: vec![], rng_seed: 0,
+        }
+    }
 }
 
 impl CombatState {

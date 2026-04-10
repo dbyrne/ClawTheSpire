@@ -16,6 +16,6 @@ pub mod ffi;
 fn sts2_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(ffi::health_check, m)?)?;
     m.add_function(wrap_pyfunction!(ffi::engine_info, m)?)?;
-    m.add_class::<ffi::CombatResult>()?;
+    m.add_function(wrap_pyfunction!(ffi::fight_combat, m)?)?;
     Ok(())
 }

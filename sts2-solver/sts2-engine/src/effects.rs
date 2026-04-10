@@ -509,6 +509,10 @@ pub fn execute_generic_effect(
 // Utility
 // ---------------------------------------------------------------------------
 
+pub fn shuffle_vec_pub<T>(vec: &mut Vec<T>, rng: &mut impl Rng) {
+    shuffle_vec(vec, rng);
+}
+
 fn shuffle_vec<T>(vec: &mut Vec<T>, rng: &mut impl Rng) {
     // Fisher-Yates shuffle
     let len = vec.len();

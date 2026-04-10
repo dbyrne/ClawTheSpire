@@ -32,7 +32,7 @@ pub const ACTION_FEAT_DIM: usize = MAX_ENEMIES + 1 + 5 + 3 + CARD_STATS_DIM;
 // ---------------------------------------------------------------------------
 
 /// Vocabulary: maps string tokens to integer indices.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Deserialize)]
 pub struct Vocabs {
     pub cards: HashMap<String, i64>,
     pub powers: HashMap<String, i64>,
