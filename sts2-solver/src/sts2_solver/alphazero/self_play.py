@@ -607,10 +607,13 @@ def train_worker(
     weights_path = str(save_path / "_worker_weights.pt")
     if effective_workers > 1:
         if use_rust:
+            # Threads: Rust releases GIL for combat, threads parallelize full runs.
+            # GIL contention on Python option head is minor (<10ms/game).
             from concurrent.futures import ThreadPoolExecutor
             thread_pool = ThreadPoolExecutor(max_workers=effective_workers)
-            print(f"Using ThreadPoolExecutor ({effective_workers} threads, GIL released in Rust)", flush=True)
+            print(f"Using ThreadPoolExecutor ({effective_workers} threads)", flush=True)
         else:
+            # Without Rust: need multiprocessing (GIL blocks PyTorch MCTS)
             torch.save(network.state_dict(), weights_path)
             pool = mp.Pool(
                 processes=effective_workers,
@@ -688,20 +691,17 @@ def train_worker(
             )
 
         if thread_pool is not None:
-            # Rust + threads: each thread gets its own MCTS for non-combat
-            # option head calls, but combat runs in Rust (GIL released)
+            # Rust + threads: combat releases GIL, threads parallelize runs
             import threading
             _collect_lock = threading.Lock()
 
             def _thread_game(args):
                 seed, temp, sims, sd_id, _onnx = args
-                # Each thread needs its own network copy for option head
                 t_network = STS2Network(vocabs, config)
                 t_network.load_state_dict(network.state_dict())
                 t_network.eval()
                 t_mcts = MCTS(t_network, vocabs, config, card_db=card_db, device="cpu")
                 t_mcts.add_noise = True
-
                 local_rng = random.Random(seed)
                 return play_full_run(
                     t_mcts, card_db, vocabs, config,
