@@ -684,6 +684,7 @@ def train_worker(
                 vocab_json=_vocab_json_content,
                 monster_data_json=rust_monster_json,
                 enemy_profiles_json=rust_profiles_json,
+                gen_id=gen,
             )
 
         if thread_pool is not None:

@@ -344,7 +344,8 @@ class MCTSStrategy:
                  onnx_value_path: str = "",
                  vocab_json: str = "",
                  monster_data_json: str = "{}",
-                 enemy_profiles_json: str = "{}"):
+                 enemy_profiles_json: str = "{}",
+                 gen_id: int = 0):
         self.mcts = mcts
         self.vocabs = vocabs
         self.config = config
@@ -358,6 +359,7 @@ class MCTSStrategy:
         self.vocab_json = vocab_json
         self.monster_data_json = monster_data_json
         self.enemy_profiles_json = enemy_profiles_json
+        self.gen_id = gen_id
         # Run context — set via set_run_context / set_remaining_path
         self.act_id: str = ""
         self.boss_id: str = ""
@@ -460,6 +462,7 @@ class MCTSStrategy:
             temperature=self.temperature,
             seed=seed,
             add_noise=True,
+            gen_id=self.gen_id,
         )
 
         # Convert Rust result dicts to TrainingSamples
@@ -835,6 +838,7 @@ def play_full_run(
     vocab_json: str = "",
     monster_data_json: str = "{}",
     enemy_profiles_json: str = "{}",
+    gen_id: int = 0,
 ) -> FullRunResult:
     """Play a full Act 1 run. Returns result with training samples."""
     strategy = MCTSStrategy(
@@ -846,6 +850,7 @@ def play_full_run(
         vocab_json=vocab_json,
         monster_data_json=monster_data_json,
         enemy_profiles_json=enemy_profiles_json,
+        gen_id=gen_id,
     )
     result = run_act1(strategy, character=character, seed=None, card_db=card_db)
 

@@ -4,6 +4,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 use crate::actions::enumerate_actions;
@@ -13,6 +14,19 @@ use crate::enemy;
 use crate::inference::OnnxInference;
 use crate::mcts::MCTS;
 use crate::types::*;
+
+// ---------------------------------------------------------------------------
+// Thread-local ONNX session cache
+// ---------------------------------------------------------------------------
+
+struct CachedInference {
+    cache_key: String,
+    inference: OnnxInference,
+}
+
+thread_local! {
+    static ONNX_CACHE: RefCell<Option<CachedInference>> = RefCell::new(None);
+}
 
 // ---------------------------------------------------------------------------
 // Training sample (collected per decision point)
@@ -57,7 +71,8 @@ struct CombatResultRust {
     monster_data_json,
     enemy_profiles_json,
     mcts_sims, temperature, seed,
-    add_noise = true
+    add_noise = true,
+    gen_id = 0
 ))]
 pub fn fight_combat(
     py: Python<'_>,
@@ -82,6 +97,7 @@ pub fn fight_combat(
     temperature: f32,
     seed: u64,
     add_noise: bool,
+    gen_id: i64,
 ) -> PyResult<PyObject> {
     // Parse inputs (with GIL — need Python error types)
     let vocabs: Vocabs = serde_json::from_str(vocab_json)
@@ -109,7 +125,7 @@ pub fn fight_combat(
             &act, &boss, map_path,
             &onnx_full, &onnx_value, vocabs,
             &monsters, &profiles,
-            mcts_sims, temperature, seed,
+            mcts_sims, temperature, seed, gen_id,
         )
     });
 
@@ -145,153 +161,152 @@ fn run_combat_nogil(
     mcts_sims: usize,
     temperature: f32,
     seed: u64,
+    gen_id: i64,
 ) -> Result<CombatResultRust, String> {
     let card_db = CardDB::default();
     let mut rng = StdRng::seed_from_u64(seed);
 
-    // Create ONNX inference
-    let inference = OnnxInference::new(onnx_full_path, onnx_value_path, vocabs.clone())
-        .map_err(|e| format!("ONNX: {e}"))?;
+    // Run entire combat inside ONNX_CACHE.with() to borrow cached session.
+    // ONNX sessions are expensive to create (~40ms each). By caching per thread
+    // and invalidating on gen_id change, we load only once per thread per generation
+    // instead of once per combat (~320 loads → ~16 loads).
+    ONNX_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
 
-    // Spawn enemies
-    let mut enemies = Vec::new();
-    let mut enemy_ais = Vec::new();
-    for mid in enemy_ids {
-        enemies.push(enemy::spawn_enemy(mid, monsters, &mut rng));
-        enemy_ais.push(enemy::create_enemy_ai(mid, profiles));
-    }
+        let cache_key = format!("{}:{}", onnx_full_path, gen_id);
+        let needs_reload = match &*cache {
+            Some(c) => c.cache_key != cache_key,
+            None => true,
+        };
+        if needs_reload {
+            let inf = OnnxInference::new(onnx_full_path, onnx_value_path, vocabs.clone())
+                .map_err(|e| format!("ONNX: {e}"))?;
+            *cache = Some(CachedInference {
+                cache_key,
+                inference: inf,
+            });
+        }
 
-    if enemies.is_empty() {
-        return Ok(CombatResultRust {
-            samples: vec![],
-            outcome: "win".to_string(),
-            turns: 0,
-            hp_after: player_hp,
-            initial_value: 0.0,
-            potions_after: vec![],
-        });
-    }
+        let inference = &cache.as_ref().unwrap().inference;
 
-    // Build combat state
-    let mut draw_pile = deck;
-    crate::effects::shuffle_vec_pub(&mut draw_pile, &mut rng);
+        // Spawn enemies
+        let mut enemies = Vec::new();
+        let mut enemy_ais = Vec::new();
+        for mid in enemy_ids {
+            enemies.push(enemy::spawn_enemy(mid, monsters, &mut rng));
+            enemy_ais.push(enemy::create_enemy_ai(mid, profiles));
+        }
 
-    let player = PlayerState {
-        hp: player_hp,
-        max_hp: player_max_hp,
-        energy: player_max_energy,
-        max_energy: player_max_energy,
-        draw_pile,
-        potions,
-        ..Default::default()
-    };
+        if enemies.is_empty() {
+            return Ok(CombatResultRust {
+                samples: vec![], outcome: "win".to_string(),
+                turns: 0, hp_after: player_hp, initial_value: 0.0,
+                potions_after: vec![],
+            });
+        }
 
-    let mut state = CombatState {
-        player,
-        enemies,
-        relics: relic_set,
-        floor,
-        gold,
-        act_id: act_id.to_string(),
-        boss_id: boss_id.to_string(),
-        map_path,
-        ..Default::default()
-    };
+        // Build combat state
+        let mut draw_pile = deck;
+        crate::effects::shuffle_vec_pub(&mut draw_pile, &mut rng);
 
-    combat::start_combat(&mut state);
+        let player = PlayerState {
+            hp: player_hp, max_hp: player_max_hp,
+            energy: player_max_energy, max_energy: player_max_energy,
+            draw_pile, potions, ..Default::default()
+        };
 
-    let mcts_engine = MCTS::new(&card_db, &inference);
+        let mut state = CombatState {
+            player, enemies, relics: relic_set,
+            floor, gold,
+            act_id: act_id.to_string(), boss_id: boss_id.to_string(),
+            map_path, ..Default::default()
+        };
 
-    let mut samples: Vec<RustTrainingSample> = Vec::new();
-    let mut initial_value: f32 = 0.0;
-    let mut outcome: Option<&str> = None;
-    let mut turn_num = 0;
-    let max_turns = 30;
+        combat::start_combat(&mut state);
 
-    for t in 1..=max_turns {
-        turn_num = t;
-        combat::start_turn(&mut state, &mut rng);
-        enemy::set_enemy_intents(&mut state, &mut enemy_ais, &mut rng);
+        let mcts_engine = MCTS::new(&card_db, inference);
 
-        let mut cards_this_turn = 0;
-        while cards_this_turn < 12 {
-            outcome = combat::is_combat_over(&state);
+        let mut samples: Vec<RustTrainingSample> = Vec::new();
+        let mut initial_value: f32 = 0.0;
+        let mut outcome: Option<&str> = None;
+        let mut turn_num = 0;
+
+        for t in 1..=30 {
+            turn_num = t;
+            combat::start_turn(&mut state, &mut rng);
+            enemy::set_enemy_intents(&mut state, &mut enemy_ais, &mut rng);
+
+            let mut cards_this_turn = 0;
+            while cards_this_turn < 12 {
+                outcome = combat::is_combat_over(&state);
+                if outcome.is_some() { break; }
+
+                let actions = enumerate_actions(&state);
+                if actions.is_empty() { break; }
+
+                let enc_state = encode::encode_state(&state, &vocabs);
+                let enc_actions = encode::encode_actions(&actions, &state, &vocabs);
+                let result = mcts_engine.search(&state, mcts_sims, temperature, &mut rng);
+
+                if t == 1 && cards_this_turn == 0 {
+                    initial_value = result.root_value as f32;
+                }
+
+                samples.push(RustTrainingSample {
+                    state: enc_state, actions: enc_actions,
+                    policy: result.policy.clone(), num_actions: actions.len(),
+                });
+
+                match &result.action {
+                    Action::EndTurn => break,
+                    Action::ChooseCard { choice_idx } => {
+                        let should_discard = state.pending_choice.as_ref()
+                            .map(|pc| pc.choice_type == "discard_from_hand")
+                            .unwrap_or(false);
+                        if should_discard && *choice_idx < state.player.hand.len() {
+                            crate::effects::discard_card_from_hand(&mut state, *choice_idx, &mut rng);
+                        }
+                        let should_clear = if let Some(ref mut pc) = state.pending_choice {
+                            pc.chosen_so_far.push(*choice_idx);
+                            pc.chosen_so_far.len() >= pc.num_choices
+                        } else { false };
+                        if should_clear { state.pending_choice = None; }
+                    }
+                    Action::UsePotion { potion_idx } => {
+                        combat::use_potion(&mut state, *potion_idx);
+                        cards_this_turn += 1;
+                    }
+                    Action::PlayCard { card_idx, target_idx } => {
+                        if combat::can_play_card(&state, *card_idx) {
+                            combat::play_card(&mut state, *card_idx, *target_idx, &card_db, &mut rng);
+                        }
+                        cards_this_turn += 1;
+                    }
+                }
+
+                outcome = combat::is_combat_over(&state);
+                if outcome.is_some() { break; }
+            }
+
             if outcome.is_some() { break; }
 
-            let actions = enumerate_actions(&state);
-            if actions.is_empty() { break; }
-
-            let enc_state = encode::encode_state(&state, &vocabs);
-            let enc_actions = encode::encode_actions(&actions, &state, &vocabs);
-
-            let result = mcts_engine.search(&state, mcts_sims, temperature, &mut rng);
-
-            if t == 1 && cards_this_turn == 0 {
-                initial_value = result.root_value as f32;
-            }
-
-            samples.push(RustTrainingSample {
-                state: enc_state,
-                actions: enc_actions,
-                policy: result.policy.clone(),
-                num_actions: actions.len(),
-            });
-
-            match &result.action {
-                Action::EndTurn => break,
-                Action::ChooseCard { choice_idx } => {
-                    let should_discard = state.pending_choice.as_ref()
-                        .map(|pc| pc.choice_type == "discard_from_hand")
-                        .unwrap_or(false);
-                    if should_discard && *choice_idx < state.player.hand.len() {
-                        crate::effects::discard_card_from_hand(&mut state, *choice_idx, &mut rng);
-                    }
-                    let should_clear = if let Some(ref mut pc) = state.pending_choice {
-                        pc.chosen_so_far.push(*choice_idx);
-                        pc.chosen_so_far.len() >= pc.num_choices
-                    } else { false };
-                    if should_clear { state.pending_choice = None; }
-                }
-                Action::UsePotion { potion_idx } => {
-                    combat::use_potion(&mut state, *potion_idx);
-                    cards_this_turn += 1;
-                }
-                Action::PlayCard { card_idx, target_idx } => {
-                    if combat::can_play_card(&state, *card_idx) {
-                        combat::play_card(&mut state, *card_idx, *target_idx, &card_db, &mut rng);
-                    }
-                    cards_this_turn += 1;
-                }
-            }
+            combat::end_turn(&mut state, &card_db, &mut rng);
+            combat::resolve_enemy_intents(&mut state);
+            combat::tick_enemy_powers(&mut state);
 
             outcome = combat::is_combat_over(&state);
             if outcome.is_some() { break; }
         }
 
-        if outcome.is_some() { break; }
+        let outcome_str = outcome.unwrap_or("lose").to_string();
+        let hp_after = if outcome_str == "win" { state.player.hp.max(0) } else { 0 };
+        let potions_after = state.player.potions.iter()
+            .filter(|p| !p.is_empty()).cloned().collect();
 
-        combat::end_turn(&mut state, &card_db, &mut rng);
-        combat::resolve_enemy_intents(&mut state);
-        combat::tick_enemy_powers(&mut state);
-
-        outcome = combat::is_combat_over(&state);
-        if outcome.is_some() { break; }
-    }
-
-    let outcome_str = outcome.unwrap_or("lose").to_string();
-    let hp_after = if outcome_str == "win" { state.player.hp.max(0) } else { 0 };
-    let potions_after = state.player.potions.iter()
-        .filter(|p| !p.is_empty())
-        .cloned()
-        .collect();
-
-    Ok(CombatResultRust {
-        samples,
-        outcome: outcome_str,
-        turns: turn_num,
-        hp_after,
-        initial_value,
-        potions_after,
+        Ok(CombatResultRust {
+            samples, outcome: outcome_str,
+            turns: turn_num, hp_after, initial_value, potions_after,
+        })
     })
 }
 
