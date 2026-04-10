@@ -250,7 +250,7 @@ fn move_card_after_play(state: &mut CombatState, card: Card, rng: &mut impl Rng)
     }
 }
 
-fn on_exhaust(state: &mut CombatState, rng: &mut impl Rng) {
+pub fn on_exhaust(state: &mut CombatState, rng: &mut impl Rng) {
     let dark_embrace = state.player.get_power("Dark Embrace");
     if dark_embrace > 0 {
         draw_cards(state, dark_embrace, rng);
@@ -281,10 +281,13 @@ pub fn use_potion(state: &mut CombatState, potion_idx: usize) {
     } else if pot.strength > 0 {
         state.player.add_power("Strength", pot.strength);
     } else if pot.damage_all > 0 {
-        for enemy in state.enemies.iter_mut() {
-            if enemy.is_alive() {
-                let dmg = apply_block_enemy(enemy, pot.damage_all);
-                enemy.hp -= dmg;
+        for i in 0..state.enemies.len() {
+            if state.enemies[i].is_alive() {
+                let dmg = apply_block_and_plating(&mut state.enemies[i], pot.damage_all);
+                state.enemies[i].hp -= dmg;
+                if !state.enemies[i].is_alive() {
+                    on_enemy_death(state, i, false);
+                }
             }
         }
     } else if pot.enemy_weak > 0 {
@@ -566,6 +569,77 @@ pub fn resolve_enemy_intents(state: &mut CombatState) {
             }
             _ => {}
         }
+        // Apply intent side effects (buffs, debuffs, spawns)
+        apply_intent_side_effects(state, i);
+    }
+}
+
+/// Apply buff/debuff/spawn side effects from the intent stored on the enemy.
+fn apply_intent_side_effects(state: &mut CombatState, i: usize) {
+    if !state.enemies[i].is_alive() {
+        return;
+    }
+
+    // Self-buffs
+    if let Some(s) = state.enemies[i].intent_self_strength {
+        state.enemies[i].add_power("Strength", s);
+    }
+
+    // All-ally Strength
+    if let Some(s) = state.enemies[i].intent_all_strength {
+        for e in state.enemies.iter_mut() {
+            if e.is_alive() {
+                e.add_power("Strength", s);
+            }
+        }
+    }
+
+    // Player debuffs
+    macro_rules! apply_debuff {
+        ($field:ident, $name:expr) => {
+            if let Some(v) = state.enemies[i].$field {
+                state.player.add_power($name, v);
+            }
+        };
+    }
+    apply_debuff!(intent_player_weak, "Weak");
+    apply_debuff!(intent_player_frail, "Frail");
+    apply_debuff!(intent_player_vulnerable, "Vulnerable");
+    apply_debuff!(intent_player_shrink, "Shrink");
+    apply_debuff!(intent_player_constrict, "Constrict");
+    apply_debuff!(intent_player_tangled, "Tangled");
+
+    if let Some(v) = state.enemies[i].intent_player_smoggy {
+        if v > 0 {
+            state.player.powers.insert("Smoggy".to_string(), 1);
+        }
+    }
+
+    // Gas Bomb self-destruct
+    if state.enemies[i].id == "GAS_BOMB" {
+        state.enemies[i].hp = 0;
+    }
+
+    // Minion spawning
+    let spawn_id = state.enemies[i].intent_spawn_minion.clone();
+    if let Some(ref spawn_id) = spawn_id {
+        let spawn_max = state.enemies[i].intent_spawn_max;
+        let alive_count = state.enemies.iter()
+            .filter(|e| e.is_alive() && e.id == *spawn_id)
+            .count() as i32;
+        if spawn_max.is_none() || alive_count < spawn_max.unwrap() {
+            let mut wriggler = EnemyState {
+                id: spawn_id.clone(),
+                name: spawn_id.replace("_", " "),
+                hp: 19, max_hp: 19,
+                intent_type: Some("Attack".to_string()),
+                intent_damage: Some(6),
+                intent_hits: 1,
+                ..Default::default()
+            };
+            wriggler.powers.insert("Minion".to_string(), 1);
+            state.enemies.push(wriggler);
+        }
     }
 }
 
@@ -756,12 +830,24 @@ fn tick_start_of_turn_powers(state: &mut CombatState, rng: &mut impl Rng) {
         }
     }
 
-    // Tools of the Trade
+    // Tools of the Trade: draw 1, discard worst card
     let tott = state.player.get_power("Tools of the Trade");
     if tott > 0 {
         draw_cards(state, 1, rng);
-        if !state.player.hand.is_empty() {
-            let card = state.player.hand.pop().unwrap();
+        if state.player.hand.len() > 1 {
+            // Heuristic: discard worst card (Status/Curse first, then highest-cost non-attack)
+            let worst_idx = state.player.hand.iter().enumerate()
+                .max_by_key(|(_, c)| {
+                    let type_score = match c.card_type {
+                        CardType::Status => 300,
+                        CardType::Curse => 200,
+                        _ => 0,
+                    };
+                    type_score + c.cost
+                })
+                .map(|(i, _)| i)
+                .unwrap_or(0);
+            let card = state.player.hand.remove(worst_idx);
             state.player.discard_pile.push(card);
         }
     }

@@ -362,6 +362,7 @@ pub fn execute_card_effect(
             let count = hand.len();
             for c in hand {
                 state.player.exhaust_pile.push(c);
+                crate::combat::on_exhaust(state, rng);
             }
             draw_cards(state, count as i32, rng);
         }
@@ -405,6 +406,7 @@ pub fn execute_card_effect(
             for _ in 0..to_exhaust {
                 if let Some(card) = state.player.hand.pop() {
                     state.player.exhaust_pile.push(card);
+                    crate::combat::on_exhaust(state, rng);
                 }
             }
         }

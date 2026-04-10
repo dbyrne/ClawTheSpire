@@ -112,19 +112,16 @@ pub fn on_enemy_death(state: &mut CombatState, enemy_idx: usize, from_poison: bo
     let infested = state.enemies[enemy_idx].get_power("Infested");
     if infested > 0 {
         for _ in 0..infested {
-            let wriggler = EnemyState {
+            let mut wriggler = EnemyState {
                 id: "WRIGGLER".to_string(),
                 name: "Wriggler".to_string(),
-                hp: 19,
-                max_hp: 19,
-                block: 0,
-                powers: HashMap::new(),
+                hp: 19, max_hp: 19,
                 intent_type: if from_poison { None } else { Some("Attack".to_string()) },
                 intent_damage: if from_poison { None } else { Some(6) },
                 intent_hits: 1,
-                intent_block: None,
-                predicted_intents: vec![],
+                ..Default::default()
             };
+            wriggler.powers.insert("Minion".to_string(), 1);
             state.enemies.push(wriggler);
         }
     }
@@ -143,8 +140,6 @@ pub fn on_enemy_death(state: &mut CombatState, enemy_idx: usize, from_poison: bo
         }
     }
 }
-
-use std::collections::HashMap;
 
 // ---------------------------------------------------------------------------
 // Core damage dealing
@@ -330,11 +325,7 @@ pub fn draw_cards(state: &mut CombatState, count: i32, rng: &mut impl Rng) {
             {
                 let alive = state.alive_enemy_indices();
                 if let Some(&target) = alive.first() {
-                    let per_hit = calculate_attack_damage(
-                        card.damage.unwrap_or(0), state, &state.enemies[target],
-                    );
-                    let per_hit = apply_block_and_plating(&mut state.enemies[target], per_hit);
-                    state.enemies[target].hp -= per_hit;
+                    deal_damage(state, target, card.damage.unwrap_or(0), card.hit_count);
                 }
                 state.player.discard_pile.push(card);
             } else {

@@ -198,7 +198,7 @@ impl Potion {
 // Enemy
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EnemyState {
     pub id: String,
     pub name: String,
@@ -219,6 +219,30 @@ pub struct EnemyState {
     // Predicted future intents (from profiles)
     #[serde(default)]
     pub predicted_intents: Vec<HashMap<String, serde_json::Value>>,
+
+    // Side effects of current intent (populated by set_enemy_intents)
+    #[serde(default)]
+    pub intent_self_strength: Option<i32>,
+    #[serde(default)]
+    pub intent_all_strength: Option<i32>,
+    #[serde(default)]
+    pub intent_player_weak: Option<i32>,
+    #[serde(default)]
+    pub intent_player_frail: Option<i32>,
+    #[serde(default)]
+    pub intent_player_vulnerable: Option<i32>,
+    #[serde(default)]
+    pub intent_player_shrink: Option<i32>,
+    #[serde(default)]
+    pub intent_player_constrict: Option<i32>,
+    #[serde(default)]
+    pub intent_player_tangled: Option<i32>,
+    #[serde(default)]
+    pub intent_player_smoggy: Option<i32>,
+    #[serde(default)]
+    pub intent_spawn_minion: Option<String>,
+    #[serde(default)]
+    pub intent_spawn_max: Option<i32>,
 }
 
 impl EnemyState {

@@ -244,15 +244,9 @@ pub fn spawn_enemy(monster_id: &str, monsters: &HashMap<String, MonsterData>, rn
     EnemyState {
         id: monster_id.to_string(),
         name: data.name.clone(),
-        hp,
-        max_hp: hp,
-        block,
-        powers,
-        intent_type: None,
-        intent_damage: None,
-        intent_hits: 1,
-        intent_block: None,
-        predicted_intents: vec![],
+        hp, max_hp: hp,
+        block, powers,
+        ..Default::default()
     }
 }
 
@@ -274,6 +268,17 @@ fn default_hp() -> i32 { 20 }
 // ---------------------------------------------------------------------------
 
 pub fn set_enemy_intents(state: &mut CombatState, ais: &mut [EnemyAI], rng: &mut impl Rng) {
+    set_enemy_intents_with_effects(state, ais, &HashMap::new(), rng);
+}
+
+/// Pick intents and populate side effect fields on each enemy.
+/// The side_effects table provides additional effects keyed by enemy_id -> intent_key.
+pub fn set_enemy_intents_with_effects(
+    state: &mut CombatState,
+    ais: &mut [EnemyAI],
+    side_effects: &HashMap<String, HashMap<String, Intent>>,
+    rng: &mut impl Rng,
+) {
     for (enemy, ai) in state.enemies.iter_mut().zip(ais.iter_mut()) {
         if !enemy.is_alive() {
             continue;
@@ -283,6 +288,24 @@ pub fn set_enemy_intents(state: &mut CombatState, ais: &mut [EnemyAI], rng: &mut
         enemy.intent_damage = intent.damage;
         enemy.intent_hits = intent.hits;
         enemy.intent_block = intent.block;
+
+        // Merge intent fields with side_effects table
+        let extra = side_effects.get(&enemy.id)
+            .and_then(|m| m.get(&intent.key()));
+
+        enemy.intent_self_strength = intent.self_strength.or_else(|| extra.and_then(|e| e.self_strength));
+        enemy.intent_all_strength = intent.all_strength.or_else(|| extra.and_then(|e| e.all_strength));
+        enemy.intent_player_weak = intent.player_weak.or_else(|| extra.and_then(|e| e.player_weak));
+        enemy.intent_player_frail = intent.player_frail.or_else(|| extra.and_then(|e| e.player_frail));
+        enemy.intent_player_vulnerable = intent.player_vulnerable.or_else(|| extra.and_then(|e| e.player_vulnerable));
+        enemy.intent_player_shrink = intent.player_shrink.or_else(|| extra.and_then(|e| e.player_shrink));
+        enemy.intent_player_constrict = intent.player_constrict.or_else(|| extra.and_then(|e| e.player_constrict));
+        enemy.intent_player_tangled = intent.player_tangled.or_else(|| extra.and_then(|e| e.player_tangled));
+        enemy.intent_player_smoggy = intent.player_smoggy.or_else(|| extra.and_then(|e| e.player_smoggy));
+        enemy.intent_spawn_minion = intent.spawn_minion.clone()
+            .or_else(|| extra.and_then(|e| e.spawn_minion.clone()));
+        enemy.intent_spawn_max = intent.spawn_max.or_else(|| extra.and_then(|e| e.spawn_max));
+
         ai.pending_intent = Some(intent);
     }
 }
