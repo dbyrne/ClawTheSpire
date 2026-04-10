@@ -18,8 +18,10 @@ Training loop:
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import math
+import multiprocessing as mp
 import random
 import sys
 import time
@@ -28,6 +30,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -375,12 +378,66 @@ def _read_progress(path: Path) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Parallel self-play workers
+# ---------------------------------------------------------------------------
+
+_worker_state: dict[str, Any] = {}
+
+
+def _worker_init(num_trunk_blocks: int, weights_path: str) -> None:
+    """Per-worker initialization. Builds card_db, vocabs, config (once per process)."""
+    card_db = load_cards()
+    vocabs = build_vocabs_from_card_db(card_db)
+    config = EncoderConfig(num_trunk_blocks=num_trunk_blocks)
+    _worker_state.update(
+        card_db=card_db, vocabs=vocabs, config=config,
+        weights_path=weights_path,
+        current_sd_id=None,  # Track which weights are loaded
+    )
+
+
+def _play_one_game(args: tuple) -> Any:
+    """Worker function: plays one full Act 1 run. Returns FullRunResult."""
+    game_seed, temperature, mcts_simulations, sd_id = args
+    # Rebuild network only when weights change (once per generation)
+    if _worker_state.get("current_sd_id") != sd_id:
+        vocabs = _worker_state["vocabs"]
+        config = _worker_state["config"]
+        network = STS2Network(vocabs, config)
+        sd = torch.load(_worker_state["weights_path"],
+                        map_location="cpu", weights_only=True)
+        network.load_state_dict(sd)
+        network.eval()
+        mcts_obj = MCTS(network, vocabs, config,
+                        card_db=_worker_state["card_db"], device="cpu")
+        mcts_obj.add_noise = True
+        _worker_state["mcts"] = mcts_obj
+        _worker_state["current_sd_id"] = sd_id
+
+    # Seed global RNGs used by MCTS internals (random.choices, np.random.dirichlet)
+    random.seed(game_seed)
+    np.random.seed(game_seed % (2**32))
+    rng = random.Random(game_seed)
+    from .full_run import play_full_run
+    return play_full_run(
+        _worker_state["mcts"],
+        _worker_state["card_db"],
+        _worker_state["vocabs"],
+        _worker_state["config"],
+        character="SILENT",
+        mcts_simulations=mcts_simulations,
+        temperature=temperature,
+        rng=rng,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Worker: headless training loop
 # ---------------------------------------------------------------------------
 
 def train_worker(
     num_generations: int = 100,
-    games_per_generation: int = 20,
+    games_per_generation: int = 40,
     mcts_simulations: int = 100,
     batch_size: int = 64,
     train_epochs: int = 10,
@@ -389,6 +446,7 @@ def train_worker(
     save_dir: str | None = None,
     progress_file: str | None = None,
     num_trunk_blocks: int = 3,
+    num_workers: int = 8,
 ):
     """Headless training loop. Writes progress to JSON file."""
     card_db = load_cards()
@@ -405,7 +463,7 @@ def train_worker(
         {"params": other_params, "weight_decay": 1e-4},
     ], lr=lr)
     scheduler = CosineAnnealingLR(optimizer, T_max=num_generations, eta_min=1e-5)
-    replay_buffer = ReplayBuffer(capacity=50_000)
+    replay_buffer = ReplayBuffer(capacity=2_000)
     option_buffer = ReplayBuffer(capacity=15_000)  # All non-combat decisions (cards, rest, map, shop)
     mcts = MCTS(network, vocabs, config, card_db=card_db, device="cpu")
     mcts.add_noise = True  # Dirichlet noise for exploration during training
@@ -464,31 +522,51 @@ def train_worker(
 
     from .full_run import play_full_run
 
-    print(f"AlphaZero training (full runs): {num_generations} generations, {games_per_generation} runs/gen, {mcts_simulations} sims", flush=True)
+    effective_workers = min(num_workers, games_per_generation)
+
+    print(f"AlphaZero training (full runs): {num_generations} generations, "
+          f"{games_per_generation} runs/gen, {mcts_simulations} sims, "
+          f"{effective_workers} workers", flush=True)
     print(f"Checkpoints: {save_path}", flush=True)
     print(f"Progress: {progress_path}", flush=True)
 
+    # Create persistent worker pool (avoids respawning processes each generation)
+    pool = None
+    weights_path = str(save_path / "_worker_weights.pt")
+    if effective_workers > 1:
+        # Write initial weights for workers to read
+        torch.save(network.state_dict(), weights_path)
+        pool = mp.Pool(
+            processes=effective_workers,
+            initializer=_worker_init,
+            initargs=(config.num_trunk_blocks, weights_path),
+        )
+
     for gen in range(1, num_generations + 1):
         gen_t0 = time.time()
+
+        # Temperature for this generation (same for all games)
+        progress = gen / num_generations
+        game_temp = 0.3 + 0.7 * temperature * (1 + math.cos(math.pi * progress)) / 2
+
+        # Write updated weights for workers to read (fast — ~1MB file)
+        if pool is not None:
+            torch.save(network.state_dict(), weights_path)
+
+        # Generate unique seeds for each game from the master RNG
+        game_seeds = [rng.randint(0, 2**31) for _ in range(games_per_generation)]
+        game_args = [
+            (seed, game_temp, mcts_simulations, gen)
+            for seed in game_seeds
+        ]
 
         # --- Self-play: full Act 1 runs ---
         gen_wins = 0
         gen_floors = []
         gen_values = []  # initial value estimates from each combat
-        for game_num in range(games_per_generation):
-            # Cosine decay: smooth exploration → exploitation over full training.
-            # Stays above 0.5 for ~60% of training, floors at 0.3 (not 0.1).
-            progress = gen / num_generations
-            game_temp = 0.3 + 0.7 * temperature * (1 + math.cos(math.pi * progress)) / 2
 
-            result = play_full_run(
-                mcts, card_db, vocabs, config,
-                character="SILENT",
-                mcts_simulations=mcts_simulations,
-                temperature=game_temp,
-                rng=rng,
-            )
-
+        def _collect_result(result):
+            nonlocal total_games, gen_wins, total_wins
             is_win = result.outcome == "win"
             for sample in result.samples:
                 replay_buffer.add(sample, is_win=is_win)
@@ -500,7 +578,7 @@ def train_worker(
             total_games += 1
             gen_floors.append(result.floor_reached)
             gen_values.extend(result._combat_value_estimates.values())
-            if result.outcome == "win":
+            if is_win:
                 gen_wins += 1
                 total_wins += 1
 
@@ -512,7 +590,24 @@ def train_worker(
                 "hp": result.final_hp,
             })
             if len(recent_games) > 50:
-                recent_games = recent_games[-50:]
+                del recent_games[:-50]
+
+        if pool is not None:
+            for result in pool.imap_unordered(_play_one_game, game_args):
+                _collect_result(result)
+        else:
+            # Sequential fallback (for debugging or --workers 1)
+            for args in game_args:
+                seed, temp, sims, sd_id = args
+                local_rng = random.Random(seed)
+                result = play_full_run(
+                    mcts, card_db, vocabs, config,
+                    character="SILENT",
+                    mcts_simulations=sims,
+                    temperature=temp,
+                    rng=local_rng,
+                )
+                _collect_result(result)
 
         # --- Training ---
         v_loss = p_loss = o_loss = total_loss = 0.0
@@ -585,6 +680,14 @@ def train_worker(
                 "num_trunk_blocks": config.num_trunk_blocks,
             }, ckpt_path)
             print(f"  Saved checkpoint: {ckpt_path.name}")
+
+    if pool is not None:
+        pool.close()
+        pool.join()
+        try:
+            Path(weights_path).unlink(missing_ok=True)
+        except OSError:
+            pass
 
     print(f"Training complete! {total_games} games, {total_wins/max(1,total_games):.1%} win rate")
 
@@ -696,7 +799,7 @@ if __name__ == "__main__":
     # Train command
     train_parser = subparsers.add_parser("train", help="Run headless training worker")
     train_parser.add_argument("--generations", type=int, default=100)
-    train_parser.add_argument("--games-per-gen", type=int, default=20)
+    train_parser.add_argument("--games-per-gen", type=int, default=40)
     train_parser.add_argument("--sims", type=int, default=100)
     train_parser.add_argument("--batch-size", type=int, default=64)
     train_parser.add_argument("--epochs", type=int, default=10)
@@ -705,6 +808,8 @@ if __name__ == "__main__":
     train_parser.add_argument("--save-dir", type=str, default=None)
     train_parser.add_argument("--progress-file", type=str, default=None)
     train_parser.add_argument("--trunk-blocks", type=int, default=3)
+    train_parser.add_argument("--workers", type=int, default=8,
+                              help="Parallel self-play workers (0 or 1 = sequential)")
 
     # Monitor command
     monitor_parser = subparsers.add_parser("monitor", help="Live TUI dashboard")
@@ -725,6 +830,7 @@ if __name__ == "__main__":
             save_dir=args.save_dir,
             progress_file=args.progress_file,
             num_trunk_blocks=args.trunk_blocks,
+            num_workers=args.workers,
         )
     elif args.command == "monitor":
         train_monitor(
