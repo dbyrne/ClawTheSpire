@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::actions::enumerate_actions;
 use crate::combat;
-use crate::encode::{self, Vocabs, EncodedState, EncodedActions};
+use crate::encode::{self, Vocabs, EncodedState, EncodedActions, CARD_STATS_DIM};
 use crate::enemy;
 use crate::inference::OnnxInference;
 use crate::mcts::MCTS;
@@ -32,11 +32,11 @@ thread_local! {
 // Training sample (collected per decision point)
 // ---------------------------------------------------------------------------
 
-struct RustTrainingSample {
-    state: EncodedState,
-    actions: EncodedActions,
-    policy: Vec<f32>,
-    num_actions: usize,
+pub struct RustTrainingSample {
+    pub state: EncodedState,
+    pub actions: EncodedActions,
+    pub policy: Vec<f32>,
+    pub num_actions: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -387,6 +387,137 @@ fn sample_to_py(py: Python<'_>, sample: &RustTrainingSample) -> PyResult<Py<PyDi
 
 fn bool_list<'py>(py: Python<'py>, v: &[bool]) -> Bound<'py, PyList> {
     PyList::new(py, v.iter().map(|&b| b)).unwrap()
+}
+
+/// Play multiple full Act 1 runs entirely in Rust with rayon parallelism.
+/// Returns list of result dicts, each with combat_samples + option_samples.
+#[pyfunction]
+#[pyo3(signature = (
+    num_games,
+    onnx_full_path, onnx_value_path, onnx_option_path,
+    vocab_json, monster_data_json, enemy_profiles_json,
+    encounter_pool_json,
+    mcts_sims, temperature, seeds
+))]
+pub fn play_all_games(
+    py: Python<'_>,
+    num_games: usize,
+    onnx_full_path: &str,
+    onnx_value_path: &str,
+    onnx_option_path: &str,
+    vocab_json: &str,
+    monster_data_json: &str,
+    enemy_profiles_json: &str,
+    encounter_pool_json: &str,
+    mcts_sims: usize,
+    temperature: f32,
+    seeds: Vec<u64>,
+) -> PyResult<PyObject> {
+    // Parse shared data (once, before releasing GIL)
+    let vocabs: Vocabs = serde_json::from_str(vocab_json)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("vocabs: {e}")))?;
+    let monsters: HashMap<String, crate::enemy::MonsterData> = serde_json::from_str(monster_data_json)
+        .unwrap_or_default();
+    let profiles: HashMap<String, crate::enemy::EnemyProfile> = serde_json::from_str(enemy_profiles_json)
+        .unwrap_or_default();
+    let encounters: HashMap<String, crate::simulator::EncounterData> = serde_json::from_str(encounter_pool_json)
+        .unwrap_or_default();
+
+    let game_data = std::sync::Arc::new(crate::simulator::GameData {
+        card_db: CardDB::default(),
+        monsters,
+        profiles,
+        encounters,
+        event_profiles: HashMap::new(), // TODO: load from JSON
+        vocabs: vocabs.clone(),
+        card_pool: Vec::new(), // TODO: build from cards.json
+    });
+
+    let onnx_full = onnx_full_path.to_string();
+    let onnx_value = onnx_value_path.to_string();
+    let onnx_option = onnx_option_path.to_string();
+
+    // Release GIL and run all games in parallel with rayon
+    let results = py.allow_threads(move || {
+        use rayon::prelude::*;
+
+        seeds.into_par_iter().map(|seed| {
+            // Each rayon thread creates its own ONNX sessions
+            // (thread_local caching inside fight_combat handles this)
+            let combat_inference = match crate::inference::OnnxInference::new(
+                &onnx_full, &onnx_value, vocabs.clone()
+            ) {
+                Ok(inf) => inf,
+                Err(e) => {
+                    eprintln!("ONNX error: {e}");
+                    return None;
+                }
+            };
+            let option_evaluator = match crate::option_eval::OptionEvaluator::new(
+                &onnx_option, vocabs.clone()
+            ) {
+                Ok(eval) => eval,
+                Err(e) => {
+                    eprintln!("ONNX option error: {e}");
+                    return None;
+                }
+            };
+
+            Some(crate::simulator::run_act1(
+                &game_data, &combat_inference, &option_evaluator,
+                mcts_sims, temperature, seed,
+            ))
+        }).collect::<Vec<_>>()
+    });
+
+    // Build Python result list (with GIL)
+    let py_results = PyList::empty(py);
+    for result_opt in &results {
+        let result = match result_opt {
+            Some(r) => r,
+            None => continue,
+        };
+
+        let d = PyDict::new(py);
+        d.set_item("outcome", &result.outcome)?;
+        d.set_item("floor_reached", result.floor_reached)?;
+        d.set_item("final_hp", result.final_hp)?;
+        d.set_item("max_hp", result.max_hp)?;
+        d.set_item("combats_won", result.combats_won)?;
+        d.set_item("combats_fought", result.combats_fought)?;
+        d.set_item("deck_size", result.deck_size)?;
+
+        // Combat samples
+        let py_samples = PyList::empty(py);
+        for sample in &result.combat_samples {
+            py_samples.append(sample_to_py(py, sample)?)?;
+        }
+        d.set_item("combat_samples", py_samples)?;
+
+        // Option samples
+        let py_opt_samples = PyList::empty(py);
+        for sample in &result.option_samples {
+            let s = PyDict::new(py);
+            s.set_item("option_types", &sample.option_types)?;
+            s.set_item("option_cards", &sample.option_cards)?;
+            s.set_item("chosen_idx", sample.chosen_idx)?;
+            s.set_item("value", sample.value)?;
+            s.set_item("floor", sample.floor)?;
+            py_opt_samples.append(s)?;
+        }
+        d.set_item("option_samples", py_opt_samples)?;
+
+        // Value estimates
+        let py_vals = PyDict::new(py);
+        for (floor, val) in &result.combat_value_estimates {
+            py_vals.set_item(*floor, *val)?;
+        }
+        d.set_item("combat_value_estimates", py_vals)?;
+
+        py_results.append(d)?;
+    }
+
+    Ok(py_results.into())
 }
 
 /// Health check.
