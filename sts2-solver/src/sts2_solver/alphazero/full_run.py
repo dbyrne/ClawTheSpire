@@ -99,7 +99,17 @@ def _assign_run_values(
     sorted_floors = sorted(combat_samples_by_floor.keys(), reverse=True)
 
     for i, floor in enumerate(sorted_floors):
+        # Per-combat HP conservation: blend run-level value with combat performance
         floor_value = run_value * (discount ** i)
+        hp_data = combat_hp_data.get(floor)
+        if hp_data is not None:
+            hp_before, hp_after, _pots_used = hp_data
+            if hp_before > 0:
+                # hp_ratio: 1.0 = took no damage, 0.0 = died or nearly died
+                hp_ratio = max(0.0, hp_after) / hp_before
+                # Combat bonus: ranges from -0.3 (lost all HP) to +0.3 (took no damage)
+                combat_bonus = 0.3 * (hp_ratio * 2 - 1)
+                floor_value = max(-1.0, min(1.0, floor_value + combat_bonus))
         for sample in combat_samples_by_floor[floor]:
             sample.value = floor_value
 
