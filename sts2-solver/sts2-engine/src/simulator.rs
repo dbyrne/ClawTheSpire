@@ -143,6 +143,31 @@ pub struct CardPoolEntry {
     pub color: String,
 }
 
+// Map data (from map_pool.json)
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct MapData {
+    #[serde(default)]
+    pub nodes: Vec<MapNode>,
+    #[serde(default)]
+    pub act_id: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct MapNode {
+    pub row: i32,
+    pub col: i32,
+    #[serde(default)]
+    pub node_type: String,
+    #[serde(default)]
+    pub children: Vec<MapChild>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct MapChild {
+    pub row: i32,
+    pub col: i32,
+}
+
 pub struct GameData {
     pub card_db: CardDB,
     pub monsters: HashMap<String, enemy::MonsterData>,
@@ -151,7 +176,8 @@ pub struct GameData {
     pub event_profiles: HashMap<String, EventProfile>,
     pub vocabs: Vocabs,
     pub card_pool: Vec<Card>,
-    pub card_pool_rarities: Vec<String>, // Parallel to card_pool
+    pub card_pool_rarities: Vec<String>,
+    pub map_pool: Vec<MapData>,
 }
 
 // ---------------------------------------------------------------------------
@@ -180,8 +206,8 @@ pub fn run_act1(
     }
     let mut potions: Vec<Potion> = Vec::new();
 
-    let room_sequence = generate_room_sequence(&mut rng);
     let act_id = "OVERGROWTH".to_string();
+    let room_sequence = generate_room_sequence(&game_data.map_pool, &act_id, &mut rng);
     let boss_id = String::new();
 
     let mut result = FullRunResult {
@@ -203,17 +229,36 @@ pub fn run_act1(
     }
     let mut event_idx = 0;
 
-    for (floor_idx, room_type) in room_sequence.iter().enumerate() {
+    for (floor_idx, room_entry) in room_sequence.iter().enumerate() {
         let floor_num = (floor_idx + 1) as i32;
         result.floor_reached = floor_num;
-        let remaining_path: Vec<String> = room_sequence[floor_idx..].to_vec();
+
+        // Build remaining path (single room types only, choices shown as "normal")
+        let remaining_path: Vec<String> = room_sequence[floor_idx..].iter()
+            .map(|r| r.as_single().to_string()).collect();
+
+        // Resolve map choices via ONNX option head
+        let room_type: String = match room_entry {
+            RoomEntry::Single(rt) => rt.clone(),
+            RoomEntry::Choice(choices) => {
+                let (chosen_idx, sample) = pick_map_path_network(
+                    choices, &deck, hp, max_hp, floor_num, gold,
+                    &relics, &act_id, &boss_id, &remaining_path,
+                    game_data, option_eval,
+                );
+                if let Some(s) = sample {
+                    result.option_samples.push(s);
+                }
+                choices.get(chosen_idx).cloned().unwrap_or_else(|| "normal".into())
+            }
+        };
 
         match room_type.as_str() {
             // =============================================================
             // COMBAT
             // =============================================================
             "weak" | "normal" | "elite" | "boss" => {
-                let enc_id = pick_encounter(&game_data.encounters, room_type, &mut rng, &seen_encounters);
+                let enc_id = pick_encounter(&game_data.encounters, &room_type, &mut rng, &seen_encounters);
                 let enemy_ids: Vec<String> = game_data.encounters.get(&enc_id)
                     .map(|e| e.monsters.iter().map(|m| m.id.clone()).collect())
                     .unwrap_or_default();
@@ -250,7 +295,7 @@ pub fn run_act1(
                 }
 
                 // Gold + potion drops
-                let (gmin, gmax) = gold_rewards(room_type);
+                let (gmin, gmax) = gold_rewards(&room_type);
                 gold += rng.random_range(gmin..=gmax);
                 if rng.random::<f64>() < POTION_DROP_CHANCE && potions.len() < POTION_SLOTS {
                     let pot = potion_types().choose(&mut rng).unwrap().clone();
@@ -514,6 +559,40 @@ fn decide_event_network(
         let otype = opt.option_type
             .unwrap_or_else(|| categorize_event_option(&opt.description));
         opt_types.push(otype);
+        opt_cards.push(0);
+        opt_stats.push(vec![0.0; CARD_STATS_DIM]);
+    }
+
+    match option_eval.evaluate(&state, &opt_types, &opt_cards, &opt_stats, None, None) {
+        Ok(result) => {
+            let enc = encode::encode_state(&state, &game_data.vocabs);
+            let sample = RustOptionSample {
+                state: enc, option_types: opt_types, option_cards: opt_cards,
+                chosen_idx: result.best_idx, value: 0.0, floor,
+            };
+            (result.best_idx, Some(sample))
+        }
+        Err(_) => (0, None),
+    }
+}
+
+/// Map path: network picks which room to visit.
+fn pick_map_path_network(
+    choices: &[String], deck: &[Card],
+    hp: i32, max_hp: i32, floor: i32, gold: i32,
+    relics: &HashSet<String>, act_id: &str, boss_id: &str,
+    remaining_path: &[String], game_data: &GameData,
+    option_eval: &OptionEvaluator,
+) -> (usize, Option<RustOptionSample>) {
+    if choices.len() <= 1 { return (0, None); }
+
+    let state = make_dummy_state(deck, hp, max_hp, floor, gold, relics, act_id, boss_id, remaining_path);
+
+    let mut opt_types = Vec::new();
+    let mut opt_cards = Vec::new();
+    let mut opt_stats = Vec::new();
+    for rt in choices {
+        opt_types.push(room_type_to_option(rt));
         opt_cards.push(0);
         opt_stats.push(vec![0.0; CARD_STATS_DIM]);
     }
@@ -922,14 +1001,121 @@ fn build_starter_deck(card_db: &CardDB) -> Vec<Card> {
     deck
 }
 
-fn generate_room_sequence(rng: &mut impl Rng) -> Vec<String> {
-    // Realistic Act 1: 17 floors
-    let template = vec![
+enum RoomEntry {
+    Single(String),
+    Choice(Vec<String>),
+}
+
+impl RoomEntry {
+    fn as_single(&self) -> &str {
+        match self {
+            RoomEntry::Single(s) => s,
+            RoomEntry::Choice(v) => v.first().map(|s| s.as_str()).unwrap_or("normal"),
+        }
+    }
+}
+
+const WEAK_ROW_THRESHOLD: i32 = 4;
+
+fn node_type_to_room(node_type: &str, row: i32) -> String {
+    match node_type {
+        "Monster" => if row < WEAK_ROW_THRESHOLD { "weak" } else { "normal" }.into(),
+        "Elite" => "elite".into(),
+        "Boss" => "boss".into(),
+        "Unknown" => "event".into(),
+        "RestSite" => "rest".into(),
+        "Shop" => "shop".into(),
+        "Treasure" => "treasure".into(),
+        "Ancient" => "event".into(),
+        _ => "normal".into(),
+    }
+}
+
+fn walk_map(map_data: &MapData, rng: &mut impl Rng) -> Vec<RoomEntry> {
+    let mut by_pos: HashMap<(i32, i32), &MapNode> = HashMap::new();
+    for n in &map_data.nodes {
+        by_pos.insert((n.row, n.col), n);
+    }
+
+    // Find start (row 0)
+    let start = map_data.nodes.iter().find(|n| n.row == 0);
+    if start.is_none() { return vec![RoomEntry::Single("boss".into())]; }
+
+    let mut rooms = Vec::new();
+    rooms.push(RoomEntry::Single("event".into())); // Floor 1 = Neow
+
+    // Advance to row 1
+    let mut current_nodes: Vec<&MapNode> = Vec::new();
+    if let Some(s) = start {
+        for c in &s.children {
+            if let Some(n) = by_pos.get(&(c.row, c.col)) {
+                current_nodes.push(n);
+            }
+        }
+    }
+
+    while !current_nodes.is_empty() {
+        let row = current_nodes[0].row;
+        let mut choices: Vec<String> = Vec::new();
+        for n in &current_nodes {
+            choices.push(node_type_to_room(&n.node_type, row));
+        }
+
+        // Deduplicate
+        let mut unique: Vec<String> = Vec::new();
+        for c in &choices {
+            if !unique.contains(c) { unique.push(c.clone()); }
+        }
+
+        let chosen_node = if unique.len() == 1 {
+            rooms.push(RoomEntry::Single(unique[0].clone()));
+            // Pick a random node from current
+            current_nodes.choose(rng).copied()
+        } else {
+            rooms.push(RoomEntry::Choice(unique));
+            None // Choice resolved at play time
+        };
+
+        // Advance to children
+        let mut children_set: HashSet<(i32, i32)> = HashSet::new();
+        if let Some(node) = chosen_node {
+            for c in &node.children {
+                children_set.insert((c.row, c.col));
+            }
+        } else {
+            // Multiple choices — collect all children
+            for n in &current_nodes {
+                for c in &n.children {
+                    children_set.insert((c.row, c.col));
+                }
+            }
+        }
+
+        current_nodes = children_set.iter()
+            .filter_map(|pos| by_pos.get(pos).copied())
+            .collect();
+    }
+
+    rooms
+}
+
+fn generate_room_sequence(map_pool: &[MapData], act_id: &str, rng: &mut impl Rng) -> Vec<RoomEntry> {
+    // Try to pick a real map from pool
+    let filtered: Vec<&MapData> = map_pool.iter()
+        .filter(|m| m.act_id == act_id || act_id.is_empty())
+        .collect();
+    if let Some(&&ref map) = filtered.choose(rng) {
+        return walk_map(map, rng);
+    }
+    if let Some(map) = map_pool.choose(rng) {
+        return walk_map(map, rng);
+    }
+    // Fallback: hardcoded sequence
+    vec![
         "event", "weak", "weak", "weak", "event", "normal", "normal",
         "elite", "rest", "normal", "normal", "event", "shop",
         "normal", "elite", "rest", "boss",
-    ];
-    template.into_iter().map(|s| s.to_string()).collect()
+    ].into_iter().map(|s| RoomEntry::Single(s.into())).collect()
 }
 
 fn pick_encounter(
