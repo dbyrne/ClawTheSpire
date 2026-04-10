@@ -397,6 +397,7 @@ fn bool_list<'py>(py: Python<'py>, v: &[bool]) -> Bound<'py, PyList> {
     onnx_full_path, onnx_value_path, onnx_option_path,
     vocab_json, monster_data_json, enemy_profiles_json,
     encounter_pool_json, event_profiles_json,
+    card_pool_json, card_db_json,
     mcts_sims, temperature, seeds
 ))]
 pub fn play_all_games(
@@ -410,6 +411,8 @@ pub fn play_all_games(
     enemy_profiles_json: &str,
     encounter_pool_json: &str,
     event_profiles_json: &str,
+    card_pool_json: &str,
+    card_db_json: &str,
     mcts_sims: usize,
     temperature: f32,
     seeds: Vec<u64>,
@@ -424,15 +427,34 @@ pub fn play_all_games(
     let encounters: HashMap<String, crate::simulator::EncounterData> = serde_json::from_str(encounter_pool_json)
         .unwrap_or_default();
 
+    // Parse card pool with rarities
+    #[derive(serde::Deserialize)]
+    struct PoolCard {
+        #[serde(flatten)]
+        card: Card,
+        #[serde(default)]
+        rarity: String,
+    }
+    let pool_cards: Vec<PoolCard> = serde_json::from_str(card_pool_json).unwrap_or_default();
+    let card_pool: Vec<Card> = pool_cards.iter().map(|pc| pc.card.clone()).collect();
+    let card_pool_rarities: Vec<String> = pool_cards.iter().map(|pc| pc.rarity.clone()).collect();
+
+    // Parse card DB
+    let card_db_vec: Vec<Card> = serde_json::from_str(card_db_json).unwrap_or_default();
+    let mut card_db = CardDB::default();
+    for card in card_db_vec {
+        card_db.insert(card);
+    }
+
     let game_data = std::sync::Arc::new(crate::simulator::GameData {
-        card_db: CardDB::default(),
+        card_db,
         monsters,
         profiles,
         encounters,
         event_profiles: serde_json::from_str(event_profiles_json).unwrap_or_default(),
         vocabs: vocabs.clone(),
-        card_pool: Vec::new(), // TODO: build from cards.json
-        card_pool_rarities: Vec::new(),
+        card_pool,
+        card_pool_rarities,
     });
 
     let onnx_full = onnx_full_path.to_string();

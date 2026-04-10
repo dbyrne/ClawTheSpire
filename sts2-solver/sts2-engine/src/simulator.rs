@@ -289,7 +289,7 @@ pub fn run_act1(
             // REST SITE — NETWORK DECIDES rest vs smith
             // =============================================================
             "rest" => {
-                let (action, sample) = rest_or_smith_network(
+                let (action, smith_card_idx, sample) = rest_or_smith_network(
                     &deck, hp, max_hp, floor_num, gold,
                     &relics, &act_id, &boss_id, &remaining_path,
                     game_data, option_eval,
@@ -302,9 +302,17 @@ pub fn run_act1(
                         hp = (hp + max_hp * 30 / 100).min(max_hp);
                     }
                     "smith" => {
-                        // Upgrade best card (the one the network picked)
-                        // For now, simplified: find first upgradeable card
-                        // TODO: track which card the network chose to upgrade
+                        // Upgrade the card the network chose
+                        if let Some(idx) = smith_card_idx {
+                            if idx < deck.len() {
+                                deck[idx].upgraded = true;
+                                // Look up upgraded version from card_db
+                                let upgraded_id = format!("{}+", deck[idx].base_id());
+                                if let Some(upgraded) = game_data.card_db.get(&upgraded_id) {
+                                    deck[idx] = upgraded.clone();
+                                }
+                            }
+                        }
                     }
                     _ => {}
                 }
@@ -444,25 +452,28 @@ fn pick_card_reward_network(
     }
 }
 
-/// Rest/smith: network decides.
+/// Rest/smith: network decides. Returns (action, optional card index for smith, sample).
 fn rest_or_smith_network(
     deck: &[Card], hp: i32, max_hp: i32, floor: i32, gold: i32,
     relics: &HashSet<String>, act_id: &str, boss_id: &str,
     remaining_path: &[String], game_data: &GameData,
     option_eval: &OptionEvaluator,
-) -> (String, Option<RustOptionSample>) {
+) -> (String, Option<usize>, Option<RustOptionSample>) {
     let state = make_dummy_state(deck, hp, max_hp, floor, gold, relics, act_id, boss_id, remaining_path);
 
     let mut opt_types = vec![OPTION_REST];
     let mut opt_cards = vec![0i64];
     let mut opt_stats = vec![vec![0.0f32; CARD_STATS_DIM]];
 
-    // Add smith option for each upgradeable card
-    for card in deck {
+    // Track which deck index each smith option corresponds to
+    let mut smith_deck_indices: Vec<usize> = Vec::new();
+
+    for (i, card) in deck.iter().enumerate() {
         if card.card_type != CardType::Status && card.card_type != CardType::Curse && !card.upgraded {
             opt_types.push(OPTION_SMITH);
             opt_cards.push(game_data.vocabs.cards.get(card.base_id()).copied().unwrap_or(1));
             opt_stats.push(card_stats_vector(card).to_vec());
+            smith_deck_indices.push(i);
         }
     }
 
@@ -473,10 +484,16 @@ fn rest_or_smith_network(
                 state: enc, option_types: opt_types, option_cards: opt_cards,
                 chosen_idx: result.best_idx, value: 0.0, floor,
             };
-            let action = if result.best_idx == 0 { "rest" } else { "smith" };
-            (action.to_string(), Some(sample))
+            if result.best_idx == 0 {
+                ("rest".to_string(), None, Some(sample))
+            } else {
+                // Map smith option index to deck card index
+                let smith_idx = result.best_idx - 1; // -1 because REST is index 0
+                let deck_idx = smith_deck_indices.get(smith_idx).copied();
+                ("smith".to_string(), deck_idx, Some(sample))
+            }
         }
-        Err(_) => ("rest".to_string(), None),
+        Err(_) => ("rest".to_string(), None, None),
     }
 }
 
@@ -525,7 +542,8 @@ fn shop_decisions_network(
     let mut samples = Vec::new();
 
     // Offer 3 cards from pool for purchase
-    let shop_cards = offer_card_rewards(&game_data.card_pool, &game_data.card_pool_rarities, deck, rng);
+    let (shop_cards, shop_rarities) = offer_card_rewards_with_rarity(
+        &game_data.card_pool, &game_data.card_pool_rarities, deck, rng);
 
     for _step in 0..6 {
         let state = make_dummy_state(deck, hp, max_hp, floor, *gold, relics, act_id, boss_id, remaining_path);
@@ -547,8 +565,9 @@ fn shop_decisions_network(
         }
 
         // Buy card options
-        for card in &shop_cards {
-            let cost = 75; // simplified cost
+        for (ci, card) in shop_cards.iter().enumerate() {
+            let rarity = if ci < shop_rarities.len() { shop_rarities[ci].as_str() } else { "Uncommon" };
+            let cost = shop_card_cost(rarity);
             if *gold >= cost {
                 opt_types.push(OPTION_SHOP_BUY);
                 opt_cards.push(game_data.vocabs.cards.get(card.base_id()).copied().unwrap_or(1));
@@ -611,7 +630,8 @@ fn shop_decisions_network(
                     }
                     if buy_count < shop_cards.len() {
                         deck.push(shop_cards[buy_count].clone());
-                        *gold -= 75;
+                        let rarity = if buy_count < shop_rarities.len() { shop_rarities[buy_count].as_str() } else { "Uncommon" };
+                        *gold -= shop_card_cost(rarity);
                     }
                 } else if chosen_type == OPTION_SHOP_BUY_POTION {
                     let pot = potion_types().choose(rng).unwrap().clone();
@@ -636,20 +656,31 @@ fn apply_event_effects(
     deck: &mut Vec<Card>, relics: &mut HashSet<String>,
     game_data: &GameData, rng: &mut impl Rng,
 ) {
+    // HP delta (absolute)
     if let Some(v) = effects.get("hp_delta") {
         *hp = (*hp + v.as_i64().unwrap_or(0) as i32).max(1).min(*max_hp);
     }
+    // HP delta (percentage of max)
+    if let Some(v) = effects.get("hp_percent") {
+        let pct = v.as_f64().unwrap_or(0.0);
+        let delta = (*max_hp as f64 * pct / 100.0) as i32;
+        *hp = (*hp + delta).max(1).min(*max_hp);
+    }
+    // Max HP delta
     if let Some(v) = effects.get("max_hp_delta") {
         *max_hp += v.as_i64().unwrap_or(0) as i32;
+        *max_hp = (*max_hp).max(1);
         *hp = (*hp).min(*max_hp);
     }
+    // Gold delta
     if let Some(v) = effects.get("gold_delta") {
         *gold = (*gold + v.as_i64().unwrap_or(0) as i32).max(0);
     }
+    // Card removal
     if let Some(v) = effects.get("card_remove") {
         let count = v.as_i64().unwrap_or(0) as usize;
         for _ in 0..count {
-            // Remove a Strike or Defend (prioritize basics)
+            // Prioritize removing Strike/Defend
             let pos = deck.iter().position(|c| {
                 let base = c.base_id();
                 base.contains("STRIKE") || base.contains("DEFEND")
@@ -661,15 +692,61 @@ fn apply_event_effects(
             }
         }
     }
-    if let Some(_) = effects.get("card_upgrade") {
-        // Upgrade first non-upgraded card
+    // Card upgrade
+    if let Some(v) = effects.get("card_upgrade") {
+        let count = v.as_i64().unwrap_or(1).max(1) as usize;
+        let mut upgraded = 0;
         for card in deck.iter_mut() {
-            if !card.upgraded && card.card_type != CardType::Status {
-                card.upgraded = true;
-                break;
+            if upgraded >= count { break; }
+            if !card.upgraded && card.card_type != CardType::Status && card.card_type != CardType::Curse {
+                let upgraded_id = format!("{}+", card.base_id());
+                if let Some(u) = game_data.card_db.get(&upgraded_id) {
+                    *card = u.clone();
+                } else {
+                    card.upgraded = true;
+                }
+                upgraded += 1;
             }
         }
     }
+    // Card transform (replace a card with a random pool card)
+    if let Some(v) = effects.get("card_transform") {
+        let count = v.as_i64().unwrap_or(1).max(1) as usize;
+        for _ in 0..count {
+            // Find a basic card to transform
+            let pos = deck.iter().position(|c| {
+                let base = c.base_id();
+                base.contains("STRIKE") || base.contains("DEFEND")
+            });
+            if let Some(idx) = pos {
+                deck.remove(idx);
+                // Add a random pool card
+                if !game_data.card_pool.is_empty() {
+                    let new_card = game_data.card_pool.choose(rng).unwrap().clone();
+                    deck.push(new_card);
+                }
+            }
+        }
+    }
+    // Random card addition
+    if let Some(v) = effects.get("card_add") {
+        let count = v.as_i64().unwrap_or(1).max(1) as usize;
+        for _ in 0..count {
+            if !game_data.card_pool.is_empty() {
+                let card = game_data.card_pool.choose(rng).unwrap().clone();
+                deck.push(card);
+            }
+        }
+    }
+    // Curse addition
+    if let Some(_) = effects.get("curse") {
+        deck.push(Card {
+            id: "CURSE".into(), name: "Curse".into(), cost: -1,
+            card_type: CardType::Curse, target: TargetType::Self_,
+            ..Default::default()
+        });
+    }
+    // Relic
     if let Some(v) = effects.get("relic") {
         if v.as_str() == Some("_random") {
             grant_random_relic(relics, rng);
@@ -878,18 +955,21 @@ fn pick_encounter(
 }
 
 fn offer_card_rewards(pool: &[Card], rarities: &[String], deck: &[Card], rng: &mut impl Rng) -> Vec<Card> {
+    offer_card_rewards_with_rarity(pool, rarities, deck, rng).0
+}
+
+fn offer_card_rewards_with_rarity(pool: &[Card], rarities: &[String], deck: &[Card], rng: &mut impl Rng) -> (Vec<Card>, Vec<String>) {
     let deck_ids: HashSet<&str> = deck.iter().map(|c| c.id.as_str()).collect();
 
     let mut offered = Vec::new();
+    let mut offered_rarities = Vec::new();
     let mut used = HashSet::new();
     for _ in 0..REWARD_CARDS_OFFERED {
-        // Weighted rarity selection
         let r: f64 = rng.random::<f64>() * (RARITY_COMMON + RARITY_UNCOMMON + RARITY_RARE);
         let target_rarity = if r < RARITY_COMMON { "Common" }
             else if r < RARITY_COMMON + RARITY_UNCOMMON { "Uncommon" }
             else { "Rare" };
 
-        // Find matching cards
         for _ in 0..50 {
             if pool.is_empty() { break; }
             let idx = rng.random_range(0..pool.len());
@@ -898,13 +978,14 @@ fn offer_card_rewards(pool: &[Card], rarities: &[String], deck: &[Card], rng: &m
                 let rarity = if idx < rarities.len() { rarities[idx].as_str() } else { "" };
                 if rarity == target_rarity || rarity.is_empty() {
                     offered.push(card.clone());
+                    offered_rarities.push(rarity.to_string());
                     used.insert(card.id.clone());
                     break;
                 }
             }
         }
     }
-    offered
+    (offered, offered_rarities)
 }
 
 fn grant_random_relic(relics: &mut HashSet<String>, rng: &mut impl Rng) {
