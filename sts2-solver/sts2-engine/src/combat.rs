@@ -384,16 +384,16 @@ pub fn start_turn(state: &mut CombatState, rng: &mut impl Rng) {
         if !enemy.is_alive() {
             continue;
         }
-        let mut plating = enemy.get_power("Plating");
+        let plating = enemy.get_power("Plating");
+        enemy.block = plating;
         if plating > 0 {
-            plating -= 1;
-            if plating <= 0 {
+            let new_plating = plating - 1;
+            if new_plating <= 0 {
                 enemy.powers.remove("Plating");
             } else {
-                enemy.powers.insert("Plating".to_string(), plating);
+                enemy.powers.insert("Plating".to_string(), new_plating);
             }
         }
-        enemy.block = plating;
         enemy.powers.remove("_skittish_triggered");
         enemy.powers.remove("_shell_damage_taken");
     }
