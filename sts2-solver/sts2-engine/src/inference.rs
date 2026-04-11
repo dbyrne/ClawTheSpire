@@ -126,7 +126,10 @@ impl Inference for OnnxInference {
                 let logits_tensor = outputs["logits"].downcast_ref::<ort::value::DynTensorValueType>().unwrap();
                 let (_, logits_data) = logits_tensor.try_extract_tensor::<f32>().unwrap();
                 let value = value_data[0];
-                let logits: Vec<f32> = logits_data.iter().take(actions.len()).copied().collect();
+                let mut logits: Vec<f32> = logits_data.iter().take(actions.len()).copied().collect();
+                // Pad with 0.0 if actions exceed MAX_ACTIONS (30) — overflow
+                // actions get uniform prior after softmax.
+                logits.resize(actions.len(), 0.0);
                 (logits, value)
             }
             Err(e) => {
