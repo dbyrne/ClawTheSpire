@@ -41,7 +41,7 @@ from .deterministic_advisor import (
 )
 from .game_data import strip_markup
 from .bridge import state_from_mcp
-from .constants import CardType
+from .constants import CardType, TargetType
 from .data_loader import load_cards
 from .game_client import GameClient
 from .game_data import load_game_data
@@ -299,12 +299,12 @@ class Runner:
         seen = set()
         alive_enemies = [e for e in sim_state.enemies if e.is_alive]
         for i, card in enumerate(hand):
-            key = (card.card_id, card.upgraded)
+            key = (card.id, card.upgraded)
             if key in seen:
                 continue
             seen.add(key)
             name = f"{card.name}+" if card.upgraded else card.name
-            if card.target_type in ("single_enemy", "SingleEnemy"):
+            if card.target in (TargetType.ANY_ENEMY,):
                 for ti, e in enumerate(alive_enemies):
                     labels.append(f"{name}→{e.name}")
             else:

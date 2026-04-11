@@ -9,7 +9,9 @@ sim_results*.csv
 game_log.md
 .claude/
 alphazero_progress.json
+alphazero_history.jsonl
 alphazero_checkpoints/
+training.log
 sts2-solver/training*.log
 .env
 .env.local
