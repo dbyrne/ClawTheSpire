@@ -1238,7 +1238,10 @@ fn replay_single_turn(
 
         match combat::is_combat_over(&state) {
             Some(oc) => if oc == "win" { 1.0 } else { -1.0 },
-            None => inference.run_value(&state),
+            None => {
+                let v = inference.run_value(&state);
+                if v.is_finite() { v.clamp(-2.0, 2.0) } else { 0.0 }
+            }
         }
     };
 
