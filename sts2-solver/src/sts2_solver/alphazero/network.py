@@ -15,7 +15,7 @@ Architecture:
         - Concatenated → MLP trunk (residual + LayerNorm) → 256-dim hidden state
 
     Value head:
-        hidden → Linear(256→64) → ReLU → Linear(64→1) (unbounded, no tanh)
+        hidden → Linear(256→128) → ReLU → Linear(128→1) (unbounded, no tanh)
 
     Policy head (action embedding similarity):
         - Encode each legal action as: card_embed + features (target/flags) + card_stats
@@ -249,6 +249,7 @@ class STS2Network(nn.Module):
 
         # --- Trunk MLP ---
         trunk_input_dim = cfg.state_dim
+        self.input_norm = nn.LayerNorm(trunk_input_dim)
         self.trunk_in = nn.Linear(trunk_input_dim, 256)
         self.trunk_blocks = nn.ModuleList([
             nn.ModuleDict({
@@ -259,11 +260,21 @@ class STS2Network(nn.Module):
             for _ in range(cfg.num_trunk_blocks)
         ])
 
-        # --- Value head ---
+        # --- Value head (run-level: will I win this run?) ---
         self.value_head = nn.Sequential(
-            nn.Linear(256, 64),
+            nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Linear(64, 1),
+            nn.Linear(128, 1),
+        )
+
+        # --- Combat head (combat-level: will I survive, how much HP?) ---
+        # Auxiliary head trained on combat replay samples only.
+        # Provides dense gradient signal through the trunk for combat
+        # tactics without conflicting with the value head's run-level targets.
+        self.combat_head = nn.Sequential(
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Linear(128, 1),
         )
 
         # --- Policy head ---
@@ -376,7 +387,7 @@ class STS2Network(nn.Module):
         ], dim=-1)
 
         # Trunk with residual blocks
-        h = F.relu(self.trunk_in(state_vec))
+        h = F.relu(self.trunk_in(self.input_norm(state_vec)))
         for block in self.trunk_blocks:
             h = h + block['dropout'](F.relu(block['linear'](h)))
             h = block['norm'](h)

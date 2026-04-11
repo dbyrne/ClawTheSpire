@@ -393,7 +393,8 @@ fn bool_list<'py>(py: Python<'py>, v: &[bool]) -> Bound<'py, PyList> {
     encounter_pool_json, event_profiles_json,
     card_pool_json, card_db_json,
     map_pool_json, shop_pool_json,
-    mcts_sims, temperature, seeds
+    mcts_sims, temperature, seeds,
+    combat_replays = 1
 ))]
 pub fn play_all_games(
     py: Python<'_>,
@@ -413,6 +414,7 @@ pub fn play_all_games(
     mcts_sims: usize,
     temperature: f32,
     seeds: Vec<u64>,
+    combat_replays: usize,
 ) -> PyResult<PyObject> {
     // Parse shared data (once, before releasing GIL)
     let vocabs: Vocabs = serde_json::from_str(vocab_json)
@@ -488,7 +490,7 @@ pub fn play_all_games(
 
             Some(crate::simulator::run_act1(
                 &game_data, &combat_inference, &option_evaluator,
-                mcts_sims, temperature, seed,
+                mcts_sims, temperature, seed, combat_replays,
             ))
         }).collect::<Vec<_>>()
     });
@@ -522,6 +524,23 @@ pub fn play_all_games(
         }
         d.set_item("combat_samples", py_samples)?;
         d.set_item("combat_samples_floor_map", py_floor_map)?;
+
+        // Replay samples (extra combat runs for dense per-combat training)
+        let py_replays = PyList::empty(py);
+        for rs in &result.replay_samples {
+            let rd = PyDict::new(py);
+            rd.set_item("floor", rs.floor)?;
+            rd.set_item("survived", rs.survived)?;
+            rd.set_item("hp_before", rs.hp_before)?;
+            rd.set_item("hp_after", rs.hp_after)?;
+            let replay_samples_list = PyList::empty(py);
+            for sample in &rs.samples {
+                replay_samples_list.append(sample_to_py(py, sample)?)?;
+            }
+            rd.set_item("samples", replay_samples_list)?;
+            py_replays.append(rd)?;
+        }
+        d.set_item("replay_samples", py_replays)?;
 
         // Per-combat HP data
         let py_hp_data = PyDict::new(py);

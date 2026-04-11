@@ -57,6 +57,7 @@ class TrainingSample:
     action_features: torch.Tensor
     action_mask: torch.Tensor
     num_actions: int
+    is_replay: bool = False  # True = combat replay (trains combat head, not value head)
 
 
 @dataclass
@@ -149,7 +150,7 @@ class ReplayBuffer:
     """
 
     def __init__(self, capacity: int = 50_000, win_capacity: int = 10_000,
-                 win_mix_ratio: float = 0.25):
+                 win_mix_ratio: float = 0.10):
         self.buffer: deque[TrainingSample] = deque(maxlen=capacity)
         self.win_buffer: deque[TrainingSample] = deque(maxlen=win_capacity)
         self.win_mix_ratio = win_mix_ratio
@@ -185,7 +186,12 @@ def train_batch(
     option_samples: list | None = None,
     device: str = "cpu",
 ) -> tuple[float, float, float, float]:
-    """Train on a batch. Returns (total, value, policy, option) losses."""
+    """Train on a batch. Returns (total, value, policy, option) losses.
+
+    Combat samples are split by ``is_replay``:
+    - Non-replay → value head (run-level prediction) + policy head
+    - Replay → combat head (combat-level prediction) + policy head
+    """
     network.train()
     value_losses = []
     policy_losses = []
@@ -267,32 +273,43 @@ def train_batch(
         else:
             values, logits = network.forward(hidden, act_card_ids, act_features, act_mask)
 
-            v_loss = F.mse_loss(values, target_values)
-
-            # Mask end_turn from policy target so the policy head only
-            # learns card selection, not when to stop. The stop decision
-            # is handled by MCTS value comparison at search time.
-            # is_end_turn flag is at feature index 11 in action_features.
-            is_end_turn = act_features[:, :, 11] > 0.5  # (batch, max_actions)
-            masked_policies = target_policies.clone()
-            masked_policies[is_end_turn] = 0.0
-            # Renormalize over card plays only
-            policy_sums = masked_policies.sum(dim=1, keepdim=True).clamp(min=1e-8)
-            masked_policies = masked_policies / policy_sums
-
+            # Policy loss on ALL samples (replay and non-replay)
             log_probs = F.log_softmax(logits, dim=1)
-            p_loss = -(masked_policies * log_probs).nan_to_num(0.0).sum(dim=1).mean()
+            p_loss = -(target_policies * log_probs).nan_to_num(0.0).sum(dim=1).mean()
 
-            loss = 0.25 * v_loss + p_loss
+            # Split value targets: value head for non-replay, combat head for replay
+            # Build replay mask from the (possibly filtered) samples
+            if n == len(samples):
+                replay_flags = torch.tensor([s.is_replay for s in samples], dtype=torch.bool)
+            else:
+                replay_flags = torch.tensor([samples[i.item()].is_replay for i in keep], dtype=torch.bool)
+
+            run_mask = ~replay_flags
+            replay_mask = replay_flags
+
+            loss = p_loss
+            v_loss_val = 0.0
+
+            if run_mask.any():
+                v_loss = F.mse_loss(values[run_mask], target_values[run_mask])
+                loss = loss + v_loss
+                v_loss_val += v_loss.item()
+
+            if replay_mask.any():
+                combat_values = network.combat_head(hidden[replay_mask])
+                c_loss = F.mse_loss(combat_values, target_values[replay_mask])
+                loss = loss + c_loss
+                v_loss_val += c_loss.item()
+
             if torch.isnan(loss):
                 nan_combat += 1
                 if nan_combat == 1:
-                    print(f"  [debug] NaN combat loss: v={v_loss.item():.4f} p={p_loss.item():.4f} "
+                    print(f"  [debug] NaN combat loss: v={v_loss_val:.4f} p={p_loss.item():.4f} "
                           f"logits_range=[{logits.min().item():.1f},{logits.max().item():.1f}] "
                           f"values_range=[{values.min().item():.2f},{values.max().item():.2f}]",
                           flush=True)
             else:
-                value_losses.append(v_loss.item())
+                value_losses.append(v_loss_val)
                 policy_losses.append(p_loss.item())
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(network.parameters(), 1.0)
@@ -393,16 +410,17 @@ def _read_progress(path: Path) -> dict:
 
 def train_worker(
     num_generations: int = 100,
-    games_per_generation: int = 60,
+    games_per_generation: int = 256,
     mcts_simulations: int = 100,
-    batch_size: int = 64,
-    train_epochs: int = 10,
+    batch_size: int = 256,
+    train_epochs: int = 20,
     lr: float = 3e-4,
     temperature: float = 1.0,
     save_dir: str | None = None,
     progress_file: str | None = None,
     num_trunk_blocks: int = 3,
     num_workers: int = 8,
+    combat_replays: int = 1,
 ):
     """Headless training loop. Writes progress to JSON file."""
     card_db = load_cards()
@@ -419,8 +437,8 @@ def train_worker(
         {"params": other_params, "weight_decay": 1e-4},
     ], lr=lr)
     scheduler = CosineAnnealingLR(optimizer, T_max=num_generations, eta_min=1e-5)
-    replay_buffer = ReplayBuffer(capacity=15_000)
-    option_buffer = ReplayBuffer(capacity=15_000)  # All non-combat decisions (cards, rest, map, shop)
+    replay_buffer = ReplayBuffer(capacity=200_000)
+    option_buffer = ReplayBuffer(capacity=60_000)  # All non-combat decisions (cards, rest, map, shop)
     save_path = Path(save_dir) if save_dir else Path(__file__).resolve().parents[4] / "alphazero_checkpoints"
     save_path.mkdir(parents=True, exist_ok=True)
 
@@ -574,6 +592,7 @@ def train_worker(
             mcts_sims=mcts_simulations,
             temperature=game_temp,
             seeds=game_seeds,
+            combat_replays=combat_replays,
         )
 
         # Convert Rust results to training samples
@@ -622,32 +641,49 @@ def train_worker(
                 )
                 option_samples_list.append(osample)
 
-            combat_hp_data = {}
-            for floor_key, (hp_before, hp_after, pots_used) in r.get("combat_hp_data", {}).items():
-                combat_hp_data[int(floor_key)] = (hp_before, hp_after, pots_used)
-
-            boss_floors = set(int(f) for f in r.get("boss_floors", []))
             combat_value_estimates = {
                 int(k): v for k, v in r.get("combat_value_estimates", {}).items()
             }
 
             _assign_run_values(
                 combat_samples_by_floor,
-                floor_reached,
-                17,  # total floors in act 1
-                final_hp,
-                max_hp_r,
-                deck_change_samples=[],
+                is_win=is_win,
+                floor_reached=floor_reached,
                 option_samples=option_samples_list,
-                combat_hp_data=combat_hp_data,
-                boss_floors=boss_floors,
-                combat_value_estimates=combat_value_estimates,
             )
 
             for sample in all_combat_samples:
                 replay_buffer.add(sample, is_win=is_win)
             for osample in option_samples_list:
                 option_buffer.add(osample, is_win=is_win)
+
+            # Process combat replay samples — routed to the combat head
+            # (separate from the value head) so targets use natural scale:
+            # Boss win: +1.0, non-boss survived: hp_after/hp_before, died: -1.0.
+            boss_floors = set(r.get("boss_floors", []))
+            for rs in r.get("replay_samples", []):
+                hp_before = rs["hp_before"]
+                hp_after = rs["hp_after"]
+                if rs["survived"]:
+                    if rs["floor"] in boss_floors:
+                        replay_value = 1.0
+                    else:
+                        replay_value = hp_after / max(1, hp_before)
+                else:
+                    replay_value = -1.0
+                for s in rs["samples"]:
+                    st = s["state_tensors"]
+                    sample = TrainingSample(
+                        state_tensors=_rust_state_to_tensors(st),
+                        policy=s["policy"],
+                        value=replay_value,
+                        action_card_ids=torch.tensor([s["action_card_ids"]], dtype=torch.long),
+                        action_features=torch.tensor(s["action_features"], dtype=torch.float32).view(1, 30, -1),
+                        action_mask=torch.tensor([s["action_mask"]], dtype=torch.bool),
+                        num_actions=s["num_actions"],
+                        is_replay=True,
+                    )
+                    replay_buffer.add(sample, is_win=rs["survived"])
 
             total_games += 1
             gen_floors.append(floor_reached)
@@ -858,10 +894,10 @@ if __name__ == "__main__":
     # Train command
     train_parser = subparsers.add_parser("train", help="Run headless training worker")
     train_parser.add_argument("--generations", type=int, default=100)
-    train_parser.add_argument("--games-per-gen", type=int, default=60)
+    train_parser.add_argument("--games-per-gen", type=int, default=256)
     train_parser.add_argument("--sims", type=int, default=100)
-    train_parser.add_argument("--batch-size", type=int, default=64)
-    train_parser.add_argument("--epochs", type=int, default=10)
+    train_parser.add_argument("--batch-size", type=int, default=256)
+    train_parser.add_argument("--epochs", type=int, default=20)
     train_parser.add_argument("--lr", type=float, default=3e-4)
     train_parser.add_argument("--temperature", type=float, default=1.0)
     train_parser.add_argument("--save-dir", type=str, default=None)
@@ -869,6 +905,8 @@ if __name__ == "__main__":
     train_parser.add_argument("--trunk-blocks", type=int, default=3)
     train_parser.add_argument("--workers", type=int, default=8,
                               help="Parallel self-play workers (0 or 1 = sequential)")
+    train_parser.add_argument("--combat-replays", type=int, default=5,
+                              help="Re-run each combat N times for dense training (1 = off)")
 
     # Monitor command
     monitor_parser = subparsers.add_parser("monitor", help="Live TUI dashboard")
@@ -890,6 +928,7 @@ if __name__ == "__main__":
             progress_file=args.progress_file,
             num_trunk_blocks=args.trunk_blocks,
             num_workers=args.workers,
+            combat_replays=args.combat_replays,
         )
     elif args.command == "monitor":
         train_monitor(

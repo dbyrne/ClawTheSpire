@@ -40,17 +40,18 @@ graph TD
     end
 
     subgraph Trunk["Shared Trunk"]
-        TrunkIn["Linear(451 → 256) + ReLU"]
+        TrunkIn["LayerNorm(451) → Linear(451 → 256) + ReLU"]
         Res1["Residual Block 1<br/><i>Linear(256→256) + ReLU + LayerNorm + Dropout</i>"]
         Res2["Residual Block 2"]
         Res3["Residual Block 3"]
         Hidden["Hidden State (256-dim)"]
     end
 
-    subgraph Heads["Three Output Heads"]
-        Value["Value Head<br/>Linear(256→64) → ReLU → Linear(64→1)<br/><i>Win probability</i>"]
+    subgraph Heads["Four Output Heads"]
+        Value["Value Head<br/>Linear(256→128) → ReLU → Linear(128→1)<br/><i>Run win probability</i>"]
+        Combat["Combat Head<br/>Linear(256→128) → ReLU → Linear(128→1)<br/><i>Combat survival (auxiliary)</i>"]
         Policy["Policy Head<br/>State→61-dim ·  Action→61-dim<br/><i>Dot product scoring</i>"]
-        Option["Option Head<br/>hidden(256)+type(16)+card(32)+stats(15)+path(16)=335<br/>Linear(335→64) → ReLU → Linear(64→1)<br/><i>Non-combat decisions</i>"]
+        Option["Option Head<br/>hidden(256)+type(16)+card(32)+stats(26)+path(16)=346<br/>Linear(346→64) → ReLU → Linear(64→1)<br/><i>Non-combat decisions</i>"]
     end
 
     Hand --> TrunkIn
@@ -62,6 +63,7 @@ graph TD
     Context --> TrunkIn
     TrunkIn --> Res1 --> Res2 --> Res3 --> Hidden
     Hidden --> Value
+    Hidden --> Combat
     Hidden --> Policy
     Hidden --> Option
 ```
@@ -110,6 +112,8 @@ All of these pieces get concatenated (joined end-to-end) into one long vector
 ```
 [451-dim input]
        |
+  LayerNorm(451)                    <-- normalize input features to zero-mean, unit-variance
+       |
   Linear(451 -> 256) + ReLU        <-- compress to 256 dimensions
        |
   ┌─ Residual Block (x3) ─────────────────────────────────────────┐
@@ -121,6 +125,13 @@ All of these pieces get concatenated (joined end-to-end) into one long vector
        |
   [256-dim hidden state]            <-- this is the network's "understanding" of the position
 ```
+
+**Input LayerNorm:** The 451-dim input concatenates features at very different
+scales — learned embeddings (~[-1,1]), HP fractions ([0,1]), log-scaled power
+amounts, tiny values like floor/50. Without normalization, the trunk's first
+linear layer has to learn to rescale all of these simultaneously. LayerNorm
+normalizes the whole vector before the linear layer sees it, making initial
+learning much more stable.
 
 The trunk depth (3 blocks) is configurable via `num_trunk_blocks`. Deeper trunks
 let the network learn more complex feature interactions at the cost of more
@@ -141,25 +152,57 @@ This forces the network to not rely too heavily on any single feature, making it
 more robust. Think of it as training multiple slightly different networks and
 averaging them.
 
-### The three output heads
+### The four output heads
 
-The 256-dim hidden state feeds into three specialized heads:
+The 256-dim hidden state feeds into four specialized heads:
 
-#### 1. Value Head — "How likely are we to win?"
+#### 1. Value Head — "How likely are we to win the run?"
 
 ```
-hidden(256) -> Linear(256->64) -> ReLU -> Linear(64->1) -> scalar
+hidden(256) -> Linear(256->128) -> ReLU -> Linear(128->1) -> scalar
 ```
 
 Outputs a single number. Positive = likely winning, negative = likely losing.
-Range roughly [-1, +1].
+Range roughly [-1, +1]. The 128-dim hidden layer gives the value head enough
+capacity to represent the complex relationship between game state and win
+probability (~33K params).
 
 *Design choice:* No `tanh` activation on the output. Many implementations use
 `tanh` to clamp to [-1,1], but tanh has **gradient saturation** — when the output
 is near +1 or -1, the gradient becomes nearly zero, so the network can't learn
 from strong wins/losses. We clamp the *targets* instead.
 
-#### 2. Policy Head — "Which move should I make?"
+#### 2. Combat Head — "Will I survive this fight?" (auxiliary)
+
+```
+hidden(256) -> Linear(256->128) -> ReLU -> Linear(128->1) -> scalar
+```
+
+Same architecture as the value head, but trained on a different signal: **per-combat
+outcomes** from combat replays (see Part 3). Targets are:
+
+| Combat outcome | Target |
+|---|---|
+| Won (boss floor) | +1.0 |
+| Survived (non-boss) | hp_after / hp_before (0 to 1.0) |
+| Died | -1.0 |
+
+**The combat head is never used during MCTS inference.** Its sole purpose is to
+provide dense auxiliary gradient signal back through the shared trunk. During early
+training, the value head gets sparse signal (almost all games are losses → most
+targets cluster near -1.0). The combat head sees per-combat outcomes — "you
+survived this fight at 80% HP" or "you died here" — giving the trunk 5× more
+gradient per generation for learning combat tactics (block timing, energy
+management, damage prioritization).
+
+*Why not train the value head on combat outcomes directly?* The value head
+predicts "will I win the run?" and the combat head predicts "will I survive this
+fight?" — these are different quantities. The same board state could be labeled
+-0.8 (full-run loss at floor 7) and +0.7 (survived this combat at 70% HP). A
+single head can't learn a consistent function from contradictory targets. Separate
+heads with separate parameters resolve this cleanly.
+
+#### 3. Policy Head — "Which move should I make?"
 
 This is the most architecturally interesting head. Instead of a simple
 "output one score per possible action" approach (which doesn't work because the
@@ -177,9 +220,9 @@ a 61-dimensional vector. The state also gets projected to 61 dimensions. The sco
 for each action is the **dot product** — how well the action "matches" what the
 state needs.
 
-Action features (29-dim) include: target one-hot (6), potion type (5), flags for
-end_turn/use_potion/choose_card (3), and card stats (15 — cost, damage, block,
-draw, magic number, etc.).
+Action features (40-dim) include: target one-hot (6), potion type (5), flags for
+end_turn/use_potion/choose_card (3), and card stats (26 — cost, damage, block,
+type/target one-hots, draw, exhaust, debuffs, etc.).
 
 *Why dot product?* It generalizes. The network learns that "Defend is good when
 facing high incoming damage" as a geometric relationship in 40-dimensional space.
@@ -187,19 +230,20 @@ It doesn't need to memorize every specific (state, action) pair.
 
 Invalid actions get their scores set to negative infinity so they're never chosen.
 
-*End-turn exclusion:* The `end_turn` action is deliberately excluded from the
-policy head's softmax. The policy head learns "which card to play" — whether to
-STOP playing is a value question that MCTS answers through lookahead. `end_turn`
-gets a fixed uniform prior (`1/num_actions`) so it's always explored but can't
-dominate through a learned bias. This prevents the network from learning to
-always end turn early (a local optimum that avoids bad plays but also avoids
-good ones).
+*End-turn in MCTS vs training:* During Rust MCTS inference, `end_turn` gets a
+fixed uniform prior (`1/num_actions`) — the NN's logit for end_turn is replaced
+so that the stop-playing decision is driven by value comparison, not a learned
+bias. However, during **training**, the policy head learns on the full MCTS
+visit distribution including end_turn. This means the policy head learns the
+right end-turn frequency from MCTS's value-guided decisions, and the state
+representation benefits from this signal even though the end_turn logit isn't
+directly used during inference.
 
-#### 3. Option Evaluation Head — "What should I do outside of combat?"
+#### 4. Option Evaluation Head — "What should I do outside of combat?"
 
 ```
-hidden(256) + option_type_embed(16) + card_embed(32) + card_stats(15) + path_embed(16) = 335
-  -> Linear(335->64) -> ReLU -> Linear(64->1) -> score
+hidden(256) + option_type_embed(16) + card_embed(32) + card_stats(26) + path_embed(16) = 346
+  -> Linear(346->64) -> ReLU -> Linear(64->1) -> score
 ```
 
 **One head for all non-combat decisions.** Each option is scored using five
@@ -207,8 +251,9 @@ concatenated features:
 
 - **Option type embedding (16-dim):** What kind of choice this is
 - **Card embedding (32-dim):** Which card is involved (zeros for non-card options)
-- **Card stats (15-dim):** Normalized stats of the card (cost, damage, block, etc.)
-  Gives the network concrete numbers to work with alongside the learned embedding.
+- **Card stats (26-dim):** Normalized stats of the card (cost, damage, block,
+  type/target one-hots, draw, exhaust, debuffs, etc.). Gives the network concrete
+  numbers to work with alongside the learned embedding.
 - **Path embedding (16-dim):** What rooms lie ahead if this option is chosen
   (per-option for map decisions, shared global context for other decisions)
 
@@ -273,7 +318,7 @@ exploration  = c_puct * prior * sqrt(parent_visits) / (1 + visits)
 - `prior`: the network's initial guess (guides search toward promising moves)
 - `sqrt(parent_visits) / (1 + visits)`: moves visited less get a bonus (try
   everything at least a few times before committing)
-- `c_puct = 2.5`: controls the exploitation/exploration balance (higher = explore more)
+- `c_puct = 1.0`: controls the exploitation/exploration balance (higher = explore more)
 
 **Minimum root visits:** Before PUCT selection kicks in, every legal action at the
 root gets at least 2 visits. With only 3-5 deduplicated actions per turn, this
@@ -360,7 +405,7 @@ Self-play runs entirely in Rust with rayon thread parallelism. Python's only
 role is ONNX model export, value assignment, and gradient updates. No Python
 GIL contention during game play.
 
-### One generation (40 games)
+### One generation (256 games)
 
 ```
 1. EXPORT: Convert PyTorch network to three ONNX models:
@@ -369,24 +414,34 @@ GIL contention during game play.
    - option_model.onnx: state + options -> scores for non-combat decisions
 
 2. SELF-PLAY (Rust, parallel via rayon):
-   Play 40 full Act 1 runs using the ONNX models
+   Play 256 full Act 1 runs using the ONNX models
    - Each run: real map from map_pool.json, ~17 floors, ~5-8 combats
    - Combat: MCTS with 100 simulations per card decision
    - Non-combat: option head scores all choices (card rewards, rest/smith,
      shop buy/remove/leave, event options, map path choices)
    - ALL decisions via neural network -- no heuristic fallbacks
    - Dynamic map walking: chosen paths affect future room availability
+   - COMBAT REPLAYS: After each combat, re-run it 4 more times from the
+     same pre-combat state with different RNG seeds. Produces ~5x more
+     combat training data from realistic, naturally-generated scenarios.
 
-3. ASSIGN VALUES (Python): Label every decision with outcome-based values
-   - Combat: per-floor HP conservation (hp_retained - damage*0.5 - potions)
-   - Boss: pure win/lose (+1.0/-1.0)
-   - Non-combat: trajectory credit (value change between adjacent combats)
-   - Temporal discount within combat (later turns get fuller signal)
+3. ASSIGN VALUES (Python): Label every decision with run outcome
+   Full-run samples → value head:
+   - Win: all samples get +1.0
+   - Loss: all samples get -1.0 + 0.5 * (floor_reached / 17)
+   
+   Combat replay samples → combat head:
+   - Boss win: +1.0
+   - Non-boss survived: hp_after / hp_before (0 to 1.0)
+   - Died: -1.0
+   
+   Policy targets (MCTS visit counts) apply to ALL samples.
 
-4. TRAIN: Sample 64 decisions from replay buffer, update network (10 epochs)
-   - Value loss: MSE between predicted and actual outcome
-   - Policy loss: cross-entropy between network policy and MCTS visit policy
-   - Option loss: MSE between option score and trajectory value
+4. TRAIN: Sample 256 decisions from replay buffer, update network (20 epochs)
+   - Policy loss: cross-entropy (ALL samples, replay and non-replay)
+   - Value loss: MSE, non-replay samples only → value head
+   - Combat loss: MSE, replay samples only → combat head
+   - Option loss: MSE between option score and run value
    - Separate backward passes for combat and option heads
 
 5. Save checkpoint (every 10 gens), repeat
@@ -407,51 +462,89 @@ do you assign credit — which decisions were good and which caused the loss?
 
 **File:** `full_run.py`, function `_assign_run_values`
 
-We blend two signals:
+We use **run-outcome-based value targets**, inspired by canonical AlphaZero:
 
-**Combat samples — pure HP conservation:**
-- Won the combat with 90% HP remaining? Good. Value ≈ +0.8
-- Won but lost 60% HP? Mediocre. Value ≈ +0.1
-- Used 2 potions to survive? Penalty applied.
-- Boss fights: pure win/lose (+1.0 / -1.0, minus potion penalty). HP
-  conservation is irrelevant since HP resets next act.
-- No run-level blending — combat decisions are judged solely on how well
-  that fight was played. Run outcome is noise for card-play decisions.
+- **Winning run:** All samples (combat and non-combat) get **+1.0**
+- **Losing run:** All samples get a value based on floor reached:
+  `-1.0 + 0.5 * (floor_reached / 17)`
 
-**Non-combat samples (card rewards, rest, shop, map) — mostly run outcome:**
-- 30% trajectory signal: did the value head's estimate improve between the
-  combat before and after this decision?
-- 70% run outcome: how far did the run get, final HP.
-- These are long-horizon decisions so the run result matters more than
-  local combat changes.
+This gives losing runs values in **[-1.0, -0.5]** — always clearly negative
+(no ambiguity with wins), but with enough spread that the value head can learn
+"getting further = less bad." Example values:
 
-Within a single combat, later turns get slightly higher values than earlier turns
-(temporal discount of 0.99 per step), since they contributed more directly to the
-outcome.
+| Outcome | Floor | Value |
+|---------|-------|-------|
+| Win | 17 | **+1.0** |
+| Loss | 15 | -0.56 |
+| Loss | 8 | -0.76 |
+| Loss | 3 | -0.91 |
+
+*Why not pure binary {+1, -1}?* Pure binary works great once the system has a
+reasonable win rate. But during cold-start (win rate near 0%), all targets are
+-1.0 and the value head gets zero gradient — it learns nothing. The floor-offset
+provides gradient signal even from all-loss batches, bootstrapping the value head
+until wins start appearing. Once wins enter the buffer, the +1.0 / -0.8 contrast
+dominates training.
+
+*Why not per-combat HP conservation for the value head?* A fight where you barely
+survive at 10% HP gets the same run-level label as one where you cruise through.
+This is intentional — a pyrrhic victory at floor 5 causes the death at floor 6,
+and the run outcome correctly reflects this. The value head learns which states
+*correlate with eventually winning the run*, not just surviving one fight.
+
+### Combat replays — dense training signal
+
+Each combat during self-play is re-run 4 extra times from the same pre-combat
+state (same deck, HP, relics, potions, enemies) with different RNG seeds. This
+produces ~5x more combat training data from realistic scenarios without needing
+to fabricate artificial combat setups.
+
+**Why interleave with full runs?** The hardest part of combat-only training is
+generating realistic scenarios — what deck does the player have on floor 7?
+What relics? How much HP? By replaying combats encountered during actual runs,
+every scenario is naturally generated by the network's own play.
+
+Replay samples are routed to the **combat head** (not the value head) with
+per-combat value targets:
+
+| Replay outcome | Target | Rationale |
+|---|---|---|
+| Boss win | +1.0 | Beating the boss IS winning the run |
+| Non-boss survived | hp_after / hp_before | HP conservation measures combat efficiency |
+| Died | -1.0 | Death ends the run regardless |
+
+The combat head provides auxiliary gradient through the shared trunk, teaching
+the network combat fundamentals (block timing, energy management) without
+conflicting with the value head's run-level predictions.
 
 ### The replay buffer
 
-We keep a buffer of 2,000 past combat decisions and sample from it. This is
-intentionally small (~50 generations of history) to keep the network focused
-on recent experience, preventing long-term drift where weak older games pollute
-training.
+We keep a buffer of 60,000 past combat decisions (plus a separate 60,000 option
+buffer) and sample from it. With ~30,000 new combat samples per generation (256
+games × ~5 combats × 5 replays × ~5 samples), the buffer holds ~2 generations
+of recent history — fast churn ensures the network trains on data from its
+current skill level.
 
 **Win prioritization:** At low win rates, most data is from losses. We maintain
-a separate win reservoir (10,000 capacity) and mix 25% winning samples into
-each batch so the network keeps learning from positive examples.
+a separate win reservoir (10,000 capacity) and mix 10% winning samples into
+each batch so the network keeps learning from positive examples. The mix ratio
+is kept low (10% vs the naive 50/50) to avoid biasing the value head toward
+features of specific lucky trajectories rather than objectively strong states.
 
 ### Hyperparameters
 
 | Parameter | Value | Why |
 |-----------|-------|-----|
-| Learning rate | 1e-3 -> 1e-5 (cosine decay) | Start aggressive, fine-tune later. Cosine is smoother than step decay. |
-| Batch size | 64 | Balances noise (too small) vs memory (too large). |
-| Epochs per gen | 10 | Multiple passes over each batch for efficiency. |
+| Learning rate | 3e-4 -> 1e-5 (cosine decay) | Start aggressive, fine-tune later. Cosine is smoother than step decay. |
+| Batch size | 256 | Large enough for low-variance gradients with 427K params. |
+| Epochs per gen | 20 | Each sample seen ~4x during its buffer lifetime. |
 | Weight decay | 1e-4 (non-embedding) | L2 regularization — prevents weights from growing huge. Embeddings are exempt so rare cards can develop strong representations. |
 | Gradient clipping | norm <= 1.0 | Prevents exploding gradients from bad samples. |
-| Games per gen | 40 | Enough variety per generation, keeps gen time reasonable. |
+| Games per gen | 256 | Large enough for stable per-gen metrics. |
+| Combat replays | 5 | Re-run each combat 5 times (4 extra) for dense training signal. |
 | MCTS simulations | 100 | Per card-play decision. Higher than standard for better training signal. |
-| Replay buffer | 2,000 | ~50 gens of history. Tight buffer prevents drift from stale games. |
+| Replay buffer | 60,000 combat + 60,000 option | ~2 gens of history with replays. |
+| Win buffer | 10,000 (10% mix ratio) | Ensures positive signal even at low win rates. |
 | Temperature | 1.0 -> 0.3 (cosine) | Cosine decay with 0.3 floor. Stays above 0.5 for ~60% of training, then smoothly drops. |
 | c_puct | 1.0 | Standard PUCT exploration constant. |
 | Min root visits | 2 | Every root action gets at least 2 visits before PUCT selection. |
@@ -482,13 +575,20 @@ run outcome, weighted at 0.25x (auxiliary task).
 Combat and option losses are optimized in **separate backward passes**:
 
 ```
-Combat step:   loss = 0.25 * value_loss + policy_loss
+Combat step:   loss = policy_loss + value_loss + combat_loss
+                      (all samples)  (non-replay)  (replay only)
 Option step:   loss = 0.25 * option_loss  (accumulated across all option samples)
 ```
 
-Policy loss is weighted highest because accurate move selection is the most
-impactful skill. The separate steps prevent option gradients from interfering
-with combat learning and vice versa.
+Within each batch, samples are split by `is_replay` flag:
+- **Non-replay samples** (from full runs): policy loss + value head loss
+- **Replay samples** (from combat replays): policy loss + combat head loss
+
+Value, combat, and policy losses are weighted **equally** (canonical AlphaZero).
+The value head is critical — it's what makes MCTS work. Without an accurate
+value head, MCTS can't distinguish good states from bad states, and the policy
+targets (MCTS visit counts) degrade. The separate backward passes prevent option
+gradients from interfering with combat learning and vice versa.
 
 ---
 
@@ -541,8 +641,8 @@ Generation 500+: Network and MCTS reinforce each other. Better network = better
 ### Cold start (fresh training)
 
 ```bash
-cd sts2-solver
-python -m sts2_solver.alphazero.self_play train --generations 2000 --games-per-gen 40 --sims 100
+cd sts2-solver/src
+python -m sts2_solver.alphazero.self_play train --generations 200
 ```
 
 ### Resume from checkpoint
@@ -565,7 +665,7 @@ python -m sts2_solver.alphazero.self_play monitor
 
 | File | Role |
 |------|------|
-| `alphazero/network.py` | Neural network architecture (3 heads, ~270K params) |
+| `alphazero/network.py` | Neural network architecture (4 heads: value, combat, policy, option) |
 | `alphazero/mcts.py` | Python MCTS (fallback when Rust unavailable) |
 | `alphazero/self_play.py` | Training loop + ONNX export + replay buffers + TUI monitor |
 | `alphazero/full_run.py` | Value assignment + Python→Rust bridge helpers |

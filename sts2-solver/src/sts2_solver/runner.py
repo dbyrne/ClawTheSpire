@@ -96,6 +96,7 @@ class Runner:
     ):
         self.step_mode = step_mode
         self.dry_run = dry_run
+        self.review_mode = False  # toggled at runtime with R key
         self.poll_interval = poll_interval
         self.character = character
         self._gen_name = gen
@@ -194,6 +195,84 @@ class Runner:
     def _log_action(self, msg: str) -> None:
         self._log.append(msg)
 
+    def _check_review_toggle(self) -> None:
+        """Non-blocking check for 'R' keypress to toggle review mode."""
+        try:
+            import msvcrt
+            while msvcrt.kbhit():
+                ch = msvcrt.getch()
+                if ch in (b'r', b'R'):
+                    self.review_mode = not self.review_mode
+                    state = "ON" if self.review_mode else "OFF"
+                    self._log_action(
+                        f"[bold cyan]Review mode {state}[/bold cyan]"
+                        f" (press R to toggle)"
+                    )
+                    self._refresh()
+        except ImportError:
+            import sys
+            import select as _sel
+            try:
+                while _sel.select([sys.stdin], [], [], 0)[0]:
+                    ch = sys.stdin.read(1)
+                    if ch in ('r', 'R'):
+                        self.review_mode = not self.review_mode
+                        state = "ON" if self.review_mode else "OFF"
+                        self._log_action(
+                            f"[bold cyan]Review mode {state}[/bold cyan]"
+                            f" (press R to toggle)"
+                        )
+                        self._refresh()
+            except Exception:
+                pass
+
+    def _review_pause(self, summary: str) -> None:
+        """Block until user approves a decision. Only active in review mode.
+
+        Controls: Space = apply, R = resume auto, Q = quit run.
+        """
+        if not self.review_mode:
+            return
+
+        if self._live:
+            self._live.stop()
+
+        self.console.print()
+        self.console.print("[bold cyan]━━━ REVIEW ━━━[/bold cyan]")
+        self.console.print(summary)
+        self.console.print(
+            "[dim]Space = apply   R = resume auto   Q = quit[/dim]"
+        )
+
+        while True:
+            try:
+                import msvcrt
+                ch = msvcrt.getch()
+            except ImportError:
+                import sys, tty, termios
+                fd = sys.stdin.fileno()
+                old = termios.tcgetattr(fd)
+                try:
+                    tty.setraw(fd)
+                    ch = sys.stdin.read(1).encode()
+                finally:
+                    termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+            if ch == b' ':
+                break
+            elif ch in (b'r', b'R'):
+                self.review_mode = False
+                self.console.print("[cyan]Review mode OFF — resuming auto[/cyan]")
+                break
+            elif ch in (b'q', b'Q'):
+                self.review_mode = False
+                if self._live:
+                    self._live.start()
+                raise KeyboardInterrupt
+
+        if self._live:
+            self._live.start()
+
     def _track_decision(self, screen_type: str, source: str) -> None:
         """Track decision routing for end-of-run summary."""
         by_source = self._decision_routing.setdefault(screen_type, {})
@@ -286,6 +365,8 @@ class Runner:
             mode = " [yellow]\\[DRY RUN][/yellow]"
         elif self.step_mode:
             mode = " [cyan]\\[STEP][/cyan]"
+        if self.review_mode:
+            mode += " [bold cyan]\\[REVIEW][/bold cyan]"
 
         parts = [
             f"[bold]{self.character}[/bold]",
@@ -424,6 +505,7 @@ class Runner:
                     self._refresh()
                     if finished:
                         break
+                    self._check_review_toggle()
                     if self.step_mode:
                         # Drop out of Live temporarily for input
                         live.stop()
@@ -984,6 +1066,7 @@ class Runner:
         max_cards = 12
 
         while len(cards_played) < max_cards:
+            self._check_review_toggle()
             # Build combat state and run MCTS
             try:
                 sim_state = state_from_mcp(gs, self.card_db,
@@ -1044,6 +1127,13 @@ class Runner:
                     f"vs: {enemy_str}\n\n"
                     f"MCTS: end turn ({solve_ms:.0f}ms)"
                 )
+                remaining = [c.name for c in hand]
+                self._review_pause(
+                    f"[bold]End Turn[/bold]  (value {root_value:+.2f}, {solve_ms:.0f}ms)\n"
+                    f"  Hand kept: {', '.join(remaining) if remaining else '(empty)'}\n"
+                    f"  HP {player.get('current_hp', '?')}/{player.get('max_hp', '?')} | "
+                    f"Energy {player.get('energy', '?')}"
+                )
                 break
 
             # Handle potion usage from MCTS
@@ -1073,6 +1163,11 @@ class Runner:
                 })
 
                 if not self.dry_run:
+                    target_info = f" -> enemy {first_action.target_idx}" if first_action.target_idx is not None else ""
+                    self._review_pause(
+                        f"[bold]Use Potion:[/bold] {pot_name}{target_info}\n"
+                        f"  Value: {root_value:+.2f} | {solve_ms:.0f}ms"
+                    )
                     mcp_action = action_to_mcp(first_action)
                     try:
                         self._execute_with_retry(
@@ -1148,6 +1243,18 @@ class Runner:
                     "enemies": enemies_compact,
                     "attacks_played": sim_state.attacks_played_this_turn,
                 })
+            # Review pause — show decision before executing
+            enemy_summary = ", ".join(
+                f"{e.name} {e.hp}hp" for e in sim_state.enemies if e.is_alive
+            )
+            self._review_pause(
+                f"[bold]Play:[/bold] {label}\n"
+                f"  Value: {root_value:+.2f} | Confidence: {best_score:.0%} | {solve_ms:.0f}ms\n"
+                f"  Hand: {', '.join(c.name for c in hand)}\n"
+                f"  HP {sim_state.player.hp}/{player.get('max_hp', '?')} | "
+                f"Energy {sim_state.player.energy} | Block {sim_state.player.block}\n"
+                f"  vs: {enemy_summary}"
+            )
             try:
                 self._execute_with_retry(
                     mcp_action["action"],
@@ -2705,6 +2812,22 @@ class Runner:
 
         # Execute
         if not self.dry_run:
+            # Review pause — show non-combat decision before applying
+            value_str = f"  Value: {decision.network_value:+.2f}" if decision.network_value is not None else ""
+            scores_str = ""
+            if decision.head_scores and "options" in decision.head_scores:
+                opts = decision.head_scores["options"]
+                scores_str = "\n  " + " | ".join(
+                    f"{o['label']}: {o['score']:.2f}" for o in opts
+                )
+            self._review_pause(
+                f"[bold]{screen_type.upper()}:[/bold] {decision.action}"
+                f"{f' (idx={decision.option_index})' if decision.option_index is not None else ''}\n"
+                f"  {decision.reasoning}\n"
+                f"  Floor {run.get('floor', '?')} | "
+                f"HP {run.get('current_hp', '?')}/{run.get('max_hp', '?')}"
+                f"{value_str}{scores_str}"
+            )
             try:
                 self._execute_with_retry(
                     decision.action, option_index=decision.option_index,

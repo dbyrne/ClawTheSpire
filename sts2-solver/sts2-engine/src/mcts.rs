@@ -254,7 +254,7 @@ impl<'a> MCTS<'a> {
                 .max_by(|&&(_, a), &&(_, b)| {
                     let score_a = arena.nodes[a].ucb_score(parent_visits, C_PUCT);
                     let score_b = arena.nodes[b].ucb_score(parent_visits, C_PUCT);
-                    score_a.partial_cmp(&score_b).unwrap()
+                    score_a.partial_cmp(&score_b).unwrap_or(std::cmp::Ordering::Equal)
                 })
                 .map(|&(_, idx)| idx)
                 .unwrap();

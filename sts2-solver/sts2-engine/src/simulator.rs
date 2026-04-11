@@ -88,6 +88,15 @@ pub struct FloorSamples {
     pub samples: Vec<RustTrainingSample>,
 }
 
+/// Combat replay samples with per-combat outcome for dense training signal.
+pub struct ReplayFloorSamples {
+    pub floor: i32,
+    pub samples: Vec<RustTrainingSample>,
+    pub survived: bool,
+    pub hp_before: i32,
+    pub hp_after: i32,
+}
+
 pub struct FullRunResult {
     pub outcome: String,
     pub floor_reached: i32,
@@ -97,6 +106,7 @@ pub struct FullRunResult {
     pub combats_fought: i32,
     pub deck_size: i32,
     pub combat_samples_by_floor: Vec<FloorSamples>,
+    pub replay_samples: Vec<ReplayFloorSamples>,
     pub option_samples: Vec<RustOptionSample>,
     pub combat_value_estimates: HashMap<i32, f32>,
     pub combat_hp_data: Vec<CombatHpData>,
@@ -242,6 +252,7 @@ pub fn run_act1(
     mcts_sims: usize,
     temperature: f32,
     seed: u64,
+    combat_replays: usize,
 ) -> FullRunResult {
     use rand::SeedableRng;
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
@@ -267,7 +278,8 @@ pub fn run_act1(
         outcome: "lose".into(), floor_reached: 0,
         final_hp: hp, max_hp, combats_won: 0, combats_fought: 0,
         deck_size: deck.len() as i32,
-        combat_samples_by_floor: Vec::new(), option_samples: Vec::new(),
+        combat_samples_by_floor: Vec::new(), replay_samples: Vec::new(),
+        option_samples: Vec::new(),
         combat_value_estimates: HashMap::new(),
         combat_hp_data: Vec::new(),
         is_boss_floor: HashSet::new(),
@@ -358,6 +370,27 @@ pub fn run_act1(
                     &remaining_path, game_data, combat_inference,
                     mcts_sims, temperature, &mut rng,
                 );
+
+                // Combat replays: re-run same encounter with different RNG
+                // seeds for dense per-combat training signal.
+                for _k in 1..combat_replays {
+                    use rand::SeedableRng;
+                    let replay_seed = rng.random::<u64>();
+                    let mut replay_rng = rand::rngs::StdRng::seed_from_u64(replay_seed);
+                    let replay = run_combat_internal(
+                        &deck, hp, max_hp, max_energy, &enemy_ids,
+                        &relics, &potions, floor_num, gold, &act_id, &boss_id,
+                        &remaining_path, game_data, combat_inference,
+                        mcts_sims, temperature, &mut replay_rng,
+                    );
+                    result.replay_samples.push(ReplayFloorSamples {
+                        floor: floor_num,
+                        samples: replay.samples,
+                        survived: replay.outcome == "win",
+                        hp_before: hp,
+                        hp_after: replay.hp_after,
+                    });
+                }
 
                 result.combats_fought += 1;
                 let hp_before = hp;

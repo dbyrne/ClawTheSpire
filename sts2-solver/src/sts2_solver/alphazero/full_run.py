@@ -63,61 +63,27 @@ def _rust_state_to_tensors(st: dict) -> dict:
 
 def _assign_run_values(
     combat_samples_by_floor: dict,
-    floor_reached: int,
-    total_floors: int,
-    final_hp: int,
-    max_hp: int,
-    deck_change_samples: list = None,
+    is_win: bool,
+    floor_reached: int = 0,
     option_samples: list = None,
-    combat_hp_data: dict = None,
-    boss_floors: set = None,
-    combat_value_estimates: dict = None,
 ) -> None:
-    """Assign training values to all samples based on run outcome.
+    """Assign run outcome values to all samples.
 
-    Combat samples from later combats get values closer to the actual outcome.
-    Deck change and option samples all get the run-level value.
+    Wins get +1.  Losses get a value in [-1, -0.5] based on floor
+    reached — further is less bad.  This gives the value head gradient
+    signal even when all games are losses (cold-start bootstrapping),
+    while keeping wins clearly separated from all loss values.
     """
-    if deck_change_samples is None:
-        deck_change_samples = []
-    if option_samples is None:
-        option_samples = []
-    if combat_hp_data is None:
-        combat_hp_data = {}
-    if boss_floors is None:
-        boss_floors = set()
-    if combat_value_estimates is None:
-        combat_value_estimates = {}
-
-    # Run-level value: based on floor reached and HP
-    base = max(-1.0, min(1.0, (floor_reached / total_floors) * 2 - 1.0))
-    hp_bonus = 0.3 * (final_hp / max(max_hp, 1)) if final_hp > 0 else 0.0
-    run_value = max(-1.0, min(1.0, base + hp_bonus))
-
-    # Discount: earlier floors get values closer to 0 (less certain)
-    discount = 0.95
-    sorted_floors = sorted(combat_samples_by_floor.keys(), reverse=True)
-
-    for i, floor in enumerate(sorted_floors):
-        # Per-combat HP conservation: blend run-level value with combat performance
-        floor_value = run_value * (discount ** i)
-        hp_data = combat_hp_data.get(floor)
-        if hp_data is not None:
-            hp_before, hp_after, _pots_used = hp_data
-            if hp_before > 0:
-                # hp_ratio: 1.0 = took no damage, 0.0 = died or nearly died
-                hp_ratio = max(0.0, hp_after) / hp_before
-                # Combat bonus: ranges from -0.3 (lost all HP) to +0.3 (took no damage)
-                combat_bonus = 0.3 * (hp_ratio * 2 - 1)
-                floor_value = max(-1.0, min(1.0, floor_value + combat_bonus))
-        for sample in combat_samples_by_floor[floor]:
-            sample.value = floor_value
-
-    # Deck change and option samples get the run-level value
-    for sample in deck_change_samples:
-        sample.value = run_value
-    for sample in option_samples:
-        sample.value = run_value
+    if is_win:
+        value = 1.0
+    else:
+        # -1.0 at floor 0, -0.5 at floor 17 (boss). Always negative.
+        value = -1.0 + 0.5 * (floor_reached / 17.0)
+    for floor_samples in combat_samples_by_floor.values():
+        for sample in floor_samples:
+            sample.value = value
+    for sample in (option_samples or []):
+        sample.value = value
 
 
 def play_full_run(*args, **kwargs):
