@@ -245,10 +245,16 @@ fn leaf_hash(state: &CombatState) -> u64 {
     hand_ids.sort();
     hand_ids.hash(&mut h);
 
-    // Enemy state
+    // Enemy state (HP, block, and powers like Weak/Vulnerable/Strength)
     for e in &state.enemies {
         e.hp.hash(&mut h);
         e.block.hash(&mut h);
+        let mut epowers: Vec<_> = e.powers.iter().collect();
+        epowers.sort_by_key(|(k, _)| k.as_str());
+        for (k, v) in &epowers {
+            k.hash(&mut h);
+            v.hash(&mut h);
+        }
     }
 
     // Player powers (sorted for determinism)
@@ -257,6 +263,14 @@ fn leaf_hash(state: &CombatState) -> u64 {
     for (k, v) in &powers {
         k.hash(&mut h);
         v.hash(&mut h);
+    }
+
+    // Potion slots (UsePotion empties a slot)
+    for p in &state.player.potions {
+        p.is_empty().hash(&mut h);
+        if !p.is_empty() {
+            p.name.hash(&mut h);
+        }
     }
 
     h.finish()
