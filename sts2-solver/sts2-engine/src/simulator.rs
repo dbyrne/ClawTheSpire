@@ -254,6 +254,7 @@ pub fn run_act1(
     seed: u64,
     combat_replays: usize,
     option_epsilon: f32,
+    search_method: &str,
 ) -> FullRunResult {
     use rand::SeedableRng;
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
@@ -369,7 +370,7 @@ pub fn run_act1(
                     &deck, hp, max_hp, max_energy, &enemy_ids,
                     &relics, &potions, floor_num, gold, &act_id, &boss_id,
                     &remaining_path, game_data, combat_inference,
-                    mcts_sims, temperature, &mut rng,
+                    mcts_sims, temperature, &mut rng, search_method,
                 );
 
                 // Combat replays: re-run same encounter with different RNG
@@ -382,7 +383,7 @@ pub fn run_act1(
                         &deck, hp, max_hp, max_energy, &enemy_ids,
                         &relics, &potions, floor_num, gold, &act_id, &boss_id,
                         &remaining_path, game_data, combat_inference,
-                        mcts_sims, temperature, &mut replay_rng,
+                        mcts_sims, temperature, &mut replay_rng, search_method,
                     );
                     result.replay_samples.push(ReplayFloorSamples {
                         floor: floor_num,
@@ -1044,6 +1045,7 @@ fn run_combat_internal(
     map_path: &[String], game_data: &GameData,
     inference: &OnnxInference, mcts_sims: usize,
     temperature: f32, rng: &mut impl Rng,
+    search_method: &str,
 ) -> CombatResult {
     let card_db = &game_data.card_db;
     let mut enemies = Vec::new();
@@ -1075,6 +1077,8 @@ fn run_combat_internal(
     combat::start_combat(&mut state);
     let mut mcts_engine = MCTS::new(card_db, inference);
     mcts_engine.add_noise = true; // Self-play always explores
+    let exhaustive_engine = crate::search::ExhaustiveSearch::new(card_db, inference);
+    let use_exhaustive = search_method == "exhaustive";
     let mut samples = Vec::new();
     let mut initial_value = 0.0f32;
     let mut outcome: Option<&str> = None;
@@ -1092,7 +1096,11 @@ fn run_combat_internal(
 
             let enc_state = encode::encode_state(&state, &game_data.vocabs);
             let enc_actions = encode::encode_actions(&actions, &state, &game_data.vocabs);
-            let result = mcts_engine.search_with_ais(&state, Some(&enemy_ais), mcts_sims, temperature, rng);
+            let result = if use_exhaustive {
+                exhaustive_engine.search(&state, mcts_sims, temperature, rng)
+            } else {
+                mcts_engine.search_with_ais(&state, Some(&enemy_ais), mcts_sims, temperature, rng)
+            };
 
             if t == 1 && cards == 0 { initial_value = result.root_value as f32; }
             samples.push(RustTrainingSample {

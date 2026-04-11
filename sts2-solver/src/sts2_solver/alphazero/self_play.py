@@ -477,6 +477,7 @@ def train_worker(
     num_workers: int = 8,
     combat_replays: int = 1,
     option_epsilon: float = 0.15,
+    search_method: str = "exhaustive",
 ):
     """Headless training loop. Writes progress to JSON file."""
     card_db = load_cards()
@@ -654,6 +655,7 @@ def train_worker(
             seeds=game_seeds,
             combat_replays=combat_replays,
             option_epsilon=gen_option_epsilon,
+            search_method=search_method,
         )
 
         # Convert Rust results to training samples
@@ -792,7 +794,6 @@ def train_worker(
         hours, mins = divmod(mins, 60)
 
         # Write progress
-        import math
         clean_values = [v for v in gen_values if not math.isnan(v)]
         stats = {
             "generation": gen,
@@ -818,6 +819,7 @@ def train_worker(
             "option_buffer_size": len(option_buffer),
             "lr": round(scheduler.get_last_lr()[0], 6),
             "mcts_sims": mcts_simulations,
+            "search_method": search_method,
             "games_per_gen": games_per_generation,
             "elapsed": f"{hours}:{mins:02d}:{secs:02d}",
             "gen_time": round(gen_elapsed, 1),
@@ -985,6 +987,9 @@ if __name__ == "__main__":
                               help="Re-run each combat N times for dense training (1 = off)")
     train_parser.add_argument("--option-epsilon", type=float, default=0.15,
                               help="Epsilon-greedy exploration for option head (0 = off)")
+    train_parser.add_argument("--search-method", type=str, default="exhaustive",
+                              choices=["mcts", "exhaustive"],
+                              help="Combat search: exhaustive 2-ply (fast) or MCTS (deep)")
 
     # Monitor command
     monitor_parser = subparsers.add_parser("monitor", help="Live TUI dashboard")
@@ -1008,6 +1013,7 @@ if __name__ == "__main__":
             num_workers=args.workers,
             combat_replays=args.combat_replays,
             option_epsilon=args.option_epsilon,
+            search_method=args.search_method,
         )
     elif args.command == "monitor":
         train_monitor(

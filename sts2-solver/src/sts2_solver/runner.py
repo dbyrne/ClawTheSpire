@@ -649,8 +649,14 @@ class Runner:
             self._handle_capstone_selection(actions)
             return False
 
-        if screen == "BUNDLE_SELECTION" and "choose_bundle" in actions:
-            self._handle_bundle_selection()
+        if screen == "BUNDLE_SELECTION" and "confirm_bundle" in actions:
+            self._log_action("[dim]auto: confirm_bundle[/dim]")
+            if not self.dry_run:
+                try:
+                    self._execute_with_retry("confirm_bundle")
+                    time.sleep(1.0)
+                except Exception:
+                    pass
             return False
 
         if not actions:
@@ -894,34 +900,6 @@ class Runner:
             "choose_capstone_option requires network evaluation but was about to be "
             "auto-picked. Investigate game state to wire up network decision."
         )
-
-    def _handle_bundle_selection(self) -> None:
-        """Handle card pack/bundle selection screens (e.g. Neow's Scroll Boxes)."""
-        gs = self.game_state
-        actions = gs.get("available_actions", [])
-
-        if "choose_bundle" in actions:
-            import json as _json
-            self._log_action(
-                f"[red]UNHANDLED AUTO: choose_bundle — game state dumped below[/red]"
-            )
-            # Dump relevant state for investigation
-            for key in ("selection", "bundles", "cards", "options", "reward", "agent_view"):
-                val = gs.get(key)
-                if val:
-                    self._log_action(f"  [yellow]gs[{key}]: {_json.dumps(val)[:500]}[/yellow]")
-            raise RuntimeError(
-                "choose_bundle requires network evaluation but was about to be "
-                "auto-picked. Investigate game state to wire up network decision."
-            )
-        elif "confirm_bundle" in actions:
-            self._log_action("[dim]auto: confirm_bundle[/dim]")
-            if not self.dry_run:
-                try:
-                    self._execute_with_retry("confirm_bundle")
-                    time.sleep(1.0)
-                except Exception:
-                    pass
 
     # ------------------------------------------------------------------
     # Combat
@@ -1891,6 +1869,7 @@ class Runner:
             "shop": self._az_decide_shop,
             "card_reward": self._az_decide_card_reward,
             "event": self._az_decide_event,
+            "bundle": self._az_decide_bundle,
         }
         _DETERMINISTIC_HANDLERS = {
             "rest": lambda: decide_rest(gs),
@@ -2603,6 +2582,100 @@ class Runner:
             self._log_action(f"  [red]Network card_reward FAILED: {e}[/red]")
             raise
 
+    def _az_decide_bundle(self, gs: dict) -> "Decision | None":
+        """Use network option head to pick a card bundle (e.g. Neow's Scroll Boxes).
+
+        Each bundle contains several cards.  We score each bundle by averaging
+        the network's per-card option scores, then pick the best bundle.
+        """
+        import torch
+        from .deterministic_advisor import Decision
+        from .option_types import OPTION_BUNDLE
+
+        try:
+            st, hidden, hp, max_hp, gold, floor, deck = self._az_run_state_tensors(gs)
+            network = self._network
+            vocabs = self._mcts_vocabs
+
+            # Get bundle data — mod exposes gs["bundles"] as array of
+            # {index, cards: [{card_id, name, upgraded, ...}, ...]}
+            bundles = (
+                gs.get("bundles")
+                or (gs.get("agent_view") or {}).get("bundles")
+                or []
+            )
+            if not bundles:
+                return None
+
+            # Score each bundle by evaluating its cards through the option head
+            from .alphazero.encoding import card_stats_vector
+            bundle_scores: list[tuple[int, float, str]] = []
+
+            for bundle in bundles:
+                b_idx = bundle.get("i", bundle.get("index", 0))
+                cards = bundle.get("cards", [])
+                if not cards:
+                    bundle_scores.append((b_idx, 0.0, "empty"))
+                    continue
+
+                # Build option arrays for all cards in this bundle
+                opt_types = []
+                opt_cards = []
+                opt_stats = []
+                card_names = []
+
+                for card_info in cards:
+                    name = card_info.get("name") or card_info.get("card_id", "?")
+                    # Agent view uses 'line' with formatted text
+                    if "line" in card_info:
+                        line = card_info["line"]
+                        # Extract card name from formatted line (first part before cost)
+                        name = line.split(" (")[0].strip() if " (" in line else line
+
+                    card_id = (card_info.get("card_id") or name).rstrip("+")
+                    upgraded = card_info.get("upgraded", False)
+
+                    opt_types.append(OPTION_BUNDLE)
+                    opt_cards.append(vocabs.cards.get(card_id))
+                    card_def = self.card_db.get(card_id, upgraded=upgraded)
+                    if card_def:
+                        opt_stats.append(card_stats_vector(card_def))
+                    else:
+                        opt_stats.append([0.0] * self._mcts_config.card_stats_dim)
+                    card_names.append(name)
+
+                with torch.no_grad():
+                    _, scores = network.pick_best_option(
+                        hidden, opt_types, opt_cards,
+                        option_card_stats=opt_stats)
+
+                avg_score = sum(scores) / len(scores)
+                label = ", ".join(card_names)
+                bundle_scores.append((b_idx, avg_score, label))
+
+            # Pick bundle with highest average score
+            best = max(bundle_scores, key=lambda x: x[1])
+            nv = network.value_head(hidden).item()
+
+            hs = {
+                "head": "option_eval",
+                "chosen": best[0],
+                "bundles": [
+                    {"i": idx, "cards": label, "score": round(sc, 4)}
+                    for idx, sc, label in bundle_scores
+                ],
+            }
+
+            return Decision(
+                "choose_bundle", best[0],
+                f"Network: bundle {best[0]} [{best[2]}] "
+                f"(avg_score={best[1]:.2f})",
+                network_value=nv, head_scores=hs,
+            )
+        except Exception as e:
+            self._log_action(f"  [red]Network bundle FAILED: {e}[/red]")
+            raise
+
     def _az_decide_event(self, gs: dict) -> "Decision | None":
         """Use network option head to decide between event options.
 
@@ -2843,6 +2916,7 @@ class Runner:
                 "boss_relic": ("choose_treasure_relic", 0),
                 "deck_select": ("select_deck_card", 0),
                 "event": ("choose_event_option", 0),
+                "bundle": ("choose_bundle", 0),
             }
             fb = _FALLBACKS.get(screen_type)
             if fb and fb[0] in actions:

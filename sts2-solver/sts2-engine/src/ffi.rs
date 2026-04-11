@@ -395,7 +395,8 @@ fn bool_list<'py>(py: Python<'py>, v: &[bool]) -> Bound<'py, PyList> {
     map_pool_json, shop_pool_json,
     mcts_sims, temperature, seeds,
     combat_replays = 1,
-    option_epsilon = 0.15
+    option_epsilon = 0.15,
+    search_method = "mcts"
 ))]
 pub fn play_all_games(
     py: Python<'_>,
@@ -418,6 +419,7 @@ pub fn play_all_games(
     seeds: Vec<u64>,
     combat_replays: usize,
     option_epsilon: f32,
+    search_method: &str,
 ) -> PyResult<PyObject> {
     // Parse shared data (once, before releasing GIL)
     let vocabs: Vocabs = serde_json::from_str(vocab_json)
@@ -465,6 +467,7 @@ pub fn play_all_games(
     let onnx_value = onnx_value_path.to_string();
     let onnx_combat = onnx_combat_path.to_string();
     let onnx_option = onnx_option_path.to_string();
+    let search_method = search_method.to_string();
 
     // Release GIL and run all games in parallel with rayon
     let results = py.allow_threads(move || {
@@ -494,6 +497,7 @@ pub fn play_all_games(
             Some(crate::simulator::run_act1(
                 &game_data, &combat_inference, &option_evaluator,
                 mcts_sims, temperature, seed, combat_replays, option_epsilon,
+                &search_method,
             ))
         }).collect::<Vec<_>>()
     });
