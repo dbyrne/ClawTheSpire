@@ -118,6 +118,53 @@ class ValueModel(nn.Module):
         return self.network.value_head(hidden)
 
 
+class CombatModel(nn.Module):
+    """Wrapper: encode_state + combat_head → combat value."""
+
+    def __init__(self, network: STS2Network):
+        super().__init__()
+        self.network = network
+
+    def forward(
+        self,
+        hand_features, hand_mask, hand_card_ids,
+        draw_card_ids, draw_mask,
+        discard_card_ids, discard_mask,
+        exhaust_card_ids, exhaust_mask,
+        player_scalars, player_power_ids, player_power_amts,
+        enemy_scalars, enemy_power_ids, enemy_power_amts,
+        relic_ids, relic_mask,
+        potion_features, scalars,
+        act_id, boss_id, path_ids, path_mask,
+    ):
+        hidden = self.network.encode_state(
+            hand_features=hand_features,
+            hand_mask=hand_mask,
+            hand_card_ids=hand_card_ids,
+            draw_card_ids=draw_card_ids,
+            draw_mask=draw_mask,
+            discard_card_ids=discard_card_ids,
+            discard_mask=discard_mask,
+            exhaust_card_ids=exhaust_card_ids,
+            exhaust_mask=exhaust_mask,
+            player_scalars=player_scalars,
+            player_power_ids=player_power_ids,
+            player_power_amts=player_power_amts,
+            enemy_scalars=enemy_scalars,
+            enemy_power_ids=enemy_power_ids,
+            enemy_power_amts=enemy_power_amts,
+            relic_ids=relic_ids,
+            relic_mask=relic_mask,
+            potion_features=potion_features,
+            scalars=scalars,
+            act_id=act_id,
+            boss_id=boss_id,
+            path_ids=path_ids,
+            path_mask=path_mask,
+        )
+        return self.network.combat_head(hidden)
+
+
 MAX_OPTIONS = 10  # Max options for ONNX export (card rewards, shop, map, events)
 
 
@@ -259,6 +306,23 @@ def export_onnx(
         opset_version=17,
     )
 
+    # --- Combat-value model (used by MCTS for leaf evaluation) ---
+    combat_model = CombatModel(network)
+    combat_model.eval()
+
+    combat_args = tuple(dummy[k] for k in state_names)
+    combat_path = str(out / "combat_model.onnx")
+
+    torch.onnx.export(
+        combat_model,
+        combat_args,
+        combat_path,
+        input_names=state_names,
+        output_names=["value"],
+        dynamic_axes={name: {0: "batch"} for name in state_names + ["value"]},
+        opset_version=17,
+    )
+
     # --- Option model (non-combat decisions) ---
     option_model = OptionModel(network)
     option_model.eval()
@@ -290,6 +354,7 @@ def export_onnx(
     print(f"Exported ONNX models to {out}/")
     print(f"  full_model.onnx: {Path(full_path).stat().st_size / 1024:.0f} KB")
     print(f"  value_model.onnx: {Path(value_path).stat().st_size / 1024:.0f} KB")
+    print(f"  combat_model.onnx: {Path(combat_path).stat().st_size / 1024:.0f} KB")
     print(f"  option_model.onnx: {Path(option_path).stat().st_size / 1024:.0f} KB")
 
     return full_path, value_path, option_path

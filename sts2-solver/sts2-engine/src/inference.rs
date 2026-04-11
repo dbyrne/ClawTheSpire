@@ -30,7 +30,9 @@ impl Inference for StubInference {
 
 pub struct OnnxInference {
     full_session: RefCell<Session>,
+    #[allow(dead_code)]  // Kept for potential future blending with combat_session
     value_session: RefCell<Session>,
+    combat_session: RefCell<Session>,
     vocabs: Vocabs,
 }
 
@@ -38,6 +40,16 @@ impl OnnxInference {
     pub fn new(
         full_model_path: &str,
         value_model_path: &str,
+        vocabs: Vocabs,
+    ) -> Result<Self, ort::Error> {
+        // Default: combat_session = value_session (for runner/non-training use)
+        Self::with_combat(full_model_path, value_model_path, value_model_path, vocabs)
+    }
+
+    pub fn with_combat(
+        full_model_path: &str,
+        value_model_path: &str,
+        combat_model_path: &str,
         vocabs: Vocabs,
     ) -> Result<Self, ort::Error> {
         let full_session = Session::builder()?
@@ -48,9 +60,14 @@ impl OnnxInference {
             .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level3)?
             .with_intra_threads(1)?
             .commit_from_file(value_model_path)?;
+        let combat_session = Session::builder()?
+            .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level3)?
+            .with_intra_threads(1)?
+            .commit_from_file(combat_model_path)?;
         Ok(OnnxInference {
             full_session: RefCell::new(full_session),
             value_session: RefCell::new(value_session),
+            combat_session: RefCell::new(combat_session),
             vocabs,
         })
     }
@@ -121,9 +138,11 @@ impl Inference for OnnxInference {
     }
 
     fn value_only(&self, state: &CombatState) -> f32 {
+        // Use combat head for MCTS leaf evaluation — it has dense per-combat
+        // training signal and directly answers "is this combat state good?"
         let enc = encode_state(state, &self.vocabs);
         let inputs = self.state_inputs(&enc);
-        match self.value_session.borrow_mut().run(inputs) {
+        match self.combat_session.borrow_mut().run(inputs) {
             Ok(outputs) => {
                 let tensor = outputs["value"].downcast_ref::<ort::value::DynTensorValueType>().unwrap();
                 let (_, data) = tensor.try_extract_tensor::<f32>().unwrap();

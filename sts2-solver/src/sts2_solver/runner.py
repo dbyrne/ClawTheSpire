@@ -273,6 +273,57 @@ class Runner:
         if self._live:
             self._live.start()
 
+    def _review_head_values(self, gs: dict) -> str:
+        """Get value head + combat head predictions for review display."""
+        if not self._network:
+            return ""
+        try:
+            import torch
+            _, hidden, *_ = self._az_run_state_tensors(gs)
+            with torch.no_grad():
+                v = self._network.value_head(hidden).item()
+                c = self._network.combat_head(hidden).item()
+            return f"  Heads: value={v:+.2f}  combat={c:+.2f}"
+        except Exception:
+            return ""
+
+    def _review_combat_alternatives(self, sim_state, hand, policy) -> str:
+        """Build labeled alternatives from MCTS policy for review display."""
+        if not policy or len(policy) < 2:
+            return ""
+        # Reconstruct action labels matching Rust enumerate_actions order:
+        # 1. Playable cards (deduplicated by id+upgraded), with targets
+        # 2. Potions
+        # 3. End turn
+        labels = []
+        seen = set()
+        alive_enemies = [e for e in sim_state.enemies if e.is_alive]
+        for i, card in enumerate(hand):
+            key = (card.card_id, card.upgraded)
+            if key in seen:
+                continue
+            seen.add(key)
+            name = f"{card.name}+" if card.upgraded else card.name
+            if card.target_type in ("single_enemy", "SingleEnemy"):
+                for ti, e in enumerate(alive_enemies):
+                    labels.append(f"{name}→{e.name}")
+            else:
+                labels.append(name)
+        for i, pot in enumerate(sim_state.player.potions):
+            if pot and pot.get("id"):
+                labels.append(f"Potion:{pot.get('name', i)}")
+        labels.append("End Turn")
+
+        # Pair labels with policy values, sort by probability
+        paired = list(zip(labels[:len(policy)], policy[:len(labels)]))
+        paired.sort(key=lambda x: -x[1])
+        # Show top 3 (skip the first since that's the chosen action)
+        alts = paired[1:4]
+        if not alts:
+            return ""
+        alt_strs = [f"{name} ({p:.0%})" for name, p in alts]
+        return "  Also: " + ", ".join(alt_strs)
+
     def _track_decision(self, screen_type: str, source: str) -> None:
         """Track decision routing for end-of-run summary."""
         by_source = self._decision_routing.setdefault(screen_type, {})
@@ -396,6 +447,25 @@ class Runner:
         if line.startswith("card"):
             return True
         return False
+
+    @staticmethod
+    def _is_potion_reward_item(item: dict) -> bool:
+        """Check if a reward item is a potion reward."""
+        rtype = str(item.get("reward_type", "")).lower()
+        if rtype == "potion":
+            return True
+        line = str(item.get("line", "")).lower()
+        if "potion" in line:
+            return True
+        return False
+
+    @staticmethod
+    def _potions_full(gs: dict) -> bool:
+        """Return True if all 3 potion slots are occupied."""
+        run = gs.get("run") or {}
+        potions = run.get("potions") or []
+        occupied = sum(1 for p in potions if isinstance(p, dict) and p.get("occupied"))
+        return occupied >= 3
 
     # ------------------------------------------------------------------
     # Init & main loop
@@ -1128,8 +1198,10 @@ class Runner:
                     f"MCTS: end turn ({solve_ms:.0f}ms)"
                 )
                 remaining = [c.name for c in hand]
+                head_vals = self._review_head_values(gs) if self.review_mode else ""
                 self._review_pause(
-                    f"[bold]End Turn[/bold]  (value {root_value:+.2f}, {solve_ms:.0f}ms)\n"
+                    f"[bold]End Turn[/bold]  (MCTS {root_value:+.2f}, {solve_ms:.0f}ms)\n"
+                    f"{head_vals}\n"
                     f"  Hand kept: {', '.join(remaining) if remaining else '(empty)'}\n"
                     f"  HP {player.get('current_hp', '?')}/{player.get('max_hp', '?')} | "
                     f"Energy {player.get('energy', '?')}"
@@ -1164,9 +1236,11 @@ class Runner:
 
                 if not self.dry_run:
                     target_info = f" -> enemy {first_action.target_idx}" if first_action.target_idx is not None else ""
+                    head_vals = self._review_head_values(gs) if self.review_mode else ""
                     self._review_pause(
                         f"[bold]Use Potion:[/bold] {pot_name}{target_info}\n"
-                        f"  Value: {root_value:+.2f} | {solve_ms:.0f}ms"
+                        f"  MCTS: {root_value:+.2f} | {solve_ms:.0f}ms\n"
+                        f"{head_vals}"
                     )
                     mcp_action = action_to_mcp(first_action)
                     try:
@@ -1247,9 +1321,13 @@ class Runner:
             enemy_summary = ", ".join(
                 f"{e.name} {e.hp}hp" for e in sim_state.enemies if e.is_alive
             )
+            head_vals = self._review_head_values(gs) if self.review_mode else ""
+            alts = self._review_combat_alternatives(sim_state, hand, policy) if self.review_mode else ""
             self._review_pause(
                 f"[bold]Play:[/bold] {label}\n"
-                f"  Value: {root_value:+.2f} | Confidence: {best_score:.0%} | {solve_ms:.0f}ms\n"
+                f"  MCTS: {root_value:+.2f} | Confidence: {best_score:.0%} | {solve_ms:.0f}ms\n"
+                f"{head_vals}\n"
+                f"{alts}\n"
                 f"  Hand: {', '.join(c.name for c in hand)}\n"
                 f"  HP {sim_state.player.hp}/{player.get('max_hp', '?')} | "
                 f"Energy {sim_state.player.energy} | Block {sim_state.player.block}\n"
@@ -1516,10 +1594,13 @@ class Runner:
             if not reward_items:
                 reward_items = ((gs.get("agent_view") or {}).get("reward") or {}).get("rewards") or []
 
+            full = self._potions_full(gs)
             for item in reward_items:
                 if not item.get("claimable", True):
                     continue
                 if self._is_card_reward_item(item):
+                    continue
+                if full and self._is_potion_reward_item(item):
                     continue
                 idx = item.get("index", item.get("i"))
                 if idx is not None:
@@ -2813,7 +2894,7 @@ class Runner:
         # Execute
         if not self.dry_run:
             # Review pause — show non-combat decision before applying
-            value_str = f"  Value: {decision.network_value:+.2f}" if decision.network_value is not None else ""
+            head_vals = self._review_head_values(gs) if self.review_mode else ""
             scores_str = ""
             if decision.head_scores and "options" in decision.head_scores:
                 opts = decision.head_scores["options"]
@@ -2825,8 +2906,8 @@ class Runner:
                 f"{f' (idx={decision.option_index})' if decision.option_index is not None else ''}\n"
                 f"  {decision.reasoning}\n"
                 f"  Floor {run.get('floor', '?')} | "
-                f"HP {run.get('current_hp', '?')}/{run.get('max_hp', '?')}"
-                f"{value_str}{scores_str}"
+                f"HP {run.get('current_hp', '?')}/{run.get('max_hp', '?')}\n"
+                f"{head_vals}{scores_str}"
             )
             try:
                 self._execute_with_retry(
@@ -3250,12 +3331,11 @@ class Runner:
             return
 
         # On NRewardsScreen — card options aren't visible yet.
-        # Claim rewards one at a time (always index 0, since indices shift
-        # after each claim), then wait for the card selection screen.
+        # Claim non-card rewards one at a time, then wait for the card
+        # selection screen.  Skip potion rewards when potion slots are full
+        # (claiming would trigger a discard_potion screen and derail the flow).
         self._log_action("  [dim]On reward screen — claiming rewards to reach card selection[/dim]")
 
-        # Claim up to 10 reward items (gold, potions, relics, then card).
-        # Each claim removes an item so we always use index 0.
         if not self.dry_run:
             for _ in range(10):
                 try:
@@ -3277,18 +3357,36 @@ class Runner:
                 if not fresh_items:
                     break
 
-                # Log what we're about to claim
-                item = fresh_items[0]
-                item_type = item.get("type", "unknown") if isinstance(item, dict) else str(item)
-                item_desc = item if isinstance(item, str) else item.get("name", item.get("type", "?"))
-                self._log_action(f"  [dim]claim_reward[0]: {item_desc}[/dim]")
+                # Find first claimable item (skip cards, skip potions when full)
+                full = self._potions_full(fresh)
+                claim_idx = None
+                claim_item = None
+                for i, item in enumerate(fresh_items):
+                    if not isinstance(item, dict):
+                        claim_idx = i
+                        claim_item = item
+                        break
+                    if self._is_card_reward_item(item):
+                        continue
+                    if full and self._is_potion_reward_item(item):
+                        continue
+                    claim_idx = item.get("index", i)
+                    claim_item = item
+                    break
+
+                if claim_idx is None:
+                    # Only card rewards and/or uncollectable potions remain
+                    break
+
+                item_desc = claim_item if isinstance(claim_item, str) else claim_item.get("name", claim_item.get("type", "?"))
+                self._log_action(f"  [dim]claim_reward[{claim_idx}]: {item_desc}[/dim]")
                 self.logger._emit({
                     "type": "reward_claim",
-                    "item": item if isinstance(item, (str, dict)) else str(item),
+                    "item": claim_item if isinstance(claim_item, (str, dict)) else str(claim_item),
                 })
 
                 try:
-                    self._execute_with_retry("claim_reward", option_index=0)
+                    self._execute_with_retry("claim_reward", option_index=claim_idx)
                     self.action_count += 1
                     time.sleep(0.2)
                 except Exception:

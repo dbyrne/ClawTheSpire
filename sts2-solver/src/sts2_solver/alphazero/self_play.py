@@ -64,11 +64,15 @@ class TrainingSample:
 class OptionSample:
     """Training sample for non-combat decisions (rest/map/shop)."""
     state_tensors: dict[str, torch.Tensor]
-    option_types: list[int]   # Option type indices (see OPTION_* constants)
-    option_cards: list[int]   # Card vocab indices (0 when N/A)
-    chosen_idx: int           # Which option was picked
-    value: float              # Assigned after run ends (trajectory-based)
-    floor: int = 0            # Floor number (for value trajectory credit assignment)
+    option_types: list[int]        # Option type indices (see OPTION_* constants)
+    option_cards: list[int]        # Card vocab indices (0 when N/A)
+    option_card_stats: list        # Per-option card stats (N x 26 floats)
+    option_path_ids: list          # Per-option path IDs (may be empty)
+    option_path_mask: list         # Per-option path masks (may be empty)
+    chosen_idx: int                # Which option was picked
+    was_greedy: bool = True        # False if epsilon-explored
+    value: float = 0.0             # Assigned after run ends (trajectory-based)
+    floor: int = 0                 # Floor number
 
 
 # Option type constants (indices into option_type_embed)
@@ -147,6 +151,10 @@ class ReplayBuffer:
     samples from winning games.  When sampling, ``win_mix_ratio`` of the
     batch is drawn from the win buffer (if available) so the network always
     sees positive signal even when wins are rare.
+
+    Note: win samples exist in BOTH the main buffer and the win buffer.
+    At 5% win rate with 10% mix ratio, effective win representation is
+    ~14.5%. This over-representation is intentional during cold start.
     """
 
     def __init__(self, capacity: int = 50_000, win_capacity: int = 10_000,
@@ -194,6 +202,7 @@ def train_batch(
     """
     network.train()
     value_losses = []
+    combat_losses = []
     policy_losses = []
     option_losses = []
     nan_combat = nan_option = 0
@@ -275,7 +284,16 @@ def train_batch(
 
             # Policy loss on ALL samples (replay and non-replay)
             log_probs = F.log_softmax(logits, dim=1)
-            p_loss = -(target_policies * log_probs).nan_to_num(0.0).sum(dim=1).mean()
+            raw_ce = target_policies * log_probs
+            # nan_to_num handles 0 * -inf = NaN from padded action slots.
+            # Periodic check: flag if non-pad slots produce NaN (masking mismatch).
+            _nc = getattr(train_batch, '_nc', 0) + 1
+            train_batch._nc = _nc
+            if _nc % 500 == 0:
+                nan_ct = raw_ce.isnan().sum().item()
+                if nan_ct > n * 2:  # More NaNs than expected from padding
+                    print(f"  [debug] policy nan_to_num: {nan_ct} NaN in {raw_ce.numel()} elements", flush=True)
+            p_loss = -(raw_ce).nan_to_num(0.0).sum(dim=1).mean()
 
             # Split value targets: value head for non-replay, combat head for replay
             # Build replay mask from the (possibly filtered) samples
@@ -289,6 +307,7 @@ def train_batch(
 
             loss = p_loss
             v_loss_val = 0.0
+            c_loss_val = 0.0
 
             if run_mask.any():
                 v_loss = F.mse_loss(values[run_mask], target_values[run_mask])
@@ -299,23 +318,24 @@ def train_batch(
                 combat_values = network.combat_head(hidden[replay_mask])
                 c_loss = F.mse_loss(combat_values, target_values[replay_mask])
                 loss = loss + c_loss
-                v_loss_val += c_loss.item()
+                c_loss_val += c_loss.item()
 
             if torch.isnan(loss):
                 nan_combat += 1
                 if nan_combat == 1:
-                    print(f"  [debug] NaN combat loss: v={v_loss_val:.4f} p={p_loss.item():.4f} "
+                    print(f"  [debug] NaN combat loss: v={v_loss_val:.4f} c={c_loss_val:.4f} p={p_loss.item():.4f} "
                           f"logits_range=[{logits.min().item():.1f},{logits.max().item():.1f}] "
                           f"values_range=[{values.min().item():.2f},{values.max().item():.2f}]",
                           flush=True)
             else:
                 value_losses.append(v_loss_val)
+                combat_losses.append(c_loss_val)
                 policy_losses.append(p_loss.item())
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(network.parameters(), 1.0)
                 optimizer.step()
 
-    # --- Option samples (all non-combat decisions): accumulate gradients, step once ---
+    # --- Option samples: pass card_stats + paths, add margin loss ---
     optimizer.zero_grad()
     option_valid = 0
     for sample in (option_samples or []):
@@ -323,17 +343,50 @@ def train_batch(
             state_tensors = {k: v.to(device) for k, v in sample.state_tensors.items()}
             hidden = network.encode_state(**state_tensors)
 
+            num_opts = len(sample.option_types)
             max_card_id = network.card_embed.num_embeddings - 1
-            clamped_cards = [c if c <= max_card_id else 1 for c in sample.option_cards]  # 1=UNK
+            clamped_cards = [c if c <= max_card_id else 1 for c in sample.option_cards]
             types_t = torch.tensor([sample.option_types], dtype=torch.long, device=device)
             cards_t = torch.tensor([clamped_cards], dtype=torch.long, device=device)
-            mask = torch.zeros(1, len(sample.option_types), dtype=torch.bool, device=device)
+            mask = torch.zeros(1, num_opts, dtype=torch.bool, device=device)
 
-            scores = network.evaluate_options(hidden, types_t, cards_t, mask)
+            # Card stats (fixes train/test mismatch — #1)
+            stats_dim = network.config.card_stats_dim
+            if sample.option_card_stats and len(sample.option_card_stats) == num_opts:
+                stats_t = torch.tensor([sample.option_card_stats], dtype=torch.float32, device=device)
+            else:
+                stats_t = None
 
+            # Per-option path data
+            path_len = network.config.max_path_length
+            if sample.option_path_ids and len(sample.option_path_ids) == num_opts:
+                pids = [(p + [0] * path_len)[:path_len] for p in sample.option_path_ids]
+                pmask = [(m + [True] * path_len)[:path_len] for m in sample.option_path_mask]
+                path_ids_t = torch.tensor([pids], dtype=torch.long, device=device)
+                path_mask_t = torch.tensor([pmask], dtype=torch.bool, device=device)
+            else:
+                path_ids_t = None
+                path_mask_t = None
+
+            scores = network.evaluate_options(
+                hidden, types_t, cards_t, mask,
+                path_ids_t, path_mask_t, stats_t,
+            )
+
+            # MSE on chosen option
             target = torch.tensor([[sample.value]], dtype=torch.float32, device=device)
             chosen_score = scores[0, sample.chosen_idx].unsqueeze(0).unsqueeze(0)
             o_loss = 0.25 * F.mse_loss(chosen_score, target)
+
+            # Margin/hinge loss: chosen should beat unchosen (#3)
+            if sample.was_greedy and num_opts > 1:
+                margin = 0.1
+                chosen_val = scores[0, sample.chosen_idx]
+                for j in range(num_opts):
+                    if j == sample.chosen_idx:
+                        continue
+                    diff = scores[0, j] - chosen_val + margin
+                    o_loss = o_loss + 0.05 * F.relu(diff)
 
             if torch.isnan(o_loss):
                 nan_option += 1
@@ -354,9 +407,10 @@ def train_batch(
         print(f"  [warn] NaN losses skipped: combat={nan_combat} option={nan_option}", flush=True)
 
     avg_v = sum(value_losses) / max(1, len(value_losses))
+    avg_c = sum(combat_losses) / max(1, len(combat_losses))
     avg_p = sum(policy_losses) / max(1, len(policy_losses))
     avg_o = sum(option_losses) / max(1, len(option_losses))
-    return avg_v + avg_p + avg_o, avg_v, avg_p, avg_o
+    return avg_v + avg_c + avg_p + avg_o, avg_v, avg_c, avg_p, avg_o
 
 
 # ---------------------------------------------------------------------------
@@ -384,6 +438,7 @@ def _write_progress(path: Path, stats: dict) -> None:
         "gen_avg_floor": stats.get("gen_avg_floor"),
         "total_loss": stats.get("total_loss"),
         "value_loss": stats.get("value_loss"),
+        "combat_loss": stats.get("combat_loss"),
         "policy_loss": stats.get("policy_loss"),
         "option_loss": stats.get("option_loss"),
         "value_head_spread": stats.get("value_head_spread"),
@@ -413,14 +468,15 @@ def train_worker(
     games_per_generation: int = 256,
     mcts_simulations: int = 100,
     batch_size: int = 256,
-    train_epochs: int = 20,
+    train_epochs: int = 40,
     lr: float = 3e-4,
     temperature: float = 1.0,
     save_dir: str | None = None,
     progress_file: str | None = None,
-    num_trunk_blocks: int = 3,
+    num_trunk_blocks: int = 2,
     num_workers: int = 8,
     combat_replays: int = 1,
+    option_epsilon: float = 0.15,
 ):
     """Headless training loop. Writes progress to JSON file."""
     card_db = load_cards()
@@ -437,8 +493,9 @@ def train_worker(
         {"params": other_params, "weight_decay": 1e-4},
     ], lr=lr)
     scheduler = CosineAnnealingLR(optimizer, T_max=num_generations, eta_min=1e-5)
-    replay_buffer = ReplayBuffer(capacity=200_000)
-    option_buffer = ReplayBuffer(capacity=60_000)  # All non-combat decisions (cards, rest, map, shop)
+    combat_buffer = ReplayBuffer(capacity=50_000)   # Non-replay combat samples (train value + policy)
+    replay_buffer = ReplayBuffer(capacity=200_000)  # Combat replay samples (train combat + policy)
+    option_buffer = ReplayBuffer(capacity=60_000)   # Non-combat decisions (cards, rest, map, shop)
     save_path = Path(save_dir) if save_dir else Path(__file__).resolve().parents[4] / "alphazero_checkpoints"
     save_path.mkdir(parents=True, exist_ok=True)
 
@@ -563,6 +620,8 @@ def train_worker(
         # Temperature for this generation (same for all games)
         progress = gen / num_generations
         game_temp = 0.3 + 0.7 * temperature * (1 + math.cos(math.pi * progress)) / 2
+        # Option exploration: decay from epsilon to 30% of epsilon
+        gen_option_epsilon = option_epsilon * max(0.3, 1.0 - progress * 0.7)
 
         # Export ONNX models with updated weights each generation
         export_onnx(network, config, onnx_dir)
@@ -579,6 +638,7 @@ def train_worker(
             num_games=games_per_generation,
             onnx_full_path=str(Path(onnx_dir) / "full_model.onnx"),
             onnx_value_path=str(Path(onnx_dir) / "value_model.onnx"),
+            onnx_combat_path=str(Path(onnx_dir) / "combat_model.onnx"),
             onnx_option_path=str(Path(onnx_dir) / "option_model.onnx"),
             vocab_json=rust_data["vocab_json"],
             monster_data_json=rust_data["monster_json"],
@@ -593,6 +653,7 @@ def train_worker(
             temperature=game_temp,
             seeds=game_seeds,
             combat_replays=combat_replays,
+            option_epsilon=gen_option_epsilon,
         )
 
         # Convert Rust results to training samples
@@ -635,7 +696,11 @@ def train_worker(
                     state_tensors=_rust_state_to_tensors(st),
                     option_types=s["option_types"],
                     option_cards=s["option_cards"],
+                    option_card_stats=s.get("option_card_stats", []),
+                    option_path_ids=s.get("option_path_ids", []),
+                    option_path_mask=s.get("option_path_mask", []),
                     chosen_idx=s["chosen_idx"],
+                    was_greedy=s.get("was_greedy", True),
                     value=0.0,
                     floor=s.get("floor", 0),
                 )
@@ -653,7 +718,7 @@ def train_worker(
             )
 
             for sample in all_combat_samples:
-                replay_buffer.add(sample, is_win=is_win)
+                combat_buffer.add(sample, is_win=is_win)
             for osample in option_samples_list:
                 option_buffer.add(osample, is_win=is_win)
 
@@ -703,12 +768,18 @@ def train_worker(
                 del recent_games[:-50]
 
         # --- Training ---
+        # Sample from both buffers: combat_buffer (value head) + replay_buffer (combat head)
         v_loss = p_loss = o_loss = total_loss = 0.0
-        if len(replay_buffer) >= batch_size:
+        min_samples = batch_size // 2
+        can_train = len(combat_buffer) >= min_samples or len(replay_buffer) >= min_samples
+        if can_train:
             for epoch in range(train_epochs):
-                batch = replay_buffer.sample(batch_size)
+                # Draw from each buffer, up to half the batch each
+                combat_half = combat_buffer.sample(min(min_samples, len(combat_buffer))) if len(combat_buffer) > 0 else []
+                replay_half = replay_buffer.sample(min(min_samples, len(replay_buffer))) if len(replay_buffer) > 0 else []
+                batch = combat_half + replay_half
                 option_batch = option_buffer.sample(min(48, len(option_buffer))) if len(option_buffer) > 0 else []
-                total_loss, v_loss, p_loss, o_loss = train_batch(
+                total_loss, v_loss, c_loss, p_loss, o_loss = train_batch(
                     network, optimizer, batch,
                     option_samples=option_batch,
                     device="cpu",
@@ -721,6 +792,8 @@ def train_worker(
         hours, mins = divmod(mins, 60)
 
         # Write progress
+        import math
+        clean_values = [v for v in gen_values if not math.isnan(v)]
         stats = {
             "generation": gen,
             "num_generations": num_generations,
@@ -730,13 +803,16 @@ def train_worker(
             "gen_avg_floor": round(sum(gen_floors) / max(1, len(gen_floors)), 1),
             "gen_min_floor": min(gen_floors) if gen_floors else 0,
             "gen_max_floor": max(gen_floors) if gen_floors else 0,
-            "value_head_mean": round(sum(gen_values) / max(1, len(gen_values)), 4) if gen_values else 0,
-            "value_head_min": round(min(gen_values), 4) if gen_values else 0,
-            "value_head_max": round(max(gen_values), 4) if gen_values else 0,
-            "value_head_spread": round(max(gen_values) - min(gen_values), 4) if gen_values else 0,
-            "buffer_size": len(replay_buffer),
+            "value_head_mean": round(sum(clean_values) / max(1, len(clean_values)), 4) if clean_values else 0,
+            "value_head_min": round(min(clean_values), 4) if clean_values else 0,
+            "value_head_max": round(max(clean_values), 4) if clean_values else 0,
+            "value_head_spread": round(max(clean_values) - min(clean_values), 4) if clean_values else 0,
+            "buffer_size": len(combat_buffer) + len(replay_buffer),
+            "combat_buffer_size": len(combat_buffer),
+            "replay_buffer_size": len(replay_buffer),
             "total_loss": round(total_loss, 4),
             "value_loss": round(v_loss, 4),
+            "combat_loss": round(c_loss, 4),
             "policy_loss": round(p_loss, 4),
             "option_loss": round(o_loss, 4),
             "option_buffer_size": len(option_buffer),
@@ -756,7 +832,7 @@ def train_worker(
         cur_lr = scheduler.get_last_lr()[0]
         print(
             f"Gen {gen:4d} | games={total_games} win={win_pct:.0f}% | "
-            f"loss={total_loss:.3f} (v={v_loss:.3f} p={p_loss:.3f} o={o_loss:.3f}) | "
+            f"loss={total_loss:.3f} (v={v_loss:.3f} c={c_loss:.3f} p={p_loss:.3f} o={o_loss:.3f}) | "
             f"lr={cur_lr:.1e} | {gen_elapsed:.1f}s",
             flush=True,
         )
@@ -897,16 +973,18 @@ if __name__ == "__main__":
     train_parser.add_argument("--games-per-gen", type=int, default=256)
     train_parser.add_argument("--sims", type=int, default=100)
     train_parser.add_argument("--batch-size", type=int, default=256)
-    train_parser.add_argument("--epochs", type=int, default=20)
+    train_parser.add_argument("--epochs", type=int, default=40)
     train_parser.add_argument("--lr", type=float, default=3e-4)
     train_parser.add_argument("--temperature", type=float, default=1.0)
     train_parser.add_argument("--save-dir", type=str, default=None)
     train_parser.add_argument("--progress-file", type=str, default=None)
-    train_parser.add_argument("--trunk-blocks", type=int, default=3)
+    train_parser.add_argument("--trunk-blocks", type=int, default=2)
     train_parser.add_argument("--workers", type=int, default=8,
                               help="Parallel self-play workers (0 or 1 = sequential)")
     train_parser.add_argument("--combat-replays", type=int, default=5,
                               help="Re-run each combat N times for dense training (1 = off)")
+    train_parser.add_argument("--option-epsilon", type=float, default=0.15,
+                              help="Epsilon-greedy exploration for option head (0 = off)")
 
     # Monitor command
     monitor_parser = subparsers.add_parser("monitor", help="Live TUI dashboard")
@@ -929,6 +1007,7 @@ if __name__ == "__main__":
             num_trunk_blocks=args.trunk_blocks,
             num_workers=args.workers,
             combat_replays=args.combat_replays,
+            option_epsilon=args.option_epsilon,
         )
     elif args.command == "monitor":
         train_monitor(

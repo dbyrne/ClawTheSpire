@@ -26,7 +26,7 @@ Architecture:
 
     Option evaluation head (all non-combat decisions):
         hidden(256) + option_type_embed(16) + card_embed(32) + card_stats(26) + path_embed(16)
-        → Linear(335→64) → ReLU → Linear(64→1)
+        → Linear(346→64) → ReLU → Linear(64→1)
         Handles card rewards, rest/smith, map pathing, shop, events.
         Type embedding carries context (free reward vs gold cost vs removal).
         Path embedding gives per-option downstream room context for map decisions.
@@ -253,7 +253,8 @@ class STS2Network(nn.Module):
         self.trunk_in = nn.Linear(trunk_input_dim, 256)
         self.trunk_blocks = nn.ModuleList([
             nn.ModuleDict({
-                'linear': nn.Linear(256, 256),
+                'linear1': nn.Linear(256, 256),
+                'linear2': nn.Linear(256, 256),
                 'norm': nn.LayerNorm(256),
                 'dropout': nn.Dropout(0.1),
             })
@@ -261,6 +262,10 @@ class STS2Network(nn.Module):
         ])
 
         # --- Value head (run-level: will I win this run?) ---
+        # No tanh: during cold start, most targets cluster near -0.85 where
+        # tanh gradient is only 0.28, killing value discrimination and making
+        # MCTS visit counts near-uniform. Unbounded outputs let MSE gradients
+        # flow freely; values self-calibrate to [-1, +1] within a few gens.
         self.value_head = nn.Sequential(
             nn.Linear(256, 128),
             nn.ReLU(),
@@ -284,7 +289,7 @@ class STS2Network(nn.Module):
         self.action_project = nn.Linear(policy_action_dim, policy_action_dim)
 
         # --- Option evaluation head ---
-        # Input: hidden(256) + option_type(16) + card(32) + card_stats(15) + path(16) = 335
+        # Input: hidden(256) + option_type(16) + card(32) + card_stats(26) + path(16) = 346
         self.option_type_embed = nn.Embedding(cfg.num_option_types, cfg.option_type_embed_dim, padding_idx=0)
         self.option_eval_head = nn.Sequential(
             nn.Linear(256 + cfg.option_type_embed_dim + cfg.card_embed_dim + cfg.card_stats_dim + cfg.path_output_dim, 64),
@@ -389,7 +394,9 @@ class STS2Network(nn.Module):
         # Trunk with residual blocks
         h = F.relu(self.trunk_in(self.input_norm(state_vec)))
         for block in self.trunk_blocks:
-            h = h + block['dropout'](F.relu(block['linear'](h)))
+            residual = F.relu(block['linear1'](h))
+            residual = block['linear2'](residual)
+            h = h + block['dropout'](residual)
             h = block['norm'](h)
         return h
 
@@ -462,6 +469,8 @@ class STS2Network(nn.Module):
                 stats = torch.tensor(card_stats_vector(card), dtype=torch.float32)
                 projected = self._stats_init_proj(stats)
                 self.card_embed.weight.data[idx] = projected
+        # Projection layer only needed for init — remove from optimizer state
+        del self._stats_init_proj
 
     # ------------------------------------------------------------------
     # Option evaluation (all non-combat decisions)

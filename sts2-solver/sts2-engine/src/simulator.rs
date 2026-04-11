@@ -253,6 +253,7 @@ pub fn run_act1(
     temperature: f32,
     seed: u64,
     combat_replays: usize,
+    option_epsilon: f32,
 ) -> FullRunResult {
     use rand::SeedableRng;
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
@@ -321,7 +322,7 @@ pub fn run_act1(
                         let (idx, sample) = pick_map_path_network(
                             choices, &deck, hp, max_hp, floor_num, gold,
                             &relics, &act_id, &boss_id, &remaining_path,
-                            game_data, option_eval,
+                            game_data, option_eval, option_epsilon, &mut rng,
                         );
                         if let Some(s) = sample {
                             result.option_samples.push(s);
@@ -445,7 +446,7 @@ pub fn run_act1(
                         let (picked, sample) = pick_card_reward_network(
                             &offered, &deck, hp, max_hp, floor_num, gold,
                             &relics, &act_id, &boss_id, &remaining_path,
-                            game_data, option_eval,
+                            game_data, option_eval, option_epsilon, &mut rng,
                         );
                         if let Some(card) = picked {
                             deck.push(card);
@@ -472,7 +473,7 @@ pub fn run_act1(
                 let (action, smith_card_idx, sample) = rest_or_smith_network(
                     &deck, hp, max_hp, floor_num, gold,
                     &relics, &act_id, &boss_id, &remaining_path,
-                    game_data, option_eval,
+                    game_data, option_eval, option_epsilon, &mut rng,
                 );
                 if let Some(s) = sample {
                     result.option_samples.push(s);
@@ -550,7 +551,7 @@ pub fn run_act1(
                     let (chosen_idx, sample) = decide_event_network(
                         &options, &deck, hp, max_hp, floor_num, gold,
                         &relics, &act_id, &boss_id, &remaining_path,
-                        game_data, option_eval,
+                        game_data, option_eval, option_epsilon, &mut rng,
                     );
                     if let Some(s) = sample {
                         result.option_samples.push(s);
@@ -571,7 +572,7 @@ pub fn run_act1(
                 let samples = shop_decisions_network(
                     &mut deck, &mut gold, &mut potions, hp, max_hp, floor_num,
                     &relics, &act_id, &boss_id, &remaining_path,
-                    game_data, option_eval, &mut rng,
+                    game_data, option_eval, option_epsilon, &mut rng,
                 );
                 result.option_samples.extend(samples);
             }
@@ -590,13 +591,25 @@ pub fn run_act1(
 // NETWORK DECISIONS — No heuristics, all via ONNX option head
 // ---------------------------------------------------------------------------
 
+/// Epsilon-greedy: with probability epsilon, pick a random option instead of best.
+fn epsilon_pick(best_idx: usize, num_options: usize, epsilon: f32, rng: &mut impl Rng) -> (usize, bool) {
+    if num_options <= 1 || epsilon <= 0.0 || rng.random::<f32>() >= epsilon {
+        return (best_idx, true);
+    }
+    let explore_idx = rng.random_range(0..num_options - 1);
+    // Skip best_idx to ensure we actually explore something different
+    let chosen = if explore_idx >= best_idx { explore_idx + 1 } else { explore_idx };
+    (chosen, false)
+}
+
 /// Card reward: network picks from offered cards or skips.
 fn pick_card_reward_network(
     offered: &[Card], deck: &[Card],
     hp: i32, max_hp: i32, floor: i32, gold: i32,
     relics: &HashSet<String>, act_id: &str, boss_id: &str,
     remaining_path: &[String], game_data: &GameData,
-    option_eval: &OptionEvaluator,
+    option_eval: &OptionEvaluator, option_epsilon: f32,
+    rng: &mut impl Rng,
 ) -> (Option<Card>, Option<RustOptionSample>) {
     if offered.is_empty() { return (None, None); }
 
@@ -615,15 +628,19 @@ fn pick_card_reward_network(
     opt_cards.push(0);
     opt_stats.push(vec![0.0; CARD_STATS_DIM]);
 
+    let num_options = opt_types.len();
     match option_eval.evaluate(&state, &opt_types, &opt_cards, &opt_stats, None, None) {
         Ok(result) => {
+            let (chosen_idx, was_greedy) = epsilon_pick(result.best_idx, num_options, option_epsilon, rng);
             let enc = encode::encode_state(&state, &game_data.vocabs);
             let sample = RustOptionSample {
                 state: enc, option_types: opt_types, option_cards: opt_cards,
-                chosen_idx: result.best_idx, value: 0.0, floor,
+                option_card_stats: opt_stats, option_path_ids: vec![],
+                option_path_mask: vec![], chosen_idx, was_greedy,
+                value: 0.0, floor,
             };
-            if result.best_idx < offered.len() {
-                (Some(offered[result.best_idx].clone()), Some(sample))
+            if chosen_idx < offered.len() {
+                (Some(offered[chosen_idx].clone()), Some(sample))
             } else {
                 (None, Some(sample)) // Skip
             }
@@ -637,7 +654,8 @@ fn rest_or_smith_network(
     deck: &[Card], hp: i32, max_hp: i32, floor: i32, gold: i32,
     relics: &HashSet<String>, act_id: &str, boss_id: &str,
     remaining_path: &[String], game_data: &GameData,
-    option_eval: &OptionEvaluator,
+    option_eval: &OptionEvaluator, option_epsilon: f32,
+    rng: &mut impl Rng,
 ) -> (String, Option<usize>, Option<RustOptionSample>) {
     let state = make_dummy_state(deck, hp, max_hp, floor, gold, relics, act_id, boss_id, remaining_path);
 
@@ -657,18 +675,21 @@ fn rest_or_smith_network(
         }
     }
 
+    let num_options = opt_types.len();
     match option_eval.evaluate(&state, &opt_types, &opt_cards, &opt_stats, None, None) {
         Ok(result) => {
+            let (chosen_idx, was_greedy) = epsilon_pick(result.best_idx, num_options, option_epsilon, rng);
             let enc = encode::encode_state(&state, &game_data.vocabs);
             let sample = RustOptionSample {
                 state: enc, option_types: opt_types, option_cards: opt_cards,
-                chosen_idx: result.best_idx, value: 0.0, floor,
+                option_card_stats: opt_stats, option_path_ids: vec![],
+                option_path_mask: vec![], chosen_idx, was_greedy,
+                value: 0.0, floor,
             };
-            if result.best_idx == 0 {
+            if chosen_idx == 0 {
                 ("rest".to_string(), None, Some(sample))
             } else {
-                // Map smith option index to deck card index
-                let smith_idx = result.best_idx - 1; // -1 because REST is index 0
+                let smith_idx = chosen_idx - 1;
                 let deck_idx = smith_deck_indices.get(smith_idx).copied();
                 ("smith".to_string(), deck_idx, Some(sample))
             }
@@ -683,7 +704,8 @@ fn decide_event_network(
     hp: i32, max_hp: i32, floor: i32, gold: i32,
     relics: &HashSet<String>, act_id: &str, boss_id: &str,
     remaining_path: &[String], game_data: &GameData,
-    option_eval: &OptionEvaluator,
+    option_eval: &OptionEvaluator, option_epsilon: f32,
+    rng: &mut impl Rng,
 ) -> (usize, Option<RustOptionSample>) {
     let state = make_dummy_state(deck, hp, max_hp, floor, gold, relics, act_id, boss_id, remaining_path);
 
@@ -698,14 +720,18 @@ fn decide_event_network(
         opt_stats.push(vec![0.0; CARD_STATS_DIM]);
     }
 
+    let num_options = opt_types.len();
     match option_eval.evaluate(&state, &opt_types, &opt_cards, &opt_stats, None, None) {
         Ok(result) => {
+            let (chosen_idx, was_greedy) = epsilon_pick(result.best_idx, num_options, option_epsilon, rng);
             let enc = encode::encode_state(&state, &game_data.vocabs);
             let sample = RustOptionSample {
                 state: enc, option_types: opt_types, option_cards: opt_cards,
-                chosen_idx: result.best_idx, value: 0.0, floor,
+                option_card_stats: opt_stats, option_path_ids: vec![],
+                option_path_mask: vec![], chosen_idx, was_greedy,
+                value: 0.0, floor,
             };
-            (result.best_idx, Some(sample))
+            (chosen_idx, Some(sample))
         }
         Err(_) => (0, None),
     }
@@ -717,7 +743,8 @@ fn pick_map_path_network(
     hp: i32, max_hp: i32, floor: i32, gold: i32,
     relics: &HashSet<String>, act_id: &str, boss_id: &str,
     remaining_path: &[String], game_data: &GameData,
-    option_eval: &OptionEvaluator,
+    option_eval: &OptionEvaluator, option_epsilon: f32,
+    rng: &mut impl Rng,
 ) -> (usize, Option<RustOptionSample>) {
     if choices.len() <= 1 { return (0, None); }
 
@@ -732,14 +759,18 @@ fn pick_map_path_network(
         opt_stats.push(vec![0.0; CARD_STATS_DIM]);
     }
 
+    let num_options = opt_types.len();
     match option_eval.evaluate(&state, &opt_types, &opt_cards, &opt_stats, None, None) {
         Ok(result) => {
+            let (chosen_idx, was_greedy) = epsilon_pick(result.best_idx, num_options, option_epsilon, rng);
             let enc = encode::encode_state(&state, &game_data.vocabs);
             let sample = RustOptionSample {
                 state: enc, option_types: opt_types, option_cards: opt_cards,
-                chosen_idx: result.best_idx, value: 0.0, floor,
+                option_card_stats: opt_stats, option_path_ids: vec![],
+                option_path_mask: vec![], chosen_idx, was_greedy,
+                value: 0.0, floor,
             };
-            (result.best_idx, Some(sample))
+            (chosen_idx, Some(sample))
         }
         Err(_) => (0, None),
     }
@@ -751,7 +782,8 @@ fn shop_decisions_network(
     hp: i32, max_hp: i32, floor: i32,
     relics: &HashSet<String>, act_id: &str, boss_id: &str,
     remaining_path: &[String], game_data: &GameData,
-    option_eval: &OptionEvaluator, rng: &mut impl Rng,
+    option_eval: &OptionEvaluator, option_epsilon: f32,
+    rng: &mut impl Rng,
 ) -> Vec<RustOptionSample> {
     let mut samples = Vec::new();
 
@@ -817,15 +849,19 @@ fn shop_decisions_network(
 
         if opt_types.len() <= 1 { break; }
 
+        let num_options = opt_types.len();
         match option_eval.evaluate(&state, &opt_types, &opt_cards, &opt_stats, None, None) {
             Ok(result) => {
+                let (chosen_idx, was_greedy) = epsilon_pick(result.best_idx, num_options, option_epsilon, rng);
                 let enc = encode::encode_state(&state, &game_data.vocabs);
                 samples.push(RustOptionSample {
                     state: enc, option_types: opt_types.clone(), option_cards: opt_cards.clone(),
-                    chosen_idx: result.best_idx, value: 0.0, floor,
+                    option_card_stats: opt_stats.clone(), option_path_ids: vec![],
+                    option_path_mask: vec![], chosen_idx, was_greedy,
+                    value: 0.0, floor,
                 });
 
-                match &opt_actions[result.best_idx] {
+                match &opt_actions[chosen_idx] {
                     ShopAction::Leave => break,
                     ShopAction::Remove(deck_idx) => {
                         if *deck_idx < deck.len() {

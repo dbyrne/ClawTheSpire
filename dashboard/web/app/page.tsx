@@ -42,6 +42,7 @@ interface TrainingProgress {
   buffer_size: number;
   total_loss: number;
   value_loss: number;
+  combat_loss: number;
   policy_loss: number;
   option_loss: number;
   option_buffer_size: number;
@@ -58,6 +59,7 @@ interface TrainingHistoryPoint {
   gen: number;
   total_loss: number;
   value_loss: number;
+  combat_loss: number;
   policy_loss: number;
   option_loss: number;
   win_rate: number;
@@ -110,6 +112,7 @@ function useTrainingProgress(pollMs = 30_000) {
             gen: data.generation,
             total_loss: data.total_loss,
             value_loss: data.value_loss,
+            combat_loss: data.combat_loss,
             policy_loss: data.policy_loss,
             option_loss: data.option_loss,
             win_rate: data.win_rate,
@@ -722,6 +725,10 @@ function TrainingStats({ progress }: { progress: TrainingProgress | null }) {
             <span className="text-arcane">{progress.value_loss.toFixed(4)}</span>
           </div>
           <div className="flex justify-between">
+            <span className="text-bone-dim">Combat</span>
+            <span className="text-arcane">{(progress.combat_loss ?? 0).toFixed(4)}</span>
+          </div>
+          <div className="flex justify-between">
             <span className="text-bone-dim">Option</span>
             <span className="text-arcane">{progress.option_loss.toFixed(4)}</span>
           </div>
@@ -831,6 +838,7 @@ function TrainingChart({ history }: { history: TrainingHistoryPoint[] }) {
                   <div><span className="text-bone-faint">Total: </span><span style={{ color: "#00ddff" }}>{pt.total_loss.toFixed(4)}</span></div>
                   <div><span className="text-bone-faint">Policy: </span><span style={{ color: "#bb66ff" }}>{pt.policy_loss.toFixed(4)}</span></div>
                   <div><span className="text-bone-faint">Value: </span><span style={{ color: "#ff5588" }}>{pt.value_loss.toFixed(4)}</span></div>
+                  <div><span className="text-bone-faint">Combat: </span><span style={{ color: "#ff6622" }}>{(pt.combat_loss ?? 0).toFixed(4)}</span></div>
                   <div><span className="text-bone-faint">Option: </span><span style={{ color: "#ffaa00" }}>{pt.option_loss.toFixed(4)}</span></div>
                   <div className="mt-1"><span className="text-bone-faint">Win%: </span><span style={{ color: "#00ff88" }}>{(pt.win_rate * 100).toFixed(1)}%</span></div>
                   <div><span className="text-bone-faint">Gen Win%: </span><span style={{ color: "#00ff88" }}>{(pt.gen_win_rate * 100).toFixed(0)}%</span></div>
@@ -843,6 +851,7 @@ function TrainingChart({ history }: { history: TrainingHistoryPoint[] }) {
         <Line yAxisId="loss" type="monotone" dataKey="total_loss" stroke="#00ddff" strokeWidth={2} dot={false} isAnimationActive={false} name="Total" />
         <Line yAxisId="loss" type="monotone" dataKey="policy_loss" stroke="#bb66ff" strokeWidth={1.5} dot={false} isAnimationActive={false} name="Policy" />
         <Line yAxisId="loss" type="monotone" dataKey="value_loss" stroke="#ff5588" strokeWidth={1.5} dot={false} isAnimationActive={false} name="Value" />
+        <Line yAxisId="loss" type="monotone" dataKey="combat_loss" stroke="#ff6622" strokeWidth={1.5} dot={false} isAnimationActive={false} name="Combat" />
         <Line yAxisId="loss" type="monotone" dataKey="option_loss" stroke="#ffaa00" strokeWidth={1.5} dot={false} isAnimationActive={false} name="Option" />
         <Line yAxisId="rate" type="monotone" dataKey="win_rate" stroke="#00ff88" strokeWidth={2} strokeDasharray="6 3" dot={false} isAnimationActive={false} name="Win%" />
       </LineChart>
@@ -919,11 +928,6 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Logo */}
-        <div className="flex items-center justify-center animate-in stagger-3 shrink-0 py-1">
-          <img src="/logo.png" alt="Claw the Spire" className="w-full max-w-[220px] object-contain opacity-90" style={{ filter: "drop-shadow(0 0 16px rgba(0,221,255,0.25))" }} />
-        </div>
-
         {/* Training Stats */}
         <TrainingStats progress={trainingProgress} />
       </div>
@@ -989,6 +993,9 @@ export default function Home() {
               </span>
               <span className="flex items-center gap-1">
                 <span className="w-3 h-[2px] rounded inline-block" style={{ background: "#ff5588" }} /> Value
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="w-3 h-[2px] rounded inline-block" style={{ background: "#ff6622" }} /> Combat
               </span>
               <span className="flex items-center gap-1">
                 <span className="w-3 h-[2px] rounded inline-block" style={{ background: "#ffaa00" }} /> Option

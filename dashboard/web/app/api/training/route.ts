@@ -24,7 +24,9 @@ export async function GET(request: Request) {
 
   try {
     const raw = await readFile(PROGRESS_PATH, "utf-8");
-    return Response.json(JSON.parse(raw));
+    // Replace NaN/Infinity with null so JSON.parse doesn't choke
+    const sanitized = raw.replace(/\bNaN\b/g, "null").replace(/\bInfinity\b/g, "null");
+    return Response.json(JSON.parse(sanitized));
   } catch {
     return Response.json(null, { status: 404 });
   }

@@ -260,7 +260,7 @@ class EncoderConfig:
     # exhaust(1) + innate(1) + ethereal(1) + retain(1) +
     # weak(1) + vuln(1) + poison(1) = 26
     card_stats_dim: int = 26
-    num_trunk_blocks: int = 3
+    num_trunk_blocks: int = 2  # Double-linear blocks; 2 blocks = sufficient depth
 
     # Global scalars: floor, turn, gold, deck_size, has_pending_choice, choice_type
     num_scalars: int = 6
@@ -317,7 +317,7 @@ class EncoderConfig:
     @property
     def action_feat_dim(self) -> int:
         """Action feature vector dimension (excluding learned card embedding)."""
-        # target_onehot(max_enemies+1) + potion_type(5) + is_end_turn(1) + is_use_potion(1) + is_choose_card(1) + card_stats(15)
+        # target_onehot(max_enemies+1) + potion_type(5) + is_end_turn(1) + is_use_potion(1) + is_choose_card(1) + card_stats(26)
         return self.max_enemies + 1 + 5 + 3 + self.card_stats_dim
 
     @property

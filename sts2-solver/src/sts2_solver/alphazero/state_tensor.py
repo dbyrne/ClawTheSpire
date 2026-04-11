@@ -239,10 +239,10 @@ def encode_actions(
         action_features: (1, max_actions, action_feat_dim) — target/flags
         action_mask: (1, max_actions) — True for invalid/padded slots
 
-    action_feat_dim = max_enemies + 1 (target one-hot) + 5 (potion type) + 3 (flags) + 15 (card stats)
+    action_feat_dim = max_enemies + 1 (target one-hot) + 5 (potion type) + 3 (flags) + 26 (card stats)
     """
     cfg = config or EncoderConfig()
-    # Feature dims: target_onehot(max_enemies+1) + potion_type(5) + flags(3) + card_stats(15)
+    # Feature dims: target_onehot(max_enemies+1) + potion_type(5) + flags(3) + card_stats(26)
     base_feat_dim = cfg.max_enemies + 1 + 5 + 3
     feat_dim = base_feat_dim + cfg.card_stats_dim
     zero_stats = [0.0] * cfg.card_stats_dim

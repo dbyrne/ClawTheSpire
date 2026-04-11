@@ -80,8 +80,12 @@ pub struct RustOptionSample {
     pub state: EncodedState,
     pub option_types: Vec<i64>,
     pub option_cards: Vec<i64>,
+    pub option_card_stats: Vec<Vec<f32>>,   // Per-option card stats (N x 26)
+    pub option_path_ids: Vec<Vec<i64>>,     // Per-option downstream path IDs
+    pub option_path_mask: Vec<Vec<bool>>,   // Per-option path masks
     pub chosen_idx: usize,
-    pub value: f32,  // Filled post-run
+    pub was_greedy: bool,                   // True if argmax, false if epsilon-explored
+    pub value: f32,                         // Filled post-run
     pub floor: i32,
 }
 

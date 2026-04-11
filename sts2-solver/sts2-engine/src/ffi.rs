@@ -388,19 +388,21 @@ fn bool_list<'py>(py: Python<'py>, v: &[bool]) -> Bound<'py, PyList> {
 #[pyfunction]
 #[pyo3(signature = (
     num_games,
-    onnx_full_path, onnx_value_path, onnx_option_path,
+    onnx_full_path, onnx_value_path, onnx_combat_path, onnx_option_path,
     vocab_json, monster_data_json, enemy_profiles_json,
     encounter_pool_json, event_profiles_json,
     card_pool_json, card_db_json,
     map_pool_json, shop_pool_json,
     mcts_sims, temperature, seeds,
-    combat_replays = 1
+    combat_replays = 1,
+    option_epsilon = 0.15
 ))]
 pub fn play_all_games(
     py: Python<'_>,
     #[allow(unused)] num_games: usize,
     onnx_full_path: &str,
     onnx_value_path: &str,
+    onnx_combat_path: &str,
     onnx_option_path: &str,
     vocab_json: &str,
     monster_data_json: &str,
@@ -415,6 +417,7 @@ pub fn play_all_games(
     temperature: f32,
     seeds: Vec<u64>,
     combat_replays: usize,
+    option_epsilon: f32,
 ) -> PyResult<PyObject> {
     // Parse shared data (once, before releasing GIL)
     let vocabs: Vocabs = serde_json::from_str(vocab_json)
@@ -460,6 +463,7 @@ pub fn play_all_games(
 
     let onnx_full = onnx_full_path.to_string();
     let onnx_value = onnx_value_path.to_string();
+    let onnx_combat = onnx_combat_path.to_string();
     let onnx_option = onnx_option_path.to_string();
 
     // Release GIL and run all games in parallel with rayon
@@ -468,9 +472,8 @@ pub fn play_all_games(
 
         seeds.into_par_iter().map(|seed| {
             // Each rayon thread creates its own ONNX sessions
-            // (thread_local caching inside fight_combat handles this)
-            let combat_inference = match crate::inference::OnnxInference::new(
-                &onnx_full, &onnx_value, vocabs.clone()
+            let combat_inference = match crate::inference::OnnxInference::with_combat(
+                &onnx_full, &onnx_value, &onnx_combat, vocabs.clone()
             ) {
                 Ok(inf) => inf,
                 Err(e) => {
@@ -490,7 +493,7 @@ pub fn play_all_games(
 
             Some(crate::simulator::run_act1(
                 &game_data, &combat_inference, &option_evaluator,
-                mcts_sims, temperature, seed, combat_replays,
+                mcts_sims, temperature, seed, combat_replays, option_epsilon,
             ))
         }).collect::<Vec<_>>()
     });
@@ -556,7 +559,7 @@ pub fn play_all_games(
         }
         d.set_item("boss_floors", py_boss)?;
 
-        // Option samples (include state tensors for option head training)
+        // Option samples (include state tensors + card stats + paths for training)
         let py_opt_samples = PyList::empty(py);
         for sample in &result.option_samples {
             let s = PyDict::new(py);
@@ -564,8 +567,26 @@ pub fn play_all_games(
             s.set_item("option_types", &sample.option_types)?;
             s.set_item("option_cards", &sample.option_cards)?;
             s.set_item("chosen_idx", sample.chosen_idx)?;
+            s.set_item("was_greedy", sample.was_greedy)?;
             s.set_item("value", sample.value)?;
             s.set_item("floor", sample.floor)?;
+            // Card stats: Vec<Vec<f32>> -> list of lists
+            let py_stats = PyList::empty(py);
+            for stats in &sample.option_card_stats {
+                py_stats.append(stats.as_slice())?;
+            }
+            s.set_item("option_card_stats", py_stats)?;
+            // Path data (may be empty for non-map decisions)
+            let py_pids = PyList::empty(py);
+            for pids in &sample.option_path_ids {
+                py_pids.append(pids.as_slice())?;
+            }
+            s.set_item("option_path_ids", py_pids)?;
+            let py_pmask = PyList::empty(py);
+            for pm in &sample.option_path_mask {
+                py_pmask.append(pm.as_slice())?;
+            }
+            s.set_item("option_path_mask", py_pmask)?;
             py_opt_samples.append(s)?;
         }
         d.set_item("option_samples", py_opt_samples)?;
