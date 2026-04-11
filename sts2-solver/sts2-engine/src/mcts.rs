@@ -302,45 +302,23 @@ impl<'a> MCTS<'a> {
             return 0.0;
         }
 
-        // Neural network evaluation for policy
+        // Neural network evaluation for policy — all actions treated equally
         let (logits, _policy_value) = self.inference.evaluate(state, &actions);
+        let priors = if !actions.is_empty() { softmax(&logits) } else { vec![] };
 
-        // Decouple end_turn from card/potion plays in the policy prior.
-        // The policy head learns "which card to play next" — whether to STOP
-        // playing is a value question answered by MCTS. end_turn gets a fixed
-        // uniform prior so it's always explored but can't dominate.
-        let n = actions.len();
-        let priors = if n > 0 {
-            let play_indices: Vec<usize> = actions.iter().enumerate()
-                .filter(|(_, a)| !matches!(a, Action::EndTurn))
-                .map(|(i, _)| i)
-                .collect();
-            let et_count = n - play_indices.len();
+        // Leaf value: resolve through end-of-turn for mid-turn states so
+        // card plays and EndTurn are compared at the same phase boundary.
+        // The resolution is on a clone — the node's stored state is untouched.
+        let is_mid_turn = arena.nodes[node_idx].parent.map_or(true, |parent_idx| {
+            let act_idx = arena.nodes[node_idx].parent_action_idx;
+            !matches!(arena.nodes[parent_idx].legal_actions[act_idx], Action::EndTurn)
+        });
 
-            if !play_indices.is_empty() && et_count > 0 {
-                let play_logits: Vec<f32> = play_indices.iter().map(|&i| logits[i]).collect();
-                let play_probs = softmax(&play_logits);
-                let et_prior = 1.0 / n as f32;
-                let card_share = 1.0 - et_prior * et_count as f32;
-                let mut priors = vec![0.0f32; n];
-                for (j, &idx) in play_indices.iter().enumerate() {
-                    priors[idx] = play_probs[j] * card_share;
-                }
-                for (i, action) in actions.iter().enumerate() {
-                    if matches!(action, Action::EndTurn) {
-                        priors[i] = et_prior;
-                    }
-                }
-                priors
-            } else {
-                softmax(&logits)
-            }
+        let value = if is_mid_turn {
+            self.resolve_and_evaluate(state, &arena.nodes[node_idx].enemy_ais, rng)
         } else {
-            vec![]
+            self.estimate_leaf_value(state)
         };
-
-        // Value from current state (symmetric: no simulation for any action type)
-        let value = self.estimate_leaf_value(state);
 
         // Create child nodes (lazy — state=None)
         let mut children = Vec::with_capacity(actions.len());
@@ -376,9 +354,38 @@ impl<'a> MCTS<'a> {
             return if outcome == "win" { 1.0 } else { -1.0 };
         }
         let v = self.inference.value_only(state);
-        // Clamp to training target range — the combat head can extrapolate
-        // beyond [-1, 1] early in training, causing MCTS to overvalue the
-        // current state and prefer EndTurn over playing cards.
+        if v.is_finite() { v.clamp(-1.0, 1.0) } else { 0.0 }
+    }
+
+    /// Resolve a mid-turn state through end-of-turn, then evaluate.
+    /// Clones the state — the original is untouched for tree expansion.
+    fn resolve_and_evaluate(
+        &self,
+        state: &CombatState,
+        enemy_ais: &Option<Vec<crate::enemy::EnemyAI>>,
+        rng: &mut impl Rng,
+    ) -> f32 {
+        let mut resolved = state.clone();
+        combat::end_turn(&mut resolved, self.card_db, rng);
+        combat::resolve_enemy_intents(&mut resolved);
+        combat::tick_enemy_powers(&mut resolved);
+
+        if let Some(outcome) = is_combat_over(&resolved) {
+            return if outcome == "win" { 1.0 } else { -1.0 };
+        }
+
+        // Start next turn so the combat head sees a realistic state
+        // (hand drawn, energy reset, new intents)
+        combat::start_turn(&mut resolved, rng);
+        if let Some(ais) = enemy_ais {
+            let mut ais_clone = ais.clone();
+            crate::enemy::sync_enemy_ais(
+                &resolved, &mut ais_clone, &std::collections::HashMap::new(),
+            );
+            crate::enemy::set_enemy_intents(&mut resolved, &mut ais_clone, rng);
+        }
+
+        let v = self.inference.value_only(&resolved);
         if v.is_finite() { v.clamp(-1.0, 1.0) } else { 0.0 }
     }
 

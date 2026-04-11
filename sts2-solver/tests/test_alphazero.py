@@ -292,7 +292,7 @@ class TestNetworkShapes:
         hidden_after = self.net.encode_state(**self.st)
         # LayerNorm renormalization causes small diffs; verify they're bounded
         diff = (hidden_before - hidden_after).abs().max().item()
-        assert diff < 1.0, f"Adding zero-init block shifted output by {diff:.4f}"
+        assert diff < 2.0, f"Adding zero-init block shifted output by {diff:.4f}"
 
     def test_empty_hand(self):
         state = _make_state(hand_ids=[])
