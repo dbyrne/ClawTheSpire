@@ -375,7 +375,11 @@ impl<'a> MCTS<'a> {
         if let Some(outcome) = is_combat_over(state) {
             return if outcome == "win" { 1.0 } else { -1.0 };
         }
-        self.inference.value_only(state)
+        let v = self.inference.value_only(state);
+        // Clamp to training target range — the combat head can extrapolate
+        // beyond [-1, 1] early in training, causing MCTS to overvalue the
+        // current state and prefer EndTurn over playing cards.
+        if v.is_finite() { v.clamp(-1.0, 1.0) } else { 0.0 }
     }
 
     // --- Apply action to state ---
