@@ -448,6 +448,28 @@ class STS2Network(nn.Module):
             return value.item(), probs.tolist()
 
     # ------------------------------------------------------------------
+    # Progressive growing
+    # ------------------------------------------------------------------
+
+    def add_trunk_block(self) -> None:
+        """Add a residual block, zero-initialized so it starts as identity.
+
+        The second linear layer is zeroed: the block computes
+        h + dropout(linear2(relu(linear1(h)))) = h + 0 = h,
+        preserving the network's output exactly.  The first linear
+        has standard init so gradients flow immediately.
+        """
+        block = nn.ModuleDict({
+            'linear1': nn.Linear(256, 256),
+            'linear2': nn.Linear(256, 256),
+            'norm': nn.LayerNorm(256),
+            'dropout': nn.Dropout(0.1),
+        })
+        nn.init.zeros_(block['linear2'].weight)
+        nn.init.zeros_(block['linear2'].bias)
+        self.trunk_blocks.append(block)
+
+    # ------------------------------------------------------------------
     # Stats-based card embedding initialization
     # ------------------------------------------------------------------
 

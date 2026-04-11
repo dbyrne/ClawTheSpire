@@ -8,7 +8,6 @@ pub mod actions;
 pub mod enemy;
 pub mod encode;
 pub mod mcts;
-pub mod search;
 pub mod inference;
 pub mod option_eval;
 pub mod simulator;

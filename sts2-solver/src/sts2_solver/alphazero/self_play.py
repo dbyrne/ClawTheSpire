@@ -58,6 +58,7 @@ class TrainingSample:
     action_mask: torch.Tensor
     num_actions: int
     is_replay: bool = False  # True = combat replay (trains combat head, not value head)
+    combat_value: float = 0.0  # Per-combat outcome: hp_after/hp_before for wins, -1 for losses
 
 
 @dataclass
@@ -193,13 +194,19 @@ def train_batch(
     samples: list[TrainingSample],
     option_samples: list | None = None,
     device: str = "cpu",
+    loss_weights: dict | None = None,
 ) -> tuple[float, float, float, float]:
     """Train on a batch. Returns (total, value, policy, option) losses.
 
     Combat samples are split by ``is_replay``:
     - Non-replay → value head (run-level prediction) + policy head
     - Replay → combat head (combat-level prediction) + policy head
+
+    loss_weights: optional dict with keys "value", "combat", "option".
+    Policy weight is always 1.0.  Default: all 1.0 (backward compat).
     """
+    if loss_weights is None:
+        loss_weights = {"value": 1.0, "combat": 1.0, "option": 1.0}
     network.train()
     value_losses = []
     combat_losses = []
@@ -228,6 +235,7 @@ def train_batch(
         act_mask = torch.ones(n, max_act, dtype=torch.bool, device=device)  # True=invalid
         target_policies = torch.zeros(n, max_act, dtype=torch.float32, device=device)
         target_values = torch.zeros(n, 1, dtype=torch.float32, device=device)
+        target_combat = torch.zeros(n, 1, dtype=torch.float32, device=device)
 
         for i, s in enumerate(samples):
             na = s.action_card_ids.shape[1]
@@ -237,6 +245,7 @@ def train_batch(
             np_ = min(s.num_actions, max_act)
             target_policies[i, :np_] = torch.tensor(s.policy[:np_], dtype=torch.float32)
             target_values[i, 0] = s.value
+            target_combat[i, 0] = s.combat_value
 
         # Drop samples with NaN/Inf in any tensor (degenerate combat states)
         valid_mask = torch.ones(n, dtype=torch.bool)
@@ -260,6 +269,7 @@ def train_batch(
                 act_mask = act_mask[keep]
                 target_policies = target_policies[keep]
                 target_values = target_values[keep]
+                target_combat = target_combat[keep]
                 n = len(keep)
 
         hidden = network.encode_state(**batched_state)
@@ -290,20 +300,19 @@ def train_batch(
             _nc = getattr(train_batch, '_nc', 0) + 1
             train_batch._nc = _nc
             if _nc % 500 == 0:
-                nan_ct = raw_ce.isnan().sum().item()
-                if nan_ct > n * 2:  # More NaNs than expected from padding
-                    print(f"  [debug] policy nan_to_num: {nan_ct} NaN in {raw_ce.numel()} elements", flush=True)
+                valid_slots = ~act_mask  # False in act_mask = valid action
+                nan_in_valid = raw_ce[valid_slots].isnan().sum().item()
+                if nan_in_valid > 0:
+                    print(f"  [debug] policy NaN in {nan_in_valid}/{valid_slots.sum().item()} valid action slots", flush=True)
             p_loss = -(raw_ce).nan_to_num(0.0).sum(dim=1).mean()
 
-            # Split value targets: value head for non-replay, combat head for replay
-            # Build replay mask from the (possibly filtered) samples
+            # Value head: non-replay samples only (run-level targets)
             if n == len(samples):
                 replay_flags = torch.tensor([s.is_replay for s in samples], dtype=torch.bool)
             else:
                 replay_flags = torch.tensor([samples[i.item()].is_replay for i in keep], dtype=torch.bool)
 
             run_mask = ~replay_flags
-            replay_mask = replay_flags
 
             loss = p_loss
             v_loss_val = 0.0
@@ -311,14 +320,14 @@ def train_batch(
 
             if run_mask.any():
                 v_loss = F.mse_loss(values[run_mask], target_values[run_mask])
-                loss = loss + v_loss
+                loss = loss + loss_weights["value"] * v_loss
                 v_loss_val += v_loss.item()
 
-            if replay_mask.any():
-                combat_values = network.combat_head(hidden[replay_mask])
-                c_loss = F.mse_loss(combat_values, target_values[replay_mask])
-                loss = loss + c_loss
-                c_loss_val += c_loss.item()
+            # Combat head: ALL samples, grounded per-combat targets
+            combat_preds = network.combat_head(hidden)
+            c_loss = F.mse_loss(combat_preds, target_combat)
+            loss = loss + loss_weights["combat"] * c_loss
+            c_loss_val = c_loss.item()
 
             if torch.isnan(loss):
                 nan_combat += 1
@@ -336,6 +345,8 @@ def train_batch(
                 optimizer.step()
 
     # --- Option samples: pass card_stats + paths, add margin loss ---
+    if loss_weights["option"] == 0.0:
+        option_samples = None  # Skip option training entirely
     optimizer.zero_grad()
     option_valid = 0
     for sample in (option_samples or []):
@@ -442,6 +453,9 @@ def _write_progress(path: Path, stats: dict) -> None:
         "policy_loss": stats.get("policy_loss"),
         "option_loss": stats.get("option_loss"),
         "value_head_spread": stats.get("value_head_spread"),
+        "combat_survival_rate": stats.get("combat_survival_rate"),
+        "combat_head_spread": stats.get("combat_head_spread"),
+        "curriculum_stage": stats.get("curriculum_stage"),
         "lr": stats.get("lr"),
         "gen_time": stats.get("gen_time"),
         "timestamp": stats.get("timestamp"),
@@ -477,9 +491,18 @@ def train_worker(
     num_workers: int = 8,
     combat_replays: int = 1,
     option_epsilon: float = 0.15,
-    search_method: str = "exhaustive",
+    curriculum: bool = False,
 ):
     """Headless training loop. Writes progress to JSON file."""
+    # Curriculum Stage 1: 1 trunk block, per-combat targets, reduced loss weights
+    if curriculum:
+        num_trunk_blocks = 1
+        _loss_weights = {"value": 0.1, "combat": 1.0, "option": 0.0}
+        print(f"Curriculum Stage 1: combat foundation "
+              f"(1 trunk block, MCTS {mcts_simulations} sims, option head dormant)", flush=True)
+    else:
+        _loss_weights = None  # default all-1.0 in train_batch
+
     card_db = load_cards()
     vocabs = build_vocabs_from_card_db(card_db)
     config = EncoderConfig(num_trunk_blocks=num_trunk_blocks)
@@ -506,7 +529,7 @@ def train_worker(
     if ckpts:
         ckpt = torch.load(ckpts[-1], map_location="cpu", weights_only=True)
         ckpt_blocks = ckpt.get("num_trunk_blocks", 1)  # legacy checkpoints had 1 block
-        if ckpt_blocks != num_trunk_blocks:
+        if ckpt_blocks != num_trunk_blocks and not curriculum:
             print(f"Lineage mismatch: checkpoint has {ckpt_blocks} trunk blocks, "
                   f"current config has {num_trunk_blocks}. Cold start.", flush=True)
         else:
@@ -613,7 +636,7 @@ def train_worker(
         "map_pool_json": map_pool_json,
         "shop_pool_json": shop_pool_json,
     }
-    from .full_run import _assign_run_values, _rust_state_to_tensors
+    from .full_run import _assign_run_values, _compute_combat_target, _rust_state_to_tensors
 
     for gen in range(1, num_generations + 1):
         gen_t0 = time.time()
@@ -634,6 +657,9 @@ def train_worker(
         gen_wins = 0
         gen_floors = []
         gen_values = []
+        gen_combat_head_values = []
+        gen_combats_won = 0
+        gen_combats_fought = 0
 
         rust_results = sts2_engine.play_all_games(
             num_games=games_per_generation,
@@ -655,7 +681,6 @@ def train_worker(
             seeds=game_seeds,
             combat_replays=combat_replays,
             option_epsilon=gen_option_epsilon,
-            search_method=search_method,
         )
 
         # Convert Rust results to training samples
@@ -711,12 +736,14 @@ def train_worker(
             combat_value_estimates = {
                 int(k): v for k, v in r.get("combat_value_estimates", {}).items()
             }
+            combat_hp_data = r.get("combat_hp_data", {})
 
             _assign_run_values(
                 combat_samples_by_floor,
                 is_win=is_win,
                 floor_reached=floor_reached,
                 option_samples=option_samples_list,
+                combat_hp_data=combat_hp_data,
             )
 
             for sample in all_combat_samples:
@@ -724,11 +751,16 @@ def train_worker(
             for osample in option_samples_list:
                 option_buffer.add(osample, is_win=is_win)
 
-            # Per-turn replay samples — value head bootstrapped targets.
-            # Each replay is a single turn with different card draws, evaluated
-            # by the run-level value head at end of turn (TD learning).
+            # Per-turn replay samples — use per-combat outcome as target
+            # so the combat head trains on grounded signal, not just
+            # bootstrapped values from itself.
             for rs in r.get("replay_samples", []):
-                replay_value = rs["value"]  # Pre-computed by Rust value head
+                replay_floor = rs.get("floor", 0)
+                combat_target = _compute_combat_target(combat_hp_data, replay_floor)
+                replay_value = rs["value"]
+                # Collect non-terminal values (±1.0 are hardcoded combat outcomes)
+                if replay_value != 1.0 and replay_value != -1.0:
+                    gen_combat_head_values.append(replay_value)
                 for s in rs["samples"]:
                     st = s["state_tensors"]
                     sample = TrainingSample(
@@ -740,12 +772,15 @@ def train_worker(
                         action_mask=torch.tensor([s["action_mask"]], dtype=torch.bool),
                         num_actions=s["num_actions"],
                         is_replay=True,
+                        combat_value=combat_target,
                     )
-                    replay_buffer.add(sample, is_win=(replay_value > 0))
+                    replay_buffer.add(sample, is_win=(combat_target > 0))
 
             total_games += 1
             gen_floors.append(floor_reached)
             gen_values.extend(combat_value_estimates.values())
+            gen_combats_won += r.get("combats_won", 0)
+            gen_combats_fought += r.get("combats_fought", 0)
             if is_win:
                 gen_wins += 1
                 total_wins += 1
@@ -776,6 +811,7 @@ def train_worker(
                     network, optimizer, batch,
                     option_samples=option_batch,
                     device="cpu",
+                    loss_weights=_loss_weights,
                 )
             scheduler.step()
 
@@ -786,6 +822,7 @@ def train_worker(
 
         # Write progress
         clean_values = [v for v in gen_values if not math.isnan(v)]
+        clean_ch_values = [v for v in gen_combat_head_values if not math.isnan(v)]
         stats = {
             "generation": gen,
             "num_generations": num_generations,
@@ -799,6 +836,10 @@ def train_worker(
             "value_head_min": round(min(clean_values), 4) if clean_values else 0,
             "value_head_max": round(max(clean_values), 4) if clean_values else 0,
             "value_head_spread": round(max(clean_values) - min(clean_values), 4) if clean_values else 0,
+            "combat_head_mean": round(sum(clean_ch_values) / max(1, len(clean_ch_values)), 4) if clean_ch_values else 0,
+            "combat_head_min": round(min(clean_ch_values), 4) if clean_ch_values else 0,
+            "combat_head_max": round(max(clean_ch_values), 4) if clean_ch_values else 0,
+            "combat_head_spread": round(max(clean_ch_values) - min(clean_ch_values), 4) if clean_ch_values else 0,
             "buffer_size": len(combat_buffer) + len(replay_buffer),
             "combat_buffer_size": len(combat_buffer),
             "replay_buffer_size": len(replay_buffer),
@@ -810,11 +851,12 @@ def train_worker(
             "option_buffer_size": len(option_buffer),
             "lr": round(scheduler.get_last_lr()[0], 6),
             "mcts_sims": mcts_simulations,
-            "search_method": search_method,
             "games_per_gen": games_per_generation,
             "elapsed": f"{hours}:{mins:02d}:{secs:02d}",
             "gen_time": round(gen_elapsed, 1),
             "recent_games": recent_games[-20:],
+            "combat_survival_rate": round(gen_combats_won / max(1, gen_combats_fought), 4),
+            "curriculum_stage": "combat_foundation" if curriculum else None,
             "status": f"Gen {gen}/{num_generations} complete",
             "timestamp": time.time(),
         }
@@ -840,6 +882,7 @@ def train_worker(
                 "games_played": total_games,
                 "win_rate": total_wins / max(1, total_games),
                 "num_trunk_blocks": config.num_trunk_blocks,
+                "curriculum": curriculum,
             }, ckpt_path)
             print(f"  Saved checkpoint: {ckpt_path.name}")
 
@@ -890,24 +933,44 @@ def train_monitor(progress_file: str | None = None, refresh_rate: float = 1.0):
         ))
 
         # Stats
+        is_curriculum = stats.get("curriculum_stage") is not None
         st = Table(show_header=False, expand=True, box=None)
         st.add_column("Key", style="dim")
         st.add_column("Value", style="bold")
         st.add_row("Generation", f"{stats.get('generation', 0)}/{stats.get('num_generations', '?')}")
         st.add_row("Games Played", str(stats.get("games_played", 0)))
-        st.add_row("Win Rate", f"{stats.get('win_rate', 0):.1%}")
-        st.add_row("Gen Win Rate", f"{stats.get('gen_win_rate', 0):.1%}")
+        if is_curriculum:
+            st.add_row("Stage", Text(stats.get("curriculum_stage", ""), style="bold magenta"))
+        st.add_row("", "")
+        # Combat performance
+        survival = stats.get("combat_survival_rate", 0)
+        st.add_row("Combat Survival", Text(f"{survival:.1%}", style="bold green" if survival > 0.5 else "bold yellow"))
         st.add_row("Gen Avg Floor", f"{stats.get('gen_avg_floor', 0):.1f} (min {stats.get('gen_min_floor', 0)}, max {stats.get('gen_max_floor', 0)})")
-        st.add_row("Buffer Size", f"{stats.get('buffer_size', 0):,}")
+        st.add_row("Win Rate", f"{stats.get('win_rate', 0):.1%} ({stats.get('gen_win_rate', 0):.1%} this gen)")
         st.add_row("", "")
+        # Losses
         st.add_row("Total Loss", f"{stats.get('total_loss', 0):.4f}")
-        st.add_row("Value Loss", f"{stats.get('value_loss', 0):.4f}")
+        st.add_row("Combat Loss", f"{stats.get('combat_loss', 0):.4f}")
         st.add_row("Policy Loss", f"{stats.get('policy_loss', 0):.4f}")
-        st.add_row("Option Loss", f"{stats.get('option_loss', 0):.4f}")
+        st.add_row("Value Loss", f"{stats.get('value_loss', 0):.4f}" + (" [dim](wt 0.1)[/dim]" if is_curriculum else ""))
+        if not is_curriculum or stats.get("option_loss", 0) > 0:
+            st.add_row("Option Loss", f"{stats.get('option_loss', 0):.4f}")
         st.add_row("", "")
-        st.add_row("Buffers", f"combat={stats.get('buffer_size', 0):,}  option={stats.get('option_buffer_size', 0):,}")
+        # Network health
+        if is_curriculum:
+            ch_spread = stats.get("combat_head_spread", 0)
+            ch_style = "bold green" if ch_spread > 1.0 else ("bold red" if ch_spread < 0.3 else "")
+            st.add_row("Combat Head Spread", Text(f"{ch_spread:.3f}", style=ch_style))
+            ch_range = f"[{stats.get('combat_head_min', 0):.2f}, {stats.get('combat_head_max', 0):.2f}]"
+            st.add_row("Combat Head Range", f"{ch_range}")
+        spread = stats.get("value_head_spread", 0)
+        spread_style = "bold green" if spread > 1.0 else ("bold red" if spread < 0.3 else "")
+        st.add_row("Value Head Spread", Text(f"{spread:.3f}", style=spread_style))
+        st.add_row("Buffers", f"combat={stats.get('combat_buffer_size', 0):,}  replay={stats.get('replay_buffer_size', 0):,}")
+        if not is_curriculum:
+            st.add_row("Option Buffer", f"{stats.get('option_buffer_size', 0):,}")
         st.add_row("Learning Rate", f"{stats.get('lr', 0):.1e}")
-        st.add_row("Sims/Move", str(stats.get("mcts_sims", "?")))
+        st.add_row("Search", f"MCTS ({stats.get('mcts_sims', '?')} sims)")
         st.add_row("Gen Time", f"{stats.get('gen_time', 0):.1f}s")
         st.add_row("Elapsed", stats.get("elapsed", "0:00"))
         layout["stats"].update(Panel(st, title="Training Stats"))
@@ -978,9 +1041,8 @@ if __name__ == "__main__":
                               help="Re-run each combat N times for dense training (1 = off)")
     train_parser.add_argument("--option-epsilon", type=float, default=0.15,
                               help="Epsilon-greedy exploration for option head (0 = off)")
-    train_parser.add_argument("--search-method", type=str, default="exhaustive",
-                              choices=["mcts", "exhaustive"],
-                              help="Combat search: exhaustive 2-ply (fast) or MCTS (deep)")
+    train_parser.add_argument("--curriculum", action="store_true", default=False,
+                              help="Stage 1 curriculum: 1 trunk block, per-combat targets, option head dormant")
 
     # Monitor command
     monitor_parser = subparsers.add_parser("monitor", help="Live TUI dashboard")
@@ -1004,7 +1066,7 @@ if __name__ == "__main__":
             num_workers=args.workers,
             combat_replays=args.combat_replays,
             option_epsilon=args.option_epsilon,
-            search_method=args.search_method,
+            curriculum=args.curriculum,
         )
     elif args.command == "monitor":
         train_monitor(

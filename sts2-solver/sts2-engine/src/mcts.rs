@@ -110,8 +110,8 @@ pub trait Inference {
 // MCTS
 // ---------------------------------------------------------------------------
 
-const C_PUCT: f32 = 1.0;
-const MIN_ROOT_VISITS: u32 = 2;
+const C_PUCT: f32 = 2.5;
+const MIN_ROOT_VISITS: u32 = 5;
 
 pub struct MCTS<'a> {
     card_db: &'a CardDB,

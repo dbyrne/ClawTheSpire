@@ -61,27 +61,45 @@ def _rust_state_to_tensors(st: dict) -> dict:
     }
 
 
+def _compute_combat_target(combat_hp_data: dict, floor: int) -> float:
+    """Per-combat outcome target based on actual HP results.
+
+    Won combats get hp_after/hp_before (0 to 1, based on HP efficiency).
+    Lost combats (floor present in samples but absent from hp_data) get -1.
+    """
+    hp = combat_hp_data.get(floor) or combat_hp_data.get(str(floor))
+    if hp is not None:
+        hp_before, hp_after, _potions = hp
+        return hp_after / max(1, hp_before)
+    return -1.0
+
+
 def _assign_run_values(
     combat_samples_by_floor: dict,
     is_win: bool,
     floor_reached: int = 0,
     option_samples: list = None,
+    combat_hp_data: dict = None,
 ) -> None:
-    """Assign run outcome values to all samples.
+    """Assign values to all samples from a run.
 
-    Wins get +1.  Losses get a value in [-1, -0.5] based on floor
-    reached — further is less bad.  This gives the value head gradient
-    signal even when all games are losses (cold-start bootstrapping),
-    while keeping wins clearly separated from all loss values.
+    Sets two targets per combat sample:
+    - value: run-level outcome for the value head (win=+1, loss=-1 to -0.5)
+    - combat_value: per-combat outcome for the combat head
+      (hp_after/hp_before for won combats, -1 for lost)
     """
     if is_win:
         value = 1.0
     else:
         # -1.0 at floor 0, -0.5 at floor 17 (boss). Always negative.
         value = -1.0 + 0.5 * (floor_reached / 17.0)
-    for floor_samples in combat_samples_by_floor.values():
+
+    for floor, floor_samples in combat_samples_by_floor.items():
+        combat_target = _compute_combat_target(combat_hp_data or {}, floor)
         for sample in floor_samples:
             sample.value = value
+            sample.combat_value = combat_target
+
     for sample in (option_samples or []):
         sample.value = value
 
