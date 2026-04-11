@@ -41,16 +41,14 @@ graph TD
 
     subgraph Trunk["Shared Trunk"]
         TrunkIn["LayerNorm(451) → Linear(451 → 256) + ReLU"]
-        Res1["Residual Block 1<br/><i>Linear(256→256) + ReLU + LayerNorm + Dropout</i>"]
-        Res2["Residual Block 2"]
-        Res3["Residual Block 3"]
+        Res1["Residual Block (×N, configurable)<br/><i>Linear(256→256) + ReLU + LayerNorm + Dropout</i>"]
         Hidden["Hidden State (256-dim)"]
     end
 
     subgraph Heads["Four Output Heads"]
         Value["Value Head<br/>Linear(256→128) → ReLU → Linear(128→1)<br/><i>Run win probability</i>"]
-        Combat["Combat Head<br/>Linear(256→128) → ReLU → Linear(128→1)<br/><i>Combat survival (auxiliary)</i>"]
-        Policy["Policy Head<br/>State→61-dim ·  Action→61-dim<br/><i>Dot product scoring</i>"]
+        Combat["Combat Head<br/>Linear(256→128) → ReLU → Linear(128→1)<br/><i>Per-combat HP eval (MCTS leaf)</i>"]
+        Policy["Policy Head<br/>State→72-dim ·  Action→72-dim<br/><i>Dot product scoring</i>"]
         Option["Option Head<br/>hidden(256)+type(16)+card(32)+stats(26)+path(16)=346<br/>Linear(346→64) → ReLU → Linear(64→1)<br/><i>Non-combat decisions</i>"]
     end
 
@@ -61,7 +59,7 @@ graph TD
     Relics --> TrunkIn
     Potions --> TrunkIn
     Context --> TrunkIn
-    TrunkIn --> Res1 --> Res2 --> Res3 --> Hidden
+    TrunkIn --> Res1 --> Hidden
     Hidden --> Value
     Hidden --> Combat
     Hidden --> Policy
@@ -98,7 +96,7 @@ Each game concept gets encoded differently:
 | Hand (variable size) | **Self-attention + mean pool** | Hands vary from 0-15 cards. Attention lets cards "look at" each other (a Defend is more valuable when you also have Entrench). Mean pooling collapses variable-length to fixed-length. |
 | Draw/Discard/Exhaust piles | **Mean of card embeddings** | Simpler than the hand — we don't need card-to-card attention for piles, just a summary of what's in there. |
 | Enemies (variable count) | **Fixed slots (max 5)** with padding | Each slot has HP, block, intent, and power features. Empty slots are zeroed out. A small linear layer projects each enemy to 32 dimensions. |
-| Relics | **Self-attention encoder (SetEncoder)** — 16-dim output | Like the hand encoder but for relics. Attention lets relics "see" each other (Kunai is more valuable with shiv-generating cards). Permutation-invariant — relic order doesn't matter. |
+| Relics | **MLP + mean pool (SetEncoder)** — 16-dim output | Each relic embedding is projected through a 2-layer MLP, then mean-pooled. Lightweight and permutation-invariant — relic order doesn't matter. |
 | Act ID | **Learned embedding** — 4-dim | Which world we're in (Overgrowth, Underdocks, Hive, Glory). Different acts have different card pools, enemies, and strategies. |
 | Boss ID | **Learned embedding** — 8-dim | Which boss to prepare for (e.g., Ceremonial Beast vs Soul Fysh). Pre-picked at run start, visible on the map. Affects card/relic evaluation for the entire run. |
 | Map path | **Ordered sequence encoder (SequenceEncoder)** — 16-dim | Remaining room types ahead (Monster, Elite, RestSite, etc.) in BFS order. Has positional embeddings so "Elite next" is different from "Elite in 5 floors." |
@@ -116,8 +114,9 @@ All of these pieces get concatenated (joined end-to-end) into one long vector
        |
   Linear(451 -> 256) + ReLU        <-- compress to 256 dimensions
        |
-  ┌─ Residual Block (x3) ─────────────────────────────────────────┐
+  ┌─ Residual Block (×N, configurable) ────────────────────────────┐
   │  Linear(256 -> 256) + ReLU   <-- refine                       │
+  │  Linear(256 -> 256)          <-- second transform              │
   │       + residual connection  <-- add the input back            │
   │       + LayerNorm            <-- normalize (stabilizes training)│
   │       + Dropout(10%)         <-- prevents overfitting          │
@@ -133,8 +132,9 @@ linear layer has to learn to rescale all of these simultaneously. LayerNorm
 normalizes the whole vector before the linear layer sees it, making initial
 learning much more stable.
 
-The trunk depth (3 blocks) is configurable via `num_trunk_blocks`. Deeper trunks
-let the network learn more complex feature interactions at the cost of more
+The trunk depth is configurable via `num_trunk_blocks` (default 2, curriculum
+mode forces 1). Current training uses 1 block (~393K params). Deeper trunks let
+the network learn more complex feature interactions at the cost of more
 parameters and slower training.
 
 **Residual connection:** Instead of just `output = f(input)`, we do
@@ -212,23 +212,23 @@ This is the most architecturally interesting head. Instead of a simple
 action space changes every turn), we use **action embedding similarity**:
 
 ```
-State side:    hidden(256) -> Linear(256->61)          -> state_vector(61)
-Action side:   card_embed(32) + features(29) -> Linear -> action_vector(61)
+State side:    hidden(256) -> Linear(256->72)                  -> state_vector(72)
+Action side:   card_embed(32) + features(40) -> Linear(72->72) -> action_vector(72)
 
 Score = dot_product(state_vector, action_vector)
 ```
 
 Each legal action (play card X on target Y, end turn, use potion) gets encoded as
-a 61-dimensional vector. The state also gets projected to 61 dimensions. The score
-for each action is the **dot product** — how well the action "matches" what the
-state needs.
+a 72-dimensional vector (32 from card embedding + 40 from features). The state
+also gets projected to 72 dimensions. The score for each action is the **dot
+product** — how well the action "matches" what the state needs.
 
 Action features (40-dim) include: target one-hot (6), potion type (5), flags for
 end_turn/use_potion/choose_card (3), and card stats (26 — cost, damage, block,
 type/target one-hots, draw, exhaust, debuffs, etc.).
 
 *Why dot product?* It generalizes. The network learns that "Defend is good when
-facing high incoming damage" as a geometric relationship in 40-dimensional space.
+facing high incoming damage" as a geometric relationship in 72-dimensional space.
 It doesn't need to memorize every specific (state, action) pair.
 
 Invalid actions get their scores set to negative infinity so they're never chosen.
@@ -335,7 +335,8 @@ alternatives.
 #### 2. EXPAND — Reach a new position, ask the network
 
 When we reach a position we haven't seen before (a leaf node), we:
-- Ask the network for a value estimate and policy priors
+- Ask the **policy head** for priors on each legal action (via `evaluate()`)
+- Ask the **combat head** for a value estimate (via `value_only()` — separate call)
 - Create child nodes for each legal action (lazily — we don't compute their
   game states until we actually visit them, saving time)
 
@@ -409,9 +410,10 @@ GIL contention during game play.
 ### One generation (256 games)
 
 ```
-1. EXPORT: Convert PyTorch network to three ONNX models:
+1. EXPORT: Convert PyTorch network to four ONNX models:
    - full_model.onnx: state + actions -> (value, policy_logits) for MCTS
-   - value_model.onnx: state -> value for end-of-turn estimation
+   - value_model.onnx: state -> value head scalar
+   - combat_model.onnx: state -> combat head scalar (MCTS leaf evaluation)
    - option_model.onnx: state + options -> scores for non-combat decisions
 
 2. SELF-PLAY (Rust, parallel via rayon):
@@ -452,11 +454,9 @@ GIL contention during game play.
 
 ### Encounter selection
 
-Each full run plays through one of two acts (Overgrowth or Underdocks), chosen
-randomly. Encounters are selected from `encounters.json` — the game's master
-encounter definitions — filtered by room type (weak, normal, elite, boss) and
-scoped to the act's encounter list. The simulator prefers unseen encounters to
-maximize variety within a single run.
+Each full run plays through Act 1 (Overgrowth). Encounters are selected from
+the encounter pool filtered by room type (weak, normal, elite, boss). The
+simulator prefers unseen encounters to maximize variety within a single run.
 
 ### Value assignment — the key training signal
 
@@ -526,10 +526,12 @@ combat outcomes from gen 1, with no bootstrapping needed.
 ### The replay buffer
 
 We maintain three replay buffers:
-- **Combat buffer** (50,000): non-replay combat samples → train value head + combat head
-- **Replay buffer** (200,000): combat replay samples → train combat head + policy head
-- **Option buffer** (60,000): non-combat decision samples → train option head
+- **Combat buffer** (50,000): non-replay combat samples
+- **Replay buffer** (200,000): combat replay samples
+- **Option buffer** (60,000): non-combat decision samples
 
+All combat/replay samples train the **policy head** and **combat head**. Only
+non-replay samples (from the combat buffer) additionally train the **value head**.
 The combat and replay buffers sample equally into each training batch (half from
 each). With ~13K new combat and ~53K new replay samples per generation, the
 buffers hold several generations of history.
@@ -545,7 +547,7 @@ features of specific lucky trajectories rather than objectively strong states.
 | Parameter | Value | Why |
 |-----------|-------|-----|
 | Learning rate | 3e-4 -> 1e-5 (cosine decay) | Start aggressive, fine-tune later. Cosine is smoother than step decay. |
-| Batch size | 256 | Large enough for low-variance gradients with 427K params. |
+| Batch size | 256 | Large enough for low-variance gradients (~393K params with 1 trunk block). |
 | Epochs per gen | 40 | Multiple passes through each batch for thorough learning. |
 | Weight decay | 1e-4 (non-embedding) | L2 regularization — prevents weights from growing huge. Embeddings are exempt so rare cards can develop strong representations. |
 | Gradient clipping | norm <= 1.0 | Prevents exploding gradients from bad samples. |
