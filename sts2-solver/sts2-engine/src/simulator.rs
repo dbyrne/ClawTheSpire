@@ -17,6 +17,7 @@ use crate::encode::{self, Vocabs, card_stats_vector, CARD_STATS_DIM};
 use crate::enemy;
 use crate::ffi::RustTrainingSample;
 use crate::inference::OnnxInference;
+use crate::mcts::Inference;
 use crate::mcts::MCTS;
 use crate::option_eval::*;
 use crate::types::*;
@@ -88,13 +89,19 @@ pub struct FloorSamples {
     pub samples: Vec<RustTrainingSample>,
 }
 
-/// Combat replay samples with per-combat outcome for dense training signal.
-pub struct ReplayFloorSamples {
+/// Per-turn replay samples with value head bootstrapped target.
+pub struct ReplayTurnSamples {
     pub floor: i32,
+    pub turn_num: i32,
     pub samples: Vec<RustTrainingSample>,
-    pub survived: bool,
-    pub hp_before: i32,
-    pub hp_after: i32,
+    pub value: f32,  // Value head eval of end-of-turn state (or +1/-1 if terminal)
+}
+
+/// Snapshot of state at the beginning of a turn (before start_turn draws cards).
+struct TurnSnapshot {
+    state: CombatState,
+    enemy_ais: Vec<crate::enemy::EnemyAI>,
+    turn_num: i32,
 }
 
 pub struct FullRunResult {
@@ -106,7 +113,7 @@ pub struct FullRunResult {
     pub combats_fought: i32,
     pub deck_size: i32,
     pub combat_samples_by_floor: Vec<FloorSamples>,
-    pub replay_samples: Vec<ReplayFloorSamples>,
+    pub replay_samples: Vec<ReplayTurnSamples>,
     pub option_samples: Vec<RustOptionSample>,
     pub combat_value_estimates: HashMap<i32, f32>,
     pub combat_hp_data: Vec<CombatHpData>,
@@ -373,25 +380,22 @@ pub fn run_act1(
                     mcts_sims, temperature, &mut rng, search_method,
                 );
 
-                // Combat replays: re-run same encounter with different RNG
-                // seeds for dense per-combat training signal.
-                for _k in 1..combat_replays {
-                    use rand::SeedableRng;
-                    let replay_seed = rng.random::<u64>();
-                    let mut replay_rng = rand::rngs::StdRng::seed_from_u64(replay_seed);
-                    let replay = run_combat_internal(
-                        &deck, hp, max_hp, max_energy, &enemy_ids,
-                        &relics, &potions, floor_num, gold, &act_id, &boss_id,
-                        &remaining_path, game_data, combat_inference,
-                        mcts_sims, temperature, &mut replay_rng, search_method,
-                    );
-                    result.replay_samples.push(ReplayFloorSamples {
-                        floor: floor_num,
-                        samples: replay.samples,
-                        survived: replay.outcome == "win",
-                        hp_before: hp,
-                        hp_after: replay.hp_after,
-                    });
+                // Per-turn replays: replay each turn individually with different
+                // card draws, evaluate end-of-turn state with value head (TD learning).
+                if combat_replays > 1 {
+                    for snapshot in &combat_result.turn_snapshots {
+                        for _k in 1..combat_replays {
+                            use rand::SeedableRng;
+                            let replay_seed = rng.random::<u64>();
+                            let mut replay_rng = rand::rngs::StdRng::seed_from_u64(replay_seed);
+                            let turn_replay = replay_single_turn(
+                                snapshot, game_data, combat_inference,
+                                search_method, mcts_sims, temperature,
+                                &mut replay_rng, floor_num,
+                            );
+                            result.replay_samples.push(turn_replay);
+                        }
+                    }
                 }
 
                 result.combats_fought += 1;
@@ -1036,6 +1040,7 @@ struct CombatResult {
     hp_after: i32,
     initial_value: f32,
     potions_after: Vec<Potion>,
+    turn_snapshots: Vec<TurnSnapshot>,
 }
 
 fn run_combat_internal(
@@ -1058,6 +1063,7 @@ fn run_combat_internal(
         return CombatResult {
             samples: vec![], outcome: "win".into(),
             hp_after: hp, initial_value: 0.0, potions_after: potions.to_vec(),
+            turn_snapshots: vec![],
         };
     }
 
@@ -1080,10 +1086,17 @@ fn run_combat_internal(
     let exhaustive_engine = crate::search::ExhaustiveSearch::new(card_db, inference);
     let use_exhaustive = search_method == "exhaustive";
     let mut samples = Vec::new();
+    let mut turn_snapshots = Vec::new();
     let mut initial_value = 0.0f32;
     let mut outcome: Option<&str> = None;
 
     for t in 1..=30 {
+        // Snapshot BEFORE start_turn so replays get different card draws
+        turn_snapshots.push(TurnSnapshot {
+            state: state.clone(),
+            enemy_ais: enemy_ais.clone(),
+            turn_num: t,
+        });
         combat::start_turn(&mut state, rng);
         enemy::set_enemy_intents(&mut state, &mut enemy_ais, rng);
 
@@ -1140,7 +1153,96 @@ fn run_combat_internal(
     let outcome_str = outcome.unwrap_or("lose").to_string();
     let hp_after = if outcome_str == "win" { state.player.hp.max(0) } else { 0 };
     let potions_after = state.player.potions.iter().filter(|p| !p.is_empty()).cloned().collect();
-    CombatResult { samples, outcome: outcome_str, hp_after, initial_value, potions_after }
+    CombatResult { samples, outcome: outcome_str, hp_after, initial_value, potions_after, turn_snapshots }
+}
+
+/// Replay a single turn from a snapshot with different RNG (different card draw).
+/// Returns decision samples and the value head evaluation of the end-of-turn state.
+fn replay_single_turn(
+    snapshot: &TurnSnapshot,
+    game_data: &GameData,
+    inference: &OnnxInference,
+    search_method: &str,
+    mcts_sims: usize,
+    temperature: f32,
+    rng: &mut impl Rng,
+    floor: i32,
+) -> ReplayTurnSamples {
+    let card_db = &game_data.card_db;
+    let mut state = snapshot.state.clone();
+    let mut enemy_ais = snapshot.enemy_ais.clone();
+
+    // Shuffle draw pile so different cards are drawn (draw_cards pops from back)
+    crate::effects::shuffle_vec_pub(&mut state.player.draw_pile, rng);
+
+    // Start turn with new RNG → different hand
+    combat::start_turn(&mut state, rng);
+    enemy::set_enemy_intents(&mut state, &mut enemy_ais, rng);
+
+    // Card-play loop (same search as primary combat)
+    let exhaustive_engine = crate::search::ExhaustiveSearch::new(card_db, inference);
+    let use_exhaustive = search_method == "exhaustive";
+    let mut samples = Vec::new();
+    let mut outcome: Option<&str> = None;
+
+    let mut cards = 0;
+    while cards < 12 {
+        outcome = combat::is_combat_over(&state);
+        if outcome.is_some() { break; }
+        let actions = crate::actions::enumerate_actions(&state);
+        if actions.is_empty() { break; }
+
+        let enc_state = encode::encode_state(&state, &game_data.vocabs);
+        let enc_actions = encode::encode_actions(&actions, &state, &game_data.vocabs);
+        let result = if use_exhaustive {
+            exhaustive_engine.search(&state, mcts_sims, temperature, rng)
+        } else {
+            let mut mcts_engine = MCTS::new(card_db, inference);
+            mcts_engine.add_noise = true;
+            mcts_engine.search_with_ais(&state, Some(&enemy_ais), mcts_sims, temperature, rng)
+        };
+
+        samples.push(RustTrainingSample {
+            state: enc_state, actions: enc_actions,
+            policy: result.policy.clone(), num_actions: actions.len(),
+        });
+
+        match &result.action {
+            Action::EndTurn => break,
+            Action::ChooseCard { choice_idx } => {
+                crate::effects::execute_choice(&mut state, *choice_idx, rng);
+            }
+            Action::UsePotion { potion_idx } => {
+                combat::use_potion(&mut state, *potion_idx);
+                cards += 1;
+            }
+            Action::PlayCard { card_idx, target_idx } => {
+                if combat::can_play_card(&state, *card_idx) {
+                    combat::play_card(&mut state, *card_idx, *target_idx, card_db, rng);
+                }
+                cards += 1;
+            }
+        }
+        outcome = combat::is_combat_over(&state);
+        if outcome.is_some() { break; }
+    }
+
+    // End-of-turn resolution + value head evaluation
+    let value = if let Some(oc) = outcome {
+        if oc == "win" { 1.0 } else { -1.0 }
+    } else {
+        combat::end_turn(&mut state, card_db, rng);
+        enemy::sync_enemy_ais(&state, &mut enemy_ais, &game_data.profiles);
+        combat::resolve_enemy_intents(&mut state);
+        combat::tick_enemy_powers(&mut state);
+
+        match combat::is_combat_over(&state) {
+            Some(oc) => if oc == "win" { 1.0 } else { -1.0 },
+            None => inference.run_value(&state),
+        }
+    };
+
+    ReplayTurnSamples { floor, turn_num: snapshot.turn_num, samples, value }
 }
 
 // ---------------------------------------------------------------------------

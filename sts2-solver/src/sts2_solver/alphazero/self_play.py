@@ -724,20 +724,11 @@ def train_worker(
             for osample in option_samples_list:
                 option_buffer.add(osample, is_win=is_win)
 
-            # Process combat replay samples — routed to the combat head
-            # (separate from the value head) so targets use natural scale:
-            # Boss win: +1.0, non-boss survived: hp_after/hp_before, died: -1.0.
-            boss_floors = set(r.get("boss_floors", []))
+            # Per-turn replay samples — value head bootstrapped targets.
+            # Each replay is a single turn with different card draws, evaluated
+            # by the run-level value head at end of turn (TD learning).
             for rs in r.get("replay_samples", []):
-                hp_before = rs["hp_before"]
-                hp_after = rs["hp_after"]
-                if rs["survived"]:
-                    if rs["floor"] in boss_floors:
-                        replay_value = 1.0
-                    else:
-                        replay_value = hp_after / max(1, hp_before)
-                else:
-                    replay_value = -1.0
+                replay_value = rs["value"]  # Pre-computed by Rust value head
                 for s in rs["samples"]:
                     st = s["state_tensors"]
                     sample = TrainingSample(
@@ -750,7 +741,7 @@ def train_worker(
                         num_actions=s["num_actions"],
                         is_replay=True,
                     )
-                    replay_buffer.add(sample, is_win=rs["survived"])
+                    replay_buffer.add(sample, is_win=(replay_value > 0))
 
             total_games += 1
             gen_floors.append(floor_reached)

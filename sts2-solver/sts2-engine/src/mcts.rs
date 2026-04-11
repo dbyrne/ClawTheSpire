@@ -99,8 +99,11 @@ pub trait Inference {
     /// logits has one entry per legal action (raw, pre-softmax).
     fn evaluate(&self, state: &CombatState, actions: &[Action]) -> (Vec<f32>, f32);
 
-    /// Encode state → value only (for end-of-turn estimation).
+    /// Encode state → value only (combat head, for leaf estimation).
     fn value_only(&self, state: &CombatState) -> f32;
+
+    /// Encode state → run-level value (value head, for turn-replay bootstrapping).
+    fn run_value(&self, state: &CombatState) -> f32;
 }
 
 // ---------------------------------------------------------------------------

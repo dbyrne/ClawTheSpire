@@ -532,14 +532,13 @@ pub fn play_all_games(
         d.set_item("combat_samples", py_samples)?;
         d.set_item("combat_samples_floor_map", py_floor_map)?;
 
-        // Replay samples (extra combat runs for dense per-combat training)
+        // Per-turn replay samples (value head bootstrapped targets)
         let py_replays = PyList::empty(py);
         for rs in &result.replay_samples {
             let rd = PyDict::new(py);
             rd.set_item("floor", rs.floor)?;
-            rd.set_item("survived", rs.survived)?;
-            rd.set_item("hp_before", rs.hp_before)?;
-            rd.set_item("hp_after", rs.hp_after)?;
+            rd.set_item("turn_num", rs.turn_num)?;
+            rd.set_item("value", rs.value)?;
             let replay_samples_list = PyList::empty(py);
             for sample in &rs.samples {
                 replay_samples_list.append(sample_to_py(py, sample)?)?;

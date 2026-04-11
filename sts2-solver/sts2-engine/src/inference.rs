@@ -22,6 +22,7 @@ impl Inference for StubInference {
         (vec![0.0; n], 0.0)
     }
     fn value_only(&self, _state: &CombatState) -> f32 { 0.0 }
+    fn run_value(&self, _state: &CombatState) -> f32 { 0.0 }
 }
 
 // ---------------------------------------------------------------------------
@@ -30,7 +31,6 @@ impl Inference for StubInference {
 
 pub struct OnnxInference {
     full_session: RefCell<Session>,
-    #[allow(dead_code)]  // Kept for potential future blending with combat_session
     value_session: RefCell<Session>,
     combat_session: RefCell<Session>,
     vocabs: Vocabs,
@@ -146,6 +146,21 @@ impl Inference for OnnxInference {
         let enc = encode_state(state, &self.vocabs);
         let inputs = self.state_inputs(&enc);
         match self.combat_session.borrow_mut().run(inputs) {
+            Ok(outputs) => {
+                let tensor = outputs["value"].downcast_ref::<ort::value::DynTensorValueType>().unwrap();
+                let (_, data) = tensor.try_extract_tensor::<f32>().unwrap();
+                data[0]
+            }
+            Err(_) => 0.0,
+        }
+    }
+
+    fn run_value(&self, state: &CombatState) -> f32 {
+        // Use run-level value head for turn-replay bootstrapping.
+        // Captures offense, defense, and strategic value (buffs/debuffs/poison).
+        let enc = encode_state(state, &self.vocabs);
+        let inputs = self.state_inputs(&enc);
+        match self.value_session.borrow_mut().run(inputs) {
             Ok(outputs) => {
                 let tensor = outputs["value"].downcast_ref::<ort::value::DynTensorValueType>().unwrap();
                 let (_, data) = tensor.try_extract_tensor::<f32>().unwrap();
