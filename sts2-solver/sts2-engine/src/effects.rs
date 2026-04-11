@@ -42,21 +42,11 @@ pub fn apply_block_enemy(enemy: &mut EnemyState, damage: i32) -> i32 {
     }
 }
 
-/// Apply block and Plating to enemy damage. Returns HP damage dealt.
-/// Plating loses 1 stack when a hit deals damage through block.
+/// Apply block to enemy damage. Returns HP damage dealt.
+/// In STS2, Plating only decrements at start of turn (in start_turn),
+/// NOT when damage breaks through block (that was STS1 behavior).
 pub fn apply_block_and_plating(enemy: &mut EnemyState, damage: i32) -> i32 {
-    let had_block = enemy.block > 0;
-    let dmg = apply_block_enemy(enemy, damage);
-    let plating = enemy.get_power("Plating");
-    if plating > 0 && had_block && dmg > 0 {
-        let new_plating = plating - 1;
-        if new_plating <= 0 {
-            enemy.powers.remove("Plating");
-        } else {
-            enemy.powers.insert("Plating".to_string(), new_plating);
-        }
-    }
-    dmg
+    apply_block_enemy(enemy, damage)
 }
 
 // ---------------------------------------------------------------------------
