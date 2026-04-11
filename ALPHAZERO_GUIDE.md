@@ -172,35 +172,38 @@ probability (~33K params).
 is near +1 or -1, the gradient becomes nearly zero, so the network can't learn
 from strong wins/losses. We clamp the *targets* instead.
 
-#### 2. Combat Head — "Will I survive this fight?" (auxiliary)
+#### 2. Combat Head — "How is this combat going?"
 
 ```
 hidden(256) -> Linear(256->128) -> ReLU -> Linear(128->1) -> scalar
 ```
 
 Same architecture as the value head, but trained on a different signal: **per-combat
-outcomes** from combat replays (see Part 3). Targets are:
+HP outcomes** from every combat sample (both primary runs and replays). Targets are
+grounded in the actual combat result:
 
-| Combat outcome | Target |
-|---|---|
-| Won (boss floor) | +1.0 |
-| Survived (non-boss) | hp_after / hp_before (0 to 1.0) |
-| Died | -1.0 |
+| Combat outcome | Target | Example |
+|---|---|---|
+| Won (boss floor) | +1.0 | Beat the boss |
+| Survived (non-boss) | hp_after / hp_before | 55/70 = 0.786 |
+| Died | -1.0 | Lost on this floor |
 
-**The combat head is never used during MCTS inference.** Its sole purpose is to
-provide dense auxiliary gradient signal back through the shared trunk. During early
-training, the value head gets sparse signal (almost all games are losses → most
-targets cluster near -1.0). The combat head sees per-combat outcomes — "you
-survived this fight at 80% HP" or "you died here" — giving the trunk 5× more
-gradient per generation for learning combat tactics (block timing, energy
-management, damage prioritization).
+**The combat head IS used during MCTS.** It provides the leaf value estimate when
+MCTS expands a new node (`value_only()` in the Rust Inference trait). This makes
+the combat head the most important head for actual gameplay — it's what tells MCTS
+"this state is good" or "this state is bad."
 
-*Why not train the value head on combat outcomes directly?* The value head
-predicts "will I win the run?" and the combat head predicts "will I survive this
-fight?" — these are different quantities. The same board state could be labeled
--0.8 (full-run loss at floor 7) and +0.7 (survived this combat at 70% HP). A
-single head can't learn a consistent function from contradictory targets. Separate
-heads with separate parameters resolve this cleanly.
+It also provides dense gradient signal through the shared trunk. The value head
+gets sparse signal (at 0% win rate, all run-level targets cluster near -0.85). The
+combat head sees per-combat outcomes — "you survived this fight at 80% HP" or
+"you died here" — giving the trunk grounded gradient from gen 1 for learning
+combat tactics (block timing, energy management, damage prioritization).
+
+*Why separate from the value head?* The value head predicts "will I win the run?"
+and the combat head predicts "how well am I doing in this fight?" — these are
+different quantities. The same board state could be labeled -0.8 (full-run loss
+at floor 7) and +0.7 (survived this combat at 70% HP). Separate heads with
+separate parameters resolve this cleanly.
 
 #### 3. Policy Head — "Which move should I make?"
 
@@ -286,7 +289,6 @@ gives each map option its own downstream context.
 
 ## Part 2: Monte Carlo Tree Search (MCTS)
 
-**Python file:** `sts2-solver/src/sts2_solver/alphazero/mcts.py`
 **Rust file:** `sts2-solver/sts2-engine/src/mcts.rs`
 
 ### The problem with using the network alone
@@ -299,7 +301,7 @@ MCTS adds this lookahead by building a **search tree** of possible futures.
 
 ### How MCTS works (one search)
 
-Starting from the current game state, we run 100 **simulations**. Each simulation
+Starting from the current game state, we run 70 **simulations**. Each simulation
 has three phases:
 
 #### 1. SELECT — Walk down the tree
@@ -318,11 +320,11 @@ exploration  = c_puct * prior * sqrt(parent_visits) / (1 + visits)
 - `prior`: the network's initial guess (guides search toward promising moves)
 - `sqrt(parent_visits) / (1 + visits)`: moves visited less get a bonus (try
   everything at least a few times before committing)
-- `c_puct = 1.0`: controls the exploitation/exploration balance (higher = explore more)
+- `c_puct = 2.5`: controls the exploitation/exploration balance (higher = explore more)
 
 **Minimum root visits:** Before PUCT selection kicks in, every legal action at the
-root gets at least 2 visits. With only 3-5 deduplicated actions per turn, this
-costs ~8 sims and guarantees every action gets a value estimate — preventing the
+root gets at least 5 visits. With ~8 deduplicated actions per turn, this costs
+~40 sims and guarantees every action gets a value estimate — preventing the
 network's prior from completely suppressing moves it hasn't learned to value yet.
 
 This is the key insight of AlphaZero: the network's policy prior makes the tree
@@ -337,12 +339,11 @@ When we reach a position we haven't seen before (a leaf node), we:
 - Create child nodes for each legal action (lazily — we don't compute their
   game states until we actually visit them, saving time)
 
-**Symmetric leaf evaluation:** All actions are evaluated the same way — apply the
-action's immediate effect, then ask the NN to evaluate the resulting state. EndTurn
-does **not** simulate enemy attacks, poison ticks, or card draw. The NN learns to
-predict those outcomes from the visible state (enemy intents, poison stacks, block,
-HP). This keeps credit assignment clean: poison damage is credited to the cards that
-applied it, not to the EndTurn action that happened to trigger the tick.
+**Full state simulation:** Each action is applied to produce the resulting game
+state, then the NN evaluates that state. EndTurn fully resolves the enemy phase
+(enemy attacks, power ticks, card draw, new intents) — the child node's state
+reflects the true post-turn reality. This means MCTS correctly accounts for
+incoming enemy damage when deciding whether to end the turn or play more cards.
 
 #### 3. BACKUP — Propagate the value back up
 
@@ -416,7 +417,7 @@ GIL contention during game play.
 2. SELF-PLAY (Rust, parallel via rayon):
    Play 256 full Act 1 runs using the ONNX models
    - Each run: real map from map_pool.json, ~17 floors, ~5-8 combats
-   - Combat: MCTS with 100 simulations per card decision
+   - Combat: MCTS with 70 simulations per card decision
    - Non-combat: option head scores all choices (card rewards, rest/smith,
      shop buy/remove/leave, event options, map path choices)
    - ALL decisions via neural network -- no heuristic fallbacks
@@ -425,22 +426,24 @@ GIL contention during game play.
      same pre-combat state with different RNG seeds. Produces ~5x more
      combat training data from realistic, naturally-generated scenarios.
 
-3. ASSIGN VALUES (Python): Label every decision with run outcome
-   Full-run samples → value head:
-   - Win: all samples get +1.0
-   - Loss: all samples get -1.0 + 0.5 * (floor_reached / 17)
+3. ASSIGN VALUES (Python): Label every decision with outcome
+   Each combat sample gets TWO targets:
+   - value (run-level, for value head):
+     Win: +1.0 / Loss: -1.0 + 0.5 * (floor_reached / 17)
+   - combat_value (per-combat, for combat head):
+     Won this combat: hp_after / hp_before (0 to 1.0)
+     Died this combat: -1.0
    
-   Combat replay samples → combat head:
-   - Boss win: +1.0
-   - Non-boss survived: hp_after / hp_before (0 to 1.0)
-   - Died: -1.0
+   Replay samples get the ORIGINAL combat's outcome as their combat_value
+   target — the known result grounds the learning even though the replay
+   drew different cards.
    
    Policy targets (MCTS visit counts) apply to ALL samples.
 
-4. TRAIN: Sample 256 decisions from replay buffer, update network (20 epochs)
+4. TRAIN: Sample 256 decisions from replay buffer, update network (40 epochs)
    - Policy loss: cross-entropy (ALL samples, replay and non-replay)
    - Value loss: MSE, non-replay samples only → value head
-   - Combat loss: MSE, replay samples only → combat head
+   - Combat loss: MSE, ALL samples → combat head (grounded per-combat targets)
    - Option loss: MSE between option score and run value
    - Separate backward passes for combat and option heads
 
@@ -504,26 +507,32 @@ generating realistic scenarios — what deck does the player have on floor 7?
 What relics? How much HP? By replaying combats encountered during actual runs,
 every scenario is naturally generated by the network's own play.
 
-Replay samples are routed to the **combat head** (not the value head) with
-per-combat value targets:
+ALL combat samples (primary and replay) train the **combat head** with the
+original combat's HP outcome as the target:
 
-| Replay outcome | Target | Rationale |
+| Original combat outcome | Target | Rationale |
 |---|---|---|
 | Boss win | +1.0 | Beating the boss IS winning the run |
 | Non-boss survived | hp_after / hp_before | HP conservation measures combat efficiency |
 | Died | -1.0 | Death ends the run regardless |
 
-The combat head provides auxiliary gradient through the shared trunk, teaching
-the network combat fundamentals (block timing, energy management) without
-conflicting with the value head's run-level predictions.
+Each replay permutation draws different cards and makes different decisions, but
+they all target the same known combat outcome. Some replays will reach states
+the combat head evaluates as better than the target, some worse — this variance
+across diverse mid-combat states IS the dense learning signal. The combat head
+learns which state features (HP, block, enemy HP, debuffs) predict good vs bad
+combat outcomes from gen 1, with no bootstrapping needed.
 
 ### The replay buffer
 
-We keep a buffer of 60,000 past combat decisions (plus a separate 60,000 option
-buffer) and sample from it. With ~30,000 new combat samples per generation (256
-games × ~5 combats × 5 replays × ~5 samples), the buffer holds ~2 generations
-of recent history — fast churn ensures the network trains on data from its
-current skill level.
+We maintain three replay buffers:
+- **Combat buffer** (50,000): non-replay combat samples → train value head + combat head
+- **Replay buffer** (200,000): combat replay samples → train combat head + policy head
+- **Option buffer** (60,000): non-combat decision samples → train option head
+
+The combat and replay buffers sample equally into each training batch (half from
+each). With ~13K new combat and ~53K new replay samples per generation, the
+buffers hold several generations of history.
 
 **Win prioritization:** At low win rates, most data is from losses. We maintain
 a separate win reservoir (10,000 capacity) and mix 10% winning samples into
@@ -537,17 +546,19 @@ features of specific lucky trajectories rather than objectively strong states.
 |-----------|-------|-----|
 | Learning rate | 3e-4 -> 1e-5 (cosine decay) | Start aggressive, fine-tune later. Cosine is smoother than step decay. |
 | Batch size | 256 | Large enough for low-variance gradients with 427K params. |
-| Epochs per gen | 20 | Each sample seen ~4x during its buffer lifetime. |
+| Epochs per gen | 40 | Multiple passes through each batch for thorough learning. |
 | Weight decay | 1e-4 (non-embedding) | L2 regularization — prevents weights from growing huge. Embeddings are exempt so rare cards can develop strong representations. |
 | Gradient clipping | norm <= 1.0 | Prevents exploding gradients from bad samples. |
 | Games per gen | 256 | Large enough for stable per-gen metrics. |
 | Combat replays | 5 | Re-run each combat 5 times (4 extra) for dense training signal. |
-| MCTS simulations | 100 | Per card-play decision. Higher than standard for better training signal. |
-| Replay buffer | 60,000 combat + 60,000 option | ~2 gens of history with replays. |
+| MCTS simulations | 70 | Per card-play decision. Balances search quality with generation speed (~2.5 min/gen). |
+| Combat buffer | 50,000 | Non-replay combat samples (value + combat heads). |
+| Replay buffer | 200,000 | Combat replay samples (combat head + policy). |
+| Option buffer | 60,000 | Non-combat decisions. |
 | Win buffer | 10,000 (10% mix ratio) | Ensures positive signal even at low win rates. |
 | Temperature | 1.0 -> 0.3 (cosine) | Cosine decay with 0.3 floor. Stays above 0.5 for ~60% of training, then smoothly drops. |
-| c_puct | 1.0 | Standard PUCT exploration constant. |
-| Min root visits | 2 | Every root action gets at least 2 visits before PUCT selection. |
+| c_puct | 2.5 | PUCT exploration constant (higher than default — ensures broad search with limited sims). |
+| Min root visits | 5 | Every root action gets at least 5 visits before PUCT selection. |
 
 ### Loss functions
 
@@ -576,19 +587,24 @@ Combat and option losses are optimized in **separate backward passes**:
 
 ```
 Combat step:   loss = policy_loss + value_loss + combat_loss
-                      (all samples)  (non-replay)  (replay only)
+                      (all samples)  (non-replay)  (all samples)
 Option step:   loss = 0.25 * option_loss  (accumulated across all option samples)
 ```
 
-Within each batch, samples are split by `is_replay` flag:
-- **Non-replay samples** (from full runs): policy loss + value head loss
-- **Replay samples** (from combat replays): policy loss + combat head loss
+The combat head trains on **all samples** (replay and non-replay) using grounded
+per-combat HP targets. The value head trains only on non-replay samples with
+run-level targets.
 
-Value, combat, and policy losses are weighted **equally** (canonical AlphaZero).
-The value head is critical — it's what makes MCTS work. Without an accurate
-value head, MCTS can't distinguish good states from bad states, and the policy
-targets (MCTS visit counts) degrade. The separate backward passes prevent option
-gradients from interfering with combat learning and vice versa.
+**Curriculum mode** (combat_foundation stage) adjusts the loss weights:
+- Value: 0.1x (mostly useless at 0% win rate — all targets ≈ -0.85)
+- Combat: 1.0x (the primary learning signal with grounded per-combat targets)
+- Policy: 1.0x (learns from MCTS visit counts)
+- Option: 0.0x (dormant until combat is solid)
+
+The combat head is what makes MCTS work — it provides leaf value estimates
+during tree search. Without an accurate combat head, MCTS can't distinguish
+good states from bad, and policy targets (visit counts) degrade. The separate
+backward passes prevent option gradients from interfering with combat learning.
 
 ---
 
@@ -623,7 +639,7 @@ Generation 500+: Network and MCTS reinforce each other. Better network = better
 | **Softmax** | Converts raw scores to a probability distribution (all positive, sums to 1). Used to turn policy logits into probabilities. |
 | **Gradient** | The derivative of the loss with respect to each weight. Points in the direction that would increase the loss, so we step in the opposite direction. |
 | **Backpropagation** | The algorithm that computes gradients efficiently by working backward through the network. |
-| **Epoch** | One complete pass through the training data. We do 3 epochs per generation. |
+| **Epoch** | One training step sampling from the replay buffer. We do 40 epochs per generation. |
 | **Overfitting** | When the network memorizes training data instead of learning general patterns. Dropout and weight decay help prevent this. |
 | **Vanishing gradients** | When gradients become near-zero in deep networks, making early layers unable to learn. Residual connections and careful activation choices (no tanh on output) mitigate this. |
 | **Warm start** | Loading weights from a previous checkpoint when starting training. Allows iterating on architecture without starting from scratch. Skips weights that changed shape. |
@@ -666,9 +682,8 @@ python -m sts2_solver.alphazero.self_play monitor
 | File | Role |
 |------|------|
 | `alphazero/network.py` | Neural network architecture (4 heads: value, combat, policy, option) |
-| `alphazero/mcts.py` | Python MCTS (fallback when Rust unavailable) |
 | `alphazero/self_play.py` | Training loop + ONNX export + replay buffers + TUI monitor |
-| `alphazero/full_run.py` | Value assignment + Python→Rust bridge helpers |
+| `alphazero/full_run.py` | Value/combat target assignment + Python→Rust bridge helpers |
 | `alphazero/onnx_export.py` | Export PyTorch models to ONNX format |
 | `alphazero/encoding.py` | Vocabularies + encoder config + feature extraction |
 | `alphazero/state_tensor.py` | Game state -> tensor conversion |
