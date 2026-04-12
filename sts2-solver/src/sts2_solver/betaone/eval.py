@@ -769,11 +769,11 @@ def build_scenarios() -> list[Scenario]:
         enemies=[enemy(20, 30, damage=10)],
         hand=[untouchable(), strike()],
         actions=[
-            ActionSpec("play_card", untouchable(), label="Untouchable (16 block, Sly)"),
+            ActionSpec("play_card", untouchable(), label="Untouchable (9 block, Sly)"),
             ActionSpec("play_card", strike(), target_idx=0, label="Strike (6 dmg)"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[0],       # 16 block vs 10 incoming — play it, don't hoard for discard
+        best_actions=[0],       # 9 block vs 10 incoming — play it, don't hoard for discard
     ))
 
     scenarios.append(Scenario(
