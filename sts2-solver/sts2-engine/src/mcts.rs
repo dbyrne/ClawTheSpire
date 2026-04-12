@@ -366,6 +366,11 @@ impl<'a> MCTS<'a> {
         rng: &mut impl Rng,
     ) -> f32 {
         let mut resolved = state.clone();
+        // Clear any pending choice (e.g. Survivor's discard) — we're doing a
+        // hypothetical end-of-turn projection, not resolving the actual choice.
+        // Leaving it set would produce an out-of-distribution state for the
+        // combat head (pending_choice=1.0 on a post-turn state).
+        resolved.pending_choice = None;
         combat::end_turn(&mut resolved, self.card_db, rng);
         combat::resolve_enemy_intents(&mut resolved);
         combat::tick_enemy_powers(&mut resolved);
