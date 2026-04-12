@@ -102,11 +102,11 @@ TIER_CONFIGS: list[TierConfig] = [
                custom_encounters=[["FOGMOG"]]),
     TierConfig("Slugs + Spinner",    deck_mode="starter", promote_threshold=0.88,
                custom_encounters=[["CORPSE_SLUG", "CORPSE_SLUG", "SLUDGE_SPINNER"]]),
-    TierConfig("Cultists",           deck_mode="starter", promote_threshold=0.90,
+    TierConfig("Cultists",           deck_mode="starter", promote_threshold=0.85,
                custom_encounters=[["CALCIFIED_CULTIST", "DAMP_CULTIST"]]),
 
     # --- Random decks: learn one archetype at a time, then mix ---
-    TierConfig("Poison deck + Hard",   deck_mode="random", promote_threshold=0.85,
+    TierConfig("Poison deck + Hard",   deck_mode="random", promote_threshold=0.80,
                custom_encounters=_FAMILIAR_HARD,
                deck_archetypes=["poison"],
                deck_min_size=16, deck_max_size=20, deck_min_removals=1, deck_max_removals=3),
