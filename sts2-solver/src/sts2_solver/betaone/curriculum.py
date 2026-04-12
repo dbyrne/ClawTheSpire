@@ -2,16 +2,20 @@
 
 Starter deck tiers: specific fights, each teaching one skill.
 Random deck tiers: revisit hard fights with better cards.
+Fixed-deck traps: force specific mechanics (shiv synergy, sly discard).
 
-  T0: Weak enemies              (100%)  — basics
-  T1: Normal enemies            (99%)   — block/attack/targeting
-  T2: Phrog Parasite            (30%)   — status cards, discard
-  T3: Corpse Slug x3            (85%)   — multi-enemy management
-  T4: Cultists                  (90%)   — priority targeting
-  T5: Fogmog                    (100%)  — sustained damage, long fight
-  T6: Random + familiar hard    (90%)   — prove cards help
-  T7: Random + Byrdonis/Effigy (70%)   — previously impossible
-  T8: Random + everything       (85%)   — full mastery
+  T0:  Weak enemies              (100%)  — basics
+  T1:  Normal enemies            (100%)  — block/attack/targeting
+  T2:  Fogmog                    (100%)  — sustained damage
+  T3:  Slugs + Spinner           (88%)   — multi-enemy management
+  T4:  Cultists                  (90%)   — priority targeting
+  T5:  Phrog Parasite            (30%)   — status cards, discard
+  T6:  Poison deck + Hard        (85%)   — poison archetype
+  T7:  Shiv deck + Bosses        (95%)   — shiv archetype
+  T8:  Pure shiv vs Byrdonis     (90%)   — Accuracy + Blade Dance trap
+  T9:  Sly deck + Hard           (70%)   — sly archetype
+  T10: Sly discard vs Fogmog     (70%)   — must discard Sly cards to win
+  T11: Final exam                (avg)   — all tiers mixed
 """
 
 from __future__ import annotations
@@ -47,6 +51,48 @@ _SHIV_TRAP_DECK = [
 ] + [
     _card_defaults({"id": "ACCURACY", "name": "Accuracy", "cost": 1,
                     "card_type": "Power", "target": "Self", "powers_applied": [["Accuracy", 4]]})
+]
+
+# Sly discard deck: Tactician/Reflex cost 3 — awful to play, amazing to discard.
+# Acrobatics and Survivor create discard choices where the model must pick Sly
+# cards over Defend/Strike. Untouchable is playable Sly block (don't discard it
+# unless you have a better Sly trigger like Tactician).
+# 14 cards: enough to cycle through Acrobatics draws multiple times.
+_SLY_DISCARD_DECK = [
+    _card_defaults({"id": "DEFEND_SILENT", "name": "Defend", "cost": 1,
+                    "card_type": "Skill", "target": "Self", "block": 5, "hit_count": 1})
+    for _ in range(3)
+] + [
+    _card_defaults({"id": "UNTOUCHABLE", "name": "Untouchable", "cost": 2,
+                    "card_type": "Skill", "target": "Self", "block": 16,
+                    "hit_count": 1, "keywords": ["Sly"]})
+    for _ in range(2)
+] + [
+    _card_defaults({"id": "ACROBATICS", "name": "Acrobatics", "cost": 1,
+                    "card_type": "Skill", "target": "Self",
+                    "cards_draw": 3, "keywords": ["Exhaust"]})
+    for _ in range(2)
+] + [
+    _card_defaults({"id": "SURVIVOR", "name": "Survivor", "cost": 1,
+                    "card_type": "Skill", "target": "Self", "block": 8, "hit_count": 1})
+] + [
+    _card_defaults({"id": "TACTICIAN", "name": "Tactician", "cost": 3,
+                    "card_type": "Skill", "target": "Self",
+                    "keywords": ["Sly"], "energy_gain": 1})
+    for _ in range(2)
+] + [
+    _card_defaults({"id": "REFLEX", "name": "Reflex", "cost": 3,
+                    "card_type": "Skill", "target": "Self",
+                    "keywords": ["Sly"], "cards_draw": 2})
+] + [
+    _card_defaults({"id": "STRIKE_SILENT", "name": "Strike", "cost": 1,
+                    "card_type": "Attack", "target": "AnyEnemy", "damage": 6,
+                    "hit_count": 1, "tags": ["Strike"]})
+    for _ in range(2)
+] + [
+    _card_defaults({"id": "NEUTRALIZE", "name": "Neutralize", "cost": 0,
+                    "card_type": "Attack", "target": "AnyEnemy", "damage": 3,
+                    "hit_count": 1, "powers_applied": [["Weak", 1]]})
 ]
 
 
@@ -117,6 +163,9 @@ TIER_CONFIGS: list[TierConfig] = [
                custom_encounters=_FAMILIAR_HARD + _PREVIOUSLY_IMPOSSIBLE,
                deck_archetypes=["sly"],
                deck_min_size=16, deck_max_size=20, deck_min_removals=1, deck_max_removals=3),
+    TierConfig("Sly discard vs Fogmog", deck_mode="custom", promote_threshold=0.70,
+               custom_encounters=[["FOGMOG"]],
+               custom_deck=_SLY_DISCARD_DECK, player_hp=50),
 ]
 
 # Auto-generate final "exam" tier: average threshold of all previous tiers
