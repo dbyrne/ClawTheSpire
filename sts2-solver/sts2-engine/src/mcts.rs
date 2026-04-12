@@ -366,11 +366,36 @@ impl<'a> MCTS<'a> {
         rng: &mut impl Rng,
     ) -> f32 {
         let mut resolved = state.clone();
-        // Clear any pending choice (e.g. Survivor's discard) — we're doing a
-        // hypothetical end-of-turn projection, not resolving the actual choice.
-        // Leaving it set would produce an out-of-distribution state for the
-        // combat head (pending_choice=1.0 on a post-turn state).
-        resolved.pending_choice = None;
+        // Auto-resolve any pending choice (e.g. Survivor's discard) using
+        // the combat head to pick the best option. The MCTS tree handles
+        // the real choice through ChooseCard children — this is just for
+        // the hypothetical leaf estimate.
+        if let Some(ref choice) = resolved.pending_choice {
+            let n = choice.num_choices.max(1) as usize;
+            let hand_len = resolved.player.hand.len();
+            let options = if let Some(ref valid) = choice.valid_indices {
+                valid.clone()
+            } else {
+                (0..hand_len).collect()
+            };
+            if options.len() <= 1 {
+                crate::effects::execute_choice(&mut resolved, 0, rng);
+            } else {
+                let mut best_idx = 0;
+                let mut best_val = f32::NEG_INFINITY;
+                for &i in &options {
+                    let mut test = resolved.clone();
+                    test.pending_choice = resolved.pending_choice.clone();
+                    crate::effects::execute_choice(&mut test, i, rng);
+                    let v = self.inference.value_only(&test);
+                    if v.is_finite() && v > best_val {
+                        best_val = v;
+                        best_idx = i;
+                    }
+                }
+                crate::effects::execute_choice(&mut resolved, best_idx, rng);
+            }
+        }
         combat::end_turn(&mut resolved, self.card_db, rng);
         combat::resolve_enemy_intents(&mut resolved);
         combat::tick_enemy_powers(&mut resolved);
