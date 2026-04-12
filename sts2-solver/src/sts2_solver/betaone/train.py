@@ -295,7 +295,8 @@ def train(
                     else:
                         check_enc.append(random.choice(curriculum.encounter_pools[0]))
                     if check_cfg.custom_deck is not None:
-                        check_decks_list.append(check_cfg.custom_deck)
+                        deck = check_cfg.custom_deck() if callable(check_cfg.custom_deck) else check_cfg.custom_deck
+                        check_decks_list.append(deck)
                     elif check_cfg.deck_mode == "starter":
                         check_decks_list.append(json.loads(json.dumps(_make_starter())))
                     elif check_cfg.deck_mode == "review_all":
@@ -347,7 +348,8 @@ def train(
                     pool = curriculum.encounter_pools[review_cfg.encounter_level]
                     enc.append(random.choice(pool))
                 if review_cfg.custom_deck is not None:
-                    dks.append(review_cfg.custom_deck)
+                    deck = review_cfg.custom_deck() if callable(review_cfg.custom_deck) else review_cfg.custom_deck
+                    dks.append(deck)
                 elif review_cfg.deck_mode == "starter":
                     dks.append(json.loads(json.dumps(_make_starter())))
                 else:
