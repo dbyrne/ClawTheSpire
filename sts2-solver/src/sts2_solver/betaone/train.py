@@ -77,38 +77,6 @@ def _build_monster_data_json() -> str:
     return json.dumps(monsters)
 
 
-def _build_starter_deck_json() -> str:
-    """Silent starter deck as JSON array of Card objects."""
-    deck = []
-    for _ in range(5):
-        deck.append({
-            "id": "STRIKE_SILENT", "name": "Strike", "cost": 1,
-            "card_type": "Attack", "target": "AnyEnemy",
-            "damage": 6, "hit_count": 1,
-            "keywords": [], "tags": ["Strike"],
-        })
-    for _ in range(5):
-        deck.append({
-            "id": "DEFEND_SILENT", "name": "Defend", "cost": 1,
-            "card_type": "Skill", "target": "Self",
-            "block": 5, "hit_count": 1,
-            "keywords": [], "tags": [],
-        })
-    deck.append({
-        "id": "NEUTRALIZE", "name": "Neutralize", "cost": 0,
-        "card_type": "Attack", "target": "AnyEnemy",
-        "damage": 3, "hit_count": 1,
-        "powers_applied": [["Weak", 1]],
-        "keywords": [], "tags": [],
-    })
-    deck.append({
-        "id": "SURVIVOR", "name": "Survivor", "cost": 1,
-        "card_type": "Skill", "target": "Self",
-        "block": 8, "hit_count": 1,
-        "keywords": [], "tags": [],
-    })
-    return json.dumps(deck)
-
 
 def _find_latest_checkpoint(output_dir: str) -> str | None:
     """Find the best resume checkpoint: latest.pt first, else highest gen."""
