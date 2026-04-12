@@ -6,6 +6,8 @@
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 
+#[allow(dead_code)]
+
 use sts2_engine::types::*;
 use sts2_engine::combat;
 use sts2_engine::effects;
@@ -895,4 +897,73 @@ fn test_strike_before_end_turn_kills_faster() {
     combat::resolve_enemy_intents(&mut skipped);
     assert_eq!(combat::is_combat_over(&skipped), None); // enemy still alive
     assert!(skipped.player.hp < 50); // we took damage
+}
+
+// ===================================================================
+// Pending choice handling in resolved evaluation
+// ===================================================================
+
+#[test]
+fn test_survivor_creates_pending_choice() {
+    let mut state = state_with(vec![survivor(), defend()], vec![enemy(30)]);
+    let db = card_db();
+    combat::play_card(&mut state, 0, None, &db, &mut rng());
+    assert_eq!(state.player.block, 8);
+    assert!(state.pending_choice.is_some(), "Survivor should create discard choice");
+}
+
+#[test]
+fn test_pending_choice_cleared_after_resolution() {
+    // After playing Survivor and resolving the choice, pending_choice should be None
+    let mut state = state_with(vec![survivor(), defend()], vec![enemy(30)]);
+    let db = card_db();
+    combat::play_card(&mut state, 0, None, &db, &mut rng());
+    assert!(state.pending_choice.is_some());
+    crate::effects::execute_choice(&mut state, 0, &mut rng());
+    assert!(state.pending_choice.is_none());
+}
+
+#[test]
+fn test_survivor_blocks_more_than_defend_after_resolution() {
+    // Survivor (8 block) should block more damage than Defend (5 block)
+    // after resolving through end-of-turn. This tests the scenario that
+    // was broken when pending_choice leaked into the resolved state.
+    let db = card_db();
+    let mut e = enemy(30);
+    e.intent_damage = Some(7);
+
+    // Path A: play Survivor, resolve choice, end turn
+    let mut surv_state = state_with(vec![survivor(), defend()], vec![e.clone()]);
+    surv_state.player.hp = 50;
+    combat::play_card(&mut surv_state, 0, None, &db, &mut rng());
+    // Resolve the discard choice (discard the Defend)
+    crate::effects::execute_choice(&mut surv_state, 0, &mut rng());
+    combat::end_turn(&mut surv_state, &db, &mut rng());
+    combat::resolve_enemy_intents(&mut surv_state);
+
+    // Path B: play Defend, end turn
+    let mut def_state = state_with(vec![defend(), survivor()], vec![e.clone()]);
+    def_state.player.hp = 50;
+    combat::play_card(&mut def_state, 0, None, &db, &mut rng());
+    combat::end_turn(&mut def_state, &db, &mut rng());
+    combat::resolve_enemy_intents(&mut def_state);
+
+    // Survivor: 8 block vs 7 damage = 0 through → HP 50
+    // Defend:   5 block vs 7 damage = 2 through → HP 48
+    assert!(surv_state.player.hp > def_state.player.hp,
+        "Survivor HP ({}) should be > Defend HP ({})",
+        surv_state.player.hp, def_state.player.hp);
+}
+
+#[test]
+fn test_end_turn_with_pending_choice_does_not_crash() {
+    // Even if end_turn is called with a pending choice still set,
+    // it should not crash. (resolve_and_evaluate auto-resolves, but
+    // this tests the defensive case.)
+    let mut state = state_with(vec![survivor(), defend()], vec![enemy(30)]);
+    let db = card_db();
+    combat::play_card(&mut state, 0, None, &db, &mut rng());
+    assert!(state.pending_choice.is_some());
+    // end_turn with unresolved choice — should not panic
+    combat::end_turn(&mut state, &db, &mut rng());
 }
