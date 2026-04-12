@@ -96,28 +96,11 @@ def _make_starter() -> list[dict]:
     if _STARTER_DECK:
         return _STARTER_DECK
     for _ in range(5):
-        _STARTER_DECK.append(_card_defaults({
-            "id": "STRIKE_SILENT", "name": "Strike", "cost": 1,
-            "card_type": "Attack", "target": "AnyEnemy",
-            "damage": 6, "hit_count": 1, "tags": ["Strike"],
-        }))
+        _STARTER_DECK.append(lookup_card("STRIKE_SILENT"))
     for _ in range(5):
-        _STARTER_DECK.append(_card_defaults({
-            "id": "DEFEND_SILENT", "name": "Defend", "cost": 1,
-            "card_type": "Skill", "target": "Self",
-            "block": 5, "hit_count": 1,
-        }))
-    _STARTER_DECK.append(_card_defaults({
-        "id": "NEUTRALIZE", "name": "Neutralize", "cost": 0,
-        "card_type": "Attack", "target": "AnyEnemy",
-        "damage": 3, "hit_count": 1,
-        "powers_applied": [["Weak", 1]],
-    }))
-    _STARTER_DECK.append(_card_defaults({
-        "id": "SURVIVOR", "name": "Survivor", "cost": 1,
-        "card_type": "Skill", "target": "Self",
-        "block": 8, "hit_count": 1,
-    }))
+        _STARTER_DECK.append(lookup_card("DEFEND_SILENT"))
+    _STARTER_DECK.append(lookup_card("NEUTRALIZE"))
+    _STARTER_DECK.append(lookup_card("SURVIVOR"))
     return _STARTER_DECK
 
 
@@ -179,6 +162,49 @@ def _load_card_pool() -> dict[str, dict]:
 
     _CARD_POOL = pool
     return pool
+
+
+_FULL_CARD_DB: dict[str, dict] | None = None
+
+
+def lookup_card(card_id: str) -> dict:
+    """Look up a card by ID from cards.json. Single source of truth."""
+    global _FULL_CARD_DB
+    if _FULL_CARD_DB is None:
+        cards_path = _DATA_DIR / "cards.json"
+        with open(cards_path, encoding="utf-8") as f:
+            raw_cards = json.load(f)
+        _FULL_CARD_DB = {}
+        for c in raw_cards:
+            cid = c["id"]
+            pa_raw = c.get("powers_applied") or []
+            powers = []
+            for p in pa_raw:
+                if isinstance(p, dict):
+                    powers.append([p["power"], p["amount"]])
+                elif isinstance(p, (list, tuple)):
+                    powers.append(list(p))
+            _FULL_CARD_DB[cid] = _card_defaults({
+                "id": cid,
+                "name": c.get("name", cid),
+                "cost": c.get("cost", 0) or 0,
+                "card_type": c.get("card_type") or c.get("type", "Skill"),
+                "target": c.get("target", "Self"),
+                "damage": c.get("damage"),
+                "block": c.get("block"),
+                "hit_count": c.get("hit_count", 1) or 1,
+                "powers_applied": powers,
+                "cards_draw": c.get("cards_draw", 0) or 0,
+                "energy_gain": c.get("energy_gain", 0) or 0,
+                "hp_loss": c.get("hp_loss", 0) or 0,
+                "keywords": c.get("keywords") or [],
+                "tags": c.get("tags") or [],
+                "spawns_cards": c.get("spawns_cards") or [],
+                "is_x_cost": bool(c.get("is_x_cost")),
+            })
+    if card_id not in _FULL_CARD_DB:
+        raise KeyError(f"Card {card_id!r} not found in cards.json")
+    return dict(_FULL_CARD_DB[card_id])
 
 
 # ---------------------------------------------------------------------------

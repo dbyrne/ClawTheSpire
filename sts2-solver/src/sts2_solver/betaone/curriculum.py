@@ -25,7 +25,7 @@ import random as stdlib_random
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .deck_gen import build_random_deck_json, _make_starter, _card_defaults
+from .deck_gen import build_random_deck_json, _make_starter, _card_defaults, lookup_card
 
 
 # ---------------------------------------------------------------------------
@@ -35,65 +35,26 @@ from .deck_gen import build_random_deck_json, _make_starter, _card_defaults
 # Shiv vs Strike deck: Strike is the trap, Blade Dance + Accuracy is the answer.
 # 2 Strikes deal 12 total — not enough for 94 HP Byrdonis.
 # 3 Blade Dances with Accuracy = 3 x 24 = 72 damage. Must play Accuracy first.
-_SHIV_TRAP_DECK = [
-    _card_defaults({"id": "DEFEND_SILENT", "name": "Defend", "cost": 1,
-                    "card_type": "Skill", "target": "Self", "block": 5, "hit_count": 1})
-    for _ in range(4)
-] + [
-    _card_defaults({"id": "STRIKE_SILENT", "name": "Strike", "cost": 1,
-                    "card_type": "Attack", "target": "AnyEnemy", "damage": 6,
-                    "hit_count": 1, "tags": ["Strike"]})
-    for _ in range(2)
-] + [
-    _card_defaults({"id": "BLADE_DANCE", "name": "Blade Dance", "cost": 1,
-                    "card_type": "Skill", "target": "Self", "spawns_cards": ["SHIV"]})
-    for _ in range(3)
-] + [
-    _card_defaults({"id": "ACCURACY", "name": "Accuracy", "cost": 1,
-                    "card_type": "Power", "target": "Self", "powers_applied": [["Accuracy", 4]]})
-]
+def _build_shiv_trap_deck() -> list[dict]:
+    return ([lookup_card("DEFEND_SILENT") for _ in range(4)]
+            + [lookup_card("STRIKE_SILENT") for _ in range(2)]
+            + [lookup_card("BLADE_DANCE") for _ in range(3)]
+            + [lookup_card("ACCURACY")])
 
 # Sly discard deck: Tactician/Reflex cost 3 — awful to play, amazing to discard.
 # Acrobatics and Survivor create discard choices where the model must pick Sly
 # cards over Defend/Strike. Untouchable is playable Sly block (don't discard it
 # unless you have a better Sly trigger like Tactician).
 # 14 cards: enough to cycle through Acrobatics draws multiple times.
-_SLY_DISCARD_DECK = [
-    _card_defaults({"id": "DEFEND_SILENT", "name": "Defend", "cost": 1,
-                    "card_type": "Skill", "target": "Self", "block": 5, "hit_count": 1})
-    for _ in range(3)
-] + [
-    _card_defaults({"id": "UNTOUCHABLE", "name": "Untouchable", "cost": 2,
-                    "card_type": "Skill", "target": "Self", "block": 16,
-                    "hit_count": 1, "keywords": ["Sly"]})
-    for _ in range(2)
-] + [
-    _card_defaults({"id": "ACROBATICS", "name": "Acrobatics", "cost": 1,
-                    "card_type": "Skill", "target": "Self",
-                    "cards_draw": 3, "keywords": ["Exhaust"]})
-    for _ in range(2)
-] + [
-    _card_defaults({"id": "SURVIVOR", "name": "Survivor", "cost": 1,
-                    "card_type": "Skill", "target": "Self", "block": 8, "hit_count": 1})
-] + [
-    _card_defaults({"id": "TACTICIAN", "name": "Tactician", "cost": 3,
-                    "card_type": "Skill", "target": "Self",
-                    "keywords": ["Sly"], "energy_gain": 1})
-    for _ in range(2)
-] + [
-    _card_defaults({"id": "REFLEX", "name": "Reflex", "cost": 3,
-                    "card_type": "Skill", "target": "Self",
-                    "keywords": ["Sly"], "cards_draw": 2})
-] + [
-    _card_defaults({"id": "STRIKE_SILENT", "name": "Strike", "cost": 1,
-                    "card_type": "Attack", "target": "AnyEnemy", "damage": 6,
-                    "hit_count": 1, "tags": ["Strike"]})
-    for _ in range(2)
-] + [
-    _card_defaults({"id": "NEUTRALIZE", "name": "Neutralize", "cost": 0,
-                    "card_type": "Attack", "target": "AnyEnemy", "damage": 3,
-                    "hit_count": 1, "powers_applied": [["Weak", 1]]})
-]
+def _build_sly_discard_deck() -> list[dict]:
+    return ([lookup_card("DEFEND_SILENT") for _ in range(3)]
+            + [lookup_card("UNTOUCHABLE") for _ in range(2)]
+            + [lookup_card("ACROBATICS") for _ in range(2)]
+            + [lookup_card("SURVIVOR")]
+            + [lookup_card("TACTICIAN") for _ in range(2)]
+            + [lookup_card("REFLEX")]
+            + [lookup_card("STRIKE_SILENT") for _ in range(2)]
+            + [lookup_card("NEUTRALIZE")])
 
 
 # ---------------------------------------------------------------------------
@@ -158,14 +119,14 @@ TIER_CONFIGS: list[TierConfig] = [
                deck_min_size=16, deck_max_size=20, deck_min_removals=1, deck_max_removals=3),
     TierConfig("Pure shiv vs Byrdonis", deck_mode="custom", promote_threshold=0.90,
                custom_encounters=[["BYRDONIS"]],
-               custom_deck=_SHIV_TRAP_DECK, player_hp=40),
+               custom_deck=_build_shiv_trap_deck, player_hp=40),
     TierConfig("Sly deck + Hard",     deck_mode="random", promote_threshold=0.70,
                custom_encounters=_FAMILIAR_HARD + _PREVIOUSLY_IMPOSSIBLE,
                deck_archetypes=["sly"],
                deck_min_size=16, deck_max_size=20, deck_min_removals=1, deck_max_removals=3),
     TierConfig("Sly discard vs Fogmog", deck_mode="custom", promote_threshold=0.70,
                custom_encounters=[["FOGMOG"]],
-               custom_deck=_SLY_DISCARD_DECK, player_hp=50),
+               custom_deck=_build_sly_discard_deck, player_hp=50),
 ]
 
 # Auto-generate final "exam" tier: average threshold of all previous tiers
@@ -323,7 +284,8 @@ class CombatCurriculum:
             cfg = prev
 
         if cfg.custom_deck is not None:
-            return json.dumps(cfg.custom_deck)
+            deck = cfg.custom_deck() if callable(cfg.custom_deck) else cfg.custom_deck
+            return json.dumps(deck)
         elif cfg.deck_mode == "starter":
             return json.dumps(_make_starter())
         else:

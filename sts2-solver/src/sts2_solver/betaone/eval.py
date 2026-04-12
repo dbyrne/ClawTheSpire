@@ -18,6 +18,7 @@ from pathlib import Path
 
 import torch
 
+from .deck_gen import lookup_card
 from .network import BetaOneNetwork, STATE_DIM, ACTION_DIM, MAX_ACTIONS
 
 
@@ -233,85 +234,26 @@ class Scenario:
 # Card shorthand builders
 # ---------------------------------------------------------------------------
 
+# Card builders — all stats from cards.json via lookup_card (single source of truth)
 def strike(name="Strike"):
-    return {"id": "STRIKE_SILENT", "name": name, "cost": 1, "card_type": "Attack",
-            "target": "AnyEnemy", "damage": 6, "hit_count": 1, "keywords": [],
-            "tags": ["Strike"], "powers_applied": []}
+    c = lookup_card("STRIKE_SILENT"); c["name"] = name; return c
 
 def defend(name="Defend"):
-    return {"id": "DEFEND_SILENT", "name": name, "cost": 1, "card_type": "Skill",
-            "target": "Self", "block": 5, "hit_count": 1, "keywords": [],
-            "tags": [], "powers_applied": []}
+    c = lookup_card("DEFEND_SILENT"); c["name"] = name; return c
 
-def neutralize():
-    return {"id": "NEUTRALIZE", "name": "Neutralize", "cost": 0, "card_type": "Attack",
-            "target": "AnyEnemy", "damage": 3, "hit_count": 1, "keywords": [],
-            "tags": [], "powers_applied": [["Weak", 1]]}
-
-def slimed():
-    return {"id": "SLIMED", "name": "Slimed", "cost": 1, "card_type": "Status",
-            "target": "Self", "damage": None, "block": None, "hit_count": 1,
-            "keywords": ["Exhaust"], "tags": [], "powers_applied": [], "cards_draw": 1}
-
-def deadly_poison():
-    return {"id": "DEADLY_POISON", "name": "Deadly Poison", "cost": 1, "card_type": "Skill",
-            "target": "AnyEnemy", "damage": None, "block": None, "hit_count": 1,
-            "keywords": [], "tags": [], "powers_applied": [["Poison", 5]]}
-
-def catalyst():
-    return {"id": "CATALYST", "name": "Catalyst", "cost": 1, "card_type": "Skill",
-            "target": "AnyEnemy", "damage": None, "block": None, "hit_count": 1,
-            "keywords": ["Exhaust"], "tags": [], "powers_applied": []}
-
-def blade_dance():
-    return {"id": "BLADE_DANCE", "name": "Blade Dance", "cost": 1, "card_type": "Skill",
-            "target": "Self", "damage": None, "block": None, "hit_count": 1,
-            "keywords": [], "tags": [], "powers_applied": [], "spawns_cards": ["SHIV"]}
-
-def footwork():
-    return {"id": "FOOTWORK", "name": "Footwork", "cost": 1, "card_type": "Power",
-            "target": "Self", "damage": None, "block": None, "hit_count": 1,
-            "keywords": [], "tags": [], "powers_applied": [["Dexterity", 2]]}
-
-def sly_skill(name="Sly Defend"):
-    return {"id": "DEFEND_SLY", "name": name, "cost": 1, "card_type": "Skill",
-            "target": "Self", "block": 5, "hit_count": 1, "keywords": ["Sly"],
-            "tags": [], "powers_applied": []}
-
-def infection():
-    return {"id": "INFECTION", "name": "Infection", "cost": -1, "card_type": "Status",
-            "target": "Self", "damage": None, "block": None, "hit_count": 1,
-            "keywords": [], "tags": [], "powers_applied": [], "hp_loss": 3}
-
-def noxious_fumes():
-    return {"id": "NOXIOUS_FUMES", "name": "Noxious Fumes", "cost": 1, "card_type": "Power",
-            "target": "Self", "damage": None, "block": None, "hit_count": 1,
-            "keywords": [], "tags": [], "powers_applied": []}
-
-def tactician():
-    return {"id": "TACTICIAN", "name": "Tactician", "cost": 3, "card_type": "Skill",
-            "target": "Self", "damage": None, "block": None, "hit_count": 1,
-            "keywords": ["Sly"], "tags": [], "powers_applied": [], "energy_gain": 3}
-
-def reflex():
-    return {"id": "REFLEX", "name": "Reflex", "cost": 3, "card_type": "Skill",
-            "target": "Self", "damage": None, "block": None, "hit_count": 1,
-            "keywords": ["Sly"], "tags": [], "powers_applied": [], "cards_draw": 3}
-
-def untouchable():
-    return {"id": "UNTOUCHABLE", "name": "Untouchable", "cost": 2, "card_type": "Skill",
-            "target": "Self", "damage": None, "block": 16, "hit_count": 1,
-            "keywords": ["Sly"], "tags": [], "powers_applied": []}
-
-def acrobatics():
-    return {"id": "ACROBATICS", "name": "Acrobatics", "cost": 1, "card_type": "Skill",
-            "target": "Self", "damage": None, "block": None, "hit_count": 1,
-            "keywords": [], "tags": [], "powers_applied": [], "cards_draw": 3}
-
-def accuracy():
-    return {"id": "ACCURACY", "name": "Accuracy", "cost": 1, "card_type": "Power",
-            "target": "Self", "damage": None, "block": None, "hit_count": 1,
-            "keywords": [], "tags": [], "powers_applied": []}
+def neutralize():    return lookup_card("NEUTRALIZE")
+def slimed():        return lookup_card("SLIMED")
+def deadly_poison(): return lookup_card("DEADLY_POISON")
+def catalyst():      return lookup_card("CATALYST")
+def blade_dance():   return lookup_card("BLADE_DANCE")
+def footwork():      return lookup_card("FOOTWORK")
+def infection():     return lookup_card("INFECTION")
+def noxious_fumes(): return lookup_card("NOXIOUS_FUMES")
+def tactician():     return lookup_card("TACTICIAN")
+def reflex():        return lookup_card("REFLEX")
+def untouchable():   return lookup_card("UNTOUCHABLE")
+def acrobatics():    return lookup_card("ACROBATICS")
+def accuracy():      return lookup_card("ACCURACY")
 
 
 # ---------------------------------------------------------------------------
@@ -357,17 +299,17 @@ def build_scenarios() -> list[Scenario]:
     scenarios.append(Scenario(
         name="discard_sly_for_value",
         category="discard",
-        description="Discard Sly card (triggers bonus on discard) over normal card",
+        description="Discard Tactician (Sly, +1 energy on discard) over normal cards",
         player={"hp": 50, "max_hp": 70, "energy": 1, "block": 0},
         enemies=[enemy(30, 50)],
-        hand=[strike(), strike(), defend(), sly_skill()],
+        hand=[strike(), strike(), defend(), tactician()],
         actions=[
             ActionSpec("choose_card", strike(), label="discard Strike"),
             ActionSpec("choose_card", strike(), label="discard Strike"),
             ActionSpec("choose_card", defend(), label="discard Defend"),
-            ActionSpec("choose_card", sly_skill(), label="discard Sly Defend"),
+            ActionSpec("choose_card", tactician(), label="discard Tactician (Sly)"),
         ],
-        best_actions=[3],       # discard Sly card (triggers bonus)
+        best_actions=[3],       # discard Tactician triggers +1 energy
         pending_choice={"choice_type": "discard_from_hand"},
     ))
 
