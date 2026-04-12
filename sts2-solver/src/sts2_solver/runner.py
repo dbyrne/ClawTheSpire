@@ -3526,6 +3526,7 @@ class Runner:
         # Poll for card options on the card selection screen
         card_options = []
         deadline = time.monotonic() + 5.0
+        poll_count = 0
         while time.monotonic() < deadline:
             time.sleep(0.3)
             try:
@@ -3542,6 +3543,12 @@ class Runner:
                 or av_reward.get("cards")
                 or (gs.get("selection") or {}).get("cards")
                 or []
+            )
+            poll_count += 1
+            self._log_action(
+                f"  [dim]reward poll #{poll_count}: screen={screen} "
+                f"actions={gs.get('available_actions', [])} "
+                f"card_options={len(card_options)}[/dim]"
             )
             if card_options:
                 break
