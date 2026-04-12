@@ -23,6 +23,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import torch.nn as nn
 
 import sts2_engine
 
