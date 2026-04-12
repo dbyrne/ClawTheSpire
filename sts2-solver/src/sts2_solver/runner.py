@@ -1185,7 +1185,9 @@ class Runner:
                 solve_ms = (time.perf_counter() - t0) * 1000
                 total_states += 200
                 total_solve_ms += solve_ms
-                best_score = max(policy) if policy else 0
+                total_visits = sum(child_visits) if child_visits else 0
+                best_visits = max(child_visits) if child_visits else 0
+                best_score = best_visits / max(1, total_visits)
                 if turn_root_value is None:
                     turn_root_value = root_value
             except Exception as e:
