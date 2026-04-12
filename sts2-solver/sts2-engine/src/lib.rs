@@ -12,6 +12,7 @@ pub mod inference;
 pub mod option_eval;
 pub mod simulator;
 pub mod ffi;
+pub mod betaone;
 
 /// STS2 combat engine — Rust implementation for fast self-play.
 #[pymodule]
@@ -22,5 +23,6 @@ fn sts2_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(ffi::play_all_games, m)?)?;
     m.add_function(wrap_pyfunction!(ffi::step, m)?)?;
     m.add_function(wrap_pyfunction!(ffi::mcts_search, m)?)?;
+    m.add_function(wrap_pyfunction!(betaone::rollout::collect_betaone_rollouts, m)?)?;
     Ok(())
 }

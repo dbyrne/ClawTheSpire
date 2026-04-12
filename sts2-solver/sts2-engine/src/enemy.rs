@@ -231,8 +231,11 @@ pub fn innate_powers(monster_id: &str) -> HashMap<String, i32> {
 
 /// Create an EnemyState from monster data.
 pub fn spawn_enemy(monster_id: &str, monsters: &HashMap<String, MonsterData>, rng: &mut impl Rng) -> EnemyState {
-    let default_data = MonsterData::default();
-    let data = monsters.get(monster_id).unwrap_or(&default_data);
+    let data = monsters.get(monster_id)
+        .unwrap_or_else(|| panic!(
+            "Unknown monster '{}' — not in monster data. \
+             Fix encounter pool or add monster definition.", monster_id
+        ));
     let hp = if data.min_hp < data.max_hp {
         rng.random_range(data.min_hp..=data.max_hp)
     } else {

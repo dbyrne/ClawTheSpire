@@ -105,14 +105,21 @@ pub fn execute_card_effect(
         }
         "BLADE_DANCE" => {
             let count = if upgraded { 4 } else { 3 };
+            let has_phantom = state.player.get_power("Phantom Blades") > 0;
             for _ in 0..count {
-                state.player.hand.push(make_shiv());
+                let mut shiv = make_shiv();
+                if has_phantom { shiv.keywords.insert("Retain".to_string()); }
+                state.player.hand.push(shiv);
             }
         }
         "CLOAK_AND_DAGGER" => {
             let block = if upgraded { 8 } else { 6 };
             gain_block(state, block);
-            state.player.hand.push(make_shiv());
+            let mut shiv = make_shiv();
+            if state.player.get_power("Phantom Blades") > 0 {
+                shiv.keywords.insert("Retain".to_string());
+            }
+            state.player.hand.push(shiv);
         }
         "LEADING_STRIKE" => {
             if let Some(tidx) = target_idx {
@@ -408,6 +415,106 @@ pub fn execute_card_effect(
                     state.player.exhaust_pile.push(card);
                     crate::combat::on_exhaust(state, rng);
                 }
+            }
+        }
+
+        // --- New Silent cards ---
+        "RICOCHET" => {
+            // Deal damage to a random enemy N times
+            let alive = state.alive_enemy_indices();
+            if !alive.is_empty() {
+                let dmg = if upgraded { 3 } else { 3 };
+                let hits = if upgraded { 5 } else { 4 };
+                for _ in 0..hits {
+                    use rand::seq::IndexedRandom;
+                    let &idx = alive.choose(rng).unwrap();
+                    deal_damage(state, idx, dmg, 1);
+                }
+            }
+        }
+        "MURDER" => {
+            // Deal 1 damage + 1 per card drawn this combat
+            // cards_drawn_this_turn tracks per-turn, we need cumulative — use a counter
+            if let Some(tidx) = target_idx {
+                let base = if upgraded { 1 } else { 1 };
+                let drawn = state.cards_drawn_this_turn
+                    + state.player.get_power("_total_cards_drawn");
+                let dmg = base + drawn;
+                deal_damage(state, tidx, dmg, 1);
+            }
+        }
+        "THE_HUNT" => {
+            // Deal damage. Fatal bonus (card reward) is irrelevant in sim.
+            if let Some(tidx) = target_idx {
+                let dmg = if upgraded { 15 } else { 10 };
+                deal_damage(state, tidx, dmg, 1);
+            }
+        }
+        "KNIFE_TRAP" => {
+            // Play every Shiv in exhaust pile on the target
+            if let Some(tidx) = target_idx {
+                let shiv_count = state.player.exhaust_pile.iter()
+                    .filter(|c| c.id == "SHIV")
+                    .count();
+                let dmg = 4 + state.player.get_power("Accuracy");
+                for _ in 0..shiv_count {
+                    deal_damage(state, tidx, dmg, 1);
+                }
+            }
+        }
+        "NIGHTMARE" => {
+            // Choose a card from hand, next turn add 3 copies.
+            // Simplified: create pending choice, store chosen card ID.
+            if !state.player.hand.is_empty() {
+                state.pending_choice = Some(PendingChoice {
+                    choice_type: "choose_from_hand".to_string(),
+                    num_choices: 1,
+                    source_card_id: "NIGHTMARE".to_string(),
+                    valid_indices: None,
+                    chosen_so_far: vec![],
+                });
+            }
+        }
+        "SHADOWMELD" => {
+            // Double Block gain this turn
+            apply_power_to_player(state, "_shadowmeld", 1);
+        }
+        "ACCELERANT" => {
+            // Poison ticks additional times
+            let amt = if upgraded { 2 } else { 1 };
+            apply_power_to_player(state, "Accelerant", amt);
+        }
+        "TRACKING" => {
+            // Weak enemies take double damage from Attacks
+            apply_power_to_player(state, "Tracking", 1);
+        }
+        "CORROSIVE_WAVE" => {
+            // This turn, whenever you draw a card, apply Poison to ALL enemies
+            let amt = if upgraded { 4 } else { 3 };
+            apply_power_to_player(state, "_corrosive_wave", amt);
+        }
+        "MASTER_PLANNER" => {
+            // When you play a Skill, it gains Sly.
+            // Simplified: Skills get Retain-like behavior — approximated as draw 1 on Skill play
+            apply_power_to_player(state, "_master_planner", 1);
+        }
+        "SERPENT_FORM" => {
+            let amt = if upgraded { 5 } else { 4 };
+            apply_power_to_player(state, "Serpent Form", amt);
+        }
+        "PHANTOM_BLADES" => {
+            let amt = if upgraded { 12 } else { 9 };
+            apply_power_to_player(state, "Phantom Blades", amt);
+            // Shivs gain Retain is handled in make_shiv checks
+        }
+        "HAND_TRICK" => {
+            let block = if upgraded { 10 } else { 7 };
+            gain_block(state, block);
+            // "Add Sly to a Skill in hand" — simplified: give a random skill Retain
+            if let Some(pos) = state.player.hand.iter().position(|c| {
+                c.card_type == CardType::Skill && !c.retain()
+            }) {
+                state.player.hand[pos].keywords.insert("Retain".to_string());
             }
         }
 

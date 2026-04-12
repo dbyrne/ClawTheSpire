@@ -21,3 +21,9 @@ runs.db-wal
 runs.db-shm
 onnx_models/
 sts2-solver/tests/_test_onnx/
+betaone_checkpoints/
+betaone_checkpoints_*/
+betaone_checkpoint_*.pt
+betaone_train.log
+*.onnx
+*.pt

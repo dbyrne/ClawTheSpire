@@ -1,1 +1,2869 @@
-[{"floor":2,"enemies":["SHRINKER_BEETLE"],"outcome":"win","turns":8},{"floor":3,"enemies":["NIBBIT"],"outcome":"win","turns":6},{"floor":5,"enemies":["LEAF_SLIME_S","TWIG_SLIME_M","TWIG_SLIME_S"],"outcome":"win","turns":3},{"floor":6,"enemies":["FUZZY_WURM_CRAWLER","SHRINKER_BEETLE"],"outcome":"win","turns":9},{"floor":11,"enemies":["SLITHERING_STRANGLER","TWIG_SLIME_M"],"outcome":"defeat","turns":3},{"floor":3,"enemies":["LEAF_SLIME_S","TWIG_SLIME_M","TWIG_SLIME_S"],"outcome":"win","turns":10},{"floor":5,"enemies":["FUZZY_WURM_CRAWLER"],"outcome":"win","turns":11},{"floor":6,"enemies":["VINE_SHAMBLER"],"outcome":"win","turns":12},{"floor":7,"enemies":["FLYCONID","TWIG_SLIME_M"],"outcome":"defeat","turns":3},{"floor":2,"enemies":["FUZZY_WURM_CRAWLER"],"outcome":"win","turns":9},{"floor":4,"enemies":["SHRINKER_BEETLE"],"outcome":"win","turns":7},{"floor":5,"enemies":["INKLET","INKLET","INKLET"],"outcome":"win","turns":12},{"floor":9,"enemies":["BYGONE_EFFIGY"],"outcome":"defeat","turns":5},{"floor":2,"enemies":["NIBBIT"],"outcome":"win","turns":8},{"floor":5,"enemies":["SHRINKER_BEETLE"],"outcome":"win","turns":11},{"floor":6,"enemies":["FUZZY_WURM_CRAWLER"],"outcome":"win","turns":11},{"floor":8,"enemies":["FOGMOG"],"outcome":"defeat","turns":8},{"floor":4,"enemies":["NIBBIT"],"outcome":"win","turns":7},{"floor":6,"enemies":["FLYCONID","LEAF_SLIME_M"],"outcome":"win","turns":9},{"floor":12,"enemies":["NIBBIT","NIBBIT"],"outcome":"defeat","turns":4},{"floor":6,"enemies":["BYGONE_EFFIGY"],"outcome":"defeat","turns":8},{"floor":3,"enemies":["SHRINKER_BEETLE"],"outcome":"defeat","turns":42},{"floor":7,"enemies":["NIBBIT"],"outcome":"win","turns":5},{"floor":9,"enemies":["FOGMOG"],"outcome":"win","turns":11},{"floor":13,"enemies":["FUZZY_WURM_CRAWLER","SHRINKER_BEETLE"],"outcome":"win","turns":13},{"floor":14,"enemies":["FLYCONID","LEAF_SLIME_M"],"outcome":"defeat","turns":6},{"floor":6,"enemies":["PHROG_PARASITE"],"outcome":"defeat","turns":13},{"floor":6,"enemies":["LEAF_SLIME_S","TWIG_SLIME_M","TWIG_SLIME_S"],"outcome":"defeat","turns":10},{"floor":7,"enemies":["LEAF_SLIME_M","LEAF_SLIME_S","TWIG_SLIME_S"],"outcome":"win","turns":7},{"floor":8,"enemies":["INKLET","INKLET","INKLET"],"outcome":"win","turns":4},{"floor":2,"enemies":["LEAF_SLIME_S","TWIG_SLIME_M","TWIG_SLIME_S"],"outcome":"win","turns":9},{"floor":4,"enemies":["FUZZY_WURM_CRAWLER"],"outcome":"win","turns":10},{"floor":5,"enemies":["NIBBIT","NIBBIT"],"outcome":"win","turns":17},{"floor":6,"enemies":["LEAF_SLIME_M","LEAF_SLIME_S","TWIG_SLIME_M","TWIG_SLIME_S"],"outcome":"defeat","turns":9},{"floor":6,"enemies":["NIBBIT"],"outcome":"win","turns":7},{"floor":7,"enemies":["INKLET","INKLET","INKLET"],"outcome":"win","turns":10},{"floor":8,"enemies":["CUBEX_CONSTRUCT"],"outcome":"defeat","turns":10},{"floor":7,"enemies":["SHRINKER_BEETLE"],"outcome":"win","turns":8},{"floor":8,"enemies":["LEAF_SLIME_S","TWIG_SLIME_M","TWIG_SLIME_S"],"outcome":"win","turns":9},{"floor":12,"enemies":["INKLET","INKLET","INKLET"],"outcome":"win","turns":8},{"floor":13,"enemies":["PHROG_PARASITE"],"outcome":"defeat","turns":8},{"floor":7,"enemies":["PHROG_PARASITE"],"outcome":"defeat","turns":11},{"floor":5,"enemies":["NIBBIT"],"outcome":"win","turns":7},{"floor":11,"enemies":["BYGONE_EFFIGY"],"outcome":"defeat","turns":13},{"floor":7,"enemies":["FOGMOG"],"outcome":"win","turns":13},{"floor":12,"enemies":["VINE_SHAMBLER"],"outcome":"defeat","turns":4},{"floor":6,"enemies":["BYRDONIS"],"outcome":"defeat","turns":11},{"floor":7,"enemies":["BYRDONIS"],"outcome":"defeat","turns":10},{"floor":5,"enemies":["FLYCONID","TWIG_SLIME_M"],"outcome":"win","turns":10},{"floor":7,"enemies":["SLITHERING_STRANGLER","SNAPPING_JAXFRUIT"],"outcome":"defeat","turns":5},{"floor":5,"enemies":["LEAF_SLIME_M","SLITHERING_STRANGLER"],"outcome":"win","turns":14},{"floor":2,"enemies":["LEAF_SLIME_M","LEAF_SLIME_S","TWIG_SLIME_S"],"outcome":"win","turns":8},{"floor":9,"enemies":["LEAF_SLIME_M","LEAF_SLIME_S","TWIG_SLIME_M","TWIG_SLIME_S"],"outcome":"win","turns":9},{"floor":12,"enemies":["ASSASSIN_RAIDER","AXE_RAIDER","CROSSBOW_RAIDER"],"outcome":"defeat","turns":1},{"floor":8,"enemies":["FLYCONID","SNAPPING_JAXFRUIT"],"outcome":"defeat","turns":5},{"floor":12,"enemies":["FLYCONID","LEAF_SLIME_M"],"outcome":"win","turns":15},{"floor":15,"enemies":["BYGONE_EFFIGY"],"outcome":"defeat","turns":6},{"floor":8,"enemies":["FUZZY_WURM_CRAWLER","SHRINKER_BEETLE"],"outcome":"defeat","turns":4},{"floor":6,"enemies":["FLYCONID","SNAPPING_JAXFRUIT"],"outcome":"win","turns":8},{"floor":5,"enemies":["FLYCONID","SNAPPING_JAXFRUIT"],"outcome":"defeat","turns":9},{"floor":3,"enemies":["FUZZY_WURM_CRAWLER"],"outcome":"win","turns":8},{"floor":7,"enemies":["FUZZY_WURM_CRAWLER","SHRINKER_BEETLE"],"outcome":"defeat","turns":9},{"floor":11,"enemies":["FOGMOG"],"outcome":"win","turns":13},{"floor":15,"enemies":["INKLET","INKLET","INKLET"],"outcome":"win","turns":2},{"floor":17,"enemies":["KIN_FOLLOWER","KIN_FOLLOWER","KIN_PRIEST"],"outcome":"defeat","turns":4},{"floor":8,"enemies":["SHRINKER_BEETLE"],"outcome":"win","turns":5},{"floor":12,"enemies":["ASSASSIN_RAIDER","CROSSBOW_RAIDER","TRACKER_RAIDER"],"outcome":"win","turns":5},{"floor":13,"enemies":["CUBEX_CONSTRUCT"],"outcome":"win","turns":6},{"floor":14,"enemies":["MAWLER"],"outcome":"win","turns":9},{"floor":17,"enemies":["VANTOM"],"outcome":"defeat","turns":9},{"floor":9,"enemies":["PHROG_PARASITE"],"outcome":"defeat","turns":13},{"floor":6,"enemies":["CUBEX_CONSTRUCT"],"outcome":"win","turns":10},{"floor":9,"enemies":["NIBBIT","NIBBIT"],"outcome":"win","turns":9},{"floor":11,"enemies":["SLITHERING_STRANGLER","SNAPPING_JAXFRUIT"],"outcome":"defeat","turns":5},{"floor":4,"enemies":["LEAF_SLIME_M","LEAF_SLIME_S","TWIG_SLIME_S"],"outcome":"win","turns":8},{"floor":13,"enemies":["BYGONE_EFFIGY"],"outcome":"defeat","turns":11},{"floor":9,"enemies":["MAWLER"],"outcome":"win","turns":10},{"floor":12,"enemies":["CUBEX_CONSTRUCT"],"outcome":"win","turns":7},{"floor":13,"enemies":["VINE_SHAMBLER"],"outcome":"win","turns":6},{"floor":15,"enemies":["NIBBIT","NIBBIT"],"outcome":"defeat","turns":5},{"floor":5,"enemies":["VINE_SHAMBLER"],"outcome":"win","turns":13},{"floor":7,"enemies":["LEAF_SLIME_M","SLITHERING_STRANGLER"],"outcome":"defeat","turns":3},{"floor":6,"enemies":["SHRINKER_BEETLE"],"outcome":"win","turns":4},{"floor":8,"enemies":["MAWLER"],"outcome":"win","turns":6},{"floor":13,"enemies":["NIBBIT","NIBBIT"],"outcome":"defeat","turns":29},{"floor":7,"enemies":["NIBBIT","NIBBIT"],"outcome":"win","turns":7},{"floor":7,"enemies":["VINE_SHAMBLER"],"outcome":"win","turns":11},{"floor":9,"enemies":["INKLET","INKLET","INKLET"],"outcome":"win","turns":9},{"floor":6,"enemies":["NIBBIT","NIBBIT"],"outcome":"win","turns":14},{"floor":9,"enemies":["CUBEX_CONSTRUCT"],"outcome":"win","turns":7},{"floor":14,"enemies":["INKLET","INKLET","INKLET"],"outcome":"defeat","turns":1},{"floor":7,"enemies":["ASSASSIN_RAIDER","BRUTE_RAIDER","CROSSBOW_RAIDER"],"outcome":"defeat","turns":10},{"floor":12,"enemies":["FOGMOG"],"outcome":"win","turns":9},{"floor":15,"enemies":["BYRDONIS"],"outcome":"defeat","turns":5},{"floor":13,"enemies":["INKLET","INKLET","INKLET"],"outcome":"win","turns":7},{"floor":17,"enemies":["CEREMONIAL_BEAST"],"outcome":"defeat","turns":6},{"floor":5,"enemies":["LEAF_SLIME_M","LEAF_SLIME_S","TWIG_SLIME_S"],"outcome":"win","turns":6},{"floor":8,"enemies":["PHROG_PARASITE"],"outcome":"defeat","turns":8},{"floor":9,"enemies":["FLYCONID","SNAPPING_JAXFRUIT"],"outcome":"win","turns":10},{"floor":12,"enemies":["BYGONE_EFFIGY"],"outcome":"defeat","turns":7},{"floor":6,"enemies":["SLITHERING_STRANGLER","TWIG_SLIME_M"],"outcome":"win","turns":13},{"floor":7,"enemies":["CUBEX_CONSTRUCT"],"outcome":"win","turns":5},{"floor":11,"enemies":["VINE_SHAMBLER"],"outcome":"win","turns":8},{"floor":9,"enemies":["ASSASSIN_RAIDER","BRUTE_RAIDER","TRACKER_RAIDER"],"outcome":"defeat","turns":9},{"floor":12,"enemies":["FUZZY_WURM_CRAWLER","SHRINKER_BEETLE"],"outcome":"defeat","turns":14},{"floor":7,"enemies":["BYGONE_EFFIGY"],"outcome":"defeat","turns":9},{"floor":4,"enemies":["LEAF_SLIME_S","TWIG_SLIME_M","TWIG_SLIME_S"],"outcome":"win","turns":6},{"floor":11,"enemies":["FUZZY_WURM_CRAWLER","SHRINKER_BEETLE"],"outcome":"win","turns":11},{"floor":6,"enemies":["WRIGGLER","WRIGGLER","WRIGGLER","WRIGGLER"],"outcome":"win","turns":14},{"floor":6,"enemies":["ASSASSIN_RAIDER","AXE_RAIDER","TRACKER_RAIDER"],"outcome":"defeat","turns":5},{"floor":8,"enemies":["FLYCONID","LEAF_SLIME_M"],"outcome":"defeat","turns":5},{"floor":8,"enemies":["LEAF_SLIME_S","SLITHERING_STRANGLER","TWIG_SLIME_S"],"outcome":"defeat","turns":10},{"floor":8,"enemies":["BYRDONIS"],"outcome":"defeat","turns":8},{"floor":5,"enemies":["AXE_RAIDER","BRUTE_RAIDER","CROSSBOW_RAIDER"],"outcome":"defeat","turns":4},{"floor":5,"enemies":["FOGMOG"],"outcome":"win","turns":8},{"floor":7,"enemies":["FUZZY_WURM_CRAWLER"],"outcome":"win","turns":7},{"floor":6,"enemies":["ASSASSIN_RAIDER","AXE_RAIDER","CROSSBOW_RAIDER"],"outcome":"win","turns":9},{"floor":8,"enemies":["SLITHERING_STRANGLER","SNAPPING_JAXFRUIT"],"outcome":"defeat","turns":6},{"floor":11,"enemies":["NIBBIT","NIBBIT"],"outcome":"defeat","turns":4},{"floor":5,"enemies":["SLITHERING_STRANGLER","SNAPPING_JAXFRUIT"],"outcome":"win","turns":13},{"floor":5,"enemies":["CUBEX_CONSTRUCT"],"outcome":"win","turns":5},{"floor":6,"enemies":["MAWLER"],"outcome":"defeat","turns":4},{"floor":11,"enemies":["SHRINKER_BEETLE"],"outcome":"win","turns":5},{"floor":13,"enemies":["LEAF_SLIME_M","LEAF_SLIME_S","TWIG_SLIME_S"],"outcome":"win","turns":5},{"floor":14,"enemies":["FLYCONID","SNAPPING_JAXFRUIT"],"outcome":"win","turns":10},{"floor":15,"enemies":["CUBEX_CONSTRUCT"],"outcome":"win","turns":6},{"floor":12,"enemies":["SLITHERING_STRANGLER","TWIG_SLIME_M"],"outcome":"win","turns":7},{"floor":15,"enemies":["FUZZY_WURM_CRAWLER","SHRINKER_BEETLE"],"outcome":"defeat","turns":4},{"floor":6,"enemies":["INKLET","INKLET","INKLET"],"outcome":"win","turns":9},{"floor":6,"enemies":["AXE_RAIDER","BRUTE_RAIDER","CROSSBOW_RAIDER"],"outcome":"win","turns":10},{"floor":11,"enemies":["LEAF_SLIME_M","SLITHERING_STRANGLER"],"outcome":"defeat","turns":7},{"floor":6,"enemies":["FLYCONID","TWIG_SLIME_M"],"outcome":"defeat","turns":4},{"floor":3,"enemies":["LEAF_SLIME_M","LEAF_SLIME_S","TWIG_SLIME_S"],"outcome":"win","turns":7},{"floor":8,"enemies":["LEAF_SLIME_M","LEAF_SLIME_S","TWIG_SLIME_M","TWIG_SLIME_S"],"outcome":"win","turns":12},{"floor":9,"enemies":["WRIGGLER","WRIGGLER","WRIGGLER","WRIGGLER"],"outcome":"win","turns":9},{"floor":8,"enemies":["WRIGGLER","WRIGGLER","WRIGGLER","WRIGGLER"],"outcome":"win","turns":9},{"floor":12,"enemies":["SHRINKER_BEETLE"],"outcome":"win","turns":11},{"floor":13,"enemies":["SLITHERING_STRANGLER","TWIG_SLIME_M"],"outcome":"defeat","turns":6},{"floor":2,"enemies":["SEAPUNK"],"outcome":"win","turns":8},{"floor":3,"enemies":["SLUDGE_SPINNER"],"outcome":"win","turns":7},{"floor":4,"enemies":["TOADPOLE","TOADPOLE"],"outcome":"win","turns":7},{"floor":5,"enemies":["TWO_TAILED_RAT","TWO_TAILED_RAT","TWO_TAILED_RAT"],"outcome":"win","turns":9},{"floor":9,"enemies":["LIVING_FOG"],"outcome":"win","turns":11},{"floor":11,"enemies":["CORPSE_SLUG","CORPSE_SLUG","CORPSE_SLUG"],"outcome":"defeat","turns":3},{"floor":2,"enemies":["TOADPOLE","TOADPOLE"],"outcome":"win","turns":7},{"floor":5,"enemies":["SEAPUNK"],"outcome":"win","turns":5},{"floor":8,"enemies":["CORPSE_SLUG","CORPSE_SLUG"],"outcome":"win","turns":5},{"floor":8,"enemies":["BRUTE_RAIDER","CROSSBOW_RAIDER","TRACKER_RAIDER"],"outcome":"win","turns":14},{"floor":9,"enemies":["FUZZY_WURM_CRAWLER","SHRINKER_BEETLE"],"outcome":"defeat","turns":5},{"floor":7,"enemies":["LEAF_SLIME_S","TWIG_SLIME_M","TWIG_SLIME_S"],"outcome":"win","turns":5},{"floor":9,"enemies":["LEAF_SLIME_M","SLITHERING_STRANGLER"],"outcome":"defeat","turns":5},{"floor":3,"enemies":["WRIGGLER","WRIGGLER","WRIGGLER","WRIGGLER"],"outcome":"defeat","turns":8},{"floor":3,"enemies":["CORPSE_SLUG","CORPSE_SLUG"],"outcome":"win","turns":6},{"floor":4,"enemies":["SLUDGE_SPINNER"],"outcome":"win","turns":3},{"floor":5,"enemies":["LIVING_FOG"],"outcome":"defeat","turns":5},{"floor":6,"enemies":["SEWER_CLAM"],"outcome":"win","turns":8},{"floor":8,"enemies":["PHANTASMAL_GARDENER","PHANTASMAL_GARDENER","PHANTASMAL_GARDENER","PHANTASMAL_GARDENER"],"outcome":"defeat","turns":5},{"floor":7,"enemies":["MAWLER"],"outcome":"win","turns":6},{"floor":5,"enemies":["CORPSE_SLUG","CORPSE_SLUG"],"outcome":"win","turns":6},{"floor":8,"enemies":["LIVING_FOG"],"outcome":"defeat","turns":7},{"floor":8,"enemies":["CALCIFIED_CULTIST","TOADPOLE"],"outcome":"win","turns":5},{"floor":9,"enemies":["CORPSE_SLUG","CORPSE_SLUG","CORPSE_SLUG"],"outcome":"win","turns":5},{"floor":12,"enemies":["PHANTASMAL_GARDENER","PHANTASMAL_GARDENER","PHANTASMAL_GARDENER","PHANTASMAL_GARDENER"],"outcome":"win","turns":10},{"floor":14,"enemies":["GREMLIN_MERC"],"outcome":"win","turns":6},{"floor":15,"enemies":["PUNCH_CONSTRUCT"],"outcome":"win","turns":3},{"floor":17,"enemies":["WATERFALL_GIANT"],"outcome":"defeat","turns":6},{"floor":5,"enemies":["SLUDGE_SPINNER"],"outcome":"win","turns":7},{"floor":6,"enemies":["CORPSE_SLUG","CORPSE_SLUG"],"outcome":"win","turns":11},{"floor":9,"enemies":["FOSSIL_STALKER"],"outcome":"win","turns":6},{"floor":13,"enemies":["CALCIFIED_CULTIST","DAMP_CULTIST"],"outcome":"win","turns":10},{"floor":14,"enemies":["TERROR_EEL"],"outcome":"defeat","turns":10},{"floor":6,"enemies":["HAUNTED_SHIP"],"outcome":"defeat","turns":9},{"floor":2,"enemies":["SLUDGE_SPINNER"],"outcome":"defeat","turns":18},{"floor":2,"enemies":["CORPSE_SLUG","CORPSE_SLUG"],"outcome":"defeat","turns":27},{"floor":5,"enemies":["HAUNTED_SHIP"],"outcome":"defeat","turns":5},{"floor":12,"enemies":["CALCIFIED_CULTIST","DAMP_CULTIST"],"outcome":"defeat","turns":9},{"floor":8,"enemies":["CALCIFIED_CULTIST","DAMP_CULTIST"],"outcome":"defeat","turns":6},{"floor":11,"enemies":["BYRDONIS"],"outcome":"defeat","turns":5},{"floor":4,"enemies":["CORPSE_SLUG","CORPSE_SLUG"],"outcome":"win","turns":5},{"floor":5,"enemies":["TOADPOLE","TOADPOLE"],"outcome":"win","turns":4},{"floor":6,"enemies":["CALCIFIED_CULTIST","TOADPOLE"],"outcome":"win","turns":5},{"floor":7,"enemies":["SEWER_CLAM"],"outcome":"win","turns":10},{"floor":8,"enemies":["CORPSE_SLUG","CORPSE_SLUG","CORPSE_SLUG"],"outcome":"win","turns":2},{"floor":9,"enemies":["CALCIFIED_CULTIST","DAMP_CULTIST"],"outcome":"defeat","turns":3},{"floor":3,"enemies":["TOADPOLE","TOADPOLE"],"outcome":"win","turns":4},{"floor":7,"enemies":["TWO_TAILED_RAT","TWO_TAILED_RAT","TWO_TAILED_RAT"],"outcome":"win","turns":4},{"floor":8,"enemies":["FOSSIL_STALKER"],"outcome":"win","turns":4},{"floor":11,"enemies":["PHANTASMAL_GARDENER","PHANTASMAL_GARDENER","PHANTASMAL_GARDENER","PHANTASMAL_GARDENER"],"outcome":"defeat","turns":1},{"floor":3,"enemies":["SEAPUNK"],"outcome":"win","turns":3},{"floor":5,"enemies":["CALCIFIED_CULTIST","DAMP_CULTIST"],"outcome":"defeat","turns":7},{"floor":8,"enemies":["TWO_TAILED_RAT","TWO_TAILED_RAT","TWO_TAILED_RAT"],"outcome":"defeat","turns":8},{"floor":7,"enemies":["SLUDGE_SPINNER"],"outcome":"win","turns":4},{"floor":11,"enemies":["SEWER_CLAM"],"outcome":"win","turns":8},{"floor":13,"enemies":["LIVING_FOG"],"outcome":"defeat","turns":7},{"floor":8,"enemies":["AXE_RAIDER","CROSSBOW_RAIDER","TRACKER_RAIDER"],"outcome":"win","turns":8},{"floor":6,"enemies":["CORPSE_SLUG","CORPSE_SLUG","CORPSE_SLUG"],"outcome":"defeat","turns":8},{"floor":8,"enemies":["VINE_SHAMBLER"],"outcome":"win","turns":5},{"floor":11,"enemies":["AXE_RAIDER","BRUTE_RAIDER","CROSSBOW_RAIDER"],"outcome":"win","turns":6},{"floor":12,"enemies":["FLYCONID","TWIG_SLIME_M"],"outcome":"win","turns":9},{"floor":14,"enemies":["BYRDONIS"],"outcome":"win","turns":9},{"floor":6,"enemies":["FOGMOG"],"outcome":"win","turns":10},{"floor":6,"enemies":["SEAPUNK"],"outcome":"win","turns":5},{"floor":4,"enemies":["SEAPUNK"],"outcome":"win","turns":5},{"floor":11,"enemies":["PUNCH_CONSTRUCT"],"outcome":"win","turns":8},{"floor":12,"enemies":["CORPSE_SLUG","CORPSE_SLUG","CORPSE_SLUG"],"outcome":"win","turns":7},{"floor":14,"enemies":["LIVING_FOG"],"outcome":"defeat","turns":7},{"floor":8,"enemies":["NIBBIT"],"outcome":"win","turns":4},{"floor":11,"enemies":["MAWLER"],"outcome":"win","turns":5},{"floor":13,"enemies":["FLYCONID","SNAPPING_JAXFRUIT"],"outcome":"win","turns":5},{"floor":15,"enemies":["ASSASSIN_RAIDER","BRUTE_RAIDER","TRACKER_RAIDER"],"outcome":"win","turns":3},{"floor":6,"enemies":["SKULKING_COLONY"],"outcome":"win","turns":9},{"floor":8,"enemies":["PUNCH_CONSTRUCT"],"outcome":"win","turns":6},{"floor":7,"enemies":["LIVING_FOG"],"outcome":"defeat","turns":5},{"floor":7,"enemies":["PHANTASMAL_GARDENER","PHANTASMAL_GARDENER","PHANTASMAL_GARDENER","PHANTASMAL_GARDENER"],"outcome":"defeat","turns":7},{"floor":8,"enemies":["HAUNTED_SHIP"],"outcome":"defeat","turns":6},{"floor":9,"enemies":["LEAF_SLIME_M","LEAF_SLIME_S","TWIG_SLIME_S"],"outcome":"win","turns":5},{"floor":8,"enemies":["TERROR_EEL"],"outcome":"defeat","turns":7},{"floor":14,"enemies":["CUBEX_CONSTRUCT"],"outcome":"defeat","turns":4},{"floor":9,"enemies":["SHRINKER_BEETLE"],"outcome":"win","turns":4},{"floor":12,"enemies":["PHROG_PARASITE"],"outcome":"defeat","turns":8},{"floor":13,"enemies":["CALCIFIED_CULTIST","TOADPOLE"],"outcome":"defeat","turns":3},{"floor":5,"enemies":["CALCIFIED_CULTIST","TOADPOLE"],"outcome":"win","turns":5},{"floor":6,"enemies":["TWO_TAILED_RAT","TWO_TAILED_RAT","TWO_TAILED_RAT"],"outcome":"win","turns":5},{"floor":7,"enemies":["CORPSE_SLUG","CORPSE_SLUG"],"outcome":"win","turns":4},{"floor":8,"enemies":["SKULKING_COLONY"],"outcome":"win","turns":6},{"floor":9,"enemies":["TOADPOLE","TOADPOLE"],"outcome":"win","turns":4},{"floor":12,"enemies":["SEWER_CLAM"],"outcome":"win","turns":5},{"floor":14,"enemies":["CORPSE_SLUG","CORPSE_SLUG","CORPSE_SLUG"],"outcome":"win","turns":5},{"floor":15,"enemies":["LIVING_FOG"],"outcome":"win","turns":4},{"floor":17,"enemies":["SOUL_FYSH"],"outcome":"defeat","turns":2},{"floor":9,"enemies":["CORPSE_SLUG","CORPSE_SLUG"],"outcome":"win","turns":4},{"floor":6,"enemies":["TOADPOLE","TOADPOLE"],"outcome":"win","turns":5},{"floor":8,"enemies":["SEWER_CLAM"],"outcome":"defeat","turns":9},{"floor":7,"enemies":["TERROR_EEL"],"outcome":"defeat","turns":5},{"floor":7,"enemies":["CALCIFIED_CULTIST","TOADPOLE"],"outcome":"win","turns":6},{"floor":7,"enemies":["SKULKING_COLONY"],"outcome":"defeat","turns":8},{"floor":5,"enemies":["FOSSIL_STALKER"],"outcome":"win","turns":4},{"floor":14,"enemies":["HAUNTED_SHIP"],"outcome":"win","turns":5},{"floor":15,"enemies":["TERROR_EEL"],"outcome":"defeat","turns":3},{"floor":11,"enemies":["SLUDGE_SPINNER"],"outcome":"win","turns":2},{"floor":12,"enemies":["LIVING_FOG"],"outcome":"win","turns":4},{"floor":13,"enemies":["TERROR_EEL"],"outcome":"defeat","turns":8},{"floor":8,"enemies":["TOADPOLE","TOADPOLE"],"outcome":"win","turns":3},{"floor":9,"enemies":["TERROR_EEL"],"outcome":"defeat","turns":3},{"floor":14,"enemies":["BYGONE_EFFIGY"],"outcome":"defeat","turns":8},{"floor":7,"enemies":["ASSASSIN_RAIDER","CROSSBOW_RAIDER","TRACKER_RAIDER"],"outcome":"defeat","turns":5},{"floor":7,"enemies":["GREMLIN_MERC"],"outcome":"win","turns":7},{"floor":7,"enemies":["CALCIFIED_CULTIST","DAMP_CULTIST"],"outcome":"defeat","turns":5},{"floor":8,"enemies":["ASSASSIN_RAIDER","AXE_RAIDER","CROSSBOW_RAIDER"],"outcome":"defeat","turns":2},{"floor":9,"enemies":["SKULKING_COLONY"],"outcome":"win","turns":6},{"floor":13,"enemies":["GREMLIN_MERC"],"outcome":"defeat","turns":2},{"floor":6,"enemies":["SLUDGE_SPINNER"],"outcome":"win","turns":3},{"floor":7,"enemies":["CORPSE_SLUG","CORPSE_SLUG","CORPSE_SLUG"],"outcome":"defeat","turns":3},{"floor":11,"enemies":["TERROR_EEL"],"outcome":"defeat","turns":3},{"floor":12,"enemies":["TERROR_EEL"],"outcome":"win","turns":10},{"floor":14,"enemies":["SKULKING_COLONY"],"outcome":"defeat","turns":6},{"floor":6,"enemies":["LEAF_SLIME_M","SLITHERING_STRANGLER"],"outcome":"defeat","turns":3},{"floor":6,"enemies":["FOSSIL_STALKER"],"outcome":"win","turns":6},{"floor":5,"enemies":["CORPSE_SLUG","CORPSE_SLUG","CORPSE_SLUG"],"outcome":"defeat","turns":3},{"floor":6,"enemies":["GREMLIN_MERC"],"outcome":"defeat","turns":4},{"floor":9,"enemies":["ASSASSIN_RAIDER","AXE_RAIDER","BRUTE_RAIDER"],"outcome":"defeat","turns":3},{"floor":11,"enemies":["LIVING_FOG"],"outcome":"win","turns":4},{"floor":6,"enemies":["LIVING_FOG"],"outcome":"defeat","turns":5},{"floor":7,"enemies":["ASSASSIN_RAIDER","BRUTE_RAIDER","TRACKER_RAIDER"],"outcome":"defeat","turns":5},{"floor":14,"enemies":["SLITHERING_STRANGLER","TWIG_SLIME_M"],"outcome":"win","turns":8},{"floor":15,"enemies":["FLYCONID","SNAPPING_JAXFRUIT"],"outcome":"defeat","turns":6},{"floor":7,"enemies":["HAUNTED_SHIP"],"outcome":"win","turns":6},{"floor":12,"enemies":["MAWLER"],"outcome":"win","turns":4},{"floor":14,"enemies":["LEAF_SLIME_M","LEAF_SLIME_S","TWIG_SLIME_M","TWIG_SLIME_S"],"outcome":"defeat","turns":2},{"floor":9,"enemies":["GREMLIN_MERC"],"outcome":"win","turns":1},{"floor":7,"enemies":["FLYCONID","SNAPPING_JAXFRUIT"],"outcome":"defeat","turns":4},{"floor":9,"enemies":["HAUNTED_SHIP"],"outcome":"defeat","turns":4},{"floor":6,"enemies":["PHANTASMAL_GARDENER","PHANTASMAL_GARDENER","PHANTASMAL_GARDENER","PHANTASMAL_GARDENER"],"outcome":"defeat","turns":6},{"floor":6,"enemies":["PUNCH_CONSTRUCT"],"outcome":"win","turns":6},{"floor":7,"enemies":["SEAPUNK"],"outcome":"win","turns":3},{"floor":9,"enemies":["VINE_SHAMBLER"],"outcome":"win","turns":8},{"floor":7,"enemies":["LEAF_SLIME_M","LEAF_SLIME_S","TWIG_SLIME_M","TWIG_SLIME_S"],"outcome":"defeat","turns":2},{"floor":5,"enemies":["PUNCH_CONSTRUCT"],"outcome":"win","turns":7},{"floor":5,"enemies":["LEAF_SLIME_M","LEAF_SLIME_S","TWIG_SLIME_M","TWIG_SLIME_S"],"outcome":"win","turns":11},{"floor":8,"enemies":["NIBBIT","NIBBIT"],"outcome":"defeat","turns":3},{"floor":5,"enemies":["MAWLER"],"outcome":"defeat","turns":7},{"floor":11,"enemies":["CUBEX_CONSTRUCT"],"outcome":"win","turns":4},{"floor":12,"enemies":["AXE_RAIDER","BRUTE_RAIDER","TRACKER_RAIDER"],"outcome":"win","turns":7},{"floor":13,"enemies":["LEAF_SLIME_M","LEAF_SLIME_S","TWIG_SLIME_M","TWIG_SLIME_S"],"outcome":"win","turns":9},{"floor":15,"enemies":["FOGMOG"],"outcome":"win","turns":5},{"floor":12,"enemies":["FOSSIL_STALKER"],"outcome":"win","turns":4},{"floor":13,"enemies":["TWO_TAILED_RAT","TWO_TAILED_RAT","TWO_TAILED_RAT"],"outcome":"defeat","turns":2},{"floor":5,"enemies":["SEWER_CLAM"],"outcome":"defeat","turns":7},{"floor":14,"enemies":["PHANTASMAL_GARDENER","PHANTASMAL_GARDENER","PHANTASMAL_GARDENER","PHANTASMAL_GARDENER"],"outcome":"win","turns":6},{"floor":5,"enemies":["GREMLIN_MERC"],"outcome":"win","turns":9},{"floor":11,"enemies":["PHROG_PARASITE"],"outcome":"win","turns":8},{"floor":12,"enemies":["ASSASSIN_RAIDER","AXE_RAIDER","TRACKER_RAIDER"],"outcome":"win","turns":2},{"floor":15,"enemies":["SLITHERING_STRANGLER","SNAPPING_JAXFRUIT"],"outcome":"win","turns":3},{"floor":7,"enemies":["FOSSIL_STALKER"],"outcome":"defeat","turns":4},{"floor":7,"enemies":["PUNCH_CONSTRUCT"],"outcome":"win","turns":6},{"floor":8,"enemies":["GREMLIN_MERC"],"outcome":"win","turns":5},{"floor":12,"enemies":["CALCIFIED_CULTIST","TOADPOLE"],"outcome":"win","turns":5},{"floor":13,"enemies":["HAUNTED_SHIP"],"outcome":"win","turns":5},{"floor":15,"enemies":["CORPSE_SLUG","CORPSE_SLUG","CORPSE_SLUG"],"outcome":"defeat","turns":3},{"floor":6,"enemies":["TERROR_EEL"],"outcome":"defeat","turns":9},{"floor":8,"enemies":["BYGONE_EFFIGY"],"outcome":"defeat","turns":6},{"floor":6,"enemies":["CALCIFIED_CULTIST","DAMP_CULTIST"],"outcome":"defeat","turns":5},{"floor":9,"enemies":["SEWER_CLAM"],"outcome":"defeat","turns":3},{"floor":9,"enemies":["BYRDONIS"],"outcome":"defeat","turns":10},{"floor":11,"enemies":["GREMLIN_MERC"],"outcome":"defeat","turns":4},{"floor":11,"enemies":["FLYCONID","SNAPPING_JAXFRUIT"],"outcome":"win","turns":6},{"floor":8,"enemies":["LEAF_SLIME_M","LEAF_SLIME_S","TWIG_SLIME_S"],"outcome":"win","turns":2},{"floor":12,"enemies":["SLITHERING_STRANGLER","TWIG_SLIME_S","TWIG_SLIME_S"],"outcome":"win","turns":2},{"floor":14,"enemies":["FLYCONID","TWIG_SLIME_M"],"outcome":"defeat","turns":3},{"floor":5,"enemies":["AXE_RAIDER","BRUTE_RAIDER","TRACKER_RAIDER"],"outcome":"win","turns":8},{"floor":13,"enemies":["SEWER_CLAM"],"outcome":"win","turns":7},{"floor":15,"enemies":["TWO_TAILED_RAT","TWO_TAILED_RAT","TWO_TAILED_RAT"],"outcome":"win","turns":5},{"floor":17,"enemies":["LAGAVULIN_MATRIARCH"],"outcome":"defeat","turns":8},{"floor":11,"enemies":["TWO_TAILED_RAT","TWO_TAILED_RAT","TWO_TAILED_RAT"],"outcome":"win","turns":2},{"floor":14,"enemies":["LEAF_SLIME_S","SLITHERING_STRANGLER","TWIG_SLIME_S"],"outcome":"win","turns":7},{"floor":15,"enemies":["MAWLER"],"outcome":"defeat","turns":3},{"floor":13,"enemies":["SKULKING_COLONY"],"outcome":"defeat","turns":4},{"floor":8,"enemies":["SEAPUNK"],"outcome":"win","turns":2},{"floor":15,"enemies":["CALCIFIED_CULTIST","TOADPOLE"],"outcome":"win","turns":4},{"floor":9,"enemies":["PHANTASMAL_GARDENER","PHANTASMAL_GARDENER","PHANTASMAL_GARDENER","PHANTASMAL_GARDENER"],"outcome":"defeat","turns":4},{"floor":8,"enemies":["ASSASSIN_RAIDER","BRUTE_RAIDER","TRACKER_RAIDER"],"outcome":"defeat","turns":3},{"floor":5,"enemies":["FUZZY_WURM_CRAWLER","SHRINKER_BEETLE"],"outcome":"defeat","turns":7},{"floor":6,"enemies":["LEAF_SLIME_S","LEAF_SLIME_S","SLITHERING_STRANGLER"],"outcome":"defeat","turns":4},{"floor":6,"enemies":["SLITHERING_STRANGLER","TWIG_SLIME_S","TWIG_SLIME_S"],"outcome":"defeat","turns":5},{"floor":9,"enemies":["CALCIFIED_CULTIST","TOADPOLE"],"outcome":"win","turns":3},{"floor":15,"enemies":["HAUNTED_SHIP"],"outcome":"win","turns":4},{"floor":12,"enemies":["BYRDONIS"],"outcome":"defeat","turns":8},{"floor":11,"enemies":["CALCIFIED_CULTIST","DAMP_CULTIST"],"outcome":"win","turns":3},{"floor":14,"enemies":["CALCIFIED_CULTIST","TOADPOLE"],"outcome":"win","turns":3},{"floor":15,"enemies":["SEWER_CLAM"],"outcome":"win","turns":6},{"floor":5,"enemies":["ASSASSIN_RAIDER","AXE_RAIDER","CROSSBOW_RAIDER"],"outcome":"defeat","turns":2},{"floor":13,"enemies":["FOGMOG"],"outcome":"win","turns":5},{"floor":7,"enemies":["TOADPOLE","TOADPOLE"],"outcome":"win","turns":3},{"floor":9,"enemies":["TWO_TAILED_RAT","TWO_TAILED_RAT","TWO_TAILED_RAT"],"outcome":"win","turns":3},{"floor":11,"enemies":["CALCIFIED_CULTIST","TOADPOLE"],"outcome":"win","turns":4},{"floor":5,"enemies":["ASSASSIN_RAIDER","BRUTE_RAIDER","CROSSBOW_RAIDER"],"outcome":"defeat","turns":2},{"floor":9,"enemies":["SLUDGE_SPINNER"],"outcome":"win","turns":4},{"floor":13,"enemies":["FOSSIL_STALKER"],"outcome":"win","turns":5},{"floor":11,"enemies":["CORPSE_SLUG","CORPSE_SLUG"],"outcome":"win","turns":4},{"floor":9,"enemies":["SEAPUNK"],"outcome":"win","turns":5},{"floor":9,"enemies":["LEAF_SLIME_S","SLITHERING_STRANGLER","TWIG_SLIME_S"],"outcome":"win","turns":3},{"floor":7,"enemies":["PUNCH_CONSTRUCT","PUNCH_CONSTRUCT"],"outcome":"win","turns":14},{"floor":8,"enemies":["FLYCONID","TWIG_SLIME_M"],"outcome":"defeat","turns":2},{"floor":13,"enemies":["PUNCH_CONSTRUCT"],"outcome":"defeat","turns":8},{"floor":5,"enemies":["ASSASSIN_RAIDER","AXE_RAIDER","TRACKER_RAIDER"],"outcome":"defeat","turns":3},{"floor":12,"enemies":["LEAF_SLIME_M","SLITHERING_STRANGLER"],"outcome":"defeat","turns":1},{"floor":5,"enemies":["WRIGGLER","WRIGGLER","WRIGGLER","WRIGGLER"],"outcome":"win","turns":6},{"floor":12,"enemies":["HAUNTED_SHIP"],"outcome":"defeat","turns":3},{"floor":9,"enemies":["PUNCH_CONSTRUCT"],"outcome":"defeat","turns":11},{"floor":12,"enemies":["SKULKING_COLONY"],"outcome":"defeat","turns":4},{"floor":9,"enemies":["SLITHERING_STRANGLER","SNAPPING_JAXFRUIT"],"outcome":"win","turns":5}]
+[
+  {
+    "floor": 2,
+    "enemies": [
+      "SHRINKER_BEETLE"
+    ],
+    "outcome": "win",
+    "turns": 8
+  },
+  {
+    "floor": 3,
+    "enemies": [
+      "NIBBIT"
+    ],
+    "outcome": "win",
+    "turns": 6
+  },
+  {
+    "floor": 5,
+    "enemies": [
+      "LEAF_SLIME_S",
+      "TWIG_SLIME_M",
+      "TWIG_SLIME_S"
+    ],
+    "outcome": "win",
+    "turns": 3
+  },
+  {
+    "floor": 6,
+    "enemies": [
+      "FUZZY_WURM_CRAWLER",
+      "SHRINKER_BEETLE"
+    ],
+    "outcome": "win",
+    "turns": 9
+  },
+  {
+    "floor": 11,
+    "enemies": [
+      "SLITHERING_STRANGLER",
+      "TWIG_SLIME_M"
+    ],
+    "outcome": "defeat",
+    "turns": 3
+  },
+  {
+    "floor": 3,
+    "enemies": [
+      "LEAF_SLIME_S",
+      "TWIG_SLIME_M",
+      "TWIG_SLIME_S"
+    ],
+    "outcome": "win",
+    "turns": 10
+  },
+  {
+    "floor": 5,
+    "enemies": [
+      "FUZZY_WURM_CRAWLER"
+    ],
+    "outcome": "win",
+    "turns": 11
+  },
+  {
+    "floor": 6,
+    "enemies": [
+      "VINE_SHAMBLER"
+    ],
+    "outcome": "win",
+    "turns": 12
+  },
+  {
+    "floor": 7,
+    "enemies": [
+      "FLYCONID",
+      "TWIG_SLIME_M"
+    ],
+    "outcome": "defeat",
+    "turns": 3
+  },
+  {
+    "floor": 2,
+    "enemies": [
+      "FUZZY_WURM_CRAWLER"
+    ],
+    "outcome": "win",
+    "turns": 9
+  },
+  {
+    "floor": 4,
+    "enemies": [
+      "SHRINKER_BEETLE"
+    ],
+    "outcome": "win",
+    "turns": 7
+  },
+  {
+    "floor": 5,
+    "enemies": [
+      "INKLET",
+      "INKLET",
+      "INKLET"
+    ],
+    "outcome": "win",
+    "turns": 12
+  },
+  {
+    "floor": 9,
+    "enemies": [
+      "BYGONE_EFFIGY"
+    ],
+    "outcome": "defeat",
+    "turns": 5
+  },
+  {
+    "floor": 2,
+    "enemies": [
+      "NIBBIT"
+    ],
+    "outcome": "win",
+    "turns": 8
+  },
+  {
+    "floor": 5,
+    "enemies": [
+      "SHRINKER_BEETLE"
+    ],
+    "outcome": "win",
+    "turns": 11
+  },
+  {
+    "floor": 6,
+    "enemies": [
+      "FUZZY_WURM_CRAWLER"
+    ],
+    "outcome": "win",
+    "turns": 11
+  },
+  {
+    "floor": 8,
+    "enemies": [
+      "FOGMOG"
+    ],
+    "outcome": "defeat",
+    "turns": 8
+  },
+  {
+    "floor": 4,
+    "enemies": [
+      "NIBBIT"
+    ],
+    "outcome": "win",
+    "turns": 7
+  },
+  {
+    "floor": 6,
+    "enemies": [
+      "FLYCONID",
+      "LEAF_SLIME_M"
+    ],
+    "outcome": "win",
+    "turns": 9
+  },
+  {
+    "floor": 12,
+    "enemies": [
+      "NIBBIT",
+      "NIBBIT"
+    ],
+    "outcome": "defeat",
+    "turns": 4
+  },
+  {
+    "floor": 6,
+    "enemies": [
+      "BYGONE_EFFIGY"
+    ],
+    "outcome": "defeat",
+    "turns": 8
+  },
+  {
+    "floor": 3,
+    "enemies": [
+      "SHRINKER_BEETLE"
+    ],
+    "outcome": "defeat",
+    "turns": 42
+  },
+  {
+    "floor": 7,
+    "enemies": [
+      "NIBBIT"
+    ],
+    "outcome": "win",
+    "turns": 5
+  },
+  {
+    "floor": 9,
+    "enemies": [
+      "FOGMOG"
+    ],
+    "outcome": "win",
+    "turns": 11
+  },
+  {
+    "floor": 13,
+    "enemies": [
+      "FUZZY_WURM_CRAWLER",
+      "SHRINKER_BEETLE"
+    ],
+    "outcome": "win",
+    "turns": 13
+  },
+  {
+    "floor": 14,
+    "enemies": [
+      "FLYCONID",
+      "LEAF_SLIME_M"
+    ],
+    "outcome": "defeat",
+    "turns": 6
+  },
+  {
+    "floor": 6,
+    "enemies": [
+      "PHROG_PARASITE"
+    ],
+    "outcome": "defeat",
+    "turns": 13
+  },
+  {
+    "floor": 6,
+    "enemies": [
+      "LEAF_SLIME_S",
+      "TWIG_SLIME_M",
+      "TWIG_SLIME_S"
+    ],
+    "outcome": "defeat",
+    "turns": 10
+  },
+  {
+    "floor": 7,
+    "enemies": [
+      "LEAF_SLIME_M",
+      "LEAF_SLIME_S",
+      "TWIG_SLIME_S"
+    ],
+    "outcome": "win",
+    "turns": 7
+  },
+  {
+    "floor": 8,
+    "enemies": [
+      "INKLET",
+      "INKLET",
+      "INKLET"
+    ],
+    "outcome": "win",
+    "turns": 4
+  },
+  {
+    "floor": 2,
+    "enemies": [
+      "LEAF_SLIME_S",
+      "TWIG_SLIME_M",
+      "TWIG_SLIME_S"
+    ],
+    "outcome": "win",
+    "turns": 9
+  },
+  {
+    "floor": 4,
+    "enemies": [
+      "FUZZY_WURM_CRAWLER"
+    ],
+    "outcome": "win",
+    "turns": 10
+  },
+  {
+    "floor": 5,
+    "enemies": [
+      "NIBBIT",
+      "NIBBIT"
+    ],
+    "outcome": "win",
+    "turns": 17
+  },
+  {
+    "floor": 6,
+    "enemies": [
+      "LEAF_SLIME_M",
+      "LEAF_SLIME_S",
+      "TWIG_SLIME_M",
+      "TWIG_SLIME_S"
+    ],
+    "outcome": "defeat",
+    "turns": 9
+  },
+  {
+    "floor": 6,
+    "enemies": [
+      "NIBBIT"
+    ],
+    "outcome": "win",
+    "turns": 7
+  },
+  {
+    "floor": 7,
+    "enemies": [
+      "INKLET",
+      "INKLET",
+      "INKLET"
+    ],
+    "outcome": "win",
+    "turns": 10
+  },
+  {
+    "floor": 8,
+    "enemies": [
+      "CUBEX_CONSTRUCT"
+    ],
+    "outcome": "defeat",
+    "turns": 10
+  },
+  {
+    "floor": 7,
+    "enemies": [
+      "SHRINKER_BEETLE"
+    ],
+    "outcome": "win",
+    "turns": 8
+  },
+  {
+    "floor": 8,
+    "enemies": [
+      "LEAF_SLIME_S",
+      "TWIG_SLIME_M",
+      "TWIG_SLIME_S"
+    ],
+    "outcome": "win",
+    "turns": 9
+  },
+  {
+    "floor": 12,
+    "enemies": [
+      "INKLET",
+      "INKLET",
+      "INKLET"
+    ],
+    "outcome": "win",
+    "turns": 8
+  },
+  {
+    "floor": 13,
+    "enemies": [
+      "PHROG_PARASITE"
+    ],
+    "outcome": "defeat",
+    "turns": 8
+  },
+  {
+    "floor": 7,
+    "enemies": [
+      "PHROG_PARASITE"
+    ],
+    "outcome": "defeat",
+    "turns": 11
+  },
+  {
+    "floor": 5,
+    "enemies": [
+      "NIBBIT"
+    ],
+    "outcome": "win",
+    "turns": 7
+  },
+  {
+    "floor": 11,
+    "enemies": [
+      "BYGONE_EFFIGY"
+    ],
+    "outcome": "defeat",
+    "turns": 13
+  },
+  {
+    "floor": 7,
+    "enemies": [
+      "FOGMOG"
+    ],
+    "outcome": "win",
+    "turns": 13
+  },
+  {
+    "floor": 12,
+    "enemies": [
+      "VINE_SHAMBLER"
+    ],
+    "outcome": "defeat",
+    "turns": 4
+  },
+  {
+    "floor": 6,
+    "enemies": [
+      "BYRDONIS"
+    ],
+    "outcome": "defeat",
+    "turns": 11
+  },
+  {
+    "floor": 7,
+    "enemies": [
+      "BYRDONIS"
+    ],
+    "outcome": "defeat",
+    "turns": 10
+  },
+  {
+    "floor": 5,
+    "enemies": [
+      "FLYCONID",
+      "TWIG_SLIME_M"
+    ],
+    "outcome": "win",
+    "turns": 10
+  },
+  {
+    "floor": 7,
+    "enemies": [
+      "SLITHERING_STRANGLER",
+      "SNAPPING_JAXFRUIT"
+    ],
+    "outcome": "defeat",
+    "turns": 5
+  },
+  {
+    "floor": 5,
+    "enemies": [
+      "LEAF_SLIME_M",
+      "SLITHERING_STRANGLER"
+    ],
+    "outcome": "win",
+    "turns": 14
+  },
+  {
+    "floor": 2,
+    "enemies": [
+      "LEAF_SLIME_M",
+      "LEAF_SLIME_S",
+      "TWIG_SLIME_S"
+    ],
+    "outcome": "win",
+    "turns": 8
+  },
+  {
+    "floor": 9,
+    "enemies": [
+      "LEAF_SLIME_M",
+      "LEAF_SLIME_S",
+      "TWIG_SLIME_M",
+      "TWIG_SLIME_S"
+    ],
+    "outcome": "win",
+    "turns": 9
+  },
+  {
+    "floor": 8,
+    "enemies": [
+      "FLYCONID",
+      "SNAPPING_JAXFRUIT"
+    ],
+    "outcome": "defeat",
+    "turns": 5
+  },
+  {
+    "floor": 12,
+    "enemies": [
+      "FLYCONID",
+      "LEAF_SLIME_M"
+    ],
+    "outcome": "win",
+    "turns": 15
+  },
+  {
+    "floor": 15,
+    "enemies": [
+      "BYGONE_EFFIGY"
+    ],
+    "outcome": "defeat",
+    "turns": 6
+  },
+  {
+    "floor": 8,
+    "enemies": [
+      "FUZZY_WURM_CRAWLER",
+      "SHRINKER_BEETLE"
+    ],
+    "outcome": "defeat",
+    "turns": 4
+  },
+  {
+    "floor": 6,
+    "enemies": [
+      "FLYCONID",
+      "SNAPPING_JAXFRUIT"
+    ],
+    "outcome": "win",
+    "turns": 8
+  },
+  {
+    "floor": 5,
+    "enemies": [
+      "FLYCONID",
+      "SNAPPING_JAXFRUIT"
+    ],
+    "outcome": "defeat",
+    "turns": 9
+  },
+  {
+    "floor": 3,
+    "enemies": [
+      "FUZZY_WURM_CRAWLER"
+    ],
+    "outcome": "win",
+    "turns": 8
+  },
+  {
+    "floor": 7,
+    "enemies": [
+      "FUZZY_WURM_CRAWLER",
+      "SHRINKER_BEETLE"
+    ],
+    "outcome": "defeat",
+    "turns": 9
+  },
+  {
+    "floor": 11,
+    "enemies": [
+      "FOGMOG"
+    ],
+    "outcome": "win",
+    "turns": 13
+  },
+  {
+    "floor": 15,
+    "enemies": [
+      "INKLET",
+      "INKLET",
+      "INKLET"
+    ],
+    "outcome": "win",
+    "turns": 2
+  },
+  {
+    "floor": 17,
+    "enemies": [
+      "KIN_FOLLOWER",
+      "KIN_FOLLOWER",
+      "KIN_PRIEST"
+    ],
+    "outcome": "defeat",
+    "turns": 4
+  },
+  {
+    "floor": 8,
+    "enemies": [
+      "SHRINKER_BEETLE"
+    ],
+    "outcome": "win",
+    "turns": 5
+  },
+  {
+    "floor": 13,
+    "enemies": [
+      "CUBEX_CONSTRUCT"
+    ],
+    "outcome": "win",
+    "turns": 6
+  },
+  {
+    "floor": 14,
+    "enemies": [
+      "MAWLER"
+    ],
+    "outcome": "win",
+    "turns": 9
+  },
+  {
+    "floor": 17,
+    "enemies": [
+      "VANTOM"
+    ],
+    "outcome": "defeat",
+    "turns": 9
+  },
+  {
+    "floor": 9,
+    "enemies": [
+      "PHROG_PARASITE"
+    ],
+    "outcome": "defeat",
+    "turns": 13
+  },
+  {
+    "floor": 6,
+    "enemies": [
+      "CUBEX_CONSTRUCT"
+    ],
+    "outcome": "win",
+    "turns": 10
+  },
+  {
+    "floor": 9,
+    "enemies": [
+      "NIBBIT",
+      "NIBBIT"
+    ],
+    "outcome": "win",
+    "turns": 9
+  },
+  {
+    "floor": 11,
+    "enemies": [
+      "SLITHERING_STRANGLER",
+      "SNAPPING_JAXFRUIT"
+    ],
+    "outcome": "defeat",
+    "turns": 5
+  },
+  {
+    "floor": 4,
+    "enemies": [
+      "LEAF_SLIME_M",
+      "LEAF_SLIME_S",
+      "TWIG_SLIME_S"
+    ],
+    "outcome": "win",
+    "turns": 8
+  },
+  {
+    "floor": 13,
+    "enemies": [
+      "BYGONE_EFFIGY"
+    ],
+    "outcome": "defeat",
+    "turns": 11
+  },
+  {
+    "floor": 9,
+    "enemies": [
+      "MAWLER"
+    ],
+    "outcome": "win",
+    "turns": 10
+  },
+  {
+    "floor": 12,
+    "enemies": [
+      "CUBEX_CONSTRUCT"
+    ],
+    "outcome": "win",
+    "turns": 7
+  },
+  {
+    "floor": 13,
+    "enemies": [
+      "VINE_SHAMBLER"
+    ],
+    "outcome": "win",
+    "turns": 6
+  },
+  {
+    "floor": 15,
+    "enemies": [
+      "NIBBIT",
+      "NIBBIT"
+    ],
+    "outcome": "defeat",
+    "turns": 5
+  },
+  {
+    "floor": 5,
+    "enemies": [
+      "VINE_SHAMBLER"
+    ],
+    "outcome": "win",
+    "turns": 13
+  },
+  {
+    "floor": 7,
+    "enemies": [
+      "LEAF_SLIME_M",
+      "SLITHERING_STRANGLER"
+    ],
+    "outcome": "defeat",
+    "turns": 3
+  },
+  {
+    "floor": 6,
+    "enemies": [
+      "SHRINKER_BEETLE"
+    ],
+    "outcome": "win",
+    "turns": 4
+  },
+  {
+    "floor": 8,
+    "enemies": [
+      "MAWLER"
+    ],
+    "outcome": "win",
+    "turns": 6
+  },
+  {
+    "floor": 13,
+    "enemies": [
+      "NIBBIT",
+      "NIBBIT"
+    ],
+    "outcome": "defeat",
+    "turns": 29
+  },
+  {
+    "floor": 7,
+    "enemies": [
+      "NIBBIT",
+      "NIBBIT"
+    ],
+    "outcome": "win",
+    "turns": 7
+  },
+  {
+    "floor": 7,
+    "enemies": [
+      "VINE_SHAMBLER"
+    ],
+    "outcome": "win",
+    "turns": 11
+  },
+  {
+    "floor": 9,
+    "enemies": [
+      "INKLET",
+      "INKLET",
+      "INKLET"
+    ],
+    "outcome": "win",
+    "turns": 9
+  },
+  {
+    "floor": 6,
+    "enemies": [
+      "NIBBIT",
+      "NIBBIT"
+    ],
+    "outcome": "win",
+    "turns": 14
+  },
+  {
+    "floor": 9,
+    "enemies": [
+      "CUBEX_CONSTRUCT"
+    ],
+    "outcome": "win",
+    "turns": 7
+  },
+  {
+    "floor": 14,
+    "enemies": [
+      "INKLET",
+      "INKLET",
+      "INKLET"
+    ],
+    "outcome": "defeat",
+    "turns": 1
+  },
+  {
+    "floor": 12,
+    "enemies": [
+      "FOGMOG"
+    ],
+    "outcome": "win",
+    "turns": 9
+  },
+  {
+    "floor": 15,
+    "enemies": [
+      "BYRDONIS"
+    ],
+    "outcome": "defeat",
+    "turns": 5
+  },
+  {
+    "floor": 13,
+    "enemies": [
+      "INKLET",
+      "INKLET",
+      "INKLET"
+    ],
+    "outcome": "win",
+    "turns": 7
+  },
+  {
+    "floor": 17,
+    "enemies": [
+      "CEREMONIAL_BEAST"
+    ],
+    "outcome": "defeat",
+    "turns": 6
+  },
+  {
+    "floor": 5,
+    "enemies": [
+      "LEAF_SLIME_M",
+      "LEAF_SLIME_S",
+      "TWIG_SLIME_S"
+    ],
+    "outcome": "win",
+    "turns": 6
+  },
+  {
+    "floor": 8,
+    "enemies": [
+      "PHROG_PARASITE"
+    ],
+    "outcome": "defeat",
+    "turns": 8
+  },
+  {
+    "floor": 9,
+    "enemies": [
+      "FLYCONID",
+      "SNAPPING_JAXFRUIT"
+    ],
+    "outcome": "win",
+    "turns": 10
+  },
+  {
+    "floor": 12,
+    "enemies": [
+      "BYGONE_EFFIGY"
+    ],
+    "outcome": "defeat",
+    "turns": 7
+  },
+  {
+    "floor": 6,
+    "enemies": [
+      "SLITHERING_STRANGLER",
+      "TWIG_SLIME_M"
+    ],
+    "outcome": "win",
+    "turns": 13
+  },
+  {
+    "floor": 7,
+    "enemies": [
+      "CUBEX_CONSTRUCT"
+    ],
+    "outcome": "win",
+    "turns": 5
+  },
+  {
+    "floor": 11,
+    "enemies": [
+      "VINE_SHAMBLER"
+    ],
+    "outcome": "win",
+    "turns": 8
+  },
+  {
+    "floor": 12,
+    "enemies": [
+      "FUZZY_WURM_CRAWLER",
+      "SHRINKER_BEETLE"
+    ],
+    "outcome": "defeat",
+    "turns": 14
+  },
+  {
+    "floor": 7,
+    "enemies": [
+      "BYGONE_EFFIGY"
+    ],
+    "outcome": "defeat",
+    "turns": 9
+  },
+  {
+    "floor": 4,
+    "enemies": [
+      "LEAF_SLIME_S",
+      "TWIG_SLIME_M",
+      "TWIG_SLIME_S"
+    ],
+    "outcome": "win",
+    "turns": 6
+  },
+  {
+    "floor": 11,
+    "enemies": [
+      "FUZZY_WURM_CRAWLER",
+      "SHRINKER_BEETLE"
+    ],
+    "outcome": "win",
+    "turns": 11
+  },
+  {
+    "floor": 6,
+    "enemies": [
+      "WRIGGLER",
+      "WRIGGLER",
+      "WRIGGLER",
+      "WRIGGLER"
+    ],
+    "outcome": "win",
+    "turns": 14
+  },
+  {
+    "floor": 8,
+    "enemies": [
+      "FLYCONID",
+      "LEAF_SLIME_M"
+    ],
+    "outcome": "defeat",
+    "turns": 5
+  },
+  {
+    "floor": 8,
+    "enemies": [
+      "LEAF_SLIME_S",
+      "SLITHERING_STRANGLER",
+      "TWIG_SLIME_S"
+    ],
+    "outcome": "defeat",
+    "turns": 10
+  },
+  {
+    "floor": 8,
+    "enemies": [
+      "BYRDONIS"
+    ],
+    "outcome": "defeat",
+    "turns": 8
+  },
+  {
+    "floor": 5,
+    "enemies": [
+      "FOGMOG"
+    ],
+    "outcome": "win",
+    "turns": 8
+  },
+  {
+    "floor": 7,
+    "enemies": [
+      "FUZZY_WURM_CRAWLER"
+    ],
+    "outcome": "win",
+    "turns": 7
+  },
+  {
+    "floor": 8,
+    "enemies": [
+      "SLITHERING_STRANGLER",
+      "SNAPPING_JAXFRUIT"
+    ],
+    "outcome": "defeat",
+    "turns": 6
+  },
+  {
+    "floor": 11,
+    "enemies": [
+      "NIBBIT",
+      "NIBBIT"
+    ],
+    "outcome": "defeat",
+    "turns": 4
+  },
+  {
+    "floor": 5,
+    "enemies": [
+      "SLITHERING_STRANGLER",
+      "SNAPPING_JAXFRUIT"
+    ],
+    "outcome": "win",
+    "turns": 13
+  },
+  {
+    "floor": 5,
+    "enemies": [
+      "CUBEX_CONSTRUCT"
+    ],
+    "outcome": "win",
+    "turns": 5
+  },
+  {
+    "floor": 6,
+    "enemies": [
+      "MAWLER"
+    ],
+    "outcome": "defeat",
+    "turns": 4
+  },
+  {
+    "floor": 11,
+    "enemies": [
+      "SHRINKER_BEETLE"
+    ],
+    "outcome": "win",
+    "turns": 5
+  },
+  {
+    "floor": 13,
+    "enemies": [
+      "LEAF_SLIME_M",
+      "LEAF_SLIME_S",
+      "TWIG_SLIME_S"
+    ],
+    "outcome": "win",
+    "turns": 5
+  },
+  {
+    "floor": 14,
+    "enemies": [
+      "FLYCONID",
+      "SNAPPING_JAXFRUIT"
+    ],
+    "outcome": "win",
+    "turns": 10
+  },
+  {
+    "floor": 15,
+    "enemies": [
+      "CUBEX_CONSTRUCT"
+    ],
+    "outcome": "win",
+    "turns": 6
+  },
+  {
+    "floor": 12,
+    "enemies": [
+      "SLITHERING_STRANGLER",
+      "TWIG_SLIME_M"
+    ],
+    "outcome": "win",
+    "turns": 7
+  },
+  {
+    "floor": 15,
+    "enemies": [
+      "FUZZY_WURM_CRAWLER",
+      "SHRINKER_BEETLE"
+    ],
+    "outcome": "defeat",
+    "turns": 4
+  },
+  {
+    "floor": 6,
+    "enemies": [
+      "INKLET",
+      "INKLET",
+      "INKLET"
+    ],
+    "outcome": "win",
+    "turns": 9
+  },
+  {
+    "floor": 11,
+    "enemies": [
+      "LEAF_SLIME_M",
+      "SLITHERING_STRANGLER"
+    ],
+    "outcome": "defeat",
+    "turns": 7
+  },
+  {
+    "floor": 6,
+    "enemies": [
+      "FLYCONID",
+      "TWIG_SLIME_M"
+    ],
+    "outcome": "defeat",
+    "turns": 4
+  },
+  {
+    "floor": 3,
+    "enemies": [
+      "LEAF_SLIME_M",
+      "LEAF_SLIME_S",
+      "TWIG_SLIME_S"
+    ],
+    "outcome": "win",
+    "turns": 7
+  },
+  {
+    "floor": 8,
+    "enemies": [
+      "LEAF_SLIME_M",
+      "LEAF_SLIME_S",
+      "TWIG_SLIME_M",
+      "TWIG_SLIME_S"
+    ],
+    "outcome": "win",
+    "turns": 12
+  },
+  {
+    "floor": 9,
+    "enemies": [
+      "WRIGGLER",
+      "WRIGGLER",
+      "WRIGGLER",
+      "WRIGGLER"
+    ],
+    "outcome": "win",
+    "turns": 9
+  },
+  {
+    "floor": 8,
+    "enemies": [
+      "WRIGGLER",
+      "WRIGGLER",
+      "WRIGGLER",
+      "WRIGGLER"
+    ],
+    "outcome": "win",
+    "turns": 9
+  },
+  {
+    "floor": 12,
+    "enemies": [
+      "SHRINKER_BEETLE"
+    ],
+    "outcome": "win",
+    "turns": 11
+  },
+  {
+    "floor": 13,
+    "enemies": [
+      "SLITHERING_STRANGLER",
+      "TWIG_SLIME_M"
+    ],
+    "outcome": "defeat",
+    "turns": 6
+  },
+  {
+    "floor": 2,
+    "enemies": [
+      "SEAPUNK"
+    ],
+    "outcome": "win",
+    "turns": 8
+  },
+  {
+    "floor": 3,
+    "enemies": [
+      "SLUDGE_SPINNER"
+    ],
+    "outcome": "win",
+    "turns": 7
+  },
+  {
+    "floor": 4,
+    "enemies": [
+      "TOADPOLE",
+      "TOADPOLE"
+    ],
+    "outcome": "win",
+    "turns": 7
+  },
+  {
+    "floor": 5,
+    "enemies": [
+      "TWO_TAILED_RAT",
+      "TWO_TAILED_RAT",
+      "TWO_TAILED_RAT"
+    ],
+    "outcome": "win",
+    "turns": 9
+  },
+  {
+    "floor": 9,
+    "enemies": [
+      "LIVING_FOG"
+    ],
+    "outcome": "win",
+    "turns": 11
+  },
+  {
+    "floor": 11,
+    "enemies": [
+      "CORPSE_SLUG",
+      "CORPSE_SLUG",
+      "CORPSE_SLUG"
+    ],
+    "outcome": "defeat",
+    "turns": 3
+  },
+  {
+    "floor": 2,
+    "enemies": [
+      "TOADPOLE",
+      "TOADPOLE"
+    ],
+    "outcome": "win",
+    "turns": 7
+  },
+  {
+    "floor": 5,
+    "enemies": [
+      "SEAPUNK"
+    ],
+    "outcome": "win",
+    "turns": 5
+  },
+  {
+    "floor": 8,
+    "enemies": [
+      "CORPSE_SLUG",
+      "CORPSE_SLUG"
+    ],
+    "outcome": "win",
+    "turns": 5
+  },
+  {
+    "floor": 9,
+    "enemies": [
+      "FUZZY_WURM_CRAWLER",
+      "SHRINKER_BEETLE"
+    ],
+    "outcome": "defeat",
+    "turns": 5
+  },
+  {
+    "floor": 7,
+    "enemies": [
+      "LEAF_SLIME_S",
+      "TWIG_SLIME_M",
+      "TWIG_SLIME_S"
+    ],
+    "outcome": "win",
+    "turns": 5
+  },
+  {
+    "floor": 9,
+    "enemies": [
+      "LEAF_SLIME_M",
+      "SLITHERING_STRANGLER"
+    ],
+    "outcome": "defeat",
+    "turns": 5
+  },
+  {
+    "floor": 3,
+    "enemies": [
+      "WRIGGLER",
+      "WRIGGLER",
+      "WRIGGLER",
+      "WRIGGLER"
+    ],
+    "outcome": "defeat",
+    "turns": 8
+  },
+  {
+    "floor": 3,
+    "enemies": [
+      "CORPSE_SLUG",
+      "CORPSE_SLUG"
+    ],
+    "outcome": "win",
+    "turns": 6
+  },
+  {
+    "floor": 4,
+    "enemies": [
+      "SLUDGE_SPINNER"
+    ],
+    "outcome": "win",
+    "turns": 3
+  },
+  {
+    "floor": 5,
+    "enemies": [
+      "LIVING_FOG"
+    ],
+    "outcome": "defeat",
+    "turns": 5
+  },
+  {
+    "floor": 6,
+    "enemies": [
+      "SEWER_CLAM"
+    ],
+    "outcome": "win",
+    "turns": 8
+  },
+  {
+    "floor": 8,
+    "enemies": [
+      "PHANTASMAL_GARDENER",
+      "PHANTASMAL_GARDENER",
+      "PHANTASMAL_GARDENER",
+      "PHANTASMAL_GARDENER"
+    ],
+    "outcome": "defeat",
+    "turns": 5
+  },
+  {
+    "floor": 7,
+    "enemies": [
+      "MAWLER"
+    ],
+    "outcome": "win",
+    "turns": 6
+  },
+  {
+    "floor": 5,
+    "enemies": [
+      "CORPSE_SLUG",
+      "CORPSE_SLUG"
+    ],
+    "outcome": "win",
+    "turns": 6
+  },
+  {
+    "floor": 8,
+    "enemies": [
+      "LIVING_FOG"
+    ],
+    "outcome": "defeat",
+    "turns": 7
+  },
+  {
+    "floor": 8,
+    "enemies": [
+      "CALCIFIED_CULTIST",
+      "TOADPOLE"
+    ],
+    "outcome": "win",
+    "turns": 5
+  },
+  {
+    "floor": 9,
+    "enemies": [
+      "CORPSE_SLUG",
+      "CORPSE_SLUG",
+      "CORPSE_SLUG"
+    ],
+    "outcome": "win",
+    "turns": 5
+  },
+  {
+    "floor": 12,
+    "enemies": [
+      "PHANTASMAL_GARDENER",
+      "PHANTASMAL_GARDENER",
+      "PHANTASMAL_GARDENER",
+      "PHANTASMAL_GARDENER"
+    ],
+    "outcome": "win",
+    "turns": 10
+  },
+  {
+    "floor": 14,
+    "enemies": [
+      "GREMLIN_MERC"
+    ],
+    "outcome": "win",
+    "turns": 6
+  },
+  {
+    "floor": 15,
+    "enemies": [
+      "PUNCH_CONSTRUCT"
+    ],
+    "outcome": "win",
+    "turns": 3
+  },
+  {
+    "floor": 17,
+    "enemies": [
+      "WATERFALL_GIANT"
+    ],
+    "outcome": "defeat",
+    "turns": 6
+  },
+  {
+    "floor": 5,
+    "enemies": [
+      "SLUDGE_SPINNER"
+    ],
+    "outcome": "win",
+    "turns": 7
+  },
+  {
+    "floor": 6,
+    "enemies": [
+      "CORPSE_SLUG",
+      "CORPSE_SLUG"
+    ],
+    "outcome": "win",
+    "turns": 11
+  },
+  {
+    "floor": 9,
+    "enemies": [
+      "FOSSIL_STALKER"
+    ],
+    "outcome": "win",
+    "turns": 6
+  },
+  {
+    "floor": 13,
+    "enemies": [
+      "CALCIFIED_CULTIST",
+      "DAMP_CULTIST"
+    ],
+    "outcome": "win",
+    "turns": 10
+  },
+  {
+    "floor": 14,
+    "enemies": [
+      "TERROR_EEL"
+    ],
+    "outcome": "defeat",
+    "turns": 10
+  },
+  {
+    "floor": 6,
+    "enemies": [
+      "HAUNTED_SHIP"
+    ],
+    "outcome": "defeat",
+    "turns": 9
+  },
+  {
+    "floor": 2,
+    "enemies": [
+      "SLUDGE_SPINNER"
+    ],
+    "outcome": "defeat",
+    "turns": 18
+  },
+  {
+    "floor": 2,
+    "enemies": [
+      "CORPSE_SLUG",
+      "CORPSE_SLUG"
+    ],
+    "outcome": "defeat",
+    "turns": 27
+  },
+  {
+    "floor": 5,
+    "enemies": [
+      "HAUNTED_SHIP"
+    ],
+    "outcome": "defeat",
+    "turns": 5
+  },
+  {
+    "floor": 12,
+    "enemies": [
+      "CALCIFIED_CULTIST",
+      "DAMP_CULTIST"
+    ],
+    "outcome": "defeat",
+    "turns": 9
+  },
+  {
+    "floor": 8,
+    "enemies": [
+      "CALCIFIED_CULTIST",
+      "DAMP_CULTIST"
+    ],
+    "outcome": "defeat",
+    "turns": 6
+  },
+  {
+    "floor": 11,
+    "enemies": [
+      "BYRDONIS"
+    ],
+    "outcome": "defeat",
+    "turns": 5
+  },
+  {
+    "floor": 4,
+    "enemies": [
+      "CORPSE_SLUG",
+      "CORPSE_SLUG"
+    ],
+    "outcome": "win",
+    "turns": 5
+  },
+  {
+    "floor": 5,
+    "enemies": [
+      "TOADPOLE",
+      "TOADPOLE"
+    ],
+    "outcome": "win",
+    "turns": 4
+  },
+  {
+    "floor": 6,
+    "enemies": [
+      "CALCIFIED_CULTIST",
+      "TOADPOLE"
+    ],
+    "outcome": "win",
+    "turns": 5
+  },
+  {
+    "floor": 7,
+    "enemies": [
+      "SEWER_CLAM"
+    ],
+    "outcome": "win",
+    "turns": 10
+  },
+  {
+    "floor": 8,
+    "enemies": [
+      "CORPSE_SLUG",
+      "CORPSE_SLUG",
+      "CORPSE_SLUG"
+    ],
+    "outcome": "win",
+    "turns": 2
+  },
+  {
+    "floor": 9,
+    "enemies": [
+      "CALCIFIED_CULTIST",
+      "DAMP_CULTIST"
+    ],
+    "outcome": "defeat",
+    "turns": 3
+  },
+  {
+    "floor": 3,
+    "enemies": [
+      "TOADPOLE",
+      "TOADPOLE"
+    ],
+    "outcome": "win",
+    "turns": 4
+  },
+  {
+    "floor": 7,
+    "enemies": [
+      "TWO_TAILED_RAT",
+      "TWO_TAILED_RAT",
+      "TWO_TAILED_RAT"
+    ],
+    "outcome": "win",
+    "turns": 4
+  },
+  {
+    "floor": 8,
+    "enemies": [
+      "FOSSIL_STALKER"
+    ],
+    "outcome": "win",
+    "turns": 4
+  },
+  {
+    "floor": 11,
+    "enemies": [
+      "PHANTASMAL_GARDENER",
+      "PHANTASMAL_GARDENER",
+      "PHANTASMAL_GARDENER",
+      "PHANTASMAL_GARDENER"
+    ],
+    "outcome": "defeat",
+    "turns": 1
+  },
+  {
+    "floor": 3,
+    "enemies": [
+      "SEAPUNK"
+    ],
+    "outcome": "win",
+    "turns": 3
+  },
+  {
+    "floor": 5,
+    "enemies": [
+      "CALCIFIED_CULTIST",
+      "DAMP_CULTIST"
+    ],
+    "outcome": "defeat",
+    "turns": 7
+  },
+  {
+    "floor": 8,
+    "enemies": [
+      "TWO_TAILED_RAT",
+      "TWO_TAILED_RAT",
+      "TWO_TAILED_RAT"
+    ],
+    "outcome": "defeat",
+    "turns": 8
+  },
+  {
+    "floor": 7,
+    "enemies": [
+      "SLUDGE_SPINNER"
+    ],
+    "outcome": "win",
+    "turns": 4
+  },
+  {
+    "floor": 11,
+    "enemies": [
+      "SEWER_CLAM"
+    ],
+    "outcome": "win",
+    "turns": 8
+  },
+  {
+    "floor": 13,
+    "enemies": [
+      "LIVING_FOG"
+    ],
+    "outcome": "defeat",
+    "turns": 7
+  },
+  {
+    "floor": 6,
+    "enemies": [
+      "CORPSE_SLUG",
+      "CORPSE_SLUG",
+      "CORPSE_SLUG"
+    ],
+    "outcome": "defeat",
+    "turns": 8
+  },
+  {
+    "floor": 8,
+    "enemies": [
+      "VINE_SHAMBLER"
+    ],
+    "outcome": "win",
+    "turns": 5
+  },
+  {
+    "floor": 12,
+    "enemies": [
+      "FLYCONID",
+      "TWIG_SLIME_M"
+    ],
+    "outcome": "win",
+    "turns": 9
+  },
+  {
+    "floor": 14,
+    "enemies": [
+      "BYRDONIS"
+    ],
+    "outcome": "win",
+    "turns": 9
+  },
+  {
+    "floor": 6,
+    "enemies": [
+      "FOGMOG"
+    ],
+    "outcome": "win",
+    "turns": 10
+  },
+  {
+    "floor": 6,
+    "enemies": [
+      "SEAPUNK"
+    ],
+    "outcome": "win",
+    "turns": 5
+  },
+  {
+    "floor": 4,
+    "enemies": [
+      "SEAPUNK"
+    ],
+    "outcome": "win",
+    "turns": 5
+  },
+  {
+    "floor": 11,
+    "enemies": [
+      "PUNCH_CONSTRUCT"
+    ],
+    "outcome": "win",
+    "turns": 8
+  },
+  {
+    "floor": 12,
+    "enemies": [
+      "CORPSE_SLUG",
+      "CORPSE_SLUG",
+      "CORPSE_SLUG"
+    ],
+    "outcome": "win",
+    "turns": 7
+  },
+  {
+    "floor": 14,
+    "enemies": [
+      "LIVING_FOG"
+    ],
+    "outcome": "defeat",
+    "turns": 7
+  },
+  {
+    "floor": 8,
+    "enemies": [
+      "NIBBIT"
+    ],
+    "outcome": "win",
+    "turns": 4
+  },
+  {
+    "floor": 11,
+    "enemies": [
+      "MAWLER"
+    ],
+    "outcome": "win",
+    "turns": 5
+  },
+  {
+    "floor": 13,
+    "enemies": [
+      "FLYCONID",
+      "SNAPPING_JAXFRUIT"
+    ],
+    "outcome": "win",
+    "turns": 5
+  },
+  {
+    "floor": 6,
+    "enemies": [
+      "SKULKING_COLONY"
+    ],
+    "outcome": "win",
+    "turns": 9
+  },
+  {
+    "floor": 8,
+    "enemies": [
+      "PUNCH_CONSTRUCT"
+    ],
+    "outcome": "win",
+    "turns": 6
+  },
+  {
+    "floor": 7,
+    "enemies": [
+      "LIVING_FOG"
+    ],
+    "outcome": "defeat",
+    "turns": 5
+  },
+  {
+    "floor": 7,
+    "enemies": [
+      "PHANTASMAL_GARDENER",
+      "PHANTASMAL_GARDENER",
+      "PHANTASMAL_GARDENER",
+      "PHANTASMAL_GARDENER"
+    ],
+    "outcome": "defeat",
+    "turns": 7
+  },
+  {
+    "floor": 8,
+    "enemies": [
+      "HAUNTED_SHIP"
+    ],
+    "outcome": "defeat",
+    "turns": 6
+  },
+  {
+    "floor": 9,
+    "enemies": [
+      "LEAF_SLIME_M",
+      "LEAF_SLIME_S",
+      "TWIG_SLIME_S"
+    ],
+    "outcome": "win",
+    "turns": 5
+  },
+  {
+    "floor": 8,
+    "enemies": [
+      "TERROR_EEL"
+    ],
+    "outcome": "defeat",
+    "turns": 7
+  },
+  {
+    "floor": 14,
+    "enemies": [
+      "CUBEX_CONSTRUCT"
+    ],
+    "outcome": "defeat",
+    "turns": 4
+  },
+  {
+    "floor": 9,
+    "enemies": [
+      "SHRINKER_BEETLE"
+    ],
+    "outcome": "win",
+    "turns": 4
+  },
+  {
+    "floor": 12,
+    "enemies": [
+      "PHROG_PARASITE"
+    ],
+    "outcome": "defeat",
+    "turns": 8
+  },
+  {
+    "floor": 13,
+    "enemies": [
+      "CALCIFIED_CULTIST",
+      "TOADPOLE"
+    ],
+    "outcome": "defeat",
+    "turns": 3
+  },
+  {
+    "floor": 5,
+    "enemies": [
+      "CALCIFIED_CULTIST",
+      "TOADPOLE"
+    ],
+    "outcome": "win",
+    "turns": 5
+  },
+  {
+    "floor": 6,
+    "enemies": [
+      "TWO_TAILED_RAT",
+      "TWO_TAILED_RAT",
+      "TWO_TAILED_RAT"
+    ],
+    "outcome": "win",
+    "turns": 5
+  },
+  {
+    "floor": 7,
+    "enemies": [
+      "CORPSE_SLUG",
+      "CORPSE_SLUG"
+    ],
+    "outcome": "win",
+    "turns": 4
+  },
+  {
+    "floor": 8,
+    "enemies": [
+      "SKULKING_COLONY"
+    ],
+    "outcome": "win",
+    "turns": 6
+  },
+  {
+    "floor": 9,
+    "enemies": [
+      "TOADPOLE",
+      "TOADPOLE"
+    ],
+    "outcome": "win",
+    "turns": 4
+  },
+  {
+    "floor": 12,
+    "enemies": [
+      "SEWER_CLAM"
+    ],
+    "outcome": "win",
+    "turns": 5
+  },
+  {
+    "floor": 14,
+    "enemies": [
+      "CORPSE_SLUG",
+      "CORPSE_SLUG",
+      "CORPSE_SLUG"
+    ],
+    "outcome": "win",
+    "turns": 5
+  },
+  {
+    "floor": 15,
+    "enemies": [
+      "LIVING_FOG"
+    ],
+    "outcome": "win",
+    "turns": 4
+  },
+  {
+    "floor": 17,
+    "enemies": [
+      "SOUL_FYSH"
+    ],
+    "outcome": "defeat",
+    "turns": 2
+  },
+  {
+    "floor": 9,
+    "enemies": [
+      "CORPSE_SLUG",
+      "CORPSE_SLUG"
+    ],
+    "outcome": "win",
+    "turns": 4
+  },
+  {
+    "floor": 6,
+    "enemies": [
+      "TOADPOLE",
+      "TOADPOLE"
+    ],
+    "outcome": "win",
+    "turns": 5
+  },
+  {
+    "floor": 8,
+    "enemies": [
+      "SEWER_CLAM"
+    ],
+    "outcome": "defeat",
+    "turns": 9
+  },
+  {
+    "floor": 7,
+    "enemies": [
+      "TERROR_EEL"
+    ],
+    "outcome": "defeat",
+    "turns": 5
+  },
+  {
+    "floor": 7,
+    "enemies": [
+      "CALCIFIED_CULTIST",
+      "TOADPOLE"
+    ],
+    "outcome": "win",
+    "turns": 6
+  },
+  {
+    "floor": 7,
+    "enemies": [
+      "SKULKING_COLONY"
+    ],
+    "outcome": "defeat",
+    "turns": 8
+  },
+  {
+    "floor": 5,
+    "enemies": [
+      "FOSSIL_STALKER"
+    ],
+    "outcome": "win",
+    "turns": 4
+  },
+  {
+    "floor": 14,
+    "enemies": [
+      "HAUNTED_SHIP"
+    ],
+    "outcome": "win",
+    "turns": 5
+  },
+  {
+    "floor": 15,
+    "enemies": [
+      "TERROR_EEL"
+    ],
+    "outcome": "defeat",
+    "turns": 3
+  },
+  {
+    "floor": 11,
+    "enemies": [
+      "SLUDGE_SPINNER"
+    ],
+    "outcome": "win",
+    "turns": 2
+  },
+  {
+    "floor": 12,
+    "enemies": [
+      "LIVING_FOG"
+    ],
+    "outcome": "win",
+    "turns": 4
+  },
+  {
+    "floor": 13,
+    "enemies": [
+      "TERROR_EEL"
+    ],
+    "outcome": "defeat",
+    "turns": 8
+  },
+  {
+    "floor": 8,
+    "enemies": [
+      "TOADPOLE",
+      "TOADPOLE"
+    ],
+    "outcome": "win",
+    "turns": 3
+  },
+  {
+    "floor": 9,
+    "enemies": [
+      "TERROR_EEL"
+    ],
+    "outcome": "defeat",
+    "turns": 3
+  },
+  {
+    "floor": 14,
+    "enemies": [
+      "BYGONE_EFFIGY"
+    ],
+    "outcome": "defeat",
+    "turns": 8
+  },
+  {
+    "floor": 7,
+    "enemies": [
+      "GREMLIN_MERC"
+    ],
+    "outcome": "win",
+    "turns": 7
+  },
+  {
+    "floor": 7,
+    "enemies": [
+      "CALCIFIED_CULTIST",
+      "DAMP_CULTIST"
+    ],
+    "outcome": "defeat",
+    "turns": 5
+  },
+  {
+    "floor": 9,
+    "enemies": [
+      "SKULKING_COLONY"
+    ],
+    "outcome": "win",
+    "turns": 6
+  },
+  {
+    "floor": 13,
+    "enemies": [
+      "GREMLIN_MERC"
+    ],
+    "outcome": "defeat",
+    "turns": 2
+  },
+  {
+    "floor": 6,
+    "enemies": [
+      "SLUDGE_SPINNER"
+    ],
+    "outcome": "win",
+    "turns": 3
+  },
+  {
+    "floor": 7,
+    "enemies": [
+      "CORPSE_SLUG",
+      "CORPSE_SLUG",
+      "CORPSE_SLUG"
+    ],
+    "outcome": "defeat",
+    "turns": 3
+  },
+  {
+    "floor": 11,
+    "enemies": [
+      "TERROR_EEL"
+    ],
+    "outcome": "defeat",
+    "turns": 3
+  },
+  {
+    "floor": 12,
+    "enemies": [
+      "TERROR_EEL"
+    ],
+    "outcome": "win",
+    "turns": 10
+  },
+  {
+    "floor": 14,
+    "enemies": [
+      "SKULKING_COLONY"
+    ],
+    "outcome": "defeat",
+    "turns": 6
+  },
+  {
+    "floor": 6,
+    "enemies": [
+      "LEAF_SLIME_M",
+      "SLITHERING_STRANGLER"
+    ],
+    "outcome": "defeat",
+    "turns": 3
+  },
+  {
+    "floor": 6,
+    "enemies": [
+      "FOSSIL_STALKER"
+    ],
+    "outcome": "win",
+    "turns": 6
+  },
+  {
+    "floor": 5,
+    "enemies": [
+      "CORPSE_SLUG",
+      "CORPSE_SLUG",
+      "CORPSE_SLUG"
+    ],
+    "outcome": "defeat",
+    "turns": 3
+  },
+  {
+    "floor": 6,
+    "enemies": [
+      "GREMLIN_MERC"
+    ],
+    "outcome": "defeat",
+    "turns": 4
+  },
+  {
+    "floor": 11,
+    "enemies": [
+      "LIVING_FOG"
+    ],
+    "outcome": "win",
+    "turns": 4
+  },
+  {
+    "floor": 6,
+    "enemies": [
+      "LIVING_FOG"
+    ],
+    "outcome": "defeat",
+    "turns": 5
+  },
+  {
+    "floor": 14,
+    "enemies": [
+      "SLITHERING_STRANGLER",
+      "TWIG_SLIME_M"
+    ],
+    "outcome": "win",
+    "turns": 8
+  },
+  {
+    "floor": 15,
+    "enemies": [
+      "FLYCONID",
+      "SNAPPING_JAXFRUIT"
+    ],
+    "outcome": "defeat",
+    "turns": 6
+  },
+  {
+    "floor": 7,
+    "enemies": [
+      "HAUNTED_SHIP"
+    ],
+    "outcome": "win",
+    "turns": 6
+  },
+  {
+    "floor": 12,
+    "enemies": [
+      "MAWLER"
+    ],
+    "outcome": "win",
+    "turns": 4
+  },
+  {
+    "floor": 14,
+    "enemies": [
+      "LEAF_SLIME_M",
+      "LEAF_SLIME_S",
+      "TWIG_SLIME_M",
+      "TWIG_SLIME_S"
+    ],
+    "outcome": "defeat",
+    "turns": 2
+  },
+  {
+    "floor": 9,
+    "enemies": [
+      "GREMLIN_MERC"
+    ],
+    "outcome": "win",
+    "turns": 1
+  },
+  {
+    "floor": 7,
+    "enemies": [
+      "FLYCONID",
+      "SNAPPING_JAXFRUIT"
+    ],
+    "outcome": "defeat",
+    "turns": 4
+  },
+  {
+    "floor": 9,
+    "enemies": [
+      "HAUNTED_SHIP"
+    ],
+    "outcome": "defeat",
+    "turns": 4
+  },
+  {
+    "floor": 6,
+    "enemies": [
+      "PHANTASMAL_GARDENER",
+      "PHANTASMAL_GARDENER",
+      "PHANTASMAL_GARDENER",
+      "PHANTASMAL_GARDENER"
+    ],
+    "outcome": "defeat",
+    "turns": 6
+  },
+  {
+    "floor": 6,
+    "enemies": [
+      "PUNCH_CONSTRUCT"
+    ],
+    "outcome": "win",
+    "turns": 6
+  },
+  {
+    "floor": 7,
+    "enemies": [
+      "SEAPUNK"
+    ],
+    "outcome": "win",
+    "turns": 3
+  },
+  {
+    "floor": 9,
+    "enemies": [
+      "VINE_SHAMBLER"
+    ],
+    "outcome": "win",
+    "turns": 8
+  },
+  {
+    "floor": 7,
+    "enemies": [
+      "LEAF_SLIME_M",
+      "LEAF_SLIME_S",
+      "TWIG_SLIME_M",
+      "TWIG_SLIME_S"
+    ],
+    "outcome": "defeat",
+    "turns": 2
+  },
+  {
+    "floor": 5,
+    "enemies": [
+      "PUNCH_CONSTRUCT"
+    ],
+    "outcome": "win",
+    "turns": 7
+  },
+  {
+    "floor": 5,
+    "enemies": [
+      "LEAF_SLIME_M",
+      "LEAF_SLIME_S",
+      "TWIG_SLIME_M",
+      "TWIG_SLIME_S"
+    ],
+    "outcome": "win",
+    "turns": 11
+  },
+  {
+    "floor": 8,
+    "enemies": [
+      "NIBBIT",
+      "NIBBIT"
+    ],
+    "outcome": "defeat",
+    "turns": 3
+  },
+  {
+    "floor": 5,
+    "enemies": [
+      "MAWLER"
+    ],
+    "outcome": "defeat",
+    "turns": 7
+  },
+  {
+    "floor": 11,
+    "enemies": [
+      "CUBEX_CONSTRUCT"
+    ],
+    "outcome": "win",
+    "turns": 4
+  },
+  {
+    "floor": 13,
+    "enemies": [
+      "LEAF_SLIME_M",
+      "LEAF_SLIME_S",
+      "TWIG_SLIME_M",
+      "TWIG_SLIME_S"
+    ],
+    "outcome": "win",
+    "turns": 9
+  },
+  {
+    "floor": 15,
+    "enemies": [
+      "FOGMOG"
+    ],
+    "outcome": "win",
+    "turns": 5
+  },
+  {
+    "floor": 12,
+    "enemies": [
+      "FOSSIL_STALKER"
+    ],
+    "outcome": "win",
+    "turns": 4
+  },
+  {
+    "floor": 13,
+    "enemies": [
+      "TWO_TAILED_RAT",
+      "TWO_TAILED_RAT",
+      "TWO_TAILED_RAT"
+    ],
+    "outcome": "defeat",
+    "turns": 2
+  },
+  {
+    "floor": 5,
+    "enemies": [
+      "SEWER_CLAM"
+    ],
+    "outcome": "defeat",
+    "turns": 7
+  },
+  {
+    "floor": 14,
+    "enemies": [
+      "PHANTASMAL_GARDENER",
+      "PHANTASMAL_GARDENER",
+      "PHANTASMAL_GARDENER",
+      "PHANTASMAL_GARDENER"
+    ],
+    "outcome": "win",
+    "turns": 6
+  },
+  {
+    "floor": 5,
+    "enemies": [
+      "GREMLIN_MERC"
+    ],
+    "outcome": "win",
+    "turns": 9
+  },
+  {
+    "floor": 11,
+    "enemies": [
+      "PHROG_PARASITE"
+    ],
+    "outcome": "win",
+    "turns": 8
+  },
+  {
+    "floor": 15,
+    "enemies": [
+      "SLITHERING_STRANGLER",
+      "SNAPPING_JAXFRUIT"
+    ],
+    "outcome": "win",
+    "turns": 3
+  },
+  {
+    "floor": 7,
+    "enemies": [
+      "FOSSIL_STALKER"
+    ],
+    "outcome": "defeat",
+    "turns": 4
+  },
+  {
+    "floor": 7,
+    "enemies": [
+      "PUNCH_CONSTRUCT"
+    ],
+    "outcome": "win",
+    "turns": 6
+  },
+  {
+    "floor": 8,
+    "enemies": [
+      "GREMLIN_MERC"
+    ],
+    "outcome": "win",
+    "turns": 5
+  },
+  {
+    "floor": 12,
+    "enemies": [
+      "CALCIFIED_CULTIST",
+      "TOADPOLE"
+    ],
+    "outcome": "win",
+    "turns": 5
+  },
+  {
+    "floor": 13,
+    "enemies": [
+      "HAUNTED_SHIP"
+    ],
+    "outcome": "win",
+    "turns": 5
+  },
+  {
+    "floor": 15,
+    "enemies": [
+      "CORPSE_SLUG",
+      "CORPSE_SLUG",
+      "CORPSE_SLUG"
+    ],
+    "outcome": "defeat",
+    "turns": 3
+  },
+  {
+    "floor": 6,
+    "enemies": [
+      "TERROR_EEL"
+    ],
+    "outcome": "defeat",
+    "turns": 9
+  },
+  {
+    "floor": 8,
+    "enemies": [
+      "BYGONE_EFFIGY"
+    ],
+    "outcome": "defeat",
+    "turns": 6
+  },
+  {
+    "floor": 6,
+    "enemies": [
+      "CALCIFIED_CULTIST",
+      "DAMP_CULTIST"
+    ],
+    "outcome": "defeat",
+    "turns": 5
+  },
+  {
+    "floor": 9,
+    "enemies": [
+      "SEWER_CLAM"
+    ],
+    "outcome": "defeat",
+    "turns": 3
+  },
+  {
+    "floor": 9,
+    "enemies": [
+      "BYRDONIS"
+    ],
+    "outcome": "defeat",
+    "turns": 10
+  },
+  {
+    "floor": 11,
+    "enemies": [
+      "GREMLIN_MERC"
+    ],
+    "outcome": "defeat",
+    "turns": 4
+  },
+  {
+    "floor": 11,
+    "enemies": [
+      "FLYCONID",
+      "SNAPPING_JAXFRUIT"
+    ],
+    "outcome": "win",
+    "turns": 6
+  },
+  {
+    "floor": 8,
+    "enemies": [
+      "LEAF_SLIME_M",
+      "LEAF_SLIME_S",
+      "TWIG_SLIME_S"
+    ],
+    "outcome": "win",
+    "turns": 2
+  },
+  {
+    "floor": 12,
+    "enemies": [
+      "SLITHERING_STRANGLER",
+      "TWIG_SLIME_S",
+      "TWIG_SLIME_S"
+    ],
+    "outcome": "win",
+    "turns": 2
+  },
+  {
+    "floor": 14,
+    "enemies": [
+      "FLYCONID",
+      "TWIG_SLIME_M"
+    ],
+    "outcome": "defeat",
+    "turns": 3
+  },
+  {
+    "floor": 13,
+    "enemies": [
+      "SEWER_CLAM"
+    ],
+    "outcome": "win",
+    "turns": 7
+  },
+  {
+    "floor": 15,
+    "enemies": [
+      "TWO_TAILED_RAT",
+      "TWO_TAILED_RAT",
+      "TWO_TAILED_RAT"
+    ],
+    "outcome": "win",
+    "turns": 5
+  },
+  {
+    "floor": 17,
+    "enemies": [
+      "LAGAVULIN_MATRIARCH"
+    ],
+    "outcome": "defeat",
+    "turns": 8
+  },
+  {
+    "floor": 11,
+    "enemies": [
+      "TWO_TAILED_RAT",
+      "TWO_TAILED_RAT",
+      "TWO_TAILED_RAT"
+    ],
+    "outcome": "win",
+    "turns": 2
+  },
+  {
+    "floor": 14,
+    "enemies": [
+      "LEAF_SLIME_S",
+      "SLITHERING_STRANGLER",
+      "TWIG_SLIME_S"
+    ],
+    "outcome": "win",
+    "turns": 7
+  },
+  {
+    "floor": 15,
+    "enemies": [
+      "MAWLER"
+    ],
+    "outcome": "defeat",
+    "turns": 3
+  },
+  {
+    "floor": 13,
+    "enemies": [
+      "SKULKING_COLONY"
+    ],
+    "outcome": "defeat",
+    "turns": 4
+  },
+  {
+    "floor": 8,
+    "enemies": [
+      "SEAPUNK"
+    ],
+    "outcome": "win",
+    "turns": 2
+  },
+  {
+    "floor": 15,
+    "enemies": [
+      "CALCIFIED_CULTIST",
+      "TOADPOLE"
+    ],
+    "outcome": "win",
+    "turns": 4
+  },
+  {
+    "floor": 9,
+    "enemies": [
+      "PHANTASMAL_GARDENER",
+      "PHANTASMAL_GARDENER",
+      "PHANTASMAL_GARDENER",
+      "PHANTASMAL_GARDENER"
+    ],
+    "outcome": "defeat",
+    "turns": 4
+  },
+  {
+    "floor": 5,
+    "enemies": [
+      "FUZZY_WURM_CRAWLER",
+      "SHRINKER_BEETLE"
+    ],
+    "outcome": "defeat",
+    "turns": 7
+  },
+  {
+    "floor": 6,
+    "enemies": [
+      "LEAF_SLIME_S",
+      "LEAF_SLIME_S",
+      "SLITHERING_STRANGLER"
+    ],
+    "outcome": "defeat",
+    "turns": 4
+  },
+  {
+    "floor": 6,
+    "enemies": [
+      "SLITHERING_STRANGLER",
+      "TWIG_SLIME_S",
+      "TWIG_SLIME_S"
+    ],
+    "outcome": "defeat",
+    "turns": 5
+  },
+  {
+    "floor": 9,
+    "enemies": [
+      "CALCIFIED_CULTIST",
+      "TOADPOLE"
+    ],
+    "outcome": "win",
+    "turns": 3
+  },
+  {
+    "floor": 15,
+    "enemies": [
+      "HAUNTED_SHIP"
+    ],
+    "outcome": "win",
+    "turns": 4
+  },
+  {
+    "floor": 12,
+    "enemies": [
+      "BYRDONIS"
+    ],
+    "outcome": "defeat",
+    "turns": 8
+  },
+  {
+    "floor": 11,
+    "enemies": [
+      "CALCIFIED_CULTIST",
+      "DAMP_CULTIST"
+    ],
+    "outcome": "win",
+    "turns": 3
+  },
+  {
+    "floor": 14,
+    "enemies": [
+      "CALCIFIED_CULTIST",
+      "TOADPOLE"
+    ],
+    "outcome": "win",
+    "turns": 3
+  },
+  {
+    "floor": 15,
+    "enemies": [
+      "SEWER_CLAM"
+    ],
+    "outcome": "win",
+    "turns": 6
+  },
+  {
+    "floor": 13,
+    "enemies": [
+      "FOGMOG"
+    ],
+    "outcome": "win",
+    "turns": 5
+  },
+  {
+    "floor": 7,
+    "enemies": [
+      "TOADPOLE",
+      "TOADPOLE"
+    ],
+    "outcome": "win",
+    "turns": 3
+  },
+  {
+    "floor": 9,
+    "enemies": [
+      "TWO_TAILED_RAT",
+      "TWO_TAILED_RAT",
+      "TWO_TAILED_RAT"
+    ],
+    "outcome": "win",
+    "turns": 3
+  },
+  {
+    "floor": 11,
+    "enemies": [
+      "CALCIFIED_CULTIST",
+      "TOADPOLE"
+    ],
+    "outcome": "win",
+    "turns": 4
+  },
+  {
+    "floor": 9,
+    "enemies": [
+      "SLUDGE_SPINNER"
+    ],
+    "outcome": "win",
+    "turns": 4
+  },
+  {
+    "floor": 13,
+    "enemies": [
+      "FOSSIL_STALKER"
+    ],
+    "outcome": "win",
+    "turns": 5
+  },
+  {
+    "floor": 11,
+    "enemies": [
+      "CORPSE_SLUG",
+      "CORPSE_SLUG"
+    ],
+    "outcome": "win",
+    "turns": 4
+  },
+  {
+    "floor": 9,
+    "enemies": [
+      "SEAPUNK"
+    ],
+    "outcome": "win",
+    "turns": 5
+  },
+  {
+    "floor": 9,
+    "enemies": [
+      "LEAF_SLIME_S",
+      "SLITHERING_STRANGLER",
+      "TWIG_SLIME_S"
+    ],
+    "outcome": "win",
+    "turns": 3
+  },
+  {
+    "floor": 7,
+    "enemies": [
+      "PUNCH_CONSTRUCT",
+      "PUNCH_CONSTRUCT"
+    ],
+    "outcome": "win",
+    "turns": 14
+  },
+  {
+    "floor": 8,
+    "enemies": [
+      "FLYCONID",
+      "TWIG_SLIME_M"
+    ],
+    "outcome": "defeat",
+    "turns": 2
+  },
+  {
+    "floor": 13,
+    "enemies": [
+      "PUNCH_CONSTRUCT"
+    ],
+    "outcome": "defeat",
+    "turns": 8
+  },
+  {
+    "floor": 12,
+    "enemies": [
+      "LEAF_SLIME_M",
+      "SLITHERING_STRANGLER"
+    ],
+    "outcome": "defeat",
+    "turns": 1
+  },
+  {
+    "floor": 5,
+    "enemies": [
+      "WRIGGLER",
+      "WRIGGLER",
+      "WRIGGLER",
+      "WRIGGLER"
+    ],
+    "outcome": "win",
+    "turns": 6
+  },
+  {
+    "floor": 12,
+    "enemies": [
+      "HAUNTED_SHIP"
+    ],
+    "outcome": "defeat",
+    "turns": 3
+  },
+  {
+    "floor": 9,
+    "enemies": [
+      "PUNCH_CONSTRUCT"
+    ],
+    "outcome": "defeat",
+    "turns": 11
+  },
+  {
+    "floor": 12,
+    "enemies": [
+      "SKULKING_COLONY"
+    ],
+    "outcome": "defeat",
+    "turns": 4
+  },
+  {
+    "floor": 9,
+    "enemies": [
+      "SLITHERING_STRANGLER",
+      "SNAPPING_JAXFRUIT"
+    ],
+    "outcome": "win",
+    "turns": 5
+  }
+]

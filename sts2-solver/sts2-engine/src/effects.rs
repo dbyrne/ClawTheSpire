@@ -69,6 +69,10 @@ pub fn calculate_attack_damage(base: i32, state: &CombatState, target: &EnemySta
     if target.get_power("Vulnerable") > 0 {
         raw = (raw as f64 * 1.5).floor() as i32;
     }
+    // Tracking: Weak enemies take double damage from Attacks
+    if player.get_power("Tracking") > 0 && target.get_power("Weak") > 0 {
+        raw *= 2;
+    }
     if player.get_power("Double Damage") > 0 {
         raw *= 2;
     }
@@ -81,6 +85,10 @@ pub fn calculate_block_gain(base: i32, state: &CombatState) -> i32 {
     let mut effective = base + player.get_power("Dexterity");
     if player.get_power("Frail") > 0 {
         effective = (effective as f64 * 0.75).floor() as i32;
+    }
+    // Shadowmeld: double block gain this turn
+    if player.get_power("_shadowmeld") > 0 {
+        effective *= 2;
     }
     effective.max(0)
 }
@@ -297,6 +305,15 @@ pub fn apply_power_to_player(state: &mut CombatState, power: &str, amount: i32) 
 /// Draw cards from draw pile to hand. Shuffles discard into draw if needed.
 pub fn draw_cards(state: &mut CombatState, count: i32, rng: &mut impl Rng) {
     state.cards_drawn_this_turn += count;
+    // Corrosive Wave: each card drawn applies Poison to ALL enemies
+    let cw_amt = state.player.get_power("_corrosive_wave");
+    if cw_amt > 0 {
+        for i in 0..state.enemies.len() {
+            if state.enemies[i].is_alive() {
+                apply_power_single(&mut state.enemies[i], "Poison", cw_amt * count);
+            }
+        }
+    }
     for _ in 0..count {
         if state.player.draw_pile.is_empty() && !state.player.discard_pile.is_empty() {
             // Shuffle discard into draw
@@ -350,8 +367,18 @@ pub fn execute_choice(state: &mut CombatState, choice_idx: usize, rng: &mut impl
             }
         }
         "choose_from_hand" => {
-            // Generic pick-from-hand (e.g. Headbutt choosing card to put on draw pile)
-            // For now just mark as chosen; specific card effects handle the rest.
+            let source = state.pending_choice.as_ref()
+                .map(|pc| pc.source_card_id.clone())
+                .unwrap_or_default();
+            if source == "NIGHTMARE" {
+                // Add 3 copies of chosen card to top of draw pile (drawn next turn)
+                if choice_idx < state.player.hand.len() {
+                    let card = state.player.hand[choice_idx].clone();
+                    for _ in 0..3 {
+                        state.player.draw_pile.push(card.clone());
+                    }
+                }
+            }
         }
         "choose_from_discard" => {
             // Generic pick-from-discard (e.g. retrieval effects)

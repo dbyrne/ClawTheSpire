@@ -140,7 +140,7 @@ pub fn play_card(
     card_db: &CardDB,
     rng: &mut impl Rng,
 ) {
-    let card = state.player.hand[card_idx].clone();
+    let mut card = state.player.hand[card_idx].clone();
     let cost = effective_cost(state, &card);
 
     // Deduct energy
@@ -190,6 +190,30 @@ pub fn play_card(
         state.player.powers.remove("Vigor");
     }
 
+    // Serpent Form: deal damage to a random enemy on every card play
+    let serpent = state.player.get_power("Serpent Form");
+    if serpent > 0 {
+        let alive = state.alive_enemy_indices();
+        if !alive.is_empty() {
+            use rand::seq::IndexedRandom;
+            let &idx = alive.choose(rng).unwrap();
+            raw_damage_to_enemy(state, idx, serpent);
+        }
+    }
+
+    // Phantom Blades: first Shiv each turn deals bonus damage
+    if card.id == "SHIV" {
+        let pb = state.player.get_power("Phantom Blades");
+        if pb > 0 && state.player.get_power("_phantom_shiv_used") == 0 {
+            // Deal bonus damage to same target (or first alive enemy)
+            let tidx = target_idx.unwrap_or_else(|| {
+                state.alive_enemy_indices().first().copied().unwrap_or(0)
+            });
+            raw_damage_to_enemy(state, tidx, pb);
+            state.player.powers.insert("_phantom_shiv_used".to_string(), 1);
+        }
+    }
+
     // Juggling: 3rd Attack adds copy to hand
     if card.card_type == CardType::Attack
         && state.player.get_power("Juggling") > 0
@@ -225,6 +249,11 @@ pub fn play_card(
 
     if card.card_type == CardType::Power && state.relics.contains("GAME_PIECE") {
         draw_cards(state, 1, rng);
+    }
+
+    // Master Planner: Skills gain Sly when played
+    if card.card_type == CardType::Skill && state.player.get_power("_master_planner") > 0 {
+        card.keywords.insert("Sly".to_string());
     }
 
     // --- Move card to zone ---
@@ -347,12 +376,18 @@ pub fn start_turn(state: &mut CombatState, rng: &mut impl Rng) {
     state.discards_this_turn = 0;
     state.player.powers.remove("_skills_played");
 
-    // Reset per-turn relic counters
+    // Reset per-turn relic/card counters
     for counter in &[
         "_kunai_count", "_fan_count", "_shuriken_count",
         "_nunchaku_count", "_letter_opener_count",
+        "_phantom_shiv_used", "_shadowmeld", "_corrosive_wave",
     ] {
         state.player.powers.remove(*counter);
+    }
+
+    // Murder: accumulate total cards drawn across turns
+    if state.cards_drawn_this_turn > 0 {
+        state.player.add_power("_total_cards_drawn", state.cards_drawn_this_turn);
     }
 
     // Reset energy
@@ -731,11 +766,13 @@ pub fn tick_enemy_powers(state: &mut CombatState) {
                 }
             }
         }
-        // Poison
+        // Poison (+ Accelerant: extra ticks)
         let poison = state.enemies[i].get_power("Poison");
         if poison > 0 {
             let was_alive = state.enemies[i].is_alive();
-            state.enemies[i].hp -= poison;
+            let extra_ticks = state.player.get_power("Accelerant");
+            let total_damage = poison * (1 + extra_ticks);
+            state.enemies[i].hp -= total_damage;
             let new_poison = poison - 1;
             if new_poison <= 0 {
                 state.enemies[i].powers.remove("Poison");
@@ -825,8 +862,11 @@ fn tick_start_of_turn_powers(state: &mut CombatState, rng: &mut impl Rng) {
     // Infinite Blades
     let ib = state.player.get_power("Infinite Blades");
     if ib > 0 {
+        let has_phantom = state.player.get_power("Phantom Blades") > 0;
         for _ in 0..ib {
-            state.player.hand.push(crate::cards::make_shiv());
+            let mut shiv = crate::cards::make_shiv();
+            if has_phantom { shiv.keywords.insert("Retain".to_string()); }
+            state.player.hand.push(shiv);
         }
     }
 

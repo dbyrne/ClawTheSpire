@@ -21,7 +21,7 @@ pub const MAX_POTIONS: usize = 3;
 pub const POTION_FEAT_DIM: usize = 6;
 pub const NUM_SCALARS: usize = 6;
 pub const MAX_PATH_LENGTH: usize = 10;
-pub const CARD_STATS_DIM: usize = 26;
+pub const CARD_STATS_DIM: usize = 28;
 pub const MAX_ACTIONS: usize = 30;
 
 /// Action feature dim: target_onehot(6) + potion_type(5) + flags(3) + card_stats(26) = 40
@@ -146,6 +146,30 @@ fn target_type_idx(tt: TargetType) -> usize {
     }
 }
 
+// Card stats slot indices — add new features at the end, update CARD_STATS_DIM above.
+pub mod cs {
+    pub const UPGRADED: usize = 0;
+    pub const COST: usize = 1;
+    pub const DAMAGE: usize = 2;
+    pub const BLOCK: usize = 3;
+    pub const X_COST: usize = 4;
+    pub const CARD_TYPE: usize = 5;      // 5..10 one-hot (Attack/Skill/Power/Status/Curse)
+    pub const TARGET_TYPE: usize = 10;    // 10..15 one-hot (Self/AnyEnemy/All/Random/Ally)
+    pub const HIT_COUNT: usize = 15;
+    pub const CARDS_DRAW: usize = 16;
+    pub const ENERGY_GAIN: usize = 17;
+    pub const HP_LOSS: usize = 18;
+    pub const EXHAUSTS: usize = 19;
+    pub const INNATE: usize = 20;
+    pub const ETHEREAL: usize = 21;
+    pub const RETAIN: usize = 22;
+    pub const WEAK_AMT: usize = 23;
+    pub const VULN_AMT: usize = 24;
+    pub const POISON_AMT: usize = 25;
+    pub const SLY: usize = 26;
+    pub const SPAWNS_CARDS: usize = 27;
+}
+
 pub fn card_stats_vector(card: &Card) -> [f32; CARD_STATS_DIM] {
     let mut v = [0.0f32; CARD_STATS_DIM];
 
@@ -162,26 +186,26 @@ pub fn card_stats_vector(card: &Card) -> [f32; CARD_STATS_DIM] {
         }
     }
 
-    v[0] = if card.upgraded { 1.0 } else { 0.0 };
-    v[1] = if card.cost >= 0 { card.cost as f32 / 5.0 } else { 0.0 };
-    v[2] = card.damage.unwrap_or(0) as f32 / 30.0;
-    v[3] = card.block.unwrap_or(0) as f32 / 30.0;
-    v[4] = if card.is_x_cost { 1.0 } else { 0.0 };
-    // card_type one-hot [5..10)
-    v[5 + card_type_idx(card.card_type)] = 1.0;
-    // target one-hot [10..15)
-    v[10 + target_type_idx(card.target)] = 1.0;
-    v[15] = card.hit_count as f32 / 5.0;
-    v[16] = card.cards_draw as f32 / 5.0;
-    v[17] = card.energy_gain as f32 / 3.0;
-    v[18] = card.hp_loss as f32 / 10.0;
-    v[19] = if card.exhausts() { 1.0 } else { 0.0 };
-    v[20] = if card.innate() { 1.0 } else { 0.0 };
-    v[21] = if card.ethereal() { 1.0 } else { 0.0 };
-    v[22] = if card.retain() { 1.0 } else { 0.0 };
-    v[23] = weak_amt / 3.0;
-    v[24] = vuln_amt / 3.0;
-    v[25] = poison_amt / 10.0;
+    v[cs::UPGRADED] = if card.upgraded { 1.0 } else { 0.0 };
+    v[cs::COST] = if card.cost >= 0 { card.cost as f32 / 5.0 } else { 0.0 };
+    v[cs::DAMAGE] = card.damage.unwrap_or(0) as f32 / 30.0;
+    v[cs::BLOCK] = card.block.unwrap_or(0) as f32 / 30.0;
+    v[cs::X_COST] = if card.is_x_cost { 1.0 } else { 0.0 };
+    v[cs::CARD_TYPE + card_type_idx(card.card_type)] = 1.0;
+    v[cs::TARGET_TYPE + target_type_idx(card.target)] = 1.0;
+    v[cs::HIT_COUNT] = card.hit_count as f32 / 5.0;
+    v[cs::CARDS_DRAW] = card.cards_draw as f32 / 5.0;
+    v[cs::ENERGY_GAIN] = card.energy_gain as f32 / 3.0;
+    v[cs::HP_LOSS] = card.hp_loss as f32 / 10.0;
+    v[cs::EXHAUSTS] = if card.exhausts() { 1.0 } else { 0.0 };
+    v[cs::INNATE] = if card.innate() { 1.0 } else { 0.0 };
+    v[cs::ETHEREAL] = if card.ethereal() { 1.0 } else { 0.0 };
+    v[cs::RETAIN] = if card.retain() { 1.0 } else { 0.0 };
+    v[cs::WEAK_AMT] = weak_amt / 3.0;
+    v[cs::VULN_AMT] = vuln_amt / 3.0;
+    v[cs::POISON_AMT] = poison_amt / 10.0;
+    v[cs::SLY] = if card.is_sly() { 1.0 } else { 0.0 };
+    v[cs::SPAWNS_CARDS] = card.spawns_cards.len() as f32 / 3.0;
 
     v
 }
