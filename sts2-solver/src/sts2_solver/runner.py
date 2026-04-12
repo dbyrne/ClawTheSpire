@@ -3585,6 +3585,14 @@ class Runner:
         if decision is not None:
             self._log_action(f"  [blue]{decision.reasoning}[/blue]")
             self._track_decision("card_reward", "network")
+            if self.review_mode and decision.head_scores:
+                opts = decision.head_scores.get("options", [])
+                scores_str = "\n".join(
+                    f"  {o['label']}  score={o['score']:+.3f}" for o in opts)
+                self._review_pause(
+                    f"[bold]CARD REWARD:[/bold] {decision.reasoning}\n"
+                    f"{scores_str}"
+                )
             if self.logger:
                 self.logger.log_decision(
                     game_state=gs, screen_type="card_reward",
