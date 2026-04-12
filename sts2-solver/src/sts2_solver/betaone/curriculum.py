@@ -21,7 +21,33 @@ import random as stdlib_random
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .deck_gen import build_random_deck_json, _make_starter
+from .deck_gen import build_random_deck_json, _make_starter, _card_defaults
+
+
+# ---------------------------------------------------------------------------
+# Fixed decks for specific tiers
+# ---------------------------------------------------------------------------
+
+# Shiv vs Strike deck: Strike is the trap, Blade Dance + Accuracy is the answer.
+# 2 Strikes deal 12 total — not enough for 94 HP Byrdonis.
+# 3 Blade Dances with Accuracy = 3 x 24 = 72 damage. Must play Accuracy first.
+_SHIV_TRAP_DECK = [
+    _card_defaults({"id": "DEFEND_SILENT", "name": "Defend", "cost": 1,
+                    "card_type": "Skill", "target": "Self", "block": 5, "hit_count": 1})
+    for _ in range(4)
+] + [
+    _card_defaults({"id": "STRIKE_SILENT", "name": "Strike", "cost": 1,
+                    "card_type": "Attack", "target": "AnyEnemy", "damage": 6,
+                    "hit_count": 1, "tags": ["Strike"]})
+    for _ in range(2)
+] + [
+    _card_defaults({"id": "BLADE_DANCE", "name": "Blade Dance", "cost": 1,
+                    "card_type": "Skill", "target": "Self", "spawns_cards": ["SHIV"]})
+    for _ in range(3)
+] + [
+    _card_defaults({"id": "ACCURACY", "name": "Accuracy", "cost": 1,
+                    "card_type": "Power", "target": "Self", "powers_applied": [["Accuracy", 4]]})
+]
 
 
 # ---------------------------------------------------------------------------
@@ -35,6 +61,8 @@ class TierConfig:
     promote_threshold: float
     encounter_level: int = -1   # pool level (0-3), or -1 for custom
     custom_encounters: list[list[str]] | None = None
+    custom_deck: list[dict] | None = None  # fixed deck override
+    player_hp: int = 70
     deck_min_size: int = 12
     deck_max_size: int = 12
     deck_min_removals: int = 0
@@ -66,7 +94,7 @@ TIER_CONFIGS: list[TierConfig] = [
                encounter_level=1),
     TierConfig("Fogmog",             deck_mode="starter", promote_threshold=1.00,
                custom_encounters=[["FOGMOG"]]),
-    TierConfig("Slugs + Spinner",    deck_mode="starter", promote_threshold=0.90,
+    TierConfig("Slugs + Spinner",    deck_mode="starter", promote_threshold=0.88,
                custom_encounters=[["CORPSE_SLUG", "CORPSE_SLUG", "SLUDGE_SPINNER"]]),
     TierConfig("Cultists",           deck_mode="starter", promote_threshold=0.90,
                custom_encounters=[["CALCIFIED_CULTIST", "DAMP_CULTIST"]]),
@@ -82,7 +110,10 @@ TIER_CONFIGS: list[TierConfig] = [
                custom_encounters=_PREVIOUSLY_IMPOSSIBLE,
                deck_archetypes=["shiv"],
                deck_min_size=16, deck_max_size=20, deck_min_removals=1, deck_max_removals=3),
-    TierConfig("Sly deck + Hard",     deck_mode="random", promote_threshold=0.90,
+    TierConfig("Pure shiv vs Byrdonis", deck_mode="custom", promote_threshold=0.90,
+               custom_encounters=[["BYRDONIS"]],
+               custom_deck=_SHIV_TRAP_DECK, player_hp=40),
+    TierConfig("Sly deck + Hard",     deck_mode="random", promote_threshold=0.70,
                custom_encounters=_FAMILIAR_HARD + _PREVIOUSLY_IMPOSSIBLE,
                deck_archetypes=["sly"],
                deck_min_size=16, deck_max_size=20, deck_min_removals=1, deck_max_removals=3),
@@ -242,7 +273,9 @@ class CombatCurriculum:
             prev = self._random_previous_tier()
             cfg = prev
 
-        if cfg.deck_mode == "starter":
+        if cfg.custom_deck is not None:
+            return json.dumps(cfg.custom_deck)
+        elif cfg.deck_mode == "starter":
             return json.dumps(_make_starter())
         else:
             return build_random_deck_json(

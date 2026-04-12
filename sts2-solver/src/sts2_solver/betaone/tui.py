@@ -43,12 +43,7 @@ def _load_promotions(path: Path) -> dict[int, int]:
                     continue
                 r = json.loads(line)
                 if r.get("tier_change") == "promoted":
-                    if r.get("eval_only"):
-                        # Pre-flight logs the OLD tier (before increment)
-                        t = r["tier"]
-                    else:
-                        # Training logs the NEW tier (after increment)
-                        t = r["tier"] - 1
+                    t = r["tier"]  # always the tier promoted FROM
                     if t not in promoted_at:
                         promoted_at[t] = "Eval" if r.get("eval_only") else r.get("gen", 0)
             return promoted_at
@@ -132,7 +127,9 @@ def build(progress: dict, history: list[dict], age: float, promoted_at: dict[int
 
     for i, cfg in enumerate(TIER_CONFIGS):
         p = 1 if i <= 3 else 2
-        if cfg.deck_mode == "starter":
+        if cfg.custom_deck:
+            deck = "fixed deck"
+        elif cfg.deck_mode == "starter":
             deck = "starter"
         elif cfg.deck_mode == "review_all":
             deck = "all tiers"

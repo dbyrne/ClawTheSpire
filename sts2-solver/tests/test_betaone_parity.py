@@ -131,6 +131,166 @@ class TestContextEncoding:
         assert abs(c[2] - 0.5) < 0.01  # 15/30
 
 
+class TestTierConfigCompleteness:
+    """Every TierConfig field that affects combat setup must be handled
+    in ALL three code paths: training, pre-flight eval, and regression check.
+    If a tier has custom_deck, custom_encounters, or non-default player_hp,
+    all paths must respect it."""
+
+    def _sample_deck_for_tier(self, tier_idx):
+        """Reproduce the deck sampling logic for a tier."""
+        from sts2_solver.betaone.curriculum import (
+            CombatCurriculum, TIER_CONFIGS, _make_starter
+        )
+        from sts2_solver.betaone.deck_gen import build_random_deck_json
+        import json
+
+        cfg = TIER_CONFIGS[tier_idx]
+        if cfg.custom_deck is not None:
+            return cfg.custom_deck
+        elif cfg.deck_mode == "starter":
+            return json.loads(json.dumps(_make_starter()))
+        elif cfg.deck_mode == "review_all":
+            return json.loads(json.dumps(_make_starter()))
+        else:
+            return json.loads(build_random_deck_json(
+                min_size=cfg.deck_min_size,
+                max_size=cfg.deck_max_size,
+                min_removals=cfg.deck_min_removals,
+                max_removals=cfg.deck_max_removals,
+                archetypes=cfg.deck_archetypes,
+            ))
+
+    def _sample_encounter_for_tier(self, tier_idx):
+        """Reproduce encounter sampling for a tier."""
+        from sts2_solver.betaone.curriculum import CombatCurriculum, TIER_CONFIGS
+        import random
+
+        cfg = TIER_CONFIGS[tier_idx]
+        if cfg.custom_encounters:
+            return random.choice(cfg.custom_encounters)
+        elif cfg.encounter_level >= 0:
+            c = CombatCurriculum()
+            return random.choice(c.encounter_pools[cfg.encounter_level])
+        else:
+            return ["NIBBIT"]  # fallback
+
+    def test_all_tiers_have_valid_encounters(self):
+        from sts2_solver.betaone.curriculum import TIER_CONFIGS
+        for i, cfg in enumerate(TIER_CONFIGS):
+            enc = self._sample_encounter_for_tier(i)
+            assert isinstance(enc, list), f"T{i} encounter should be list, got {type(enc)}"
+            assert len(enc) > 0, f"T{i} encounter is empty"
+
+    def test_all_tiers_have_valid_decks(self):
+        from sts2_solver.betaone.curriculum import TIER_CONFIGS
+        for i, cfg in enumerate(TIER_CONFIGS):
+            deck = self._sample_deck_for_tier(i)
+            assert isinstance(deck, list), f"T{i} deck should be list, got {type(deck)}"
+            assert len(deck) >= 5, f"T{i} deck too small: {len(deck)} cards"
+
+    def test_custom_deck_tiers_return_fixed_deck(self):
+        from sts2_solver.betaone.curriculum import TIER_CONFIGS
+        for i, cfg in enumerate(TIER_CONFIGS):
+            if cfg.custom_deck is not None:
+                deck = self._sample_deck_for_tier(i)
+                assert deck == cfg.custom_deck, f"T{i} custom_deck not returned"
+
+    def test_all_tiers_have_valid_hp(self):
+        from sts2_solver.betaone.curriculum import TIER_CONFIGS
+        for i, cfg in enumerate(TIER_CONFIGS):
+            assert 1 <= cfg.player_hp <= 999, f"T{i} player_hp={cfg.player_hp} out of range"
+
+    def test_all_tiers_have_valid_threshold(self):
+        from sts2_solver.betaone.curriculum import TIER_CONFIGS
+        for i, cfg in enumerate(TIER_CONFIGS):
+            assert 0 < cfg.promote_threshold <= 1.0, f"T{i} threshold={cfg.promote_threshold}"
+
+    def test_curriculum_sample_deck_matches_config(self):
+        """CombatCurriculum.sample_deck_json() should respect custom_deck."""
+        from sts2_solver.betaone.curriculum import CombatCurriculum, TIER_CONFIGS
+        import json
+        c = CombatCurriculum()
+        for i, cfg in enumerate(TIER_CONFIGS):
+            c.tier = i
+            deck = json.loads(c.sample_deck_json())
+            if cfg.custom_deck is not None:
+                assert deck == cfg.custom_deck, (
+                    f"T{i} sample_deck_json() doesn't match custom_deck"
+                )
+            elif cfg.deck_mode == "starter":
+                assert any(card["id"] == "STRIKE_SILENT" for card in deck), (
+                    f"T{i} starter deck missing Strike"
+                )
+
+    def test_curriculum_sample_encounters_matches_config(self):
+        """CombatCurriculum.sample_encounters() should respect custom_encounters."""
+        from sts2_solver.betaone.curriculum import CombatCurriculum, TIER_CONFIGS
+        c = CombatCurriculum()
+        for i, cfg in enumerate(TIER_CONFIGS):
+            if cfg.deck_mode == "review_all":
+                continue  # final exam samples from previous tiers
+            c.tier = i
+            encs = c.sample_encounters(10)
+            if cfg.custom_encounters:
+                for enc in encs:
+                    assert enc in cfg.custom_encounters, (
+                        f"T{i} sampled {enc} not in custom_encounters {cfg.custom_encounters}"
+                    )
+
+    def test_regression_and_review_handle_custom_deck(self):
+        """The regression check and review combats must handle custom_deck.
+        This catches the bug where custom_deck tiers fell through to
+        random deck generation."""
+        from sts2_solver.betaone.curriculum import TIER_CONFIGS
+
+        has_custom_deck = any(cfg.custom_deck is not None for cfg in TIER_CONFIGS)
+        if not has_custom_deck:
+            return  # no custom decks, nothing to check
+
+        from pathlib import Path
+        train_src = Path(__file__).parent.parent / "src" / "sts2_solver" / "betaone" / "train.py"
+        code = train_src.read_text()
+
+        assert "check_cfg.custom_deck" in code, (
+            "Regression check doesn't handle custom_deck — will use wrong deck"
+        )
+        assert "review_cfg.custom_deck" in code, (
+            "Review combats don't handle custom_deck — will use wrong deck"
+        )
+
+    def test_regression_and_review_handle_custom_hp(self):
+        """If any tier has non-default player_hp, the regression check and
+        review must use it."""
+        from sts2_solver.betaone.curriculum import TIER_CONFIGS
+
+        has_custom_hp = any(cfg.player_hp != 70 for cfg in TIER_CONFIGS)
+        if not has_custom_hp:
+            return
+
+        from pathlib import Path
+        train_src = Path(__file__).parent.parent / "src" / "sts2_solver" / "betaone" / "train.py"
+        code = train_src.read_text()
+
+        assert "check_cfg.player_hp" in code, (
+            "Regression check doesn't use tier-specific player_hp"
+        )
+
+    def test_all_code_paths_use_tier_config_not_hardcoded(self):
+        """No hardcoded player_hp=70 should remain in rollout calls."""
+        from pathlib import Path
+        train_src = Path(__file__).parent.parent / "src" / "sts2_solver" / "betaone" / "train.py"
+        code = train_src.read_text()
+
+        # Find all collect_betaone_rollouts calls and check player_hp
+        import re
+        calls = re.findall(r'collect_betaone_rollouts\([^)]+\)', code, re.DOTALL)
+        for call in calls:
+            assert "player_hp=70" not in call, (
+                f"Found hardcoded player_hp=70 in rollout call: {call[:100]}..."
+            )
+
+
 class TestFullStateDim:
     def test_total(self):
         p = encode_player({"hp": 70, "max_hp": 70, "energy": 3, "max_energy": 3})

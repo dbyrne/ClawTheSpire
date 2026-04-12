@@ -211,7 +211,7 @@ def train(
             eval_rollout = sts2_engine.collect_betaone_rollouts(
                 encounters_json=json.dumps(eval_enc),
                 decks_json=json.dumps(eval_decks),
-                player_hp=70, player_max_hp=70, player_max_energy=3,
+                player_hp=cfg.player_hp, player_max_hp=70, player_max_energy=3,
                 relics=[], potions_json="[]",
                 monster_data_json=monster_json,
                 enemy_profiles_json=profiles_json,
@@ -286,7 +286,9 @@ def train(
                             curriculum.encounter_pools[check_cfg.encounter_level]))
                     else:
                         check_enc.append(random.choice(curriculum.encounter_pools[0]))
-                    if check_cfg.deck_mode == "starter":
+                    if check_cfg.custom_deck is not None:
+                        check_decks_list.append(check_cfg.custom_deck)
+                    elif check_cfg.deck_mode == "starter":
                         check_decks_list.append(json.loads(json.dumps(_make_starter())))
                     elif check_cfg.deck_mode == "review_all":
                         check_decks_list.append(json.loads(json.dumps(_make_starter())))
@@ -302,7 +304,7 @@ def train(
                 check_rollout = sts2_engine.collect_betaone_rollouts(
                     encounters_json=json.dumps(check_enc),
                     decks_json=json.dumps(check_decks_list),
-                    player_hp=70, player_max_hp=70, player_max_energy=3,
+                    player_hp=check_cfg.player_hp, player_max_hp=70, player_max_energy=3,
                     relics=[], potions_json="[]",
                     monster_data_json=monster_json,
                     enemy_profiles_json=profiles_json,
@@ -319,26 +321,29 @@ def train(
                 parts = [f"T{t} {regressed_detail[t]:.0%}/{TIER_CONFIGS[t].promote_threshold:.0%}" for t in sorted(regressed_tiers)]
                 print(f"  Regression detected: {', '.join(parts)} — adding review combats")
 
-        # Sample encounters: mostly current tier + targeted review for regressed tiers
+        # Build combat batches: current tier + regressed tier review (each with correct HP)
         cfg = curriculum.config
-        encounters = []
-        decks = []
+        batches: list[tuple[list, list, int, int]] = []  # (encounters, decks, hp, count)
 
-        # Targeted review for any tiers flagged as regressed
+        # Regressed tier review batches
         n_review = 0
         for review_tier_idx in regressed_tiers:
             review_cfg = TIER_CONFIGS[review_tier_idx]
-            review_per_tier = combats_per_gen // 8  # 12.5% per regressed tier
+            review_per_tier = combats_per_gen // 8
+            enc = []
+            dks = []
             for _ in range(review_per_tier):
                 if review_cfg.custom_encounters:
-                    encounters.append(random.choice(review_cfg.custom_encounters))
+                    enc.append(random.choice(review_cfg.custom_encounters))
                 else:
                     pool = curriculum.encounter_pools[review_cfg.encounter_level]
-                    encounters.append(random.choice(pool))
-                if review_cfg.deck_mode == "starter":
-                    decks.append(json.loads(json.dumps(_make_starter())))
+                    enc.append(random.choice(pool))
+                if review_cfg.custom_deck is not None:
+                    dks.append(review_cfg.custom_deck)
+                elif review_cfg.deck_mode == "starter":
+                    dks.append(json.loads(json.dumps(_make_starter())))
                 else:
-                    decks.append(json.loads(build_random_deck_json(
+                    dks.append(json.loads(build_random_deck_json(
                         rng=curriculum.deck_rng,
                         min_size=review_cfg.deck_min_size,
                         max_size=review_cfg.deck_max_size,
@@ -346,51 +351,73 @@ def train(
                         max_removals=review_cfg.deck_max_removals,
                         archetypes=review_cfg.deck_archetypes,
                     )))
-                n_review += 1
+            batches.append((enc, dks, review_cfg.player_hp, review_per_tier))
+            n_review += review_per_tier
 
-        # Fill rest with current tier
+        # Current tier batch
         n_current = combats_per_gen - n_review
-        encounters.extend(curriculum.sample_encounters(n_current))
-        for _ in range(n_current):
-            decks.append(json.loads(curriculum.sample_deck_json()))
+        cur_enc = curriculum.sample_encounters(n_current)
+        cur_dks = [json.loads(curriculum.sample_deck_json()) for _ in range(n_current)]
+        batches.append((cur_enc, cur_dks, cfg.player_hp, n_current))
 
-        encounters_json = json.dumps(encounters)
-        decks_json = json.dumps(decks)
+        # Collect rollouts — one call per HP level, merge results
+        all_states, all_act_feat, all_act_masks = [], [], []
+        all_chosen, all_lp, all_values, all_rewards, all_dones = [], [], [], [], []
+        all_outcomes, all_hps = [], []
+        seed_offset = gen * 100_000
+        seed_idx = 0
 
-        # Collect rollouts in Rust — each combat gets its own deck
-        seeds = [gen * 100_000 + i for i in range(combats_per_gen)]
-        rollout = sts2_engine.collect_betaone_rollouts(
-            encounters_json=encounters_json,
-            decks_json=decks_json,
-            player_hp=70,
-            player_max_hp=70,
-            player_max_energy=3,
-            relics=[],
-            potions_json="[]",
-            monster_data_json=monster_json,
-            enemy_profiles_json=profiles_json,
-            onnx_path=onnx_path,
-            temperature=temperature,
-            seeds=seeds,
-            gen_id=gen,
-        )
+        for b_enc, b_dks, b_hp, b_count in batches:
+            if not b_enc:
+                continue
+            b_seeds = [seed_offset + seed_idx + i for i in range(b_count)]
+            seed_idx += b_count
+            rollout = sts2_engine.collect_betaone_rollouts(
+                encounters_json=json.dumps(b_enc),
+                decks_json=json.dumps(b_dks),
+                player_hp=b_hp,
+                player_max_hp=70,
+                player_max_energy=3,
+                relics=[],
+                potions_json="[]",
+                monster_data_json=monster_json,
+                enemy_profiles_json=profiles_json,
+                onnx_path=onnx_path,
+                temperature=temperature,
+                seeds=b_seeds,
+                gen_id=gen,
+            )
+            if rollout["total_steps"] == 0:
+                continue
+            all_states.extend(rollout["states"])
+            all_act_feat.extend(rollout["action_features"])
+            all_act_masks.extend(rollout["action_masks"])
+            all_chosen.extend(rollout["chosen_indices"])
+            all_lp.extend(rollout["log_probs"])
+            all_values.extend(rollout["values"])
+            all_rewards.extend(rollout["rewards"])
+            all_dones.extend(rollout["dones"])
+            all_outcomes.extend(rollout["outcomes"])
+            all_hps.extend(rollout["final_hps"])
 
-        T = rollout["total_steps"]
+        T = len(all_chosen)
         if T == 0:
             print(f"Gen {gen}: no steps collected, skipping")
             continue
 
+        rollout = {"outcomes": all_outcomes, "final_hps": all_hps, "total_steps": T}
+
         # Reshape flat arrays → tensors
-        states = torch.tensor(rollout["states"], dtype=torch.float32).reshape(T, STATE_DIM)
+        states = torch.tensor(all_states, dtype=torch.float32).reshape(T, STATE_DIM)
         act_feat = torch.tensor(
-            rollout["action_features"], dtype=torch.float32
+            all_act_feat, dtype=torch.float32
         ).reshape(T, MAX_ACTIONS, ACTION_DIM)
-        act_masks = torch.tensor(rollout["action_masks"]).reshape(T, MAX_ACTIONS)
-        chosen = torch.tensor(rollout["chosen_indices"], dtype=torch.long)
-        old_lp = torch.tensor(rollout["log_probs"], dtype=torch.float32)
-        values = np.array(rollout["values"], dtype=np.float32)
-        rewards = np.array(rollout["rewards"], dtype=np.float32)
-        dones = np.array(rollout["dones"], dtype=bool)
+        act_masks = torch.tensor(all_act_masks).reshape(T, MAX_ACTIONS)
+        chosen = torch.tensor(all_chosen, dtype=torch.long)
+        old_lp = torch.tensor(all_lp, dtype=torch.float32)
+        values = np.array(all_values, dtype=np.float32)
+        rewards = np.array(all_rewards, dtype=np.float32)
+        dones = np.array(all_dones, dtype=bool)
 
         # GAE
         advantages, returns = compute_gae(rewards, values, dones, gamma, lam)
