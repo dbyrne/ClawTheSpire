@@ -2177,6 +2177,19 @@ class Runner:
             f"(value={root_value:.2f})[/blue]"
         )
 
+        # Review pause — show all options with MCTS scores
+        if self.review_mode:
+            option_labels = [c.get("name", "?") for c in sel_cards]
+            lines = []
+            for i, (lbl, p) in enumerate(zip(option_labels, policy)):
+                marker = " [chosen]" if i == first_action.choice_idx else ""
+                lines.append(f"  {lbl}  visits={p:.0%}{marker}")
+            self._review_pause(
+                f"[bold]{prompt.title()}:[/bold] MCTS {verb} {chosen_card.name} "
+                f"(value={root_value:+.2f})\n"
+                + "\n".join(lines)
+            )
+
         # Log the decision
         if self.logger:
             option_labels = [c.get("name", "?") for c in sel_cards]
