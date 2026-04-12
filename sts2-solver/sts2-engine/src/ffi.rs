@@ -66,7 +66,7 @@ struct CombatResultRust {
     floor, gold,
     act_id, boss_id,
     map_path,
-    onnx_full_path, onnx_value_path,
+    onnx_full_path, onnx_value_path, onnx_combat_path,
     vocab_json,
     monster_data_json,
     enemy_profiles_json,
@@ -90,6 +90,7 @@ pub fn fight_combat(
     map_path: Vec<String>,
     onnx_full_path: &str,
     onnx_value_path: &str,
+    onnx_combat_path: &str,
     vocab_json: &str,
     monster_data_json: &str,
     enemy_profiles_json: &str,
@@ -114,6 +115,7 @@ pub fn fight_combat(
     let relic_set: HashSet<String> = relics.into_iter().collect();
     let onnx_full = onnx_full_path.to_string();
     let onnx_value = onnx_value_path.to_string();
+    let onnx_combat = onnx_combat_path.to_string();
     let act = act_id.to_string();
     let boss = boss_id.to_string();
 
@@ -123,7 +125,7 @@ pub fn fight_combat(
             deck, player_hp, player_max_hp, player_max_energy,
             &enemy_ids, relic_set, potions, floor, gold,
             &act, &boss, map_path,
-            &onnx_full, &onnx_value, vocabs,
+            &onnx_full, &onnx_value, &onnx_combat, vocabs,
             &monsters, &profiles,
             mcts_sims, temperature, seed, add_noise, gen_id,
         )
@@ -155,6 +157,7 @@ fn run_combat_nogil(
     map_path: Vec<String>,
     onnx_full_path: &str,
     onnx_value_path: &str,
+    onnx_combat_path: &str,
     vocabs: Vocabs,
     monsters: &HashMap<String, enemy::MonsterData>,
     profiles: &HashMap<String, enemy::EnemyProfile>,
@@ -180,7 +183,7 @@ fn run_combat_nogil(
             None => true,
         };
         if needs_reload {
-            let inf = OnnxInference::new(onnx_full_path, onnx_value_path, vocabs.clone())
+            let inf = OnnxInference::new(onnx_full_path, onnx_value_path, onnx_combat_path, vocabs.clone())
                 .map_err(|e| format!("ONNX: {e}"))?;
             *cache = Some(CachedInference {
                 cache_key,
@@ -472,7 +475,7 @@ pub fn play_all_games(
 
         seeds.into_par_iter().map(|seed| {
             // Each rayon thread creates its own ONNX sessions
-            let combat_inference = match crate::inference::OnnxInference::with_combat(
+            let combat_inference = match crate::inference::OnnxInference::new(
                 &onnx_full, &onnx_value, &onnx_combat, vocabs.clone()
             ) {
                 Ok(inf) => inf,
@@ -690,7 +693,9 @@ pub fn mcts_search(
 
     let onnx_full = onnx_full_path.to_string();
     let onnx_value = onnx_value_path.to_string();
-    let onnx_combat = onnx_combat_path.map(|s| s.to_string());
+    let onnx_combat = onnx_combat_path
+        .unwrap_or(onnx_value_path)  // fallback for backwards compat
+        .to_string();
 
     let result = py.allow_threads(move || {
         ONNX_CACHE.with(|cache| {
@@ -702,11 +707,9 @@ pub fn mcts_search(
                 None => true,
             };
             if needs_reload {
-                let inf = match &onnx_combat {
-                    Some(combat_path) => OnnxInference::with_combat(
-                        &onnx_full, &onnx_value, combat_path, vocabs.clone()),
-                    None => OnnxInference::new(&onnx_full, &onnx_value, vocabs.clone()),
-                }.map_err(|e| format!("ONNX: {e}"))?;
+                let inf = OnnxInference::new(
+                    &onnx_full, &onnx_value, &onnx_combat, vocabs.clone(),
+                ).map_err(|e| format!("ONNX: {e}"))?;
                 *cache = Some(CachedInference {
                     cache_key,
                     inference: inf,

@@ -40,15 +40,6 @@ impl OnnxInference {
     pub fn new(
         full_model_path: &str,
         value_model_path: &str,
-        vocabs: Vocabs,
-    ) -> Result<Self, ort::Error> {
-        // Default: combat_session = value_session (for runner/non-training use)
-        Self::with_combat(full_model_path, value_model_path, value_model_path, vocabs)
-    }
-
-    pub fn with_combat(
-        full_model_path: &str,
-        value_model_path: &str,
         combat_model_path: &str,
         vocabs: Vocabs,
     ) -> Result<Self, ort::Error> {
