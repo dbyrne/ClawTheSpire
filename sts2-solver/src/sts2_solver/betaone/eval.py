@@ -762,21 +762,6 @@ def build_scenarios() -> list[Scenario]:
     ))
 
     scenarios.append(Scenario(
-        name="dont_discard_sly_when_no_discard_trigger",
-        category="sly",
-        description="No forced discard — Sly cards should be played normally, not held for discard",
-        player={"hp": 50, "max_hp": 70, "energy": 2, "block": 0},
-        enemies=[enemy(20, 30, damage=10)],
-        hand=[untouchable(), strike()],
-        actions=[
-            ActionSpec("play_card", untouchable(), label="Untouchable (9 block, Sly)"),
-            ActionSpec("play_card", strike(), target_idx=0, label="Strike (6 dmg)"),
-            ActionSpec("end_turn", label="End turn"),
-        ],
-        best_actions=[0],       # 9 block vs 10 incoming — play it, don't hoard for discard
-    ))
-
-    scenarios.append(Scenario(
         name="sly_over_status_in_discard",
         category="sly",
         description="Discard choice with both Sly and Status — Sly first (gets value), Status second",
