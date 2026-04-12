@@ -1770,6 +1770,15 @@ class Runner:
                 pick_idx = net_decision.option_index
                 self._log_action(f"  [blue]{net_decision.reasoning}[/blue]")
                 self._track_decision("deck_select", "network")
+                if self.review_mode and net_decision.head_scores:
+                    opts = net_decision.head_scores.get("options", [])
+                    card_lines = [f"  {o['label']}  score={o['score']:+.3f}" for o in opts]
+                    card_names = [c.get("name", "?") for c in sel.get("cards", [])]
+                    self._review_pause(
+                        f"[bold]{prompt.title()}:[/bold] {net_decision.reasoning}\n"
+                        + "\n".join(card_lines) + "\n"
+                        f"  Hand: {', '.join(card_names)}"
+                    )
                 if self.logger:
                     self.logger.log_decision(
                         game_state=gs, screen_type="deck_select",
