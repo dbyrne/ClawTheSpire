@@ -350,8 +350,8 @@ class Runner:
             else:
                 labels.append(name)
         for i, pot in enumerate(sim_state.player.potions):
-            if pot and pot.get("id"):
-                labels.append(f"Potion:{pot.get('name', i)}")
+            if pot and (pot.get("name") or pot.get("id")):
+                labels.append(f"Potion:{pot.get('name') or pot.get('id', i)}")
         labels.append("End Turn")
 
         # Pair labels with policy/value/visit data, sort by visits
