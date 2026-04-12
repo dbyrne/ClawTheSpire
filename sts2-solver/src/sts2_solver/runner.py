@@ -296,12 +296,22 @@ class Runner:
             return ""
         # Reconstruct action labels matching Rust enumerate_actions order:
         # 1. Playable cards (deduplicated by id+upgraded), with targets
+        #    — must skip unplayable cards (cost > energy) to stay aligned
         # 2. Potions
         # 3. End turn
         labels = []
         seen = set()
         alive_enemies = [e for e in sim_state.enemies if e.is_alive]
+        energy = sim_state.player.energy
         for i, card in enumerate(hand):
+            # Skip unplayable cards — Rust enumerate_actions excludes them
+            if card.cost < 0:
+                continue  # Status/Curse
+            cost = card.cost
+            if card.card_type == CardType.SKILL and sim_state.player.powers.get("Corruption", 0) > 0:
+                cost = 0
+            if cost > energy:
+                continue
             key = (card.id, card.upgraded)
             if key in seen:
                 continue

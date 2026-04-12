@@ -967,3 +967,61 @@ fn test_end_turn_with_pending_choice_does_not_crash() {
     // end_turn with unresolved choice — should not panic
     combat::end_turn(&mut state, &db, &mut rng());
 }
+
+// ===================================================================
+// JSON deserialization + can_play_card
+// ===================================================================
+
+#[test]
+fn test_deserialized_card_cost_respected() {
+    // Simulate what the runner does: serialize state to JSON, deserialize in Rust
+    let json = r#"{
+        "player": {
+            "hp": 61, "max_hp": 70, "block": 5, "energy": 1, "max_energy": 3,
+            "powers": {},
+            "hand": [
+                {"id": "SNAKEBITE", "name": "Snakebite", "cost": 2,
+                 "card_type": "Skill", "target": "AnyEnemy", "hit_count": 1,
+                 "powers_applied": [["Poison", 7]]},
+                {"id": "STRIKE_SILENT", "name": "Strike", "cost": 1,
+                 "card_type": "Attack", "target": "AnyEnemy", "damage": 6, "hit_count": 1},
+                {"id": "DEFEND_SILENT", "name": "Defend", "cost": 1,
+                 "card_type": "Skill", "target": "Self", "block": 5, "hit_count": 1}
+            ],
+            "draw_pile": [], "discard_pile": [], "exhaust_pile": [], "potions": []
+        },
+        "enemies": [
+            {"id": "SEAPUNK", "name": "Seapunk", "hp": 25, "max_hp": 40,
+             "block": 0, "powers": {}, "intent_hits": 1}
+        ],
+        "turn": 1, "cards_played_this_turn": 0, "attacks_played_this_turn": 0,
+        "cards_drawn_this_turn": 0, "discards_this_turn": 0, "last_x_cost": 0,
+        "relics": [], "floor": 3, "gold": 50,
+        "act_id": "", "boss_id": "", "map_path": [], "rng_seed": 0
+    }"#;
+
+    let state: CombatState = serde_json::from_str(json).expect("deserialization failed");
+    assert_eq!(state.player.energy, 1);
+    assert_eq!(state.player.hand[0].cost, 2); // Snakebite costs 2
+    assert_eq!(state.player.hand[0].id, "SNAKEBITE");
+
+    // Snakebite (cost 2) should NOT be playable with 1 energy
+    assert!(!combat::can_play_card(&state, 0),
+        "Snakebite (cost 2) should not be playable with energy 1");
+
+    // Strike (cost 1) SHOULD be playable
+    assert!(combat::can_play_card(&state, 1),
+        "Strike (cost 1) should be playable with energy 1");
+
+    // Defend (cost 1) SHOULD be playable
+    assert!(combat::can_play_card(&state, 2),
+        "Defend (cost 1) should be playable with energy 1");
+
+    // enumerate_actions should NOT include Snakebite
+    let actions = enumerate_actions(&state);
+    let snakebite_actions: Vec<_> = actions.iter()
+        .filter(|a| matches!(a, Action::PlayCard { card_idx: 0, .. }))
+        .collect();
+    assert!(snakebite_actions.is_empty(),
+        "Snakebite should not appear in actions with 1 energy, got {:?}", snakebite_actions);
+}
