@@ -1195,7 +1195,7 @@ class Runner:
                     f"vs: {enemy_str}\n\n"
                     f"MCTS: end turn ({solve_ms:.0f}ms)"
                 )
-                remaining = [c.name for c in hand]
+                remaining = [f"{c.name}({c.cost})" for c in hand]
                 head_vals = self._review_head_values(gs) if self.review_mode else ""
                 alts = self._review_combat_alternatives(sim_state, hand, policy, child_values, child_visits) if self.review_mode else ""
                 self._review_pause(
@@ -1328,7 +1328,7 @@ class Runner:
                 f"  MCTS: {root_value:+.2f} | Confidence: {best_score:.0%} | {solve_ms:.0f}ms\n"
                 f"{head_vals}\n"
                 f"{alts}\n"
-                f"  Hand: {', '.join(c.name for c in hand)}\n"
+                f"  Hand: {', '.join(f'{c.name}({c.cost})' for c in hand)}\n"
                 f"  HP {sim_state.player.hp}/{player.get('max_hp', '?')} | "
                 f"Energy {sim_state.player.energy} | Block {sim_state.player.block}\n"
                 f"  vs: {enemy_summary}"
