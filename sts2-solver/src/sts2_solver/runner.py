@@ -2182,10 +2182,11 @@ class Runner:
             option_labels = [c.get("name", "?") for c in sel_cards]
             lines = []
             for i, (lbl, p) in enumerate(zip(option_labels, policy)):
-                marker = " [chosen]" if i == first_action.choice_idx else ""
+                marker = " *" if i == first_action.choice_idx else ""
                 lines.append(f"  {lbl}  visits={p:.0%}{marker}")
+            safe_prompt = prompt.title().replace("[", "(").replace("]", ")")
             self._review_pause(
-                f"[bold]{prompt.title()}:[/bold] MCTS {verb} {chosen_card.name} "
+                f"[bold]{safe_prompt}:[/bold] MCTS {verb} {chosen_card.name} "
                 f"(value={root_value:+.2f})\n"
                 + "\n".join(lines)
             )
