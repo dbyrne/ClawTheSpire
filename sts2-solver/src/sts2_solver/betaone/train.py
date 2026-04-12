@@ -173,26 +173,65 @@ def train(
     if latest_ckpt:
         ckpt = torch.load(latest_ckpt, weights_only=False)
         old_state = ckpt["model_state_dict"]
-        # Architectural upgrade: load matching weights, skip mismatched
+        # Dimension-aware warm-start: copy overlapping submatrix for shape
+        # mismatches, identity-init new trunk layers, preserve everything else.
         try:
             network.load_state_dict(old_state)
             print("Loaded all weights (exact match)")
+            arch_changed = False
         except RuntimeError:
-            # Shape mismatch — load what fits, zero-init the rest
             new_state = network.state_dict()
-            loaded, skipped = 0, 0
+            exact, expanded, identity_init, skipped_keys = 0, 0, 0, []
             for key in new_state:
-                if key in old_state and old_state[key].shape == new_state[key].shape:
-                    new_state[key] = old_state[key]
-                    loaded += 1
+                if key not in old_state:
+                    # New layer — check if it's a trunk Linear (identity-init)
+                    if "trunk" in key and "weight" in key and new_state[key].dim() == 2:
+                        n = min(new_state[key].shape)
+                        nn.init.eye_(new_state[key])
+                        # Add small noise so gradients aren't perfectly symmetric
+                        new_state[key] += torch.randn_like(new_state[key]) * 0.01
+                        identity_init += 1
+                        print(f"  {key}: identity-init {list(new_state[key].shape)}")
+                    else:
+                        skipped_keys.append(key)
+                        print(f"  {key}: zero-init {list(new_state[key].shape)}")
+                    continue
+
+                old_t = old_state[key]
+                new_t = new_state[key]
+                if old_t.shape == new_t.shape:
+                    new_state[key] = old_t
+                    exact += 1
+                elif old_t.dim() == new_t.dim():
+                    # Dimension expansion: copy overlapping submatrix
+                    # Works for Linear weights (2D) and LayerNorm params (1D)
+                    slices = tuple(slice(0, min(o, n)) for o, n in zip(old_t.shape, new_t.shape))
+                    if all(o <= n for o, n in zip(old_t.shape, new_t.shape)):
+                        # LayerNorm: init new dims to mean=0/var=1
+                        if "LayerNorm" in key or key.endswith(".weight") and new_t.dim() == 1:
+                            if "weight" in key:
+                                new_state[key] = torch.ones_like(new_t)
+                            else:
+                                new_state[key] = torch.zeros_like(new_t)
+                        new_state[key][slices] = old_t[slices]
+                        expanded += 1
+                        print(f"  {key}: expanded {list(old_t.shape)} -> {list(new_t.shape)}")
+                    else:
+                        skipped_keys.append(key)
+                        print(f"  {key}: shape mismatch {list(old_t.shape)} vs {list(new_t.shape)}, skipped")
                 else:
-                    skipped += 1
+                    skipped_keys.append(key)
+                    print(f"  {key}: rank mismatch, skipped")
             network.load_state_dict(new_state)
-            print(f"Architectural upgrade: loaded {loaded} layers, initialized {skipped} new layers")
+            print(f"Warm-start: {exact} exact, {expanded} expanded, {identity_init} identity-init, {len(skipped_keys)} zero-init")
+            arch_changed = True
         # Only restore optimizer if architecture didn't change
-        try:
-            optimizer.load_state_dict(ckpt["optimizer_state_dict"])
-        except (ValueError, KeyError):
+        if not arch_changed:
+            try:
+                optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+            except (ValueError, KeyError):
+                print("Optimizer reset (state mismatch)")
+        else:
             print("Optimizer reset (architecture changed)")
         start_gen = ckpt["gen"] + 1
         best_win_rate = ckpt.get("win_rate", 0.0)

@@ -1,9 +1,9 @@
-"""BetaOne network: minimal combat-only policy + value (~48K params).
+"""BetaOne network: combat-only policy + value (~65K params).
 
 Architecture:
-  State (100) → Trunk MLP (128) → Policy (dot-product) + Value (scalar)
+  State (106) → Trunk MLP (128, 3 layers) → Policy (dot-product) + Value (scalar)
 
-Inputs:  state (B,100), action_features (B,30,32), action_mask (B,30)
+Inputs:  state (B,106), action_features (B,30,35), action_mask (B,30)
 Outputs: logits (B,30), value (B,1)
 """
 
@@ -13,8 +13,8 @@ import torch
 import torch.nn as nn
 
 # These must match betaone/encode.rs constants exactly
-STATE_DIM = 105
-ACTION_DIM = 34
+STATE_DIM = 106
+ACTION_DIM = 35
 MAX_ACTIONS = 30
 HIDDEN_DIM = 128
 ACTION_HIDDEN = 64
@@ -24,13 +24,14 @@ class BetaOneNetwork(nn.Module):
     def __init__(self):
         super().__init__()
 
-        # Shared trunk: state → hidden
+        # Shared trunk: state → hidden (3 layers, no ReLU after last for signed output)
         self.trunk = nn.Sequential(
             nn.LayerNorm(STATE_DIM),
             nn.Linear(STATE_DIM, HIDDEN_DIM),
             nn.ReLU(),
             nn.Linear(HIDDEN_DIM, HIDDEN_DIM),
             nn.ReLU(),
+            nn.Linear(HIDDEN_DIM, HIDDEN_DIM),
         )
 
         # Policy: score = dot(query(state), encode(action))
@@ -52,11 +53,11 @@ class BetaOneNetwork(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
-            state:           (B, 100)
-            action_features: (B, 30, 32)
-            action_mask:     (B, 30) bool — True = invalid/padding
+            state:           (B, STATE_DIM)
+            action_features: (B, MAX_ACTIONS, ACTION_DIM)
+            action_mask:     (B, MAX_ACTIONS) bool — True = invalid/padding
         Returns:
-            logits: (B, 30) masked action scores
+            logits: (B, MAX_ACTIONS) masked action scores
             value:  (B, 1)  state value estimate
         """
         h = self.trunk(state)  # (B, 128)

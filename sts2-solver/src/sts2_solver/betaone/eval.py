@@ -81,12 +81,14 @@ def encode_enemy(e: dict | None) -> list[float]:
     ]
 
 
-def encode_context(turn: int, hand_size: int, draw: int, discard: int, exhaust: int) -> list[float]:
-    return [turn / 20.0, hand_size / 12.0, draw / 30.0, discard / 30.0, exhaust / 20.0]
+def encode_context(turn: int, hand_size: int, draw: int, discard: int, exhaust: int,
+                   pending_choice: bool = False) -> list[float]:
+    return [turn / 20.0, hand_size / 12.0, draw / 30.0, discard / 30.0, exhaust / 20.0,
+            1.0 if pending_choice else 0.0]
 
 
 def encode_state(scenario: "Scenario") -> list[float]:
-    """Encode a full scenario state → 105 floats."""
+    """Encode a full scenario state → STATE_DIM floats."""
     v = encode_player(scenario.player)
     for i in range(5):
         e = scenario.enemies[i] if i < len(scenario.enemies) else None
@@ -94,6 +96,7 @@ def encode_state(scenario: "Scenario") -> list[float]:
     v.extend(encode_context(
         scenario.turn, len(scenario.hand),
         scenario.draw_size, scenario.discard_size, scenario.exhaust_size,
+        pending_choice=scenario.pending_choice is not None,
     ))
     assert len(v) == STATE_DIM, f"State dim {len(v)} != {STATE_DIM}"
     return v
@@ -133,10 +136,11 @@ class CS:
 
 # Action layout — derived from card stats dim
 _TARGET_DIM = 4
-_FLAGS_DIM = 2
+_FLAGS_DIM = 3
 _TARGET_OFFSET = CS.TOTAL
 _FLAG_END_TURN = CS.TOTAL + _TARGET_DIM
 _FLAG_USE_POTION = CS.TOTAL + _TARGET_DIM + 1
+_FLAG_IS_DISCARD = CS.TOTAL + _TARGET_DIM + 2
 
 
 def encode_card_stats(c: dict) -> list[float]:
@@ -187,6 +191,7 @@ def encode_action(action: "ActionSpec", enemies: list[dict]) -> list[float]:
         if action.card:
             stats = encode_card_stats(action.card)
             v[:CS.TOTAL] = stats
+        v[_FLAG_IS_DISCARD] = 1.0
 
     return v
 
@@ -346,6 +351,7 @@ def build_scenarios() -> list[Scenario]:
         ],
         best_actions=[3],       # discard Slimed
         bad_actions=[4],        # don't discard Neutralize
+        pending_choice={"choice_type": "discard_from_hand"},
     ))
 
     scenarios.append(Scenario(
@@ -362,6 +368,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("choose_card", sly_skill(), label="discard Sly Defend"),
         ],
         best_actions=[3],       # discard Sly card (triggers bonus)
+        pending_choice={"choice_type": "discard_from_hand"},
     ))
 
     # ===== BLOCK EFFICIENCY =====
@@ -690,6 +697,7 @@ def build_scenarios() -> list[Scenario]:
         ],
         best_actions=[2],       # always discard the Status junk
         bad_actions=[0],        # never discard the poison card
+        pending_choice={"choice_type": "discard_from_hand"},
     ))
 
     # ===== SHIV STRATEGY =====
@@ -794,6 +802,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("choose_card", defend(), label="discard Defend"),
         ],
         best_actions=[1],       # Tactician has Sly — discarding it triggers free energy
+        pending_choice={"choice_type": "discard_from_hand"},
     ))
 
     scenarios.append(Scenario(
@@ -809,6 +818,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("choose_card", defend(), label="discard Defend"),
         ],
         best_actions=[1],       # Reflex Sly trigger = draw 3 cards for free
+        pending_choice={"choice_type": "discard_from_hand"},
     ))
 
     scenarios.append(Scenario(
@@ -841,6 +851,7 @@ def build_scenarios() -> list[Scenario]:
         ],
         best_actions=[0],       # Sly discard gives free energy, better than just removing junk
         bad_actions=[2, 3],     # don't discard useful cards
+        pending_choice={"choice_type": "discard_from_hand"},
     ))
 
     scenarios.append(Scenario(
@@ -871,7 +882,28 @@ def run_eval(checkpoint_path: str | None = None) -> dict:
     net = BetaOneNetwork()
     if checkpoint_path and os.path.exists(checkpoint_path):
         ckpt = torch.load(checkpoint_path, weights_only=False)
-        net.load_state_dict(ckpt["model_state_dict"])
+        try:
+            net.load_state_dict(ckpt["model_state_dict"])
+        except RuntimeError:
+            # Dimension-aware warm-start for older checkpoints
+            import torch.nn as nn
+            old_state = ckpt["model_state_dict"]
+            new_state = net.state_dict()
+            for key in new_state:
+                if key not in old_state:
+                    if "trunk" in key and "weight" in key and new_state[key].dim() == 2:
+                        nn.init.eye_(new_state[key])
+                elif old_state[key].shape == new_state[key].shape:
+                    new_state[key] = old_state[key]
+                elif old_state[key].dim() == new_state[key].dim() and all(
+                    o <= n for o, n in zip(old_state[key].shape, new_state[key].shape)
+                ):
+                    if new_state[key].dim() == 1:
+                        new_state[key] = torch.ones_like(new_state[key]) if "weight" in key else torch.zeros_like(new_state[key])
+                    slices = tuple(slice(0, o) for o in old_state[key].shape)
+                    new_state[key][slices] = old_state[key]
+            net.load_state_dict(new_state)
+            print("(warm-started from older checkpoint)")
         gen = ckpt.get("gen", "?")
         print(f"Loaded checkpoint: gen {gen}")
     else:

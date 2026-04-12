@@ -11,11 +11,11 @@ pub const STATE_DIM: usize = PLAYER_DIM + ENEMY_SLOTS * ENEMY_FEATURES + CONTEXT
 pub const PLAYER_DIM: usize = 20;
 pub const ENEMY_FEATURES: usize = 16;
 pub const ENEMY_SLOTS: usize = 5;
-pub const CONTEXT_DIM: usize = 5;
+pub const CONTEXT_DIM: usize = 6;
 
 // Action layout: [card_stats | target | flags]
 const TARGET_DIM: usize = 4;
-const FLAGS_DIM: usize = 2;
+const FLAGS_DIM: usize = 3;
 pub const ACTION_DIM: usize = CARD_STATS_DIM + TARGET_DIM + FLAGS_DIM;
 pub const MAX_ACTIONS: usize = 30;
 
@@ -23,12 +23,13 @@ pub const MAX_ACTIONS: usize = 30;
 const TARGET_OFFSET: usize = CARD_STATS_DIM;           // target_hp, target_dmg, target_vuln, has_target
 const FLAG_END_TURN: usize = CARD_STATS_DIM + TARGET_DIM;
 const FLAG_USE_POTION: usize = CARD_STATS_DIM + TARGET_DIM + 1;
+const FLAG_IS_DISCARD: usize = CARD_STATS_DIM + TARGET_DIM + 2;
 
 // ---------------------------------------------------------------------------
 // State encoding
 // ---------------------------------------------------------------------------
 
-/// Encode combat state as a flat 100-dim vector.
+/// Encode combat state as a flat STATE_DIM vector.
 pub fn encode_state(state: &CombatState) -> [f32; STATE_DIM] {
     let mut v = [0.0f32; STATE_DIM];
     let mut o = 0; // offset
@@ -91,12 +92,13 @@ pub fn encode_state(state: &CombatState) -> [f32; STATE_DIM] {
     }
     o += ENEMY_SLOTS * ENEMY_FEATURES;
 
-    // --- Turn context (5 dims) ---
+    // --- Turn context (6 dims) ---
     v[o] = state.turn as f32 / 20.0;
     v[o + 1] = state.player.hand.len() as f32 / 12.0;
     v[o + 2] = state.player.draw_pile.len() as f32 / 30.0;
     v[o + 3] = state.player.discard_pile.len() as f32 / 30.0;
     v[o + 4] = state.player.exhaust_pile.len() as f32 / 20.0;
+    v[o + 5] = if state.pending_choice.is_some() { 1.0 } else { 0.0 };
 
     v
 }
@@ -173,6 +175,7 @@ pub fn encode_actions(
                     let stats = card_stats_vector(card);
                     features[b..b + CARD_STATS_DIM].copy_from_slice(&stats);
                 }
+                features[b + FLAG_IS_DISCARD] = 1.0;
             }
         }
     }
