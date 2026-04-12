@@ -14,7 +14,7 @@ Fixed-deck traps: force specific mechanics (shiv synergy, sly discard).
   T7:  Shiv deck + Bosses        (95%)   — shiv archetype
   T8:  Pure shiv vs Byrdonis     (90%)   — Accuracy + Blade Dance trap
   T9:  Sly deck + Hard           (70%)   — sly archetype
-  T10: Sly discard vs Fogmog     (70%)   — must discard Sly cards to win
+  T10: Sly discard vs Boss       (50%)   — must discard Sly cards to win
   T11: Final exam                (avg)   — all tiers mixed
 """
 
@@ -124,9 +124,9 @@ TIER_CONFIGS: list[TierConfig] = [
                custom_encounters=_FAMILIAR_HARD + _PREVIOUSLY_IMPOSSIBLE,
                deck_archetypes=["sly"],
                deck_min_size=16, deck_max_size=20, deck_min_removals=1, deck_max_removals=3),
-    TierConfig("Sly discard vs Fogmog", deck_mode="custom", promote_threshold=0.70,
-               custom_encounters=[["FOGMOG"]],
-               custom_deck=_build_sly_discard_deck, player_hp=50),
+    TierConfig("Sly discard vs Boss", deck_mode="custom", promote_threshold=0.50,
+               custom_encounters=[["CEREMONIAL_BEAST"]],
+               custom_deck=_build_sly_discard_deck, player_hp=70),
 ]
 
 # Auto-generate final "exam" tier: average threshold of all previous tiers
