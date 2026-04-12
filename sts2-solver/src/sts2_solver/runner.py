@@ -288,7 +288,8 @@ class Runner:
         except Exception:
             return ""
 
-    def _review_combat_alternatives(self, sim_state, hand, policy) -> str:
+    def _review_combat_alternatives(self, sim_state, hand, policy,
+                                     child_values=None, child_visits=None) -> str:
         """Build labeled alternatives from MCTS policy for review display."""
         if not policy or len(policy) < 2:
             return ""
@@ -307,7 +308,7 @@ class Runner:
             name = f"{card.name}+" if card.upgraded else card.name
             if card.target in (TargetType.ANY_ENEMY,):
                 for ti, e in enumerate(alive_enemies):
-                    labels.append(f"{name}→{e.name}")
+                    labels.append(f"{name}\u2192{e.name}")
             else:
                 labels.append(name)
         for i, pot in enumerate(sim_state.player.potions):
@@ -315,15 +316,23 @@ class Runner:
                 labels.append(f"Potion:{pot.get('name', i)}")
         labels.append("End Turn")
 
-        # Pair labels with policy values, sort by probability
-        paired = list(zip(labels[:len(policy)], policy[:len(labels)]))
-        paired.sort(key=lambda x: -x[1])
-        # Show top 3 (skip the first since that's the chosen action)
-        alts = paired[1:4]
-        if not alts:
-            return ""
-        alt_strs = [f"{name} ({p:.0%})" for name, p in alts]
-        return "  Also: " + ", ".join(alt_strs)
+        # Pair labels with policy/value/visit data, sort by visits
+        entries = []
+        for i in range(min(len(labels), len(policy))):
+            val = child_values[i] if child_values and i < len(child_values) else None
+            vis = child_visits[i] if child_visits and i < len(child_visits) else None
+            entries.append((labels[i], policy[i], val, vis))
+        entries.sort(key=lambda x: -(x[3] or 0))
+
+        lines = []
+        for name, p, val, vis in entries:
+            parts = [name]
+            if val is not None:
+                parts.append(f"val={val:+.2f}")
+            if vis is not None:
+                parts.append(f"n={vis}")
+            lines.append("  " + "  ".join(parts))
+        return "\n".join(lines)
 
     def _track_decision(self, screen_type: str, source: str) -> None:
         """Track decision routing for end-of-run summary."""
@@ -567,7 +576,9 @@ class Runner:
 
         policy = list(result["policy"])
         root_value = float(result["root_value"])
-        return action, policy, root_value
+        child_values = list(result.get("child_values", []))
+        child_visits = list(result.get("child_visits", []))
+        return action, policy, root_value, child_values, child_visits
 
     def run(self) -> None:
         self._init_deps()
@@ -1155,7 +1166,7 @@ class Runner:
                         sim_state.player.potions[pidx] = {}
                 hand = list(sim_state.player.hand)
                 t0 = time.perf_counter()
-                first_action, policy, root_value = self._rust_mcts_search(
+                first_action, policy, root_value, child_values, child_visits = self._rust_mcts_search(
                     sim_state, num_simulations=200, temperature=0,
                 )
                 solve_ms = (time.perf_counter() - t0) * 1000
@@ -1183,9 +1194,11 @@ class Runner:
                 )
                 remaining = [c.name for c in hand]
                 head_vals = self._review_head_values(gs) if self.review_mode else ""
+                alts = self._review_combat_alternatives(sim_state, hand, policy, child_values, child_visits) if self.review_mode else ""
                 self._review_pause(
                     f"[bold]End Turn[/bold]  (MCTS {root_value:+.2f}, {solve_ms:.0f}ms)\n"
                     f"{head_vals}\n"
+                    f"{alts}\n"
                     f"  Hand kept: {', '.join(remaining) if remaining else '(empty)'}\n"
                     f"  HP {player.get('current_hp', '?')}/{player.get('max_hp', '?')} | "
                     f"Energy {player.get('energy', '?')}"
@@ -1306,7 +1319,7 @@ class Runner:
                 f"{e.name} {e.hp}hp" for e in sim_state.enemies if e.is_alive
             )
             head_vals = self._review_head_values(gs) if self.review_mode else ""
-            alts = self._review_combat_alternatives(sim_state, hand, policy) if self.review_mode else ""
+            alts = self._review_combat_alternatives(sim_state, hand, policy, child_values, child_visits) if self.review_mode else ""
             self._review_pause(
                 f"[bold]Play:[/bold] {label}\n"
                 f"  MCTS: {root_value:+.2f} | Confidence: {best_score:.0%} | {solve_ms:.0f}ms\n"
@@ -2098,7 +2111,7 @@ class Runner:
 
         # Run MCTS — enumerate_actions will return only choose_card actions
         try:
-            first_action, policy, root_value = self._rust_mcts_search(
+            first_action, policy, root_value, _, _ = self._rust_mcts_search(
                 sim_state, num_simulations=200, temperature=0,
             )
         except Exception as e:

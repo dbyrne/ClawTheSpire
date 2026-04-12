@@ -87,6 +87,8 @@ pub struct SearchResult {
     pub action: Action,
     pub policy: Vec<f32>,
     pub root_value: f64,
+    pub child_values: Vec<f32>,  // Per-action average values from MCTS
+    pub child_visits: Vec<u32>,  // Per-action visit counts
 }
 
 // ---------------------------------------------------------------------------
@@ -157,6 +159,8 @@ impl<'a> MCTS<'a> {
                 action: Action::EndTurn,
                 policy: vec![1.0],
                 root_value: root_value as f64,
+                child_values: vec![],
+                child_visits: vec![],
             };
         }
 
@@ -226,10 +230,20 @@ impl<'a> MCTS<'a> {
             (chosen, policy)
         };
 
+        // Per-action values and visits for diagnostics
+        let child_values: Vec<f32> = root.children.iter()
+            .map(|&(_, child_idx)| arena.nodes[child_idx].value() as f32)
+            .collect();
+        let child_visits: Vec<u32> = root.children.iter()
+            .map(|&(_, child_idx)| arena.nodes[child_idx].visit_count)
+            .collect();
+
         SearchResult {
             action: actions[action_idx].clone(),
             policy,
             root_value: root.value(),
+            child_values,
+            child_visits,
         }
     }
 

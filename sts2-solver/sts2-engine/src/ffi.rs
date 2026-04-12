@@ -749,6 +749,8 @@ pub fn mcts_search(
 
     dict.set_item("policy", sr.policy)?;
     dict.set_item("root_value", sr.root_value)?;
+    dict.set_item("child_values", sr.child_values)?;
+    dict.set_item("child_visits", sr.child_visits.iter().map(|&v| v as i64).collect::<Vec<_>>())?;
 
     Ok(dict.into())
 }
