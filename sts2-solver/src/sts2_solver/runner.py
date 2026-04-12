@@ -289,6 +289,33 @@ class Runner:
         except Exception:
             return ""
 
+    def _review_combat_decision(self, label, sim_state, gs, hand, policy,
+                                root_value, solve_ms, child_values=None,
+                                child_visits=None) -> None:
+        """Consolidated review display for all combat MCTS decisions."""
+        if not self.review_mode:
+            return
+        head_vals = self._review_head_values(gs)
+        alts = self._review_combat_alternatives(
+            sim_state, hand, policy, child_values, child_visits)
+        total_vis = sum(child_visits) if child_visits else 0
+        best_vis = max(child_visits) if child_visits else 0
+        confidence = best_vis / max(1, total_vis)
+        enemy_summary = ", ".join(
+            f"{e.name} {e.hp}hp" for e in sim_state.enemies if e.is_alive
+        )
+        player = gs.get("run") or gs.get("player") or {}
+        self._review_pause(
+            f"[bold]{label}[/bold]  (MCTS {root_value:+.2f} | "
+            f"{confidence:.0%} | {solve_ms:.0f}ms)\n"
+            f"{head_vals}\n"
+            f"{alts}\n"
+            f"  Hand: {', '.join(f'{c.name}({c.cost})' for c in hand)}\n"
+            f"  HP {sim_state.player.hp}/{sim_state.player.max_hp} | "
+            f"Energy {sim_state.player.energy} | Block {sim_state.player.block}\n"
+            f"  vs: {enemy_summary}"
+        )
+
     def _review_combat_alternatives(self, sim_state, hand, policy,
                                      child_values=None, child_visits=None) -> str:
         """Build labeled alternatives from MCTS policy for review display."""
@@ -1207,17 +1234,9 @@ class Runner:
                     f"vs: {enemy_str}\n\n"
                     f"MCTS: end turn ({solve_ms:.0f}ms)"
                 )
-                remaining = [f"{c.name}({c.cost})" for c in hand]
-                head_vals = self._review_head_values(gs) if self.review_mode else ""
-                alts = self._review_combat_alternatives(sim_state, hand, policy, child_values, child_visits) if self.review_mode else ""
-                self._review_pause(
-                    f"[bold]End Turn[/bold]  (MCTS {root_value:+.2f}, {solve_ms:.0f}ms)\n"
-                    f"{head_vals}\n"
-                    f"{alts}\n"
-                    f"  Hand kept: {', '.join(remaining) if remaining else '(empty)'}\n"
-                    f"  HP {player.get('current_hp', '?')}/{player.get('max_hp', '?')} | "
-                    f"Energy {player.get('energy', '?')}"
-                )
+                self._review_combat_decision(
+                    "End Turn", sim_state, gs, hand, policy,
+                    root_value, solve_ms, child_values, child_visits)
                 break
 
             # Handle potion usage from MCTS
@@ -1248,12 +1267,10 @@ class Runner:
 
                 if not self.dry_run:
                     target_info = f" -> enemy {first_action.target_idx}" if first_action.target_idx is not None else ""
-                    head_vals = self._review_head_values(gs) if self.review_mode else ""
-                    self._review_pause(
-                        f"[bold]Use Potion:[/bold] {pot_name}{target_info}\n"
-                        f"  MCTS: {root_value:+.2f} | {solve_ms:.0f}ms\n"
-                        f"{head_vals}"
-                    )
+                    self._review_combat_decision(
+                        f"Use Potion: {pot_name}{target_info}",
+                        sim_state, gs, hand, policy,
+                        root_value, solve_ms, child_values, child_visits)
                     mcp_action = action_to_mcp(first_action)
                     try:
                         self._execute_with_retry(
@@ -1330,21 +1347,9 @@ class Runner:
                     "attacks_played": sim_state.attacks_played_this_turn,
                 })
             # Review pause — show decision before executing
-            enemy_summary = ", ".join(
-                f"{e.name} {e.hp}hp" for e in sim_state.enemies if e.is_alive
-            )
-            head_vals = self._review_head_values(gs) if self.review_mode else ""
-            alts = self._review_combat_alternatives(sim_state, hand, policy, child_values, child_visits) if self.review_mode else ""
-            self._review_pause(
-                f"[bold]Play:[/bold] {label}\n"
-                f"  MCTS: {root_value:+.2f} | Confidence: {best_score:.0%} | {solve_ms:.0f}ms\n"
-                f"{head_vals}\n"
-                f"{alts}\n"
-                f"  Hand: {', '.join(f'{c.name}({c.cost})' for c in hand)}\n"
-                f"  HP {sim_state.player.hp}/{player.get('max_hp', '?')} | "
-                f"Energy {sim_state.player.energy} | Block {sim_state.player.block}\n"
-                f"  vs: {enemy_summary}"
-            )
+            self._review_combat_decision(
+                f"Play: {label}", sim_state, gs, hand, policy,
+                root_value, solve_ms, child_values, child_visits)
             try:
                 self._execute_with_retry(
                     mcp_action["action"],
