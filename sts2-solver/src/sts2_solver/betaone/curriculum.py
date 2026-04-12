@@ -102,7 +102,7 @@ TIER_CONFIGS: list[TierConfig] = [
                custom_encounters=[["FOGMOG"]]),
     TierConfig("Slugs + Spinner",    deck_mode="starter", promote_threshold=0.85,
                custom_encounters=[["CORPSE_SLUG", "CORPSE_SLUG", "SLUDGE_SPINNER"]]),
-    TierConfig("Cultists",           deck_mode="starter", promote_threshold=0.85,
+    TierConfig("Cultists",           deck_mode="starter", promote_threshold=0.90,
                custom_encounters=[["CALCIFIED_CULTIST", "DAMP_CULTIST"]]),
 
     # --- Random decks: learn one archetype at a time, then mix ---
@@ -114,7 +114,7 @@ TIER_CONFIGS: list[TierConfig] = [
                custom_encounters=_PREVIOUSLY_IMPOSSIBLE,
                deck_archetypes=["shiv"],
                deck_min_size=16, deck_max_size=20, deck_min_removals=1, deck_max_removals=3),
-    TierConfig("Pure shiv vs Byrdonis", deck_mode="custom", promote_threshold=0.80,
+    TierConfig("Pure shiv vs Byrdonis", deck_mode="custom", promote_threshold=0.50,
                custom_encounters=[["BYRDONIS"]],
                custom_deck=_build_shiv_trap_deck, player_hp=40),
     TierConfig("Sly deck + Hard",     deck_mode="random", promote_threshold=0.70,
