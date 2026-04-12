@@ -3511,7 +3511,19 @@ class Runner:
                     break
 
                 if claim_idx is None:
-                    # Only card rewards and/or uncollectable potions remain
+                    # Only card rewards and/or uncollectable potions remain.
+                    # Claim the card reward item to open card selection.
+                    for i2, item2 in enumerate(fresh_items):
+                        if isinstance(item2, dict) and self._is_card_reward_item(item2):
+                            cidx = item2.get("index", i2)
+                            self._log_action(f"  [dim]claim_reward[{cidx}]: opening card selection[/dim]")
+                            try:
+                                self._execute_with_retry("claim_reward", option_index=cidx)
+                                self.action_count += 1
+                                time.sleep(0.3)
+                            except Exception:
+                                pass
+                            break
                     break
 
                 item_desc = claim_item if isinstance(claim_item, str) else claim_item.get("name", claim_item.get("type", "?"))
@@ -3560,9 +3572,24 @@ class Runner:
             # Left the reward flow entirely (no card reward existed)
             if "REWARD" not in screen and "CARD_SELECTION" not in screen:
                 break
+            # Still on REWARD with claim_reward available — card reward item
+            # wasn't detected by _is_card_reward_item.  Claim index 0 as
+            # a fallback to open card selection.
+            if (not card_options
+                    and "claim_reward" in gs.get("available_actions", [])
+                    and poll_count == 1):
+                self._log_action("  [dim]claim_reward[0]: fallback open card selection[/dim]")
+                if not self.dry_run:
+                    try:
+                        self._execute_with_retry("claim_reward", option_index=0)
+                        self.action_count += 1
+                        time.sleep(0.3)
+                    except Exception:
+                        pass
 
         # Step 4: Decide and pick/skip
-        self._card_reward_handled = True
+        if card_options:
+            self._card_reward_handled = True
         if card_options and not self.dry_run:
             card_index = self._evaluate_card_reward(gs, card_options)
             if card_index is not None:
