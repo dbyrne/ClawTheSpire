@@ -100,7 +100,7 @@ TIER_CONFIGS: list[TierConfig] = [
                encounter_level=1),
     TierConfig("Fogmog",             deck_mode="starter", promote_threshold=1.00,
                custom_encounters=[["FOGMOG"]]),
-    TierConfig("Slugs + Spinner",    deck_mode="starter", promote_threshold=0.88,
+    TierConfig("Slugs + Spinner",    deck_mode="starter", promote_threshold=0.85,
                custom_encounters=[["CORPSE_SLUG", "CORPSE_SLUG", "SLUDGE_SPINNER"]]),
     TierConfig("Cultists",           deck_mode="starter", promote_threshold=0.85,
                custom_encounters=[["CALCIFIED_CULTIST", "DAMP_CULTIST"]]),
