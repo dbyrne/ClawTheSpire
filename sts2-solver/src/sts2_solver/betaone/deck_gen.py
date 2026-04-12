@@ -203,7 +203,17 @@ def lookup_card(card_id: str) -> dict:
                 "is_x_cost": bool(c.get("is_x_cost")),
             })
     if card_id not in _FULL_CARD_DB:
-        raise KeyError(f"Card {card_id!r} not found in cards.json")
+        # Cards the Rust engine supports but upstream data export missed.
+        # These should be removed once the data export is regenerated.
+        _ENGINE_ONLY = {
+            "CATALYST": {"id": "CATALYST", "name": "Catalyst", "cost": 1,
+                         "card_type": "Skill", "target": "AnyEnemy",
+                         "keywords": ["Exhaust"]},
+        }
+        if card_id in _ENGINE_ONLY:
+            _FULL_CARD_DB[card_id] = _card_defaults(dict(_ENGINE_ONLY[card_id]))
+        else:
+            raise KeyError(f"Card {card_id!r} not found in cards.json")
     return dict(_FULL_CARD_DB[card_id])
 
 
