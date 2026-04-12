@@ -659,7 +659,8 @@ pub fn step(state_json: &str, action_json: &str, seed: u64) -> PyResult<String> 
     mcts_sims,
     temperature,
     seed,
-    enemy_profiles_json = None
+    enemy_profiles_json = None,
+    onnx_combat_path = None
 ))]
 pub fn mcts_search(
     py: Python<'_>,
@@ -671,6 +672,7 @@ pub fn mcts_search(
     temperature: f32,
     seed: u64,
     enemy_profiles_json: Option<&str>,
+    onnx_combat_path: Option<&str>,
 ) -> PyResult<PyObject> {
     let state: CombatState = serde_json::from_str(state_json)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("state: {e}")))?;
@@ -688,6 +690,7 @@ pub fn mcts_search(
 
     let onnx_full = onnx_full_path.to_string();
     let onnx_value = onnx_value_path.to_string();
+    let onnx_combat = onnx_combat_path.map(|s| s.to_string());
 
     let result = py.allow_threads(move || {
         ONNX_CACHE.with(|cache| {
@@ -699,8 +702,11 @@ pub fn mcts_search(
                 None => true,
             };
             if needs_reload {
-                let inf = OnnxInference::new(&onnx_full, &onnx_value, vocabs.clone())
-                    .map_err(|e| format!("ONNX: {e}"))?;
+                let inf = match &onnx_combat {
+                    Some(combat_path) => OnnxInference::with_combat(
+                        &onnx_full, &onnx_value, combat_path, vocabs.clone()),
+                    None => OnnxInference::new(&onnx_full, &onnx_value, vocabs.clone()),
+                }.map_err(|e| format!("ONNX: {e}"))?;
                 *cache = Some(CachedInference {
                     cache_key,
                     inference: inf,

@@ -127,6 +127,7 @@ class Runner:
         self._mcts_config = None
         self._onnx_full_path: str | None = None
         self._onnx_value_path: str | None = None
+        self._onnx_combat_path: str | None = None
         self._vocab_json: str | None = None
         self._enemy_profiles_json: str | None = None
         self._card_reward_handled = False  # Reset when leaving reward screen
@@ -522,6 +523,7 @@ class Runner:
         self._onnx_full_path, self._onnx_value_path, _ = export_onnx(
             network, self._mcts_config, self._onnx_dir,
         )
+        self._onnx_combat_path = str(_Path(self._onnx_dir) / "combat_model.onnx")
         vocab_path = str(_Path(self._onnx_dir) / "vocabs.json")
         export_vocabs_json(self._mcts_vocabs, vocab_path)
         with open(vocab_path) as f:
@@ -556,6 +558,7 @@ class Runner:
             float(temperature),
             int(time.time() * 1000) & 0xFFFFFFFF,
             enemy_profiles_json=self._enemy_profiles_json,
+            onnx_combat_path=self._onnx_combat_path,
         )
 
         action_type = result["action_type"]
