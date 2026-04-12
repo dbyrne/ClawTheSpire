@@ -249,11 +249,12 @@ def build(progress: dict, history: list[dict], age: float, promoted_at: dict[int
     regressed = progress.get("regressed")
     regressed_detail = progress.get("regressed_detail")
     if regressed:
+        gens_until_recheck = 50 - (gen % 50) if gen % 50 != 0 else 50
         if regressed_detail:
             parts = [f"T{t} {regressed_detail[str(t)]:.0%}" for t in regressed if str(t) in regressed_detail]
         else:
             parts = [f"T{t}" for t in regressed]
-        flags.append(f"[red]Regression: {', '.join(parts)} — reviewing[/red]")
+        flags.append(f"[red]Regression: {', '.join(parts)} — reviewing ({gens_until_recheck} gens to recheck)[/red]")
     flag_str = "  ".join(flags) if flags else "[green]Healthy[/green]"
     gens_at = progress.get("gens_at_tier", 0)
     promo_str = f"T{tier} Promote: 3 consecutive >= {cur_threshold:.0%} ({consecutive}/3)"
