@@ -658,7 +658,8 @@ pub fn step(state_json: &str, action_json: &str, seed: u64) -> PyResult<String> 
     vocab_json,
     mcts_sims,
     temperature,
-    seed
+    seed,
+    enemy_profiles_json = None
 ))]
 pub fn mcts_search(
     py: Python<'_>,
@@ -669,11 +670,21 @@ pub fn mcts_search(
     mcts_sims: usize,
     temperature: f32,
     seed: u64,
+    enemy_profiles_json: Option<&str>,
 ) -> PyResult<PyObject> {
     let state: CombatState = serde_json::from_str(state_json)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("state: {e}")))?;
     let vocabs: Vocabs = serde_json::from_str(vocab_json)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("vocabs: {e}")))?;
+
+    // Parse enemy profiles for AI intent prediction (same as self-play)
+    let profiles: std::collections::HashMap<String, crate::enemy::EnemyProfile> =
+        enemy_profiles_json
+            .and_then(|j| serde_json::from_str(j).ok())
+            .unwrap_or_default();
+    let enemy_ais: Vec<crate::enemy::EnemyAI> = state.enemies.iter()
+        .map(|e| crate::enemy::create_enemy_ai(&e.id, &profiles))
+        .collect();
 
     let onnx_full = onnx_full_path.to_string();
     let onnx_value = onnx_value_path.to_string();
@@ -698,10 +709,12 @@ pub fn mcts_search(
 
             let inference = &cache.as_ref().unwrap().inference;
             let card_db = CardDB::default();
-            let mcts_engine = MCTS::new(&card_db, inference);
+            let mut mcts_engine = MCTS::new(&card_db, inference);
             let mut rng = StdRng::seed_from_u64(seed);
 
-            Ok(mcts_engine.search(&state, mcts_sims, temperature, &mut rng))
+            Ok(mcts_engine.search_with_ais(
+                &state, Some(&enemy_ais), mcts_sims, temperature, &mut rng,
+            ))
         })
     });
 

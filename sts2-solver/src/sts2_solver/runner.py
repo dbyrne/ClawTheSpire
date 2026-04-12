@@ -128,6 +128,7 @@ class Runner:
         self._onnx_full_path: str | None = None
         self._onnx_value_path: str | None = None
         self._vocab_json: str | None = None
+        self._enemy_profiles_json: str | None = None
         self._card_reward_handled = False  # Reset when leaving reward screen
         self._deck_select_stuck = False  # Track stuck deck_select screens
         self._stuck_since: float | None = None  # Timestamp when we got stuck
@@ -282,7 +283,7 @@ class Runner:
             _, hidden, *_ = self._az_run_state_tensors(gs)
             with torch.no_grad():
                 v = self._network.value_head(hidden).item()
-                c = self._network.combat_head(hidden).item()
+                c = max(-1.0, min(1.0, self._network.combat_head(hidden).item()))
             return f"  Heads: value={v:+.2f}  combat={c:+.2f}"
         except Exception:
             return ""
@@ -516,6 +517,10 @@ class Runner:
         export_vocabs_json(self._mcts_vocabs, vocab_path)
         with open(vocab_path) as f:
             self._vocab_json = f.read()
+        # Load enemy profiles for MCTS intent prediction (same as self-play)
+        from .simulator import _load_enemy_profiles
+        import json as _json
+        self._enemy_profiles_json = _json.dumps(_load_enemy_profiles())
         self.console.print(f"[dim]Exported ONNX models to {self._onnx_dir}[/dim]")
         self.logger.metadata = {
             "checkpoint": self._checkpoint_name or "none",
@@ -541,6 +546,7 @@ class Runner:
             num_simulations,
             float(temperature),
             int(time.time() * 1000) & 0xFFFFFFFF,
+            enemy_profiles_json=self._enemy_profiles_json,
         )
 
         action_type = result["action_type"]
