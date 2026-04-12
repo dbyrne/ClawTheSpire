@@ -47,13 +47,14 @@ def _build_shiv_trap_deck() -> list[dict]:
 # unless you have a better Sly trigger like Tactician).
 # 14 cards: enough to cycle through Acrobatics draws multiple times.
 def _build_sly_discard_deck() -> list[dict]:
-    return ([lookup_card("DEFEND_SILENT") for _ in range(3)]
+    return ([lookup_card("DEFEND_SILENT") for _ in range(2)]
             + [lookup_card("UNTOUCHABLE") for _ in range(2)]
             + [lookup_card("ACROBATICS") for _ in range(2)]
             + [lookup_card("SURVIVOR")]
             + [lookup_card("TACTICIAN") for _ in range(2)]
-            + [lookup_card("REFLEX")]
-            + [lookup_card("STRIKE_SILENT") for _ in range(2)]
+            + [lookup_card("REFLEX") for _ in range(2)]
+            + [lookup_card("FLICK_FLACK") for _ in range(2)]
+            + [lookup_card("STRIKE_SILENT")]
             + [lookup_card("NEUTRALIZE")])
 
 
