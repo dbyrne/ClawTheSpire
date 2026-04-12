@@ -9,13 +9,12 @@ Fixed-deck traps: force specific mechanics (shiv synergy, sly discard).
   T2:  Fogmog                    (100%)  — sustained damage
   T3:  Slugs + Spinner           (88%)   — multi-enemy management
   T4:  Cultists                  (90%)   — priority targeting
-  T5:  Phrog Parasite            (30%)   — status cards, discard
-  T6:  Poison deck + Hard        (85%)   — poison archetype
-  T7:  Shiv deck + Bosses        (95%)   — shiv archetype
-  T8:  Pure shiv vs Byrdonis     (90%)   — Accuracy + Blade Dance trap
-  T9:  Sly deck + Hard           (70%)   — sly archetype
-  T10: Sly discard vs Boss       (50%)   — must discard Sly cards to win
-  T11: Final exam                (avg)   — all tiers mixed
+  T5:  Poison deck + Hard        (85%)   — poison archetype
+  T6:  Shiv deck + Bosses        (95%)   — shiv archetype
+  T7:  Pure shiv vs Byrdonis     (90%)   — Accuracy + Blade Dance trap
+  T8:  Sly deck + Hard           (70%)   — sly archetype
+  T9:  Sly discard vs Boss       (50%)   — Phrog (status) + Ceremonial Beast
+  T10: Final exam                (avg)   — all tiers mixed
 """
 
 from __future__ import annotations
@@ -80,7 +79,6 @@ class TierConfig:
 
 # Familiar hard encounters for random-deck tiers
 _FAMILIAR_HARD = [
-    ["PHROG_PARASITE"],
     ["CORPSE_SLUG", "CORPSE_SLUG", "SLUDGE_SPINNER"],
     ["CALCIFIED_CULTIST", "DAMP_CULTIST"],
     ["FOGMOG"],
@@ -106,8 +104,6 @@ TIER_CONFIGS: list[TierConfig] = [
                custom_encounters=[["CORPSE_SLUG", "CORPSE_SLUG", "SLUDGE_SPINNER"]]),
     TierConfig("Cultists",           deck_mode="starter", promote_threshold=0.90,
                custom_encounters=[["CALCIFIED_CULTIST", "DAMP_CULTIST"]]),
-    TierConfig("Phrog Parasite",     deck_mode="starter", promote_threshold=0.30,
-               custom_encounters=[["PHROG_PARASITE"]]),
 
     # --- Random decks: learn one archetype at a time, then mix ---
     TierConfig("Poison deck + Hard",   deck_mode="random", promote_threshold=0.85,
@@ -126,7 +122,7 @@ TIER_CONFIGS: list[TierConfig] = [
                deck_archetypes=["sly"],
                deck_min_size=16, deck_max_size=20, deck_min_removals=1, deck_max_removals=3),
     TierConfig("Sly discard vs Boss", deck_mode="custom", promote_threshold=0.50,
-               custom_encounters=[["CEREMONIAL_BEAST"]],
+               custom_encounters=[["CEREMONIAL_BEAST"], ["PHROG_PARASITE"]],
                custom_deck=_build_sly_discard_deck, player_hp=70),
 ]
 
