@@ -354,7 +354,7 @@ impl<'a> MCTS<'a> {
             return if outcome == "win" { 1.0 } else { -1.0 };
         }
         let v = self.inference.value_only(state);
-        if v.is_finite() { v.clamp(-1.0, 1.0) } else { 0.0 }
+        if v.is_finite() { v } else { 0.0 }
     }
 
     /// Resolve a mid-turn state through end-of-turn, then evaluate.
@@ -416,7 +416,7 @@ impl<'a> MCTS<'a> {
         }
 
         let v = self.inference.value_only(&resolved);
-        if v.is_finite() { v.clamp(-1.0, 1.0) } else { 0.0 }
+        if v.is_finite() { v } else { 0.0 }
     }
 
     // --- Apply action to state ---
