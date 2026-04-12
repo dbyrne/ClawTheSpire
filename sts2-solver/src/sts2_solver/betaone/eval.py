@@ -244,7 +244,7 @@ def defend(name="Defend"):
 def neutralize():    return lookup_card("NEUTRALIZE")
 def slimed():        return lookup_card("SLIMED")
 def deadly_poison(): return lookup_card("DEADLY_POISON")
-def catalyst():      return lookup_card("CATALYST")
+def accelerant():    return lookup_card("ACCELERANT")
 def blade_dance():   return lookup_card("BLADE_DANCE")
 def footwork():      return lookup_card("FOOTWORK")
 def infection():     return lookup_card("INFECTION")
@@ -464,18 +464,18 @@ def build_scenarios() -> list[Scenario]:
     # ===== SYNERGY RECOGNITION =====
 
     scenarios.append(Scenario(
-        name="poison_then_catalyst",
+        name="accelerant_with_poison",
         category="synergy",
-        description="Enemy has 8 Poison, Catalyst in hand — use Catalyst to double it",
+        description="Enemy has 8 Poison, Accelerant in hand — play it (poison ticks 2x each turn)",
         player={"hp": 50, "max_hp": 70, "energy": 1, "block": 0},
         enemies=[enemy(40, 50, damage=8, powers={"Poison": 8})],
-        hand=[catalyst(), defend()],
+        hand=[accelerant(), defend()],
         actions=[
-            ActionSpec("play_card", catalyst(), target_idx=0, label="Catalyst (double poison)"),
+            ActionSpec("play_card", accelerant(), label="Accelerant (double poison ticks)"),
             ActionSpec("play_card", defend(), label="Defend"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[0],       # double 8 → 16 poison is massive
+        best_actions=[0],       # poison will tick for 16 instead of 8 next turn
     ))
 
     scenarios.append(Scenario(
@@ -496,35 +496,35 @@ def build_scenarios() -> list[Scenario]:
     ))
 
     scenarios.append(Scenario(
-        name="catalyst_without_poison_is_bad",
+        name="accelerant_without_poison_is_bad",
         category="synergy",
-        description="Enemy has 0 Poison, Catalyst does nothing — play Strike instead",
+        description="Enemy has 0 Poison, no poison cards in deck — Accelerant is useless, Strike instead",
         player={"hp": 50, "max_hp": 70, "energy": 1, "block": 0},
         enemies=[enemy(30, 50, damage=8)],
-        hand=[catalyst(), strike()],
+        hand=[accelerant(), strike()],
         actions=[
-            ActionSpec("play_card", catalyst(), target_idx=0, label="Catalyst (wasted)"),
+            ActionSpec("play_card", accelerant(), label="Accelerant (no poison to amplify)"),
             ActionSpec("play_card", strike(), target_idx=0, label="Strike"),
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[1],       # Strike does actual damage
-        bad_actions=[0],        # Catalyst on 0 poison = waste
+        bad_actions=[0],        # Accelerant with no poison = wasted Power
     ))
 
     scenarios.append(Scenario(
-        name="apply_poison_before_catalyst",
+        name="apply_poison_before_accelerant",
         category="synergy",
-        description="Both Deadly Poison and Catalyst in hand, no poison on enemy — poison first",
+        description="Both Deadly Poison and Accelerant in hand, no poison on enemy — poison first",
         player={"hp": 50, "max_hp": 70, "energy": 2, "block": 0},
         enemies=[enemy(40, 50, damage=8)],
-        hand=[deadly_poison(), catalyst()],
+        hand=[deadly_poison(), accelerant()],
         actions=[
-            ActionSpec("play_card", deadly_poison(), target_idx=0, label="Deadly Poison"),
-            ActionSpec("play_card", catalyst(), target_idx=0, label="Catalyst (0 poison)"),
+            ActionSpec("play_card", deadly_poison(), target_idx=0, label="Deadly Poison (apply 5)"),
+            ActionSpec("play_card", accelerant(), label="Accelerant (no poison yet)"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[0],       # apply poison first, then catalyst next
-        bad_actions=[1],        # catalyst on 0 poison wastes it
+        best_actions=[0],       # apply poison first so Accelerant has something to amplify
+        bad_actions=[1],        # Accelerant first = wasted turn when poison applied later anyway
     ))
 
     # ===== POISON STRATEGY =====
@@ -562,33 +562,33 @@ def build_scenarios() -> list[Scenario]:
     ))
 
     scenarios.append(Scenario(
-        name="catalyst_high_poison",
+        name="accelerant_high_poison",
         category="poison",
-        description="Enemy has 12 Poison — Catalyst doubles to 24, way better than Defend",
+        description="Enemy has 12 Poison — Accelerant makes it tick for 24, play it over Defend",
         player={"hp": 40, "max_hp": 70, "energy": 1, "block": 0},
         enemies=[enemy(30, 50, damage=10, powers={"Poison": 12})],
-        hand=[catalyst(), defend()],
+        hand=[accelerant(), defend()],
         actions=[
-            ActionSpec("play_card", catalyst(), target_idx=0, label="Catalyst (12 → 24 poison)"),
+            ActionSpec("play_card", accelerant(), label="Accelerant (12 poison ticks for 24)"),
             ActionSpec("play_card", defend(), label="Defend (5 block)"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[0],       # 24 poison = enemy dead in 2 turns, Defend only delays
+        best_actions=[0],       # 24 poison damage = kills enemy fast, Defend only delays
     ))
 
     scenarios.append(Scenario(
-        name="catalyst_low_poison",
+        name="block_over_accelerant_low_hp",
         category="poison",
-        description="Enemy has 2 Poison — Catalyst doubles to 4, barely worth it vs Defend",
+        description="Low HP + 15 incoming — must block to survive, Accelerant can wait",
         player={"hp": 30, "max_hp": 70, "energy": 1, "block": 0},
-        enemies=[enemy(40, 50, damage=15)],
-        hand=[catalyst(), defend()],
+        enemies=[enemy(40, 50, damage=15, powers={"Poison": 2})],
+        hand=[accelerant(), defend()],
         actions=[
-            ActionSpec("play_card", catalyst(), target_idx=0, label="Catalyst (2 → 4 poison)"),
+            ActionSpec("play_card", accelerant(), label="Accelerant (2 poison ticks for 4)"),
             ActionSpec("play_card", defend(), label="Defend (5 block vs 15 incoming)"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[1],       # only 2 extra poison, but 15 incoming at 30 HP = must block
+        best_actions=[1],       # 15 incoming at 30 HP = must block, Accelerant can wait
     ))
 
     scenarios.append(Scenario(
@@ -608,20 +608,18 @@ def build_scenarios() -> list[Scenario]:
     ))
 
     scenarios.append(Scenario(
-        name="let_poison_finish_dont_waste_catalyst",
+        name="let_poison_finish_dont_waste_attack",
         category="poison",
-        description="Enemy at 6 HP with 8 Poison — poison kills it, save Catalyst for next fight",
+        description="Enemy at 6 HP with 8 Poison — poison kills it, block instead of overkill",
         player={"hp": 50, "max_hp": 70, "energy": 2, "block": 0},
         enemies=[enemy(6, 50, damage=5, powers={"Poison": 8})],
-        hand=[catalyst(), defend(), strike()],
+        hand=[defend(), strike()],
         actions=[
-            ActionSpec("play_card", catalyst(), target_idx=0, label="Catalyst (overkill)"),
             ActionSpec("play_card", defend(), label="Defend"),
             ActionSpec("play_card", strike(), target_idx=0, label="Strike (overkill)"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[1, 3],    # block or end turn, poison handles the kill
-        bad_actions=[0],        # wasting Catalyst (exhaust) on a dead enemy
+        best_actions=[0, 2],    # block or end turn, poison handles the kill
     ))
 
     scenarios.append(Scenario(
