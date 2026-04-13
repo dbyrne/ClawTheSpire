@@ -135,8 +135,17 @@ def train(
     best_win_rate = 0.0
     cumulative_wins = 0
     cumulative_games = 0
-    tier_cumulative: dict[str, list[int]] = {}  # "tier_idx" -> [wins, games]
     start_gen = 1
+
+    # Per-tier cumulative stats — persisted in a separate file that survives restarts
+    cumulative_path = os.path.join(output_dir, "betaone_cumulative.json")
+    tier_cumulative: dict[str, list[int]] = {}  # "tier_idx" -> [wins, games]
+    if os.path.exists(cumulative_path):
+        try:
+            with open(cumulative_path) as f:
+                tier_cumulative = json.load(f)
+        except (json.JSONDecodeError, ValueError):
+            pass
 
     history_path = os.path.join(output_dir, "betaone_history.jsonl")
     progress_path = os.path.join(output_dir, "betaone_progress.json")
@@ -207,7 +216,6 @@ def train(
             print("Optimizer reset (architecture changed)")
         start_gen = ckpt["gen"] + 1
         best_win_rate = ckpt.get("win_rate", 0.0)
-        tier_cumulative = ckpt.get("tier_cumulative", {})
         for f in [history_path, progress_path]:
             if os.path.exists(f):
                 os.remove(f)
@@ -543,6 +551,8 @@ def train(
             record["best_win_rate"] = round(best_win_rate, 4)
             record["tier_cumulative"] = tier_cumulative
             json.dump(record, f, indent=2)
+        with open(cumulative_path, "w") as f:
+            json.dump(tier_cumulative, f)
 
         # Save checkpoints: always save "latest", keep milestones
         best_win_rate = max(best_win_rate, win_rate)
