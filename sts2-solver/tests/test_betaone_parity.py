@@ -22,10 +22,10 @@ from sts2_solver.betaone.network import STATE_DIM, ACTION_DIM, MAX_ACTIONS
 
 class TestDimensions:
     def test_state_dim(self):
-        assert STATE_DIM == 105
+        assert STATE_DIM == 134  # player(20) + enemies(80) + context(6) + hand_mean_pool(28)
 
     def test_action_dim(self):
-        assert ACTION_DIM == CS.TOTAL + 4 + 2  # card_stats + target + flags
+        assert ACTION_DIM == CS.TOTAL + 4 + 3  # card_stats + target + flags(end_turn, use_potion, is_discard)
 
     def test_card_stats_total(self):
         assert CS.TOTAL == 28
@@ -122,7 +122,7 @@ class TestEnemyEncoding:
 class TestContextEncoding:
     def test_dimensions(self):
         c = encode_context(turn=3, hand_size=5, draw=10, discard=5, exhaust=0)
-        assert len(c) == 5
+        assert len(c) == 6  # turn, hand_size, draw, discard, exhaust, pending_choice
 
     def test_values(self):
         c = encode_context(turn=10, hand_size=6, draw=15, discard=10, exhaust=5)
@@ -147,7 +147,7 @@ class TestTierConfigCompleteness:
 
         cfg = TIER_CONFIGS[tier_idx]
         if cfg.custom_deck is not None:
-            return cfg.custom_deck
+            return cfg.custom_deck() if callable(cfg.custom_deck) else cfg.custom_deck
         elif cfg.deck_mode == "starter":
             return json.loads(json.dumps(_make_starter()))
         elif cfg.deck_mode == "review_all":
@@ -194,7 +194,8 @@ class TestTierConfigCompleteness:
         for i, cfg in enumerate(TIER_CONFIGS):
             if cfg.custom_deck is not None:
                 deck = self._sample_deck_for_tier(i)
-                assert deck == cfg.custom_deck, f"T{i} custom_deck not returned"
+                expected = cfg.custom_deck() if callable(cfg.custom_deck) else cfg.custom_deck
+                assert deck == expected, f"T{i} custom_deck not returned"
 
     def test_all_tiers_have_valid_hp(self):
         from sts2_solver.betaone.curriculum import TIER_CONFIGS
@@ -215,7 +216,8 @@ class TestTierConfigCompleteness:
             c.tier = i
             deck = json.loads(c.sample_deck_json())
             if cfg.custom_deck is not None:
-                assert deck == cfg.custom_deck, (
+                expected = cfg.custom_deck() if callable(cfg.custom_deck) else cfg.custom_deck
+                assert deck == expected, (
                     f"T{i} sample_deck_json() doesn't match custom_deck"
                 )
             elif cfg.deck_mode == "starter":
@@ -296,5 +298,6 @@ class TestFullStateDim:
         p = encode_player({"hp": 70, "max_hp": 70, "energy": 3, "max_energy": 3})
         enemies = [encode_enemy(None) for _ in range(5)]
         c = encode_context(0, 0, 0, 0, 0)
-        total = len(p) + sum(len(e) for e in enemies) + len(c)
+        hand_pool = [0.0] * CS.TOTAL  # mean-pooled card stats (28 dims)
+        total = len(p) + sum(len(e) for e in enemies) + len(c) + len(hand_pool)
         assert total == STATE_DIM

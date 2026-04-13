@@ -83,5 +83,7 @@ impl BetaOneInference {
     }
 }
 
+// Send is needed for rayon thread pool to take ownership.
+// Sync is intentionally omitted — wraps RefCell<Session> which is not Sync.
+// This type lives in thread_local! storage, never shared across threads.
 unsafe impl Send for BetaOneInference {}
-unsafe impl Sync for BetaOneInference {}

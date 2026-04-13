@@ -76,12 +76,12 @@ fn softmax(logits: &[f32]) -> Vec<f32> {
 fn sample_action(logits: &[f32], temperature: f32, rng: &mut impl Rng) -> (usize, f32) {
     let temp = temperature.max(0.01);
     let scaled: Vec<f32> = logits.iter().map(|&l| l / temp).collect();
-    let probs = softmax(&scaled);
+    let tempered_probs = softmax(&scaled);
 
     let r: f32 = rng.random();
     let mut cumsum = 0.0;
-    let mut chosen = probs.len().saturating_sub(1);
-    for (i, &p) in probs.iter().enumerate() {
+    let mut chosen = tempered_probs.len().saturating_sub(1);
+    for (i, &p) in tempered_probs.iter().enumerate() {
         cumsum += p;
         if r < cumsum {
             chosen = i;
@@ -89,7 +89,12 @@ fn sample_action(logits: &[f32], temperature: f32, rng: &mut impl Rng) -> (usize
         }
     }
 
-    let log_prob = probs[chosen].max(1e-8).ln();
+    // Store UN-tempered log_prob for PPO ratio calculation.
+    // PPO computes π_new(a|s) / π_old(a|s) — both must use the same temperature
+    // (none). Sampling uses temperature for exploration, but the policy gradient
+    // must see the network's actual output distribution.
+    let untempered_probs = softmax(logits);
+    let log_prob = untempered_probs[chosen].max(1e-8).ln();
     (chosen, log_prob)
 }
 
