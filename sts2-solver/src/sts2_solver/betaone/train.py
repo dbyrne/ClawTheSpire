@@ -482,13 +482,13 @@ def train(
         avg_reward = float(rewards.mean())
         cumulative_wins += all_wins
         cumulative_games += n_episodes
+
+        # Curriculum update — use tier-only win rate (no review inflation)
+        tier_before = curriculum.tier
         # Per-tier cumulative (persisted across runs via checkpoint)
         tk = str(tier_before)
         prev = tier_cumulative.get(tk, [0, 0])
         tier_cumulative[tk] = [prev[0] + tier_wins, prev[1] + len(tier_outcomes)]
-
-        # Curriculum update — use tier-only win rate (no review inflation)
-        tier_before = curriculum.tier
         if lock_tier is not None:
             tier_change = "hold"
             curriculum.gens_at_tier += 1
