@@ -17,6 +17,7 @@ use crate::enemy;
 use crate::types::*;
 
 use super::encode;
+use super::encode::CardVocab;
 use super::inference::BetaOneInference;
 use super::rewards;
 
@@ -41,6 +42,8 @@ struct Step {
     state: [f32; encode::STATE_DIM],
     action_features: [f32; encode::MAX_ACTIONS * encode::ACTION_DIM],
     action_mask: [bool; encode::MAX_ACTIONS],
+    hand_card_ids: [i64; encode::MAX_HAND],
+    action_card_ids: [i64; encode::MAX_ACTIONS],
     num_valid: usize,
     chosen_idx: usize,
     log_prob: f32,
@@ -59,31 +62,40 @@ struct Rollout {
 // Sampling
 // ---------------------------------------------------------------------------
 
-fn softmax(logits: &[f32]) -> Vec<f32> {
-    if logits.is_empty() {
-        return vec![];
-    }
-    let max = logits.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-    let exps: Vec<f32> = logits.iter().map(|&x| (x - max).exp()).collect();
-    let sum: f32 = exps.iter().sum();
-    if sum > 0.0 {
-        exps.iter().map(|&e| e / sum).collect()
-    } else {
-        vec![1.0 / logits.len() as f32; logits.len()]
-    }
-}
-
 fn sample_action(logits: &[f32], temperature: f32, rng: &mut impl Rng) -> (usize, f32) {
     let temp = temperature.max(0.01);
-    let scaled: Vec<f32> = logits.iter().map(|&l| l / temp).collect();
-    let tempered_probs = softmax(&scaled);
+    let n = logits.len();
+    if n == 0 {
+        return (0, 0.0);
+    }
+    if n == 1 {
+        return (0, 0.0f32);
+    }
 
+    // Tempered softmax for sampling
+    let max_logit = logits.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+    let mut tempered_probs = vec![0.0f32; n];
+    let mut sum = 0.0f32;
+    for (i, &l) in logits.iter().enumerate() {
+        let v = ((l - max_logit) / temp).exp();
+        tempered_probs[i] = v;
+        sum += v;
+    }
+    if sum > 0.0 {
+        for p in tempered_probs.iter_mut() {
+            *p /= sum;
+        }
+    } else {
+        tempered_probs.fill(1.0 / n as f32);
+    }
+
+    // Sample from tempered distribution
     let r: f32 = rng.random();
-    let mut cumsum = 0.0;
-    let mut chosen = tempered_probs.len().saturating_sub(1);
+    let mut cum = 0.0;
+    let mut chosen = n - 1;
     for (i, &p) in tempered_probs.iter().enumerate() {
-        cumsum += p;
-        if r < cumsum {
+        cum += p;
+        if r <= cum {
             chosen = i;
             break;
         }
@@ -92,8 +104,19 @@ fn sample_action(logits: &[f32], temperature: f32, rng: &mut impl Rng) -> (usize
     // Store UN-tempered log_prob for PPO ratio calculation.
     // PPO computes π_new(a|s) / π_old(a|s) — both must use the same temperature
     // (none). Sampling uses temperature for exploration, but the policy gradient
-    // must see the network's actual output distribution.
-    let untempered_probs = softmax(logits);
+    // must see the raw network output to update weights correctly.
+    let mut untempered_probs = vec![0.0f32; n];
+    let mut usum = 0.0f32;
+    for (i, &l) in logits.iter().enumerate() {
+        let v = (l - max_logit).exp();
+        untempered_probs[i] = v;
+        usum += v;
+    }
+    if usum > 0.0 {
+        for p in untempered_probs.iter_mut() {
+            *p /= usum;
+        }
+    }
     let log_prob = untempered_probs[chosen].max(1e-8).ln();
     (chosen, log_prob)
 }
@@ -113,6 +136,7 @@ fn run_single_combat(
     monsters: &HashMap<String, enemy::MonsterData>,
     profiles: &HashMap<String, enemy::EnemyProfile>,
     inference: &BetaOneInference,
+    card_vocab: &CardVocab,
     temperature: f32,
     seed: u64,
 ) -> Rollout {
@@ -185,7 +209,11 @@ fn run_single_combat(
             // Encode & evaluate
             let state_enc = encode::encode_state(&state);
             let (act_feat, act_mask, num_valid) = encode::encode_actions(&actions, &state);
-            let (logits, value) = inference.evaluate(&state_enc, &act_feat, &act_mask, num_valid);
+            let hand_ids = encode::encode_hand_card_ids(&state, card_vocab);
+            let action_ids = encode::encode_action_card_ids(&actions, &state, card_vocab);
+            let (logits, value) = inference.evaluate(
+                &state_enc, &act_feat, &act_mask, &hand_ids, &action_ids, num_valid,
+            );
             let (chosen_idx, log_prob) =
                 sample_action(&logits, temperature, &mut rng);
             let chosen_idx = chosen_idx.min(actions.len().saturating_sub(1));
@@ -226,6 +254,8 @@ fn run_single_combat(
                         state: state_enc,
                         action_features: act_feat,
                         action_mask: act_mask,
+                        hand_card_ids: hand_ids,
+                        action_card_ids: action_ids,
                         num_valid,
                         chosen_idx,
                         log_prob,
@@ -259,6 +289,8 @@ fn run_single_combat(
                         state: state_enc,
                         action_features: act_feat,
                         action_mask: act_mask,
+                        hand_card_ids: hand_ids,
+                        action_card_ids: action_ids,
                         num_valid,
                         chosen_idx,
                         log_prob,
@@ -288,6 +320,8 @@ fn run_single_combat(
                         state: state_enc,
                         action_features: act_feat,
                         action_mask: act_mask,
+                        hand_card_ids: hand_ids,
+                        action_card_ids: action_ids,
                         num_valid,
                         chosen_idx,
                         log_prob,
@@ -309,6 +343,8 @@ fn run_single_combat(
                         state: state_enc,
                         action_features: act_feat,
                         action_mask: act_mask,
+                        hand_card_ids: hand_ids,
+                        action_card_ids: action_ids,
                         num_valid,
                         chosen_idx,
                         log_prob,
@@ -359,7 +395,8 @@ fn run_single_combat(
     onnx_path,
     temperature,
     seeds,
-    gen_id = 0
+    gen_id = 0,
+    card_vocab_json = "{}"
 ))]
 pub fn collect_betaone_rollouts(
     py: Python<'_>,
@@ -376,6 +413,7 @@ pub fn collect_betaone_rollouts(
     temperature: f32,
     seeds: Vec<u64>,
     gen_id: i64,
+    card_vocab_json: &str,
 ) -> PyResult<PyObject> {
     // Parse inputs (with GIL)
     let decks: Vec<Vec<Card>> = serde_json::from_str(decks_json)
@@ -388,6 +426,8 @@ pub fn collect_betaone_rollouts(
         serde_json::from_str(enemy_profiles_json).unwrap_or_default();
     let encounter_list: Vec<Vec<String>> = serde_json::from_str(encounters_json)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("encounters: {e}")))?;
+    let card_vocab: CardVocab = serde_json::from_str(card_vocab_json)
+        .unwrap_or_default();
 
     let relic_set: HashSet<String> = relics.into_iter().collect();
     let onnx = onnx_path.to_string();
@@ -439,6 +479,7 @@ pub fn collect_betaone_rollouts(
                         &monsters,
                         &profiles,
                         inference,
+                        &card_vocab,
                         temperature,
                         seed,
                     ))
@@ -462,6 +503,8 @@ fn build_rollouts_py(py: Python<'_>, rollouts: &[Option<Rollout>]) -> PyResult<P
     let mut all_states: Vec<f32> = Vec::new();
     let mut all_action_features: Vec<f32> = Vec::new();
     let mut all_action_masks: Vec<bool> = Vec::new();
+    let mut all_hand_card_ids: Vec<i64> = Vec::new();
+    let mut all_action_card_ids: Vec<i64> = Vec::new();
     let mut all_chosen: Vec<i64> = Vec::new();
     let mut all_log_probs: Vec<f32> = Vec::new();
     let mut all_values: Vec<f32> = Vec::new();
@@ -484,6 +527,8 @@ fn build_rollouts_py(py: Python<'_>, rollouts: &[Option<Rollout>]) -> PyResult<P
             all_states.extend_from_slice(&step.state);
             all_action_features.extend_from_slice(&step.action_features);
             all_action_masks.extend_from_slice(&step.action_mask);
+            all_hand_card_ids.extend_from_slice(&step.hand_card_ids);
+            all_action_card_ids.extend_from_slice(&step.action_card_ids);
             all_chosen.push(step.chosen_idx as i64);
             all_log_probs.push(step.log_prob);
             all_values.push(step.value);
@@ -496,6 +541,8 @@ fn build_rollouts_py(py: Python<'_>, rollouts: &[Option<Rollout>]) -> PyResult<P
     result.set_item("states", &all_states)?;
     result.set_item("action_features", &all_action_features)?;
     result.set_item("action_masks", PyList::new(py, all_action_masks.iter().map(|&b| b))?)?;
+    result.set_item("hand_card_ids", &all_hand_card_ids)?;
+    result.set_item("action_card_ids", &all_action_card_ids)?;
     result.set_item("chosen_indices", &all_chosen)?;
     result.set_item("log_probs", &all_log_probs)?;
     result.set_item("values", &all_values)?;

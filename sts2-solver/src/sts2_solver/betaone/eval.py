@@ -19,7 +19,7 @@ from pathlib import Path
 import torch
 
 from .deck_gen import lookup_card
-from .network import BetaOneNetwork, STATE_DIM, ACTION_DIM, MAX_ACTIONS
+from .network import BetaOneNetwork, STATE_DIM, ACTION_DIM, MAX_ACTIONS, MAX_HAND, CARD_STATS_DIM, CARD_EMBED_DIM
 
 
 # ---------------------------------------------------------------------------
@@ -27,7 +27,7 @@ from .network import BetaOneNetwork, STATE_DIM, ACTION_DIM, MAX_ACTIONS
 # ---------------------------------------------------------------------------
 
 def encode_player(p: dict) -> list[float]:
-    """Encode player state → 20 floats."""
+    """Encode player state → 25 floats."""
     hp = p.get("hp", 70)
     max_hp = max(p.get("max_hp", 70), 1)
     powers = p.get("powers", {})
@@ -52,6 +52,12 @@ def encode_player(p: dict) -> list[float]:
         powers.get("Thorns", 0) / 5.0,
         powers.get("Well-Laid Plans", 0) / 3.0,
         powers.get("Infinite Blades", 0) / 3.0,
+        # Pending-effect powers (within-turn modifiers)
+        powers.get("Burst", 0) / 2.0,
+        min(powers.get("Double Damage", 0), 1),         # binary
+        min(powers.get("_shadowmeld", 0), 1),            # binary
+        powers.get("_corrosive_wave", 0) / 5.0,
+        min(powers.get("_master_planner", 0), 1),        # binary
     ]
 
 
@@ -99,13 +105,17 @@ def encode_state(scenario: "Scenario") -> list[float]:
         scenario.draw_size, scenario.discard_size, scenario.exhaust_size,
         pending_choice=scenario.pending_choice is not None,
     ))
-    # Hand mean-pool (28 dims matching card_stats_vector)
+    # Individual hand cards (MAX_HAND × CARD_STATS_DIM) + hand mask (MAX_HAND)
+    hand_cards = [0.0] * (MAX_HAND * CARD_STATS_DIM)
+    hand_mask = [0.0] * MAX_HAND
     if scenario.hand:
-        hand_stats = [encode_card_stats(c) for c in scenario.hand]
-        mean = [sum(s[j] for s in hand_stats) / len(hand_stats) for j in range(CS.TOTAL)]
-        v.extend(mean)
-    else:
-        v.extend([0.0] * CS.TOTAL)
+        for i, card in enumerate(scenario.hand[:MAX_HAND]):
+            stats = encode_card_stats(card)
+            for j in range(CARD_STATS_DIM):
+                hand_cards[i * CARD_STATS_DIM + j] = stats[j]
+            hand_mask[i] = 1.0
+    v.extend(hand_cards)
+    v.extend(hand_mask)
     assert len(v) == STATE_DIM, f"State dim {len(v)} != {STATE_DIM}"
     return v
 
@@ -968,10 +978,41 @@ def build_scenarios() -> list[Scenario]:
 # Eval runner
 # ---------------------------------------------------------------------------
 
+def _load_card_vocab(output_dir: str = "betaone_checkpoints") -> dict[str, int]:
+    """Load card vocab from checkpoint dir, or build a default one."""
+    vocab_path = os.path.join(output_dir, "card_vocab.json")
+    if os.path.exists(vocab_path):
+        with open(vocab_path, encoding="utf-8") as f:
+            return json.load(f)
+    # Fallback: build from card database
+    from .deck_gen import _DATA_DIR
+    cards_path = _DATA_DIR / "cards.json"
+    if cards_path.exists():
+        with open(cards_path, encoding="utf-8") as f:
+            raw = json.load(f)
+        vocab = {"<PAD>": 0, "<UNK>": 1}
+        for c in raw:
+            base_id = c["id"].rstrip("+")
+            if base_id not in vocab:
+                vocab[base_id] = len(vocab)
+        return vocab
+    return {"<PAD>": 0, "<UNK>": 1}
+
+
+def _card_id_lookup(card: dict, vocab: dict[str, int]) -> int:
+    """Get vocab index for a card dict."""
+    base_id = card.get("id", "").rstrip("+")
+    return vocab.get(base_id, 1)  # 1 = UNK
+
+
 def run_eval(checkpoint_path: str | None = None) -> dict:
     """Run all eval scenarios against the network. Returns results dict."""
+    # Load card vocab
+    card_vocab = _load_card_vocab()
+    num_cards = len(card_vocab)
+
     # Load model
-    net = BetaOneNetwork()
+    net = BetaOneNetwork(num_cards=num_cards)
     if checkpoint_path and os.path.exists(checkpoint_path):
         ckpt = torch.load(checkpoint_path, weights_only=False)
         try:
@@ -1027,13 +1068,22 @@ def run_eval(checkpoint_path: str | None = None) -> dict:
         # Encode actions
         action_t = torch.zeros(1, MAX_ACTIONS, ACTION_DIM)
         mask_t = torch.ones(1, MAX_ACTIONS, dtype=torch.bool)
+        action_ids = torch.zeros(1, MAX_ACTIONS, dtype=torch.long)
         for i, act in enumerate(sc.actions):
             action_t[0, i] = torch.tensor(encode_action(act, sc.enemies))
             mask_t[0, i] = False
+            if act.card is not None:
+                action_ids[0, i] = _card_id_lookup(act.card, card_vocab)
+
+        # Encode hand card IDs
+        hand_ids = torch.zeros(1, MAX_HAND, dtype=torch.long)
+        if sc.hand:
+            for i, card in enumerate(sc.hand[:MAX_HAND]):
+                hand_ids[0, i] = _card_id_lookup(card, card_vocab)
 
         # Forward pass
         with torch.no_grad():
-            logits, value = net(state_t, action_t, mask_t)
+            logits, value = net(state_t, action_t, mask_t, hand_ids, action_ids)
 
         n_actions = len(sc.actions)
         probs = torch.softmax(logits[0, :n_actions], dim=0).tolist()

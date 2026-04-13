@@ -53,17 +53,19 @@ def ppo_update(
     states: torch.Tensor,
     action_features: torch.Tensor,
     action_masks: torch.Tensor,
+    hand_card_ids: torch.Tensor,
+    action_card_ids: torch.Tensor,
     chosen_indices: torch.Tensor,
     old_log_probs: torch.Tensor,
     advantages: torch.Tensor,
     returns: torch.Tensor,
     *,
-    clip_ratio: float = 0.2,
-    value_coef: float = 0.5,
-    entropy_coef: float = 0.01,
-    max_grad_norm: float = 0.5,
-    epochs: int = 4,
-    batch_size: int = 256,
+    clip_ratio: float,
+    value_coef: float,
+    entropy_coef: float,
+    max_grad_norm: float,
+    epochs: int,
+    batch_size: int,
 ) -> dict[str, float]:
     """Run PPO clipped surrogate update. Returns loss metrics."""
     T = len(advantages)
@@ -87,13 +89,15 @@ def ppo_update(
             b_states = states[b]
             b_actions = action_features[b]
             b_masks = action_masks[b]
+            b_hand_ids = hand_card_ids[b]
+            b_action_ids = action_card_ids[b]
             b_chosen = chosen_indices[b]
             b_old_lp = old_log_probs[b]
             b_adv = advantages[b]
             b_ret = returns[b]
 
             # Forward pass
-            logits, values = network(b_states, b_actions, b_masks)
+            logits, values = network(b_states, b_actions, b_masks, b_hand_ids, b_action_ids)
 
             # Policy loss
             dist = torch.distributions.Categorical(logits=logits)

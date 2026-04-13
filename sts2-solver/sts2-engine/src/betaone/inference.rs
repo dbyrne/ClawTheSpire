@@ -1,6 +1,6 @@
 //! BetaOne ONNX inference: single model with policy (logits) + value outputs.
 //!
-//! Much simpler than AlphaZero's 3-model setup: one ONNX file, 3 input tensors.
+//! 5 input tensors: state, action_features, action_mask, hand_card_ids, action_card_ids.
 
 use std::cell::RefCell;
 
@@ -29,12 +29,14 @@ impl BetaOneInference {
         })
     }
 
-    /// Forward pass: state + actions → (logits[num_valid], value).
+    /// Forward pass: state + actions + card IDs → (logits[num_valid], value).
     pub fn evaluate(
         &self,
         state: &[f32; STATE_DIM],
         action_features: &[f32; MAX_ACTIONS * ACTION_DIM],
         action_mask: &[bool; MAX_ACTIONS],
+        hand_card_ids: &[i64; MAX_HAND],
+        action_card_ids: &[i64; MAX_ACTIONS],
         num_valid: usize,
     ) -> (Vec<f32>, f32) {
         // Build ONNX input tensors
@@ -44,6 +46,10 @@ impl BetaOneInference {
             Array::from_shape_vec((1, MAX_ACTIONS, ACTION_DIM), action_features.to_vec()).unwrap();
         let mask_arr =
             Array::from_shape_vec((1, MAX_ACTIONS), action_mask.to_vec()).unwrap();
+        let hand_ids_arr =
+            Array::from_shape_vec((1, MAX_HAND), hand_card_ids.to_vec()).unwrap();
+        let action_ids_arr =
+            Array::from_shape_vec((1, MAX_ACTIONS), action_card_ids.to_vec()).unwrap();
 
         let inputs: Vec<(String, ort::value::DynValue)> = vec![
             (
@@ -57,6 +63,14 @@ impl BetaOneInference {
             (
                 "action_mask".into(),
                 Tensor::from_array(mask_arr).unwrap().into_dyn(),
+            ),
+            (
+                "hand_card_ids".into(),
+                Tensor::from_array(hand_ids_arr).unwrap().into_dyn(),
+            ),
+            (
+                "action_card_ids".into(),
+                Tensor::from_array(action_ids_arr).unwrap().into_dyn(),
             ),
         ];
 

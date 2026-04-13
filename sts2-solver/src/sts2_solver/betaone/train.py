@@ -32,6 +32,7 @@ from .deck_gen import build_random_deck_json, _make_starter
 from .network import (
     ACTION_DIM,
     MAX_ACTIONS,
+    MAX_HAND,
     STATE_DIM,
     BetaOneNetwork,
     export_onnx,
@@ -78,6 +79,27 @@ def _build_monster_data_json() -> str:
 
 
 
+def _build_card_vocab(output_dir: str) -> tuple[dict[str, int], str]:
+    """Build card vocab from card database. Returns (vocab_dict, vocab_json_str)."""
+    vocab_path = os.path.join(output_dir, "card_vocab.json")
+    if os.path.exists(vocab_path):
+        with open(vocab_path, encoding="utf-8") as f:
+            vocab = json.load(f)
+        return vocab, json.dumps(vocab)
+
+    cards_raw = json.loads(_load_json("cards.json"))
+    vocab: dict[str, int] = {"<PAD>": 0, "<UNK>": 1}
+    for c in cards_raw:
+        base_id = c["id"].rstrip("+")
+        if base_id not in vocab:
+            vocab[base_id] = len(vocab)
+    # Save for eval harness
+    with open(vocab_path, "w", encoding="utf-8") as f:
+        json.dump(vocab, f, indent=2)
+    print(f"Card vocab: {len(vocab)} entries (saved to {vocab_path})")
+    return vocab, json.dumps(vocab)
+
+
 def _find_latest_checkpoint(output_dir: str) -> str | None:
     """Find the best resume checkpoint: latest.pt first, else highest gen."""
     latest = os.path.join(output_dir, "betaone_latest.pt")
@@ -106,7 +128,10 @@ def train(
     lam: float = 0.95,
     temperature_start: float = 1.0,
     temperature_end: float = 0.5,
-    entropy_coef: float = 0.05,
+    entropy_coef: float = 0.03,
+    clip_ratio: float = 0.2,
+    value_coef: float = 0.5,
+    max_grad_norm: float = 0.5,
     ppo_epochs: int = 4,
     ppo_batch_size: int = 256,
     output_dir: str = "betaone_checkpoints",
@@ -124,10 +149,14 @@ def train(
 
     enc_pool_path = encounter_pool_path or str(_SOLVER_DIR / "encounter_pool.json")
 
+    # Card vocabulary for learned embeddings
+    card_vocab, card_vocab_json = _build_card_vocab(output_dir)
+    num_cards = len(card_vocab)
+
     # Network + optimizer
-    network = BetaOneNetwork()
+    network = BetaOneNetwork(num_cards=num_cards)
     optimizer = torch.optim.Adam(network.parameters(), lr=lr)
-    print(f"BetaOne network: {network.param_count():,} parameters")
+    print(f"BetaOne network: {network.param_count():,} parameters ({num_cards} card vocab)")
 
     # Curriculum
     curriculum = CombatCurriculum(encounter_pool_path=enc_pool_path)
@@ -189,7 +218,7 @@ def train(
                     slices = tuple(slice(0, min(o, n)) for o, n in zip(old_t.shape, new_t.shape))
                     if all(o <= n for o, n in zip(old_t.shape, new_t.shape)):
                         # LayerNorm: init new dims to mean=0/var=1
-                        if "LayerNorm" in key or key.endswith(".weight") and new_t.dim() == 1:
+                        if key.endswith(".weight") and new_t.dim() == 1:
                             if "weight" in key:
                                 new_state[key] = torch.ones_like(new_t)
                             else:
@@ -250,6 +279,7 @@ def train(
                 temperature=0.01,
                 seeds=list(range(n_eval)),
                 gen_id=start_gen,
+                card_vocab_json=card_vocab_json,
             )
             eval_outcomes = eval_rollout["outcomes"]
             eval_wr = sum(1 for o in eval_outcomes if o == "win") / max(len(eval_outcomes), 1)
@@ -344,6 +374,7 @@ def train(
                     temperature=0.01,
                     seeds=[gen * 100_000 + 90_000 + i for i in range(n_check)],
                     gen_id=gen,
+                    card_vocab_json=card_vocab_json,
                 )
                 check_wr = sum(1 for o in check_rollout["outcomes"] if o == "win") / max(len(check_rollout["outcomes"]), 1)
                 if check_wr < check_cfg.promote_threshold * 0.9:  # 90% of original threshold
@@ -395,6 +426,7 @@ def train(
 
         # Collect rollouts — one call per HP level, merge results
         all_states, all_act_feat, all_act_masks = [], [], []
+        all_hand_card_ids, all_action_card_ids = [], []
         all_chosen, all_lp, all_values, all_rewards, all_dones = [], [], [], [], []
         all_outcomes, all_hps = [], []
         seed_offset = gen * 100_000
@@ -419,12 +451,15 @@ def train(
                 temperature=temperature,
                 seeds=b_seeds,
                 gen_id=gen,
+                card_vocab_json=card_vocab_json,
             )
             if rollout["total_steps"] == 0:
                 continue
             all_states.extend(rollout["states"])
             all_act_feat.extend(rollout["action_features"])
             all_act_masks.extend(rollout["action_masks"])
+            all_hand_card_ids.extend(rollout["hand_card_ids"])
+            all_action_card_ids.extend(rollout["action_card_ids"])
             all_chosen.extend(rollout["chosen_indices"])
             all_lp.extend(rollout["log_probs"])
             all_values.extend(rollout["values"])
@@ -446,6 +481,8 @@ def train(
             all_act_feat, dtype=torch.float32
         ).reshape(T, MAX_ACTIONS, ACTION_DIM)
         act_masks = torch.tensor(all_act_masks).reshape(T, MAX_ACTIONS)
+        hand_card_ids = torch.tensor(all_hand_card_ids, dtype=torch.long).reshape(T, MAX_HAND)
+        action_card_ids = torch.tensor(all_action_card_ids, dtype=torch.long).reshape(T, MAX_ACTIONS)
         chosen = torch.tensor(all_chosen, dtype=torch.long)
         old_lp = torch.tensor(all_lp, dtype=torch.float32)
         values = np.array(all_values, dtype=np.float32)
@@ -466,11 +503,16 @@ def train(
             states,
             act_feat,
             act_masks,
+            hand_card_ids,
+            action_card_ids,
             chosen,
             old_lp,
             torch.tensor(advantages, dtype=torch.float32),
             torch.tensor(returns, dtype=torch.float32),
+            clip_ratio=clip_ratio,
+            value_coef=value_coef,
             entropy_coef=entropy_coef,
+            max_grad_norm=max_grad_norm,
             epochs=ppo_epochs,
             batch_size=ppo_batch_size,
         )
@@ -584,7 +626,7 @@ def main():
     parser.add_argument("--generations", type=int, default=500)
     parser.add_argument("--combats", type=int, default=512)
     parser.add_argument("--lr", type=float, default=3e-4)
-    parser.add_argument("--entropy-coef", type=float, default=0.05)
+    parser.add_argument("--entropy-coef", type=float, default=0.03)
     parser.add_argument("--output-dir", default="betaone_checkpoints")
     parser.add_argument("--final-exam", action="store_true",
                         help="Skip tier progression, start at final exam")

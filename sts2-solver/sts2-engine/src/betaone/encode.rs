@@ -1,18 +1,30 @@
 //! BetaOne state/action encoding: simplified combat-only tensors.
 //!
-//! State: flat vector (player + enemies + context + hand_mean_pool). Dims derived from constants.
+//! State: flat vector (player + enemies + context + hand_cards + hand_mask).
+//! Hand cards are individually encoded (not mean-pooled) for attention in the network.
+//! Card IDs are encoded separately as integer indices for learned embeddings.
 //! Actions: per action (card_stats + target + flags). Dims auto-update with CARD_STATS_DIM.
-//! No vocabularies or learned embeddings — pure numeric features.
+
+use std::collections::HashMap;
 
 use crate::encode::{card_stats_vector, CARD_STATS_DIM};
 use crate::types::*;
 
-pub const PLAYER_DIM: usize = 20;
+/// Card vocabulary: maps card base_id → integer index for nn.Embedding lookup.
+/// Index 0 = PAD (empty slot), Index 1 = UNK (unknown card).
+pub type CardVocab = HashMap<String, i64>;
+
+const UNK_IDX: i64 = 1;
+
+pub const PLAYER_DIM: usize = 25;
 pub const ENEMY_FEATURES: usize = 16;
 pub const ENEMY_SLOTS: usize = 5;
 pub const CONTEXT_DIM: usize = 6;
-const HAND_STATS_DIM: usize = CARD_STATS_DIM;  // mean-pooled card stats across hand
-pub const STATE_DIM: usize = PLAYER_DIM + ENEMY_SLOTS * ENEMY_FEATURES + CONTEXT_DIM + HAND_STATS_DIM;
+pub const MAX_HAND: usize = 10;
+const BASE_STATE_DIM: usize = PLAYER_DIM + ENEMY_SLOTS * ENEMY_FEATURES + CONTEXT_DIM;  // 106
+const HAND_CARDS_DIM: usize = MAX_HAND * CARD_STATS_DIM;  // 10 × 28 = 280
+const HAND_MASK_DIM: usize = MAX_HAND;                     // 10
+pub const STATE_DIM: usize = BASE_STATE_DIM + HAND_CARDS_DIM + HAND_MASK_DIM;  // 396
 
 // Action layout: [card_stats | target | flags]
 const TARGET_DIM: usize = 4;
@@ -60,6 +72,12 @@ pub fn encode_state(state: &CombatState) -> [f32; STATE_DIM] {
     v[o + 17] = p.get_power("Thorns") as f32 / 5.0;
     v[o + 18] = p.get_power("Well-Laid Plans") as f32 / 3.0;
     v[o + 19] = p.get_power("Infinite Blades") as f32 / 3.0;
+    // Pending-effect powers (within-turn modifiers)
+    v[o + 20] = p.get_power("Burst") as f32 / 2.0;
+    v[o + 21] = p.get_power("Double Damage") as f32;  // binary: 0 or 1
+    v[o + 22] = if p.get_power("_shadowmeld") > 0 { 1.0 } else { 0.0 };
+    v[o + 23] = p.get_power("_corrosive_wave") as f32 / 5.0;
+    v[o + 24] = if p.get_power("_master_planner") > 0 { 1.0 } else { 0.0 };
     o += PLAYER_DIM;
 
     // --- Enemies (5 slots x 16 = 80 dims) ---
@@ -102,20 +120,19 @@ pub fn encode_state(state: &CombatState) -> [f32; STATE_DIM] {
     v[o + 5] = if state.pending_choice.is_some() { 1.0 } else { 0.0 };
     o += CONTEXT_DIM;
 
-    // --- Hand mean-pool (28 dims = CARD_STATS_DIM) ---
-    let hand_len = state.player.hand.len();
-    if hand_len > 0 {
-        let mut hand_sum = [0.0f32; CARD_STATS_DIM];
-        for card in &state.player.hand {
-            let stats = card_stats_vector(card);
-            for (s, &val) in hand_sum.iter_mut().zip(&stats) {
-                *s += val;
-            }
-        }
-        let scale = 1.0 / hand_len as f32;
+    // --- Individual hand cards (MAX_HAND × CARD_STATS_DIM + MAX_HAND mask) ---
+    let hand_len = state.player.hand.len().min(MAX_HAND);
+    for i in 0..hand_len {
+        let stats = card_stats_vector(&state.player.hand[i]);
+        let card_offset = o + i * CARD_STATS_DIM;
         for j in 0..CARD_STATS_DIM {
-            v[o + j] = hand_sum[j] * scale;
+            v[card_offset + j] = stats[j];
         }
+    }
+    // Hand mask: 1.0 for each real card, 0.0 for empty slots (already zero-init)
+    let mask_offset = o + HAND_CARDS_DIM;
+    for i in 0..hand_len {
+        v[mask_offset + i] = 1.0;
     }
 
     v
@@ -199,4 +216,53 @@ pub fn encode_actions(
     }
 
     (features, mask, num_valid)
+}
+
+// ---------------------------------------------------------------------------
+// Card ID encoding (for learned embeddings)
+// ---------------------------------------------------------------------------
+
+fn vocab_lookup(vocab: &CardVocab, card: &Card) -> i64 {
+    *vocab.get(card.base_id()).unwrap_or(&UNK_IDX)
+}
+
+/// Encode hand card IDs for embedding lookup. PAD (0) for empty slots.
+pub fn encode_hand_card_ids(state: &CombatState, vocab: &CardVocab) -> [i64; MAX_HAND] {
+    let mut ids = [0i64; MAX_HAND];
+    for (i, card) in state.player.hand.iter().take(MAX_HAND).enumerate() {
+        ids[i] = vocab_lookup(vocab, card);
+    }
+    ids
+}
+
+/// Encode action card IDs for embedding lookup. PAD (0) for non-card actions and padding.
+pub fn encode_action_card_ids(
+    actions: &[Action],
+    state: &CombatState,
+    vocab: &CardVocab,
+) -> [i64; MAX_ACTIONS] {
+    let mut ids = [0i64; MAX_ACTIONS];
+    for (i, action) in actions.iter().take(MAX_ACTIONS).enumerate() {
+        ids[i] = match action {
+            Action::PlayCard { card_idx, .. } => {
+                state.player.hand.get(*card_idx)
+                    .map(|c| vocab_lookup(vocab, c))
+                    .unwrap_or(UNK_IDX)
+            }
+            Action::ChooseCard { choice_idx } => {
+                let card = state.pending_choice.as_ref().and_then(|pc| {
+                    match pc.choice_type.as_str() {
+                        "discard_from_hand" | "choose_from_hand" => {
+                            state.player.hand.get(*choice_idx)
+                        }
+                        "choose_from_discard" => state.player.discard_pile.get(*choice_idx),
+                        _ => None,
+                    }
+                });
+                card.map(|c| vocab_lookup(vocab, c)).unwrap_or(UNK_IDX)
+            }
+            _ => 0, // PAD for EndTurn, UsePotion
+        };
+    }
+    ids
 }

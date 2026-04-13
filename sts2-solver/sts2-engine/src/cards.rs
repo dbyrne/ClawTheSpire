@@ -107,6 +107,7 @@ pub fn execute_card_effect(
             let count = if upgraded { 4 } else { 3 };
             let has_phantom = state.player.get_power("Phantom Blades") > 0;
             for _ in 0..count {
+                if state.player.hand.len() >= crate::effects::MAX_HAND_SIZE { break; }
                 let mut shiv = make_shiv();
                 if has_phantom { shiv.keywords.insert("Retain".to_string()); }
                 state.player.hand.push(shiv);
@@ -115,28 +116,34 @@ pub fn execute_card_effect(
         "CLOAK_AND_DAGGER" => {
             let block = if upgraded { 8 } else { 6 };
             gain_block(state, block);
-            let mut shiv = make_shiv();
-            if state.player.get_power("Phantom Blades") > 0 {
-                shiv.keywords.insert("Retain".to_string());
+            if state.player.hand.len() < crate::effects::MAX_HAND_SIZE {
+                let mut shiv = make_shiv();
+                if state.player.get_power("Phantom Blades") > 0 {
+                    shiv.keywords.insert("Retain".to_string());
+                }
+                state.player.hand.push(shiv);
             }
-            state.player.hand.push(shiv);
         }
         "LEADING_STRIKE" => {
             if let Some(tidx) = target_idx {
                 let dmg = if upgraded { 9 } else { 7 };
                 deal_damage(state, tidx, dmg, 1);
             }
-            state.player.hand.push(make_shiv());
+            if state.player.hand.len() < crate::effects::MAX_HAND_SIZE {
+                state.player.hand.push(make_shiv());
+            }
         }
         "UP_MY_SLEEVE" | "STORM_OF_STEEL" => {
             if base == "STORM_OF_STEEL" {
                 let hand_size = discard_entire_hand(state, rng);
                 for _ in 0..hand_size {
+                    if state.player.hand.len() >= crate::effects::MAX_HAND_SIZE { break; }
                     state.player.hand.push(make_shiv());
                 }
             } else {
                 let count = if upgraded { 4 } else { 3 };
                 for _ in 0..count {
+                    if state.player.hand.len() >= crate::effects::MAX_HAND_SIZE { break; }
                     state.player.hand.push(make_shiv());
                 }
             }
@@ -207,7 +214,8 @@ pub fn execute_card_effect(
         }
         "SHADOW_STEP" => {
             discard_entire_hand(state, rng);
-            apply_power_to_player(state, "Double Damage", 1);
+            // "Next turn, Attacks deal double damage" — deferred to start_turn
+            apply_power_to_player(state, "_double_damage_next_turn", 1);
         }
         "EXPERTISE" => {
             let draw = (6 - state.player.hand.len() as i32).max(0);

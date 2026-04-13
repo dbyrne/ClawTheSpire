@@ -315,15 +315,23 @@ pub fn draw_cards(state: &mut CombatState, count: i32, rng: &mut impl Rng) {
         }
     }
     for _ in 0..count {
+        if state.player.hand.len() >= MAX_HAND_SIZE {
+            break;
+        }
         if state.player.draw_pile.is_empty() && !state.player.discard_pile.is_empty() {
             // Shuffle discard into draw
             state.player.draw_pile.append(&mut state.player.discard_pile);
             shuffle_vec(&mut state.player.draw_pile, rng);
             // Pendulum relic: draw extra card on shuffle
-            if state.relics.contains("PENDULUM") && !state.player.draw_pile.is_empty() {
+            if state.relics.contains("PENDULUM") && !state.player.draw_pile.is_empty()
+                && state.player.hand.len() < MAX_HAND_SIZE
+            {
                 let extra = state.player.draw_pile.pop().unwrap();
                 state.player.hand.push(extra);
             }
+        }
+        if state.player.hand.len() >= MAX_HAND_SIZE {
+            break;
         }
         if let Some(card) = state.player.draw_pile.pop() {
             // Hellraiser: auto-play Strikes when drawn
@@ -463,8 +471,13 @@ pub fn add_card_to_discard(state: &mut CombatState, card: Card) {
     state.player.discard_pile.push(card);
 }
 
+/// STS2 enforces a 10-card hand limit. Cards that can't fit are discarded.
+pub const MAX_HAND_SIZE: usize = 10;
+
 pub fn add_card_to_hand(state: &mut CombatState, card: Card) {
-    state.player.hand.push(card);
+    if state.player.hand.len() < MAX_HAND_SIZE {
+        state.player.hand.push(card);
+    }
 }
 
 pub fn add_card_to_draw(state: &mut CombatState, card: Card) {

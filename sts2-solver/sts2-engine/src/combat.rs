@@ -185,6 +185,18 @@ pub fn play_card(
     // --- Execute card effect ---
     crate::cards::execute_card_effect(state, &card, target_idx, card_db, rng);
 
+    // Burst: replay Skill an extra time
+    if card.card_type == CardType::Skill {
+        let burst = state.player.get_power("Burst");
+        if burst > 0 {
+            crate::cards::execute_card_effect(state, &card, target_idx, card_db, rng);
+            state.player.add_power("Burst", -1);
+            if state.player.get_power("Burst") <= 0 {
+                state.player.powers.remove("Burst");
+            }
+        }
+    }
+
     // --- Post-effect triggers ---
     if card.card_type == CardType::Attack {
         state.player.powers.remove("Vigor");
@@ -218,6 +230,7 @@ pub fn play_card(
     if card.card_type == CardType::Attack
         && state.player.get_power("Juggling") > 0
         && state.attacks_played_this_turn == 3
+        && state.player.hand.len() < crate::effects::MAX_HAND_SIZE
     {
         state.player.hand.push(card.clone());
     }
@@ -380,7 +393,7 @@ pub fn start_turn(state: &mut CombatState, rng: &mut impl Rng) {
     for counter in &[
         "_kunai_count", "_fan_count", "_shuriken_count",
         "_nunchaku_count", "_letter_opener_count",
-        "_phantom_shiv_used", "_shadowmeld", "_corrosive_wave",
+        "_phantom_shiv_used", "_shadowmeld", "_corrosive_wave", "Double Damage",
     ] {
         state.player.powers.remove(*counter);
     }
@@ -465,6 +478,7 @@ pub fn start_turn(state: &mut CombatState, rng: &mut impl Rng) {
     let bolas_return = state.player.remove_power("_bolas_return");
     if bolas_return > 0 {
         for _ in 0..bolas_return {
+            if state.player.hand.len() >= crate::effects::MAX_HAND_SIZE { break; }
             if let Some(pos) = state.player.discard_pile.iter().position(|c| c.base_id() == "BOLAS") {
                 let card = state.player.discard_pile.remove(pos);
                 state.player.hand.push(card);
@@ -473,6 +487,12 @@ pub fn start_turn(state: &mut CombatState, rng: &mut impl Rng) {
     }
 
     state.player.powers.remove("_entropy_transform");
+
+    // Shadow Step: deferred "next turn double damage" → active
+    let dd_next = state.player.remove_power("_double_damage_next_turn");
+    if dd_next > 0 {
+        state.player.add_power("Double Damage", dd_next);
+    }
 
     // Clear turn-duration powers
     state.player.powers.remove("Rage");
@@ -864,6 +884,7 @@ fn tick_start_of_turn_powers(state: &mut CombatState, rng: &mut impl Rng) {
     if ib > 0 {
         let has_phantom = state.player.get_power("Phantom Blades") > 0;
         for _ in 0..ib {
+            if state.player.hand.len() >= crate::effects::MAX_HAND_SIZE { break; }
             let mut shiv = crate::cards::make_shiv();
             if has_phantom { shiv.keywords.insert("Retain".to_string()); }
             state.player.hand.push(shiv);
@@ -894,7 +915,7 @@ fn tick_start_of_turn_powers(state: &mut CombatState, rng: &mut impl Rng) {
 
     // Aggression
     let aggression = state.player.get_power("Aggression");
-    if aggression > 0 {
+    if aggression > 0 && state.player.hand.len() < crate::effects::MAX_HAND_SIZE {
         if let Some(pos) = state.player.discard_pile.iter().position(|c| c.card_type == CardType::Attack) {
             let card = state.player.discard_pile.remove(pos);
             state.player.hand.push(card);
