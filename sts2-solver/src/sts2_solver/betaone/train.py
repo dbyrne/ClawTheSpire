@@ -112,6 +112,7 @@ def train(
     output_dir: str = "betaone_checkpoints",
     encounter_pool_path: str | None = None,
     skip_to_final: bool = False,
+    lock_tier: int | None = None,
 ):
     os.makedirs(output_dir, exist_ok=True)
     onnx_dir = os.path.join(output_dir, "onnx")
@@ -208,7 +209,12 @@ def train(
         for f in [history_path, progress_path]:
             if os.path.exists(f):
                 os.remove(f)
-        if skip_to_final:
+        if lock_tier is not None:
+            curriculum.tier = lock_tier
+            curriculum.consecutive_good = 0
+            curriculum.gens_at_tier = 0
+            print(f"Warm restart from gen {start_gen - 1} — locked to T{lock_tier}: {curriculum.config.name}")
+        elif skip_to_final:
             curriculum.tier = curriculum.max_tier
             curriculum.consecutive_good = 0
             curriculum.gens_at_tier = 0
@@ -218,7 +224,7 @@ def train(
 
         # Pre-flight: greedy eval through tiers without training
         onnx_path = export_onnx(network, onnx_dir)
-        while not skip_to_final and curriculum.tier < curriculum.max_tier:
+        while lock_tier is None and not skip_to_final and curriculum.tier < curriculum.max_tier:
             cfg = curriculum.config
             n_eval = 128
             eval_enc = curriculum.sample_encounters(n_eval)
@@ -477,7 +483,11 @@ def train(
 
         # Curriculum update — use tier-only win rate (no review inflation)
         tier_before = curriculum.tier
-        tier_change = curriculum.update(tier_wr)
+        if lock_tier is not None:
+            tier_change = "hold"
+            curriculum.gens_at_tier += 1
+        else:
+            tier_change = curriculum.update(tier_wr)
 
         elapsed = time.time() - t0
 
@@ -560,6 +570,8 @@ def main():
     parser.add_argument("--output-dir", default="betaone_checkpoints")
     parser.add_argument("--final-exam", action="store_true",
                         help="Skip tier progression, start at final exam")
+    parser.add_argument("--tier", type=int, default=None,
+                        help="Lock to a specific tier (no promotion)")
     args = parser.parse_args()
 
     train(
@@ -569,6 +581,7 @@ def main():
         entropy_coef=args.entropy_coef,
         output_dir=args.output_dir,
         skip_to_final=args.final_exam,
+        lock_tier=args.tier,
     )
 
 
