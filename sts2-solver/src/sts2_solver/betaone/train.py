@@ -135,6 +135,7 @@ def train(
     best_win_rate = 0.0
     cumulative_wins = 0
     cumulative_games = 0
+    tier_cumulative: dict[str, list[int]] = {}  # "tier_idx" -> [wins, games]
     start_gen = 1
 
     history_path = os.path.join(output_dir, "betaone_history.jsonl")
@@ -206,6 +207,7 @@ def train(
             print("Optimizer reset (architecture changed)")
         start_gen = ckpt["gen"] + 1
         best_win_rate = ckpt.get("win_rate", 0.0)
+        tier_cumulative = ckpt.get("tier_cumulative", {})
         for f in [history_path, progress_path]:
             if os.path.exists(f):
                 os.remove(f)
@@ -480,6 +482,10 @@ def train(
         avg_reward = float(rewards.mean())
         cumulative_wins += all_wins
         cumulative_games += n_episodes
+        # Per-tier cumulative (persisted across runs via checkpoint)
+        tk = str(tier_before)
+        prev = tier_cumulative.get(tk, [0, 0])
+        tier_cumulative[tk] = [prev[0] + tier_wins, prev[1] + len(tier_outcomes)]
 
         # Curriculum update — use tier-only win rate (no review inflation)
         tier_before = curriculum.tier
@@ -535,6 +541,7 @@ def train(
             record["cumulative_wins"] = cumulative_wins
             record["cumulative_games"] = cumulative_games
             record["best_win_rate"] = round(best_win_rate, 4)
+            record["tier_cumulative"] = tier_cumulative
             json.dump(record, f, indent=2)
 
         # Save checkpoints: always save "latest", keep milestones
@@ -547,6 +554,7 @@ def train(
             "tier": curriculum.tier,
             "tier_name": curriculum.config.name,
             "gens_at_tier": curriculum.gens_at_tier,
+            "tier_cumulative": tier_cumulative,
         }
         # Always overwrite latest (resume point)
         torch.save(ckpt_data, os.path.join(output_dir, "betaone_latest.pt"))
