@@ -261,6 +261,11 @@ def reflex():        return lookup_card("REFLEX")
 def untouchable():   return lookup_card("UNTOUCHABLE")
 def acrobatics():    return lookup_card("ACROBATICS")
 def accuracy():      return lookup_card("ACCURACY")
+def backflip():      return lookup_card("BACKFLIP")
+def adrenaline():    return lookup_card("ADRENALINE")
+def dagger_spray():  return lookup_card("DAGGER_SPRAY")
+def burst():         return lookup_card("BURST")
+def survivor():      return lookup_card("SURVIVOR")
 
 
 # ---------------------------------------------------------------------------
@@ -771,8 +776,8 @@ def build_scenarios() -> list[Scenario]:
     scenarios.append(Scenario(
         name="sly_over_status_in_discard",
         category="sly",
-        description="Discard choice with both Sly and Status — Sly first (gets value), Status second",
-        player={"hp": 40, "max_hp": 70, "energy": 1, "block": 0},
+        description="After Survivor (8 block, discard 1): Sly gives energy, Slimed auto-leaves anyway",
+        player={"hp": 40, "max_hp": 70, "energy": 1, "block": 8},
         enemies=[enemy(30, 50, damage=10)],
         hand=[tactician(), slimed(), defend(), strike()],
         actions=[
@@ -801,6 +806,161 @@ def build_scenarios() -> list[Scenario]:
         best_actions=[0],       # Acrobatics draws 3 AND creates a discard opportunity for Tactician
     ))
 
+    scenarios.append(Scenario(
+        name="survivor_triggers_sly",
+        category="sly",
+        description="Survivor (block + forced discard) with Tactician in hand — discard triggers Sly energy",
+        player={"hp": 50, "max_hp": 70, "energy": 1, "block": 0},
+        enemies=[enemy(30, 50, damage=10)],
+        hand=[survivor(), defend(), tactician()],
+        actions=[
+            ActionSpec("play_card", survivor(), label="Survivor (block + discard triggers Sly)"),
+            ActionSpec("play_card", defend(), label="Defend (5 block)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # more block than Defend AND Sly energy from discarding Tactician
+    ))
+
+    # ===== DEBUFF APPLICATION =====
+
+    scenarios.append(Scenario(
+        name="weak_vs_multi_hit",
+        category="debuff",
+        description="Enemy doing 3x8=24 — Neutralize (Weak, -25% per hit) saves more than Defend",
+        player={"hp": 50, "max_hp": 70, "energy": 1, "block": 0},
+        enemies=[enemy(40, 50, damage=8, hits=3)],
+        hand=[neutralize(), defend()],
+        actions=[
+            ActionSpec("play_card", neutralize(), target_idx=0, label="Neutralize (Weak, 3x6=18)"),
+            ActionSpec("play_card", defend(), label="Defend (5 block vs 24)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # Weak saves 6 damage (3 hits × 2 reduction) vs Defend saves 5
+        bad_actions=[2],
+    ))
+
+    scenarios.append(Scenario(
+        name="dont_debuff_dying_enemy",
+        category="debuff",
+        description="Enemy at 6 HP attacking for 8 — Strike kills it, don't waste Neutralize",
+        player={"hp": 30, "max_hp": 70, "energy": 1, "block": 0},
+        enemies=[enemy(6, 50, damage=8)],
+        hand=[strike(), neutralize()],
+        actions=[
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike (6 dmg, lethal)"),
+            ActionSpec("play_card", neutralize(), target_idx=0, label="Neutralize (Weak, doesn't kill)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # kill the enemy, remove the damage source entirely
+        bad_actions=[2],
+    ))
+
+    # ===== DRAW VALUE =====
+
+    scenarios.append(Scenario(
+        name="backflip_over_defend",
+        category="draw",
+        description="Both cost 1 and block — Backflip also draws 2 cards, strictly better",
+        player={"hp": 50, "max_hp": 70, "energy": 2, "block": 0},
+        enemies=[enemy(30, 50, damage=10)],
+        hand=[backflip(), defend(), strike()],
+        actions=[
+            ActionSpec("play_card", backflip(), label="Backflip (block + draw 2)"),
+            ActionSpec("play_card", defend(), label="Defend (block only)"),
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # same block as Defend plus 2 card draw = strictly better
+    ))
+
+    scenarios.append(Scenario(
+        name="adrenaline_always_play",
+        category="draw",
+        description="Adrenaline costs 0, draws 2, gives 1 energy — pure free value, always play",
+        player={"hp": 50, "max_hp": 70, "energy": 1, "block": 0},
+        enemies=[enemy(30, 50, damage=10)],
+        hand=[adrenaline(), strike(), defend()],
+        actions=[
+            ActionSpec("play_card", adrenaline(), label="Adrenaline (0-cost, draw 2, +1 energy)"),
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike"),
+            ActionSpec("play_card", defend(), label="Defend"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # free card draw and energy, always play first
+        bad_actions=[3],
+    ))
+
+    # ===== MULTI-ENEMY =====
+
+    scenarios.append(Scenario(
+        name="aoe_vs_single_target",
+        category="multi_enemy",
+        description="3 enemies alive — Dagger Spray hits all vs Strike hits one",
+        player={"hp": 50, "max_hp": 70, "energy": 1, "block": 0},
+        enemies=[enemy(20, 30, damage=5), enemy(20, 30, damage=5), enemy(20, 30, damage=5)],
+        hand=[dagger_spray(), strike()],
+        actions=[
+            ActionSpec("play_card", dagger_spray(), label="Dagger Spray (hit all enemies)"),
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike one enemy (6 dmg)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # AoE deals far more total damage with 3 targets
+        bad_actions=[2],
+    ))
+
+    scenarios.append(Scenario(
+        name="aoe_kills_multiple_low",
+        category="multi_enemy",
+        description="3 enemies at 7 HP — Dagger Spray kills all, Strike kills none",
+        player={"hp": 50, "max_hp": 70, "energy": 1, "block": 0},
+        enemies=[enemy(7, 30, damage=5), enemy(7, 30, damage=5), enemy(7, 30, damage=5)],
+        hand=[dagger_spray(), strike()],
+        actions=[
+            ActionSpec("play_card", dagger_spray(), label="Dagger Spray (kills all 3)"),
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike one (6 dmg, no kill)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # kills 3 enemies, removes 15 incoming damage
+        bad_actions=[2],
+    ))
+
+    # ===== COMBO SEQUENCING =====
+
+    scenarios.append(Scenario(
+        name="burst_before_blade_dance",
+        category="combo",
+        description="Burst makes next Skill play twice — Burst first, then Blade Dance = 6 shivs",
+        player={"hp": 50, "max_hp": 70, "energy": 2, "block": 0},
+        enemies=[enemy(40, 50, damage=8)],
+        hand=[burst(), blade_dance(), defend()],
+        actions=[
+            ActionSpec("play_card", burst(), label="Burst (next Skill plays twice)"),
+            ActionSpec("play_card", blade_dance(), label="Blade Dance (3 shivs)"),
+            ActionSpec("play_card", defend(), label="Defend"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # Burst then Blade Dance = 6 shivs, massive damage
+        bad_actions=[3],
+    ))
+
+    # ===== SURVIVAL PRIORITY =====
+
+    scenarios.append(Scenario(
+        name="block_over_power_low_hp",
+        category="survival",
+        description="12 HP with 15 incoming — Defend to survive, power gives 0 block",
+        player={"hp": 12, "max_hp": 70, "energy": 1, "block": 0},
+        enemies=[enemy(40, 50, damage=15)],
+        hand=[defend(), noxious_fumes()],
+        actions=[
+            ActionSpec("play_card", defend(), label="Defend (5 block, survive)"),
+            ActionSpec("play_card", noxious_fumes(), label="Noxious Fumes (0 block, die)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # must block to survive, power does nothing for survival
+        bad_actions=[1, 2],     # Fumes or end turn = die to 15 damage at 12 HP
+    ))
+
     return scenarios
 
 
@@ -819,7 +979,18 @@ def run_eval(checkpoint_path: str | None = None) -> dict:
         except RuntimeError:
             # Dimension-aware warm-start for older checkpoints
             import torch.nn as nn
-            old_state = ckpt["model_state_dict"]
+            # Remap old Sequential trunk keys → new residual trunk keys
+            _WARM_KEY_MAP = {
+                "trunk.0.weight": "input_norm.weight",
+                "trunk.0.bias":   "input_norm.bias",
+                "trunk.1.weight": "trunk_in.weight",
+                "trunk.1.bias":   "trunk_in.bias",
+                "trunk.3.weight": "trunk_blocks.0.linear1.weight",
+                "trunk.3.bias":   "trunk_blocks.0.linear1.bias",
+                "trunk.5.weight": "trunk_blocks.0.linear2.weight",
+                "trunk.5.bias":   "trunk_blocks.0.linear2.bias",
+            }
+            old_state = {_WARM_KEY_MAP.get(k, k): v for k, v in ckpt["model_state_dict"].items()}
             new_state = net.state_dict()
             for key in new_state:
                 if key not in old_state:

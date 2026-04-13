@@ -105,8 +105,8 @@ def train(
     gamma: float = 0.99,
     lam: float = 0.95,
     temperature_start: float = 1.0,
-    temperature_end: float = 0.3,
-    entropy_coef: float = 0.01,
+    temperature_end: float = 0.5,
+    entropy_coef: float = 0.05,
     ppo_epochs: int = 4,
     ppo_batch_size: int = 256,
     output_dir: str = "betaone_checkpoints",
@@ -154,6 +154,18 @@ def train(
     if latest_ckpt:
         ckpt = torch.load(latest_ckpt, weights_only=False)
         old_state = ckpt["model_state_dict"]
+        # Remap old Sequential trunk keys → new residual trunk keys
+        _WARM_KEY_MAP = {
+            "trunk.0.weight": "input_norm.weight",
+            "trunk.0.bias":   "input_norm.bias",
+            "trunk.1.weight": "trunk_in.weight",
+            "trunk.1.bias":   "trunk_in.bias",
+            "trunk.3.weight": "trunk_blocks.0.linear1.weight",
+            "trunk.3.bias":   "trunk_blocks.0.linear1.bias",
+            "trunk.5.weight": "trunk_blocks.0.linear2.weight",
+            "trunk.5.bias":   "trunk_blocks.0.linear2.bias",
+        }
+        old_state = {_WARM_KEY_MAP.get(k, k): v for k, v in old_state.items()}
         # Dimension-aware warm-start: copy overlapping submatrix for shape
         # mismatches, identity-init new trunk layers, preserve everything else.
         try:
@@ -214,7 +226,7 @@ def train(
                 print("Optimizer reset (state mismatch)")
         else:
             print("Optimizer reset (architecture changed)")
-        start_gen = ckpt["gen"] + 1
+        start_gen = 1 if arch_changed else ckpt["gen"] + 1
         best_win_rate = ckpt.get("win_rate", 0.0)
         for f in [history_path, progress_path]:
             if os.path.exists(f):
@@ -584,7 +596,7 @@ def main():
     parser.add_argument("--generations", type=int, default=500)
     parser.add_argument("--combats", type=int, default=512)
     parser.add_argument("--lr", type=float, default=3e-4)
-    parser.add_argument("--entropy-coef", type=float, default=0.005)
+    parser.add_argument("--entropy-coef", type=float, default=0.05)
     parser.add_argument("--output-dir", default="betaone_checkpoints")
     parser.add_argument("--final-exam", action="store_true",
                         help="Skip tier progression, start at final exam")
