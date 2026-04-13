@@ -33,6 +33,28 @@ def _load(path: Path, tail: int | None = 30):
         return None
 
 
+def _load_tier_cumulative(path: Path) -> dict[int, tuple[int, int]]:
+    """Scan full history for per-tier cumulative wins/games."""
+    result: dict[int, tuple[int, int]] = {}
+    try:
+        with open(path) as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                r = json.loads(line)
+                if r.get("eval_only"):
+                    continue
+                t = r.get("tier", 0)
+                wr = r.get("tier_wr") or r.get("win_rate", 0)
+                eps = r.get("episodes", 0)
+                wins = int(wr * eps)
+                prev_w, prev_g = result.get(t, (0, 0))
+                result[t] = (prev_w + wins, prev_g + eps)
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    return result
+
+
 def _load_promotions(path: Path) -> dict[int, int]:
     """Scan full history for tier promotion gens. Returns {tier: gen}."""
     try:
@@ -75,8 +97,11 @@ def _sparkline(values: list[float], width: int = 20) -> str:
     return "".join(blocks[min(int((v - lo) / span * (len(blocks) - 1)), len(blocks) - 1)] for v in recent)
 
 
-def build(progress: dict, history: list[dict], age: float, promoted_at: dict[int, int] | None = None) -> Group:
+def build(progress: dict, history: list[dict], age: float,
+          promoted_at: dict[int, int] | None = None,
+          tier_cumulative: dict[int, tuple[int, int]] | None = None) -> Group:
     promoted_at = promoted_at or {}
+    tier_cumulative = tier_cumulative or {}
     gen = progress.get("gen", 0)
     total = progress.get("num_generations", 5000)
     tier = progress.get("tier", 0)
@@ -119,7 +144,7 @@ def build(progress: dict, history: list[dict], age: float, promoted_at: dict[int
     ct.add_column("", width=22)
     ct.add_column("", ratio=1)
 
-    # Compute per-tier win rates from recent history (tier-only, excludes review)
+    # Compute per-tier recent win rates from tail history
     tier_wrs: dict[int, list[float]] = {}
     for r in history:
         t = r.get("tier", 0)
@@ -138,13 +163,16 @@ def build(progress: dict, history: list[dict], age: float, promoted_at: dict[int
         else:
             deck = f"random {cfg.deck_min_size}-{cfg.deck_max_size}"
 
-        # Criteria: show recent win rate at this tier vs its threshold
+        # Criteria: show recent win rate + cumulative stats
         tier_thresh = cfg.promote_threshold
         recent_at_tier = tier_wrs.get(i, [])
+        cum_w, cum_g = tier_cumulative.get(i, (0, 0))
         if recent_at_tier:
             avg_wr = sum(recent_at_tier[-10:]) / len(recent_at_tier[-10:])
+            cum_wr = cum_w / max(cum_g, 1)
             color = "green" if avg_wr >= tier_thresh else _wr_color(avg_wr)
-            criteria = f"[{color}]{avg_wr:.0%}[/{color}] [dim](need {tier_thresh:.0%})[/dim]"
+            cum_s = f" [dim]cum {cum_wr:.0%}[/dim]" if cum_g > 0 else ""
+            criteria = f"[{color}]{avg_wr:.0%}[/{color}] [dim]({tier_thresh:.0%})[/dim]{cum_s}"
         else:
             criteria = f"[dim](need {tier_thresh:.0%})[/dim]"
 
@@ -290,9 +318,10 @@ def main():
             p = _load(d / "betaone_progress.json")
             h = _load(history_path) or []
             promos = _load_promotions(history_path)
+            cum = _load_tier_cumulative(history_path)
             if p:
                 age = time.time() - p.get("timestamp", time.time())
-                live.update(build(p, h, age, promos))
+                live.update(build(p, h, age, promos, cum))
                 if p.get("gen", 0) >= p.get("num_generations", 0) and age > 30:
                     break
             else:

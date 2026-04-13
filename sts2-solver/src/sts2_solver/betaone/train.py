@@ -111,6 +111,7 @@ def train(
     ppo_batch_size: int = 256,
     output_dir: str = "betaone_checkpoints",
     encounter_pool_path: str | None = None,
+    skip_to_final: bool = False,
 ):
     os.makedirs(output_dir, exist_ok=True)
     onnx_dir = os.path.join(output_dir, "onnx")
@@ -207,11 +208,17 @@ def train(
         for f in [history_path, progress_path]:
             if os.path.exists(f):
                 os.remove(f)
-        print(f"Warm restart from gen {start_gen - 1} — validating tiers")
+        if skip_to_final:
+            curriculum.tier = curriculum.max_tier
+            curriculum.consecutive_good = 0
+            curriculum.gens_at_tier = 0
+            print(f"Warm restart from gen {start_gen - 1} — skipping to T{curriculum.tier}: {curriculum.config.name}")
+        else:
+            print(f"Warm restart from gen {start_gen - 1} — validating tiers")
 
         # Pre-flight: greedy eval through tiers without training
         onnx_path = export_onnx(network, onnx_dir)
-        while curriculum.tier < curriculum.max_tier:
+        while not skip_to_final and curriculum.tier < curriculum.max_tier:
             cfg = curriculum.config
             n_eval = 128
             eval_enc = curriculum.sample_encounters(n_eval)
@@ -551,6 +558,8 @@ def main():
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--entropy-coef", type=float, default=0.005)
     parser.add_argument("--output-dir", default="betaone_checkpoints")
+    parser.add_argument("--final-exam", action="store_true",
+                        help="Skip tier progression, start at final exam")
     args = parser.parse_args()
 
     train(
@@ -559,6 +568,7 @@ def main():
         lr=args.lr,
         entropy_coef=args.entropy_coef,
         output_dir=args.output_dir,
+        skip_to_final=args.final_exam,
     )
 
 
