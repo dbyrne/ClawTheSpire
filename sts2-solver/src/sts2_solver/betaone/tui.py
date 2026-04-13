@@ -115,13 +115,13 @@ def build(progress: dict, history: list[dict], age: float,
         else:
             break
 
-    ct = Table(box=None, padding=(0, 2), expand=True, show_header=False)
+    ct = Table(box=None, padding=(0, 1), expand=True, show_header=False)
     ct.add_column("", width=3)
     ct.add_column("", width=3)
-    ct.add_column("", width=32)
-    ct.add_column("", width=12)
-    ct.add_column("", width=22)
-    ct.add_column("", ratio=1)
+    ct.add_column("", width=25)
+    ct.add_column("", width=11)
+    ct.add_column("", ratio=2, no_wrap=True)
+    ct.add_column("", ratio=1, no_wrap=True)
 
     # Compute per-tier recent win rates from tail history
     tier_wrs: dict[int, list[float]] = {}
