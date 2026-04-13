@@ -114,7 +114,7 @@ TIER_CONFIGS: list[TierConfig] = [
                custom_encounters=_PREVIOUSLY_IMPOSSIBLE,
                deck_archetypes=["shiv"],
                deck_min_size=16, deck_max_size=20, deck_min_removals=1, deck_max_removals=3),
-    TierConfig("Pure shiv vs Byrdonis", deck_mode="custom", promote_threshold=0.55,
+    TierConfig("Pure shiv vs Byrdonis", deck_mode="custom", promote_threshold=0.62,
                custom_encounters=[["BYRDONIS"]],
                custom_deck=_build_shiv_trap_deck, player_hp=40),
     TierConfig("Sly deck + Hard",     deck_mode="random", promote_threshold=0.70,
