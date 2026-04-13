@@ -1,9 +1,9 @@
 """BetaOne network: combat-only policy + value (~65K params).
 
 Architecture:
-  State (106) → Trunk MLP (128, 3 layers) → Policy (dot-product) + Value (scalar)
+  State (134) → Trunk MLP (128, 3 layers) → Policy (dot-product) + Value (scalar)
 
-Inputs:  state (B,106), action_features (B,30,35), action_mask (B,30)
+Inputs:  state (B,134), action_features (B,30,35), action_mask (B,30)
 Outputs: logits (B,30), value (B,1)
 """
 
@@ -13,7 +13,7 @@ import torch
 import torch.nn as nn
 
 # These must match betaone/encode.rs constants exactly
-STATE_DIM = 106
+STATE_DIM = 134
 ACTION_DIM = 35
 MAX_ACTIONS = 30
 HIDDEN_DIM = 128

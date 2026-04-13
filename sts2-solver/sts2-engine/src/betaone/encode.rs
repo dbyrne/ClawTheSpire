@@ -1,17 +1,18 @@
 //! BetaOne state/action encoding: simplified combat-only tensors.
 //!
-//! State: flat vector (player + enemies + context). Dims derived from constants.
+//! State: flat vector (player + enemies + context + hand_mean_pool). Dims derived from constants.
 //! Actions: per action (card_stats + target + flags). Dims auto-update with CARD_STATS_DIM.
 //! No vocabularies or learned embeddings — pure numeric features.
 
 use crate::encode::{card_stats_vector, CARD_STATS_DIM};
 use crate::types::*;
 
-pub const STATE_DIM: usize = PLAYER_DIM + ENEMY_SLOTS * ENEMY_FEATURES + CONTEXT_DIM;
 pub const PLAYER_DIM: usize = 20;
 pub const ENEMY_FEATURES: usize = 16;
 pub const ENEMY_SLOTS: usize = 5;
 pub const CONTEXT_DIM: usize = 6;
+const HAND_STATS_DIM: usize = CARD_STATS_DIM;  // mean-pooled card stats across hand
+pub const STATE_DIM: usize = PLAYER_DIM + ENEMY_SLOTS * ENEMY_FEATURES + CONTEXT_DIM + HAND_STATS_DIM;
 
 // Action layout: [card_stats | target | flags]
 const TARGET_DIM: usize = 4;
@@ -99,6 +100,23 @@ pub fn encode_state(state: &CombatState) -> [f32; STATE_DIM] {
     v[o + 3] = state.player.discard_pile.len() as f32 / 30.0;
     v[o + 4] = state.player.exhaust_pile.len() as f32 / 20.0;
     v[o + 5] = if state.pending_choice.is_some() { 1.0 } else { 0.0 };
+    o += CONTEXT_DIM;
+
+    // --- Hand mean-pool (28 dims = CARD_STATS_DIM) ---
+    let hand_len = state.player.hand.len();
+    if hand_len > 0 {
+        let mut hand_sum = [0.0f32; CARD_STATS_DIM];
+        for card in &state.player.hand {
+            let stats = card_stats_vector(card);
+            for (s, &val) in hand_sum.iter_mut().zip(&stats) {
+                *s += val;
+            }
+        }
+        let scale = 1.0 / hand_len as f32;
+        for j in 0..CARD_STATS_DIM {
+            v[o + j] = hand_sum[j] * scale;
+        }
+    }
 
     v
 }

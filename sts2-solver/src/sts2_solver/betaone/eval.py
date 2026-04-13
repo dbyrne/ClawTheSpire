@@ -99,6 +99,13 @@ def encode_state(scenario: "Scenario") -> list[float]:
         scenario.draw_size, scenario.discard_size, scenario.exhaust_size,
         pending_choice=scenario.pending_choice is not None,
     ))
+    # Hand mean-pool (28 dims matching card_stats_vector)
+    if scenario.hand:
+        hand_stats = [encode_card_stats(c) for c in scenario.hand]
+        mean = [sum(s[j] for s in hand_stats) / len(hand_stats) for j in range(CS.TOTAL)]
+        v.extend(mean)
+    else:
+        v.extend([0.0] * CS.TOTAL)
     assert len(v) == STATE_DIM, f"State dim {len(v)} != {STATE_DIM}"
     return v
 
