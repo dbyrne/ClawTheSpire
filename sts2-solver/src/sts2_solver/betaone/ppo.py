@@ -59,7 +59,7 @@ def ppo_update(
     returns: torch.Tensor,
     *,
     clip_ratio: float = 0.2,
-    value_coef: float = 0.25,
+    value_coef: float = 0.5,
     entropy_coef: float = 0.01,
     max_grad_norm: float = 0.5,
     epochs: int = 4,

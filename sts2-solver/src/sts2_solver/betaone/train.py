@@ -154,18 +154,6 @@ def train(
     if latest_ckpt:
         ckpt = torch.load(latest_ckpt, weights_only=False)
         old_state = ckpt["model_state_dict"]
-        # Remap old Sequential trunk keys → new residual trunk keys
-        _WARM_KEY_MAP = {
-            "trunk.0.weight": "input_norm.weight",
-            "trunk.0.bias":   "input_norm.bias",
-            "trunk.1.weight": "trunk_in.weight",
-            "trunk.1.bias":   "trunk_in.bias",
-            "trunk.3.weight": "trunk_blocks.0.linear1.weight",
-            "trunk.3.bias":   "trunk_blocks.0.linear1.bias",
-            "trunk.5.weight": "trunk_blocks.0.linear2.weight",
-            "trunk.5.bias":   "trunk_blocks.0.linear2.bias",
-        }
-        old_state = {_WARM_KEY_MAP.get(k, k): v for k, v in old_state.items()}
         # Dimension-aware warm-start: copy overlapping submatrix for shape
         # mismatches, identity-init new trunk layers, preserve everything else.
         try:
