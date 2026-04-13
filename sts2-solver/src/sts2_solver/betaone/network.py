@@ -3,7 +3,7 @@
 Architecture:
   State (134) → LayerNorm → Linear(192) → ReLU → [ResBlock(192)]×3 → Policy + Value
 
-  ResBlock: Linear(192→192) → ReLU → Linear(192→192) + skip + Dropout + LayerNorm
+  ResBlock: Linear(192→192) → ReLU → Linear(192→192) + skip + LayerNorm
   Policy:   dot(Linear(192→128)(state), Linear(35→128)(action))  — wider head for richer scoring
   Value:    Linear(192→64) → ReLU → Linear(64→1)
 
@@ -38,7 +38,6 @@ class BetaOneNetwork(nn.Module):
                 'linear1': nn.Linear(HIDDEN_DIM, HIDDEN_DIM),
                 'linear2': nn.Linear(HIDDEN_DIM, HIDDEN_DIM),
                 'norm': nn.LayerNorm(HIDDEN_DIM),
-                'dropout': nn.Dropout(0.1),
             })
             for _ in range(NUM_TRUNK_BLOCKS)
         ])
@@ -74,7 +73,7 @@ class BetaOneNetwork(nn.Module):
         for block in self.trunk_blocks:
             residual = F.relu(block['linear1'](h))
             residual = block['linear2'](residual)
-            h = h + block['dropout'](residual)
+            h = h + residual
             h = block['norm'](h)
 
         # Policy: dot-product scoring
@@ -98,7 +97,6 @@ class BetaOneNetwork(nn.Module):
             'linear1': nn.Linear(HIDDEN_DIM, HIDDEN_DIM),
             'linear2': nn.Linear(HIDDEN_DIM, HIDDEN_DIM),
             'norm': nn.LayerNorm(HIDDEN_DIM),
-            'dropout': nn.Dropout(0.1),
         })
         nn.init.zeros_(block['linear2'].weight)
         nn.init.zeros_(block['linear2'].bias)
