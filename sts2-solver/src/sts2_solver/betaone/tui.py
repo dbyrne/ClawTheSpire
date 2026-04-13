@@ -270,12 +270,28 @@ def build(progress: dict, history: list[dict], age: float,
     gens_at = progress.get("gens_at_tier", 0)
     promo_str = f"T{tier} Promote: 3 consecutive >= {cur_threshold:.0%} ({consecutive}/3)"
 
+    # Theoretical max: average of per-tier cumulative win rates (excluding final exam)
+    theoretical_str = ""
+    if tier == len(TIER_CONFIGS) - 1:  # at final exam
+        tier_rates = []
+        for i in range(len(TIER_CONFIGS) - 1):
+            c = tier_cumulative.get(str(i), [0, 0])
+            if c[1] > 0:
+                tier_rates.append(c[0] / c[1])
+        if tier_rates:
+            theo = sum(tier_rates) / len(tier_rates)
+            theoretical_str = f"  [dim]Theoretical max (avg per-tier cum): [bold]{theo:.1%}[/bold] across {len(tier_rates)} tiers[/dim]"
+
+    footer = f"  {flag_str}\n  [dim]{promo_str}[/dim]"
+    if theoretical_str:
+        footer += f"\n{theoretical_str}"
+
     return Group(
         Panel(header, style="cyan"),
         Panel(ct, title="[bold]Curriculum[/bold]", border_style="blue"),
         Panel(mt, title="[bold]Metrics[/bold]", border_style="blue"),
         Panel(ht, title=f"[bold]Recent Generations[/bold]  [dim]WR trend: {spark}[/dim]", border_style="blue"),
-        Text.from_markup(f"  {flag_str}\n  [dim]{promo_str}[/dim]"),
+        Text.from_markup(footer),
     )
 
 
