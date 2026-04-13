@@ -292,8 +292,8 @@ def train(
         # Export current network
         onnx_path = export_onnx(network, onnx_dir)
 
-        # Regression check every 50 gens: eval all previous tiers
-        if gen % 50 == 0 and curriculum.tier > 0:
+        # Regression check every 50 gens: eval all previous tiers (skip in locked tier mode)
+        if gen % 50 == 0 and curriculum.tier > 0 and lock_tier is None:
             regressed_tiers.clear()
             regressed_detail: dict[int, float] = {}
             for check_tier in range(curriculum.tier):
