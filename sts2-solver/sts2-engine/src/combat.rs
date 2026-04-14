@@ -900,7 +900,7 @@ fn tick_start_of_turn_powers(state: &mut CombatState, rng: &mut impl Rng) {
             let worst_idx = state.player.hand.iter().enumerate()
                 .max_by_key(|(_, c)| {
                     let type_score = match c.card_type {
-                        CardType::Status => 300,
+                        CardType::Status | CardType::Quest => 300,
                         CardType::Curse => 200,
                         _ => 0,
                     };

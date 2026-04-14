@@ -2636,93 +2636,33 @@ class Runner:
             raise
 
     def _az_decide_card_reward(self, gs: dict) -> "Decision | None":
-        """Use network option head to pick a card reward (or skip)."""
-        import torch
+        """Pick a random card reward (always take, never skip) for deck diversity."""
+        import random as _rand
         from .deterministic_advisor import Decision
-        from .option_types import OPTION_CARD_REWARD, OPTION_CARD_SKIP
 
-        try:
-            st, hidden, hp, max_hp, gold, floor, deck = self._az_run_state_tensors(gs)
-            network = self._network
-            vocabs = self._mcts_vocabs
+        # Get offered cards from the game state.
+        reward_data = gs.get("reward") or {}
+        av_reward = (gs.get("agent_view") or {}).get("reward") or {}
+        rewards = (
+            reward_data.get("card_options")
+            or av_reward.get("cards")
+            or gs.get("card_rewards")
+            or gs.get("rewards")
+            or (gs.get("selection") or {}).get("cards")
+            or []
+        )
 
-            # Get offered cards from the game state.
-            # Raw state: reward.card_options (on NCardRewardSelectionScreen)
-            # Agent view: reward.cards (transformed by BuildAgentRewardPayload)
-            reward_data = gs.get("reward") or {}
-            av_reward = (gs.get("agent_view") or {}).get("reward") or {}
-            rewards = (
-                reward_data.get("card_options")
-                or av_reward.get("cards")
-                or gs.get("card_rewards")
-                or gs.get("rewards")
-                or (gs.get("selection") or {}).get("cards")
-                or []
-            )
+        if not rewards:
+            return None
 
-            if not rewards:
-                return None
+        pick = _rand.randrange(len(rewards))
+        card_info = rewards[pick]
+        name = card_info.get("name") or card_info.get("card_id", "?")
+        chosen_idx = card_info.get("index", pick)
 
-            # Build option types, card IDs, and card stats
-            from .alphazero.encoding import card_stats_vector
-            opt_types = []
-            opt_cards = []
-            opt_stats = []
-            option_labels = []
-            game_indices = []
-
-            for card_info in rewards:
-                name = card_info.get("name") or card_info.get("card_id", "?")
-                card_id = (card_info.get("card_id") or name).rstrip("+")
-                upgraded = card_info.get("upgraded", False)
-                idx = card_info.get("index", len(opt_types))
-                opt_types.append(OPTION_CARD_REWARD)
-                opt_cards.append(vocabs.cards.get(card_id))
-                # Get card stats for the option head
-                card_def = self.card_db.get(card_id, upgraded=upgraded)
-                if card_def:
-                    opt_stats.append(card_stats_vector(card_def))
-                else:
-                    opt_stats.append([0.0] * self._mcts_config.card_stats_dim)
-                option_labels.append(name)
-                game_indices.append(idx)
-
-            # Add skip option
-            opt_types.append(OPTION_CARD_SKIP)
-            opt_cards.append(0)
-            opt_stats.append([0.0] * self._mcts_config.card_stats_dim)
-            option_labels.append("Skip")
-            game_indices.append(None)
-
-            with torch.no_grad():
-                best_idx, scores = network.pick_best_option(
-                    hidden, opt_types, opt_cards,
-                    option_card_stats=opt_stats)
-
-            nv = network.value_head(hidden).item()
-            hs = {
-                "head": "option_eval",
-                "chosen": best_idx,
-                "options": [{"label": lbl, "score": round(s, 4)} for lbl, s in zip(option_labels, scores)],
-            }
-
-            if best_idx < len(rewards):
-                # Pick a card
-                chosen_idx = game_indices[best_idx]
-                card_name = option_labels[best_idx]
-                self._card_reward_handled = True
-                return Decision("choose_reward_card", chosen_idx,
-                                f"Network: take {card_name} (score={scores[best_idx]:.2f})",
-                                network_value=nv, head_scores=hs)
-            else:
-                # Skip — use skip_reward_cards (card selection screen)
-                self._card_reward_handled = True
-                return Decision("skip_reward_cards", None,
-                                f"Network: skip (score={scores[best_idx]:.2f})",
-                                network_value=nv, head_scores=hs)
-        except Exception as e:
-            self._log_action(f"  [red]Network card_reward FAILED: {e}[/red]")
-            raise
+        self._card_reward_handled = True
+        return Decision("choose_reward_card", chosen_idx,
+                        f"Random: take {name} ({pick + 1}/{len(rewards)})")
 
     def _az_decide_bundle(self, gs: dict) -> "Decision | None":
         """Use network option head to pick a card bundle (e.g. Neow's Scroll Boxes).

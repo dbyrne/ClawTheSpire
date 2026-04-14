@@ -12,6 +12,7 @@ pub enum CardType {
     Power,
     Status,
     Curse,
+    Quest,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

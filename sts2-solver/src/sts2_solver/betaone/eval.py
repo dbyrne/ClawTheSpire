@@ -276,6 +276,18 @@ def adrenaline():    return lookup_card("ADRENALINE")
 def dagger_spray():  return lookup_card("DAGGER_SPRAY")
 def burst():         return lookup_card("BURST")
 def survivor():      return lookup_card("SURVIVOR")
+def dagger_throw():  return lookup_card("DAGGER_THROW")
+def predator():      return lookup_card("PREDATOR")
+def skewer():        return lookup_card("SKEWER")
+def sucker_punch():  return lookup_card("SUCKER_PUNCH")
+def piercing_wail(): return lookup_card("PIERCING_WAIL")
+def malaise():       return lookup_card("MALAISE")
+def escape_plan():   return lookup_card("ESCAPE_PLAN")
+def blur():          return lookup_card("BLUR")
+def wraith_form():   return lookup_card("WRAITH_FORM")
+def cloak_and_dagger(): return lookup_card("CLOAK_AND_DAGGER")
+def prepared():      return lookup_card("PREPARED")
+def omnislice():     return lookup_card("OMNISLICE")
 
 
 # ---------------------------------------------------------------------------
@@ -760,7 +772,7 @@ def build_scenarios() -> list[Scenario]:
         hand=[strike(), strike(), tactician(), defend()],
         actions=[
             ActionSpec("choose_card", strike(), label="discard Strike"),
-            ActionSpec("choose_card", tactician(), label="discard Tactician (Sly → energy)"),
+            ActionSpec("choose_card", tactician(), label="discard Tactician (Sly -> energy)"),
             ActionSpec("choose_card", defend(), label="discard Defend"),
         ],
         best_actions=[1],       # Tactician has Sly — discarding it triggers free energy
@@ -776,7 +788,7 @@ def build_scenarios() -> list[Scenario]:
         hand=[strike(), reflex(), defend(), defend()],
         actions=[
             ActionSpec("choose_card", strike(), label="discard Strike"),
-            ActionSpec("choose_card", reflex(), label="discard Reflex (Sly → draw 3)"),
+            ActionSpec("choose_card", reflex(), label="discard Reflex (Sly -> draw 3)"),
             ActionSpec("choose_card", defend(), label="discard Defend"),
         ],
         best_actions=[1],       # Reflex Sly trigger = draw 3 cards for free
@@ -791,7 +803,7 @@ def build_scenarios() -> list[Scenario]:
         enemies=[enemy(30, 50, damage=10)],
         hand=[tactician(), slimed(), defend(), strike()],
         actions=[
-            ActionSpec("choose_card", tactician(), label="discard Tactician (Sly → energy)"),
+            ActionSpec("choose_card", tactician(), label="discard Tactician (Sly -> energy)"),
             ActionSpec("choose_card", slimed(), label="discard Slimed (junk)"),
             ActionSpec("choose_card", defend(), label="discard Defend"),
             ActionSpec("choose_card", strike(), label="discard Strike"),
@@ -809,7 +821,7 @@ def build_scenarios() -> list[Scenario]:
         enemies=[enemy(40, 50, damage=8)],
         hand=[acrobatics(), tactician(), defend()],
         actions=[
-            ActionSpec("play_card", acrobatics(), label="Acrobatics (draw 3, discard 1 → trigger Sly)"),
+            ActionSpec("play_card", acrobatics(), label="Acrobatics (draw 3, discard 1 -> trigger Sly)"),
             ActionSpec("play_card", defend(), label="Defend (5 block)"),
             ActionSpec("end_turn", label="End turn"),
         ],
@@ -971,6 +983,235 @@ def build_scenarios() -> list[Scenario]:
         bad_actions=[1, 2],     # Fumes or end turn = die to 15 damage at 12 HP
     ))
 
+    # ===== DAMAGE CARDS =====
+
+    scenarios.append(Scenario(
+        name="dagger_throw_over_strike",
+        category="damage",
+        description="Dagger Throw (9 dmg) is strictly better than Strike (6 dmg) at same cost",
+        player={"hp": 50, "max_hp": 70, "energy": 1, "block": 0},
+        enemies=[enemy(30, 50, damage=8)],
+        hand=[dagger_throw(), strike()],
+        actions=[
+            ActionSpec("play_card", dagger_throw(), target_idx=0, label="Dagger Throw (9 dmg)"),
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike (6 dmg)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # 50% more damage at same cost
+        bad_actions=[1],
+    ))
+
+    scenarios.append(Scenario(
+        name="predator_high_energy",
+        category="damage",
+        description="3 energy, Predator (2 cost, 15 dmg) + Defend (1 cost) = 15 dmg + 5 block",
+        player={"hp": 50, "max_hp": 70, "energy": 3, "block": 0},
+        enemies=[enemy(40, 50, damage=10)],
+        hand=[predator(), strike(), defend()],
+        actions=[
+            ActionSpec("play_card", predator(), target_idx=0, label="Predator (15 dmg)"),
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike (6 dmg)"),
+            ActionSpec("play_card", defend(), label="Defend"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # 15 dmg is huge, and still have energy for Defend after
+    ))
+
+    scenarios.append(Scenario(
+        name="skewer_with_3_energy",
+        category="damage",
+        description="Skewer (X cost, 7*X dmg) with 3 energy = 21 damage, better than Strike+Strike+Strike",
+        player={"hp": 50, "max_hp": 70, "energy": 3, "block": 0},
+        enemies=[enemy(30, 50, intent="Defend", damage=0)],
+        hand=[skewer(), strike(), strike(), strike()],
+        actions=[
+            ActionSpec("play_card", skewer(), target_idx=0, label="Skewer (3 energy = 21 dmg)"),
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike (6 dmg)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # 21 damage in one action, enemy defending so no need to block
+    ))
+
+    scenarios.append(Scenario(
+        name="omnislice_free_damage",
+        category="damage",
+        description="Omnislice costs 0 and hits all enemies for 8 — always play free AoE",
+        player={"hp": 50, "max_hp": 70, "energy": 0, "block": 5},
+        enemies=[enemy(20, 30, damage=5), enemy(20, 30, damage=5)],
+        hand=[omnislice(), strike()],
+        actions=[
+            ActionSpec("play_card", omnislice(), label="Omnislice (0-cost, 8 to all)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # free AoE damage, never skip it
+        bad_actions=[1],
+    ))
+
+    # ===== BLOCK CARDS =====
+
+    scenarios.append(Scenario(
+        name="escape_plan_free_block",
+        category="block_cards",
+        description="Escape Plan costs 0 and gives 3 block — always play free block",
+        player={"hp": 50, "max_hp": 70, "energy": 0, "block": 0},
+        enemies=[enemy(30, 50, damage=10)],
+        hand=[escape_plan(), strike()],
+        actions=[
+            ActionSpec("play_card", escape_plan(), label="Escape Plan (0-cost, 3 block)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # free block, always play
+        bad_actions=[1],
+    ))
+
+    scenarios.append(Scenario(
+        name="cloak_and_dagger_over_defend",
+        category="block_cards",
+        description="Cloak and Dagger (6 block + 1 shiv) strictly better than Defend (5 block)",
+        player={"hp": 50, "max_hp": 70, "energy": 1, "block": 0},
+        enemies=[enemy(30, 50, damage=10)],
+        hand=[cloak_and_dagger(), defend()],
+        actions=[
+            ActionSpec("play_card", cloak_and_dagger(), label="Cloak and Dagger (6 block + shiv)"),
+            ActionSpec("play_card", defend(), label="Defend (5 block)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # more block AND generates a shiv
+        bad_actions=[1],
+    ))
+
+    scenarios.append(Scenario(
+        name="blur_keeps_block",
+        category="block_cards",
+        description="Blur (5 block that persists) over Defend when enemy is Defending — block carries over",
+        player={"hp": 50, "max_hp": 70, "energy": 1, "block": 0},
+        enemies=[enemy(40, 50, intent="Defend", damage=0)],
+        hand=[blur(), defend()],
+        actions=[
+            ActionSpec("play_card", blur(), label="Blur (5 block, carries to next turn)"),
+            ActionSpec("play_card", defend(), label="Defend (5 block, lost next turn)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # both give 5 block but Blur's persists, huge advantage
+    ))
+
+    scenarios.append(Scenario(
+        name="wraith_form_early_high_hp",
+        category="block_cards",
+        description="Turn 1 at 70 HP — Wraith Form (Intangible 2 turns) is massive defense investment",
+        player={"hp": 70, "max_hp": 70, "energy": 3, "block": 0},
+        enemies=[enemy(60, 60, damage=12)],
+        hand=[wraith_form(), strike(), defend()],
+        actions=[
+            ActionSpec("play_card", wraith_form(), label="Wraith Form (Intangible 2 turns)"),
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike"),
+            ActionSpec("play_card", defend(), label="Defend"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # Intangible reduces ALL damage to 1 for 2 turns, at full HP cost is fine
+        turn=1,
+    ))
+
+    # ===== DEBUFF CARDS =====
+
+    scenarios.append(Scenario(
+        name="sucker_punch_over_strike",
+        category="debuff_cards",
+        description="Sucker Punch (8 dmg + Weak 1) is better than Strike (6 dmg) — more damage AND debuff",
+        player={"hp": 50, "max_hp": 70, "energy": 1, "block": 0},
+        enemies=[enemy(30, 50, damage=12)],
+        hand=[sucker_punch(), strike()],
+        actions=[
+            ActionSpec("play_card", sucker_punch(), target_idx=0, label="Sucker Punch (8 dmg + Weak)"),
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike (6 dmg)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # more damage AND applies Weak reducing future incoming damage
+        bad_actions=[1],
+    ))
+
+    scenarios.append(Scenario(
+        name="piercing_wail_vs_multi_enemy",
+        category="debuff_cards",
+        description="3 enemies all attacking — Piercing Wail reduces ALL their Strength",
+        player={"hp": 40, "max_hp": 70, "energy": 1, "block": 0},
+        enemies=[enemy(20, 30, damage=8), enemy(20, 30, damage=8), enemy(20, 30, damage=8)],
+        hand=[piercing_wail(), defend()],
+        actions=[
+            ActionSpec("play_card", piercing_wail(), label="Piercing Wail (reduce all enemy Str)"),
+            ActionSpec("play_card", defend(), label="Defend (5 block vs 24 total)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # reduces damage from all 3 enemies every turn, far more value than 5 block
+        bad_actions=[2],
+    ))
+
+    scenarios.append(Scenario(
+        name="malaise_high_energy",
+        category="debuff_cards",
+        description="Malaise (X cost, apply X Weak+Str down) with 3 energy — massive debuff",
+        player={"hp": 40, "max_hp": 70, "energy": 3, "block": 0},
+        enemies=[enemy(50, 50, damage=15)],
+        hand=[malaise(), defend()],
+        actions=[
+            ActionSpec("play_card", malaise(), target_idx=0, label="Malaise (3 Weak + 3 Str down)"),
+            ActionSpec("play_card", defend(), label="Defend (5 block vs 15)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # 3 turns of reduced damage from a 15-damage enemy saves way more than 5 block
+    ))
+
+    # ===== DRAW/CYCLE CARDS =====
+
+    scenarios.append(Scenario(
+        name="prepared_free_cycle",
+        category="draw_cycle",
+        description="Prepared costs 0, draws 2 discards 1 — free cycle, always play first",
+        player={"hp": 50, "max_hp": 70, "energy": 1, "block": 0},
+        enemies=[enemy(30, 50, damage=8)],
+        hand=[prepared(), strike(), defend()],
+        actions=[
+            ActionSpec("play_card", prepared(), label="Prepared (0-cost, draw 2 discard 1)"),
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike"),
+            ActionSpec("play_card", defend(), label="Defend"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # free cycle sees more cards, may find better options
+        bad_actions=[3],
+    ))
+
+    scenarios.append(Scenario(
+        name="prepared_with_sly_in_hand",
+        category="draw_cycle",
+        description="Prepared (draw 2, discard 1) with Tactician in hand — play it to trigger Sly discard",
+        player={"hp": 50, "max_hp": 70, "energy": 1, "block": 0},
+        enemies=[enemy(30, 50, damage=8)],
+        hand=[prepared(), tactician(), strike()],
+        actions=[
+            ActionSpec("play_card", prepared(), label="Prepared (draw 2, discard Tactician for energy)"),
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # Prepared creates discard opportunity for Tactician's Sly trigger
+    ))
+
+    scenarios.append(Scenario(
+        name="tools_of_the_trade_early",
+        category="draw_cycle",
+        description="Turn 1 — Tools of the Trade (power, draw+discard each turn) is a long-term engine",
+        player={"hp": 70, "max_hp": 70, "energy": 3, "block": 0},
+        enemies=[enemy(50, 60, damage=8)],
+        hand=[lookup_card("TOOLS_OF_THE_TRADE"), strike(), defend(), defend()],
+        actions=[
+            ActionSpec("play_card", lookup_card("TOOLS_OF_THE_TRADE"), label="Tools of the Trade (Power)"),
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike"),
+            ActionSpec("play_card", defend(), label="Defend"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # power on turn 1 = card selection engine for rest of combat
+        turn=1,
+    ))
+
     return scenarios
 
 
@@ -1128,7 +1369,8 @@ def run_eval(checkpoint_path: str | None = None) -> dict:
             print(f"  {icon}  {r['name']}")
             if not r["passed"]:
                 print(f"        chose: {r['chosen']} ({r['chosen_prob']:.0%})")
-                print(f"        probs: {r['probs']}")
+                probs_str = ", ".join(f"{k}: {v:.0%}" for k, v in r["probs"].items())
+                print(f"        probs: {probs_str}")
         print()
 
     return {

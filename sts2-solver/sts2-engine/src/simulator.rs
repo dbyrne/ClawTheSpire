@@ -671,7 +671,7 @@ fn rest_or_smith_network(
     let mut smith_deck_indices: Vec<usize> = Vec::new();
 
     for (i, card) in deck.iter().enumerate() {
-        if card.card_type != CardType::Status && card.card_type != CardType::Curse && !card.upgraded {
+        if card.card_type != CardType::Status && card.card_type != CardType::Curse && card.card_type != CardType::Quest && !card.upgraded {
             opt_types.push(OPTION_SMITH);
             opt_cards.push(game_data.vocabs.cards.get(card.base_id()).copied().unwrap_or(1));
             opt_stats.push(card_stats_vector(card).to_vec());
@@ -952,7 +952,7 @@ fn apply_event_effects(
         let mut upgraded = 0;
         for card in deck.iter_mut() {
             if upgraded >= count { break; }
-            if !card.upgraded && card.card_type != CardType::Status && card.card_type != CardType::Curse {
+            if !card.upgraded && card.card_type != CardType::Status && card.card_type != CardType::Curse && card.card_type != CardType::Quest {
                 let upgraded_id = format!("{}+", card.base_id());
                 if let Some(u) = game_data.card_db.get(&upgraded_id) {
                     *card = u.clone();

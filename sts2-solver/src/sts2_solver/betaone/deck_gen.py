@@ -79,6 +79,17 @@ _STARTER_DECK: list[dict] = []
 
 def _card_defaults(c: dict) -> dict:
     """Ensure all fields expected by Rust Card struct have non-null values."""
+    # Numeric fields: None → 0 (Rust expects i32, not Option<i32>)
+    for key in ("damage", "block", "hit_count", "cards_draw", "energy_gain",
+                "hp_loss", "cost"):
+        if c.get(key) is None:
+            c[key] = 0
+    # String enum fields: None/invalid → default
+    valid_targets = {"Self", "AnyEnemy", "AllEnemies", "RandomEnemy", "AnyAlly"}
+    if c.get("target") not in valid_targets:
+        c["target"] = "Self"
+    if not c.get("card_type"):
+        c["card_type"] = "Skill"
     c.setdefault("hit_count", 1)
     c.setdefault("powers_applied", [])
     c.setdefault("cards_draw", 0)
@@ -189,7 +200,7 @@ def lookup_card(card_id: str) -> dict:
                 "name": c.get("name", cid),
                 "cost": c.get("cost", 0) or 0,
                 "card_type": c.get("card_type") or c.get("type", "Skill"),
-                "target": c.get("target", "Self"),
+                "target": c.get("target") or "Self",
                 "damage": c.get("damage"),
                 "block": c.get("block"),
                 "hit_count": c.get("hit_count", 1) or 1,

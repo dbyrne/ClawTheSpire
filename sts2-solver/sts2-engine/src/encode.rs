@@ -133,6 +133,7 @@ fn card_type_idx(ct: CardType) -> usize {
         CardType::Power => 2,
         CardType::Status => 3,
         CardType::Curse => 4,
+        CardType::Quest => 3, // unplayable dead card, encode like Status
     }
 }
 

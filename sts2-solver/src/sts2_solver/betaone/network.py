@@ -57,7 +57,7 @@ class BetaOneNetwork(nn.Module):
         self.policy_query = nn.Linear(HIDDEN_DIM, ACTION_HIDDEN)
         self.action_encoder = nn.Linear(CARD_EMBED_DIM + ACTION_DIM, ACTION_HIDDEN)
 
-        # Value: state → scalar
+        # Value: state → scalar (clamped to [-1,1] at inference in Rust)
         self.value_head = nn.Sequential(
             nn.Linear(HIDDEN_DIM, 64),
             nn.ReLU(),
@@ -110,7 +110,7 @@ class BetaOneNetwork(nn.Module):
         action_input = torch.cat([action_embeds, action_features], dim=-1)  # (B, 30, 51)
         query = self.policy_query(h)  # (B, 64)
         keys = self.action_encoder(action_input)  # (B, 30, 64)
-        logits = torch.bmm(keys, query.unsqueeze(-1)).squeeze(-1)  # (B, 30)
+        logits = torch.bmm(keys, query.unsqueeze(-1)).squeeze(-1) / (ACTION_HIDDEN ** 0.5)  # (B, 30)
         logits = logits.masked_fill(action_mask, -1e9)
 
         value = self.value_head(h)  # (B, 1)

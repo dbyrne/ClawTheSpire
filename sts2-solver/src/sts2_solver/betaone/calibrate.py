@@ -119,14 +119,14 @@ def calibrate_all(records: list[dict], monster_json: str, profiles_json: str,
             rec["calibrated_hp"] = hp
             hp_values.append(hp)
             if not quiet:
-                print(f"    → calibrated_hp = {hp}")
+                print(f"    -> calibrated_hp = {hp}")
             updated += 1
         else:
             # Keep existing calibrated_hp if recalibration skipped
             if rec.get("calibrated_hp") is not None:
                 hp_values.append(rec["calibrated_hp"])
             if not quiet:
-                print(f"    → skipped")
+                print(f"    -> skipped")
 
     if encounters_path is not None:
         with open(encounters_path, "w", encoding="utf-8") as f:

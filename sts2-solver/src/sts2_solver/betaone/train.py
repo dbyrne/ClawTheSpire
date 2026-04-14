@@ -140,6 +140,8 @@ def train(
     skip_to_final: bool = False,
     lock_tier: int | None = None,
     recorded_encounters: bool = False,
+    mixed: bool = False,
+    recorded_frac: float = 0.5,
 ):
     os.makedirs(output_dir, exist_ok=True)
     onnx_dir = os.path.join(output_dir, "onnx")
@@ -164,12 +166,18 @@ def train(
     recorded_path = os.path.join(output_dir, "recorded_encounters.jsonl")
     curriculum = CombatCurriculum(encounter_pool_path=enc_pool_path, recorded_encounters_path=recorded_path)
 
-    if recorded_encounters:
+    if mixed:
+        if not curriculum.recorded_encounters:
+            print("No recorded encounters found — run the game bot first to build the pool")
+            return
+        curriculum.tier = curriculum.max_tier
+        n_rec = len(curriculum.recorded_encounters)
+        print(f"Mixed mode: {recorded_frac:.0%} recorded ({n_rec} encounters) + {1-recorded_frac:.0%} final exam")
+    elif recorded_encounters:
         if not curriculum.recorded_encounters:
             print("No recorded encounters found — run the game bot first to build the pool")
             return
         curriculum.use_recorded_only = True
-        # Skip to final exam tier (which handles recorded mode)
         curriculum.tier = curriculum.max_tier
         print(f"Training on {len(curriculum.recorded_encounters)} recorded encounters")
 
@@ -461,24 +469,57 @@ def train(
 
         # Current tier batch
         n_current = combats_per_gen - n_review
-        cur_enc = curriculum.sample_encounters(n_current)
-        cur_dks = [json.loads(curriculum.sample_deck_json(combat_idx=i)) for i in range(n_current)]
 
-        # For recorded encounters, group by calibrated HP so each combat uses
-        # its own calibrated HP level (not an average)
-        recorded_samples = getattr(curriculum, "_recorded_samples", None)
-        if recorded_samples and any(r is not None for r in recorded_samples):
+        if mixed:
+            # Mixed mode: split between recorded encounters and final exam
+            n_rec_batch = int(n_current * recorded_frac)
+            n_exam_batch = n_current - n_rec_batch
+
+            # Recorded encounters portion
+            curriculum.use_recorded_only = True
+            rec_enc = curriculum.sample_encounters(n_rec_batch)
+            rec_samples = getattr(curriculum, "_recorded_samples", None)
+            rec_dks = [json.loads(curriculum.sample_deck_json(combat_idx=i))
+                       for i in range(n_rec_batch)]
+
+            # Final exam portion
+            curriculum.use_recorded_only = False
+            curriculum.tier = curriculum.max_tier
+            exam_enc = curriculum.sample_encounters(n_exam_batch)
+            exam_dks = [json.loads(curriculum.sample_deck_json(combat_idx=None))
+                        for _ in range(n_exam_batch)]
+
+            # Group recorded by calibrated HP
             from collections import defaultdict
             hp_groups: dict[int, tuple[list, list]] = defaultdict(lambda: ([], []))
-            for i, (enc_ids, dk) in enumerate(zip(cur_enc, cur_dks)):
-                rec = recorded_samples[i] if i < len(recorded_samples) else None
-                hp = rec.get("calibrated_hp", rec.get("player_hp", 70)) if rec else cfg.player_hp
-                hp_groups[hp][0].append(enc_ids)
-                hp_groups[hp][1].append(dk)
+            for i in range(n_rec_batch):
+                rec = rec_samples[i] if rec_samples and i < len(rec_samples) else None
+                hp = rec.get("calibrated_hp", rec.get("player_hp", 70)) if rec else 70
+                hp_groups[hp][0].append(rec_enc[i])
+                hp_groups[hp][1].append(rec_dks[i])
             for hp, (encs, dks_list) in hp_groups.items():
                 batches.append((encs, dks_list, hp, len(encs)))
+
+            # Final exam at standard HP
+            batches.append((exam_enc, exam_dks, cfg.player_hp, n_exam_batch))
         else:
-            batches.append((cur_enc, cur_dks, cfg.player_hp, n_current))
+            cur_enc = curriculum.sample_encounters(n_current)
+            cur_dks = [json.loads(curriculum.sample_deck_json(combat_idx=i)) for i in range(n_current)]
+
+            # For recorded encounters, group by calibrated HP
+            recorded_samples = getattr(curriculum, "_recorded_samples", None)
+            if recorded_samples and any(r is not None for r in recorded_samples):
+                from collections import defaultdict
+                hp_groups: dict[int, tuple[list, list]] = defaultdict(lambda: ([], []))
+                for i, (enc_ids, dk) in enumerate(zip(cur_enc, cur_dks)):
+                    rec = recorded_samples[i] if i < len(recorded_samples) else None
+                    hp = rec.get("calibrated_hp", rec.get("player_hp", 70)) if rec else cfg.player_hp
+                    hp_groups[hp][0].append(enc_ids)
+                    hp_groups[hp][1].append(dk)
+                for hp, (encs, dks_list) in hp_groups.items():
+                    batches.append((encs, dks_list, hp, len(encs)))
+            else:
+                batches.append((cur_enc, cur_dks, cfg.player_hp, n_current))
 
         # Collect rollouts — one call per HP level, merge results
         all_states, all_act_feat, all_act_masks = [], [], []
@@ -693,6 +734,10 @@ def main():
                         help="Lock to a specific tier (no promotion)")
     parser.add_argument("--recorded-encounters", action="store_true",
                         help="Train exclusively on recorded death encounters from live games")
+    parser.add_argument("--mixed", action="store_true",
+                        help="Train on mix of recorded encounters and final exam")
+    parser.add_argument("--recorded-frac", type=float, default=0.5,
+                        help="Fraction of combats from recorded encounters in mixed mode")
     args = parser.parse_args()
 
     train(
@@ -704,6 +749,8 @@ def main():
         skip_to_final=args.final_exam,
         lock_tier=args.tier,
         recorded_encounters=args.recorded_encounters,
+        mixed=args.mixed,
+        recorded_frac=args.recorded_frac,
     )
 
 
