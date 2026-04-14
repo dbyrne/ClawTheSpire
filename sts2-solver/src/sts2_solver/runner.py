@@ -1200,7 +1200,7 @@ class Runner:
                 "player_max_hp": player.get("max_hp", 70),
                 "floor": run.get("floor", 0),
                 "act": run.get("act_id", ""),
-                "relics": [r.get("id", r.get("name", "?")) for r in (run.get("relics") or [])],
+                "relics": [r.get("relic_id", r.get("id", r.get("name", "?"))) for r in (run.get("relics") or [])],
             }
             self._combat_start_hp = player.get("current_hp", 0)
 
