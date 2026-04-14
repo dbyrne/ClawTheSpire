@@ -256,12 +256,10 @@ class CombatCurriculum:
     @property
     def config(self) -> TierConfig:
         cfg = TIER_CONFIGS[min(self.tier, len(TIER_CONFIGS) - 1)]
-        # Override player_hp with average calibrated HP from recorded encounters
         if getattr(self, "use_recorded_only", False) and self.recorded_encounters:
-            avg_hp = int(sum(r.get("calibrated_hp", 70) for r in self.recorded_encounters)
-                         / len(self.recorded_encounters))
+            # HP is handled per-combat in train.py via _recorded_samples
             cfg = TierConfig(name="Recorded encounters", deck_mode="recorded",
-                             promote_threshold=cfg.promote_threshold, player_hp=avg_hp)
+                             promote_threshold=cfg.promote_threshold, player_hp=70)
         return cfg
 
     @property

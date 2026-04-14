@@ -433,7 +433,22 @@ def train(
         n_current = combats_per_gen - n_review
         cur_enc = curriculum.sample_encounters(n_current)
         cur_dks = [json.loads(curriculum.sample_deck_json(combat_idx=i)) for i in range(n_current)]
-        batches.append((cur_enc, cur_dks, cfg.player_hp, n_current))
+
+        # For recorded encounters, group by calibrated HP so each combat uses
+        # its own calibrated HP level (not an average)
+        recorded_samples = getattr(curriculum, "_recorded_samples", None)
+        if recorded_samples and any(r is not None for r in recorded_samples):
+            from collections import defaultdict
+            hp_groups: dict[int, tuple[list, list]] = defaultdict(lambda: ([], []))
+            for i, (enc_ids, dk) in enumerate(zip(cur_enc, cur_dks)):
+                rec = recorded_samples[i] if i < len(recorded_samples) else None
+                hp = rec.get("calibrated_hp", 70) if rec else cfg.player_hp
+                hp_groups[hp][0].append(enc_ids)
+                hp_groups[hp][1].append(dk)
+            for hp, (encs, dks_list) in hp_groups.items():
+                batches.append((encs, dks_list, hp, len(encs)))
+        else:
+            batches.append((cur_enc, cur_dks, cfg.player_hp, n_current))
 
         # Collect rollouts — one call per HP level, merge results
         all_states, all_act_feat, all_act_masks = [], [], []
