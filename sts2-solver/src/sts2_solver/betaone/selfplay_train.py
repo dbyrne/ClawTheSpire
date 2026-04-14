@@ -283,7 +283,7 @@ def train(
             return
         curriculum.tier = curriculum.max_tier
         n_rec = len(curriculum.recorded_encounters)
-        print(f"Mixed mode: {recorded_frac:.0%} recorded ({n_rec} encounters) + {1-recorded_frac:.0%} final exam")
+        print(f"Mixed mode: {recorded_frac:.0%} recorded ({n_rec} encounters) + {1-recorded_frac:.0%} archetype packages")
     elif recorded_encounters:
         if not curriculum.recorded_encounters:
             print("No recorded encounters found — run the game bot first to build the pool")
@@ -640,7 +640,7 @@ def main():
     parser.add_argument("--recorded-encounters", action="store_true",
                         help="Train on recorded death encounters from live games")
     parser.add_argument("--mixed", action="store_true",
-                        help="Train on mix of recorded encounters and final exam")
+                        help="Train on mix of recorded encounters and archetype packages")
     parser.add_argument("--recorded-frac", type=float, default=0.5,
                         help="Fraction of combats from recorded encounters in mixed mode")
     parser.add_argument("--cold-start", action="store_true",
