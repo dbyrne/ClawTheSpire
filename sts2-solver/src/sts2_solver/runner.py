@@ -1638,8 +1638,13 @@ class Runner:
                 self._log_action("  [dim]skip: discard_potion but no potions (transient)[/dim]")
                 return
             if self._combat_logged:
-                self._log_action("  [dim]skip: discard_potion mid-combat (transient)[/dim]")
-                return
+                # First time: skip as transient. If it persists, execute it.
+                if not getattr(self, "_discard_potion_retries", 0):
+                    self._discard_potion_retries = 1
+                    self._log_action("  [dim]skip: discard_potion mid-combat (transient)[/dim]")
+                    return
+                self._discard_potion_retries = 0
+                # Fall through to execute the discard
             # Identify which potion is in slot 0
             potion_name = None
             for p in potions:
