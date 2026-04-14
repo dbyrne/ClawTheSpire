@@ -421,7 +421,7 @@ def train(
         # Current tier batch
         n_current = combats_per_gen - n_review
         cur_enc = curriculum.sample_encounters(n_current)
-        cur_dks = [json.loads(curriculum.sample_deck_json()) for _ in range(n_current)]
+        cur_dks = [json.loads(curriculum.sample_deck_json(combat_idx=i)) for i in range(n_current)]
         batches.append((cur_enc, cur_dks, cfg.player_hp, n_current))
 
         # Collect rollouts — one call per HP level, merge results

@@ -124,13 +124,6 @@ TIER_CONFIGS: list[TierConfig] = [
     TierConfig("Sly discard vs Boss", deck_mode="custom", promote_threshold=0.43,
                custom_encounters=[["CEREMONIAL_BEAST"], ["PHROG_PARASITE"]],
                custom_deck=_build_sly_discard_deck, player_hp=70),
-
-    # --- Weak deck vs hard enemies (from live game deaths) ---
-    TierConfig("Starter deck vs Bosses", deck_mode="random", promote_threshold=0.30,
-               custom_encounters=_PREVIOUSLY_IMPOSSIBLE,
-               deck_archetypes=None,  # any archetype
-               deck_min_size=12, deck_max_size=15, deck_min_removals=0, deck_max_removals=1,
-               player_hp=70),
 ]
 
 # Auto-generate final "exam" tier: average threshold of all previous tiers
@@ -162,6 +155,7 @@ class CombatCurriculum:
     def __init__(
         self,
         encounter_pool_path: str | Path | None = None,
+        recorded_encounters_path: str | Path | None = None,
     ):
         self.tier = 0
         self.consecutive_good = 0
@@ -172,6 +166,9 @@ class CombatCurriculum:
             self.encounter_pools = self._load_from_pool(encounter_pool_path)
         else:
             self.encounter_pools = [list(p) for p in DEFAULT_ENCOUNTER_POOLS]
+
+        # Load recorded encounters from live game runs (auto-growing pool)
+        self.recorded_encounters = self._load_recorded_encounters(recorded_encounters_path)
 
     def _load_from_pool(self, path: str | Path) -> list[list[list[str]]]:
         with open(path) as f:
@@ -233,6 +230,29 @@ class CombatCurriculum:
 
         return levels
 
+    @staticmethod
+    def _load_recorded_encounters(path: str | Path | None = None) -> list[dict]:
+        """Load calibrated death encounters from live game runs."""
+        if path is None:
+            path = Path(__file__).resolve().parents[4] / "betaone_checkpoints" / "recorded_encounters.jsonl"
+        path = Path(path)
+        if not path.exists():
+            return []
+        encounters = []
+        for line in path.read_text(encoding="utf-8").strip().split("\n"):
+            if not line:
+                continue
+            rec = json.loads(line)
+            # Only use defeats with calibrated HP and valid deck
+            if (rec.get("outcome") == "defeat"
+                    and rec.get("calibrated_hp")
+                    and rec.get("deck")
+                    and rec["deck"][0] != "?"):
+                encounters.append(rec)
+        if encounters:
+            print(f"Curriculum: loaded {len(encounters)} recorded death encounters")
+        return encounters
+
     @property
     def config(self) -> TierConfig:
         return TIER_CONFIGS[min(self.tier, len(TIER_CONFIGS) - 1)]
@@ -255,14 +275,22 @@ class CombatCurriculum:
 
         if cfg.deck_mode == "review_all":
             encounters = []
+            self._recorded_samples = []  # parallel list: recorded encounter or None
             for _ in range(n):
-                prev = self._random_previous_tier()
-                if prev.custom_encounters:
-                    encounters.append(stdlib_random.choice(prev.custom_encounters))
-                elif prev.encounter_level >= 0:
-                    encounters.append(stdlib_random.choice(self.encounter_pools[prev.encounter_level]))
+                # 20% chance to use a recorded death encounter (if any exist)
+                if self.recorded_encounters and stdlib_random.random() < 0.20:
+                    rec = stdlib_random.choice(self.recorded_encounters)
+                    encounters.append(rec["enemy_ids"])
+                    self._recorded_samples.append(rec)
                 else:
-                    encounters.append(stdlib_random.choice(self.encounter_pools[0]))
+                    self._recorded_samples.append(None)
+                    prev = self._random_previous_tier()
+                    if prev.custom_encounters:
+                        encounters.append(stdlib_random.choice(prev.custom_encounters))
+                    elif prev.encounter_level >= 0:
+                        encounters.append(stdlib_random.choice(self.encounter_pools[prev.encounter_level]))
+                    else:
+                        encounters.append(stdlib_random.choice(self.encounter_pools[0]))
             return encounters
 
         if cfg.custom_encounters:
@@ -280,8 +308,25 @@ class CombatCurriculum:
                 encounters.append(stdlib_random.choice(pool))
         return encounters
 
-    def sample_deck_json(self) -> str:
+    def sample_deck_json(self, combat_idx: int | None = None) -> str:
+        """Sample a deck for training. If combat_idx is provided and this combat
+        uses a recorded encounter, return the recorded deck instead."""
         cfg = self.config
+
+        # Check if this combat uses a recorded encounter with a specific deck
+        recorded_samples = getattr(self, "_recorded_samples", None)
+        if recorded_samples and combat_idx is not None and combat_idx < len(recorded_samples):
+            rec = recorded_samples[combat_idx]
+            if rec is not None:
+                from .deck_gen import lookup_card
+                deck = []
+                for cid in rec["deck"]:
+                    try:
+                        deck.append(lookup_card(cid.rstrip("+")))
+                    except Exception:
+                        pass
+                if deck:
+                    return json.dumps(deck)
 
         if cfg.deck_mode == "review_all":
             prev = self._random_previous_tier()

@@ -242,7 +242,7 @@ def train(
         # Sample encounters and decks
         cfg = curriculum.config
         encounters = curriculum.sample_encounters(combats_per_gen)
-        decks = [json.loads(curriculum.sample_deck_json()) for _ in range(combats_per_gen)]
+        decks = [json.loads(curriculum.sample_deck_json(combat_idx=i)) for i in range(combats_per_gen)]
         seeds = [gen * 100_000 + i for i in range(combats_per_gen)]
 
         # Self-play: MCTS combats
