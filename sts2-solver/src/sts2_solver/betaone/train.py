@@ -138,6 +138,7 @@ def train(
     encounter_pool_path: str | None = None,
     skip_to_final: bool = False,
     lock_tier: int | None = None,
+    recorded_encounters: bool = False,
 ):
     os.makedirs(output_dir, exist_ok=True)
     onnx_dir = os.path.join(output_dir, "onnx")
@@ -159,7 +160,17 @@ def train(
     print(f"BetaOne network: {network.param_count():,} parameters ({num_cards} card vocab)")
 
     # Curriculum
-    curriculum = CombatCurriculum(encounter_pool_path=enc_pool_path)
+    recorded_path = os.path.join(output_dir, "recorded_encounters.jsonl")
+    curriculum = CombatCurriculum(encounter_pool_path=enc_pool_path, recorded_encounters_path=recorded_path)
+
+    if recorded_encounters:
+        if not curriculum.recorded_encounters:
+            print("No recorded encounters found — run the game bot first to build the pool")
+            return
+        curriculum.use_recorded_only = True
+        # Skip to final exam tier (which handles recorded mode)
+        curriculum.tier = curriculum.max_tier
+        print(f"Training on {len(curriculum.recorded_encounters)} recorded encounters")
 
     best_win_rate = 0.0
     cumulative_wins = 0
@@ -632,6 +643,8 @@ def main():
                         help="Skip tier progression, start at final exam")
     parser.add_argument("--tier", type=int, default=None,
                         help="Lock to a specific tier (no promotion)")
+    parser.add_argument("--recorded-encounters", action="store_true",
+                        help="Train exclusively on recorded death encounters from live games")
     args = parser.parse_args()
 
     train(
@@ -642,6 +655,7 @@ def main():
         output_dir=args.output_dir,
         skip_to_final=args.final_exam,
         lock_tier=args.tier,
+        recorded_encounters=args.recorded_encounters,
     )
 
 

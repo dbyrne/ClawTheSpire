@@ -1202,6 +1202,7 @@ class Runner:
                 "act": run.get("act_id", ""),
                 "relics": [r.get("id", r.get("name", "?")) for r in (run.get("relics") or [])],
             }
+            self._combat_start_hp = player.get("current_hp", 0)
 
             if self._store_run_started:
                 run = gs.get("run") or {}
@@ -3392,26 +3393,53 @@ class Runner:
     # ------------------------------------------------------------------
 
     def _record_encounter(self, outcome: str) -> None:
-        """Record a combat encounter to recorded_encounters.jsonl.
-        On defeat, also calibrate the encounter to find ~50% win rate HP."""
-        import json as _json
+        """Track HP lost per combat. The worst encounter of the run is saved at game over."""
         enc = getattr(self, "_combat_encounter", None)
         if enc is None:
             return
-        from pathlib import Path as _P
+
+        # Compute HP lost this combat
+        start_hp = getattr(self, "_combat_start_hp", enc.get("player_hp", 70))
+        if outcome == "win":
+            gs = self.game_state
+            post_hp = (gs.get("run") or {}).get("current_hp", start_hp)
+        else:
+            post_hp = 0
+        hp_lost = start_hp - post_hp
+
         record = {**enc, "outcome": outcome, "turns": self.turn_count,
-                  "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S")}
+                  "hp_lost": hp_lost, "hp_after": post_hp}
 
-        if outcome == "defeat":
-            self._log_action(f"[yellow]Recorded death encounter: {enc['enemy_names']}[/yellow]")
-            calibrated_hp = self._calibrate_encounter(enc)
-            if calibrated_hp is not None:
-                record["calibrated_hp"] = calibrated_hp
-                self._log_action(f"[yellow]Calibrated: ~50% win rate at {calibrated_hp} HP[/yellow]")
+        # Track worst encounter this run (most HP lost)
+        if not hasattr(self, "_worst_encounter") or self._worst_encounter is None:
+            self._worst_encounter = record
+        elif hp_lost > self._worst_encounter.get("hp_lost", 0):
+            self._worst_encounter = record
 
+    def _save_worst_encounter(self) -> None:
+        """At end of run, calibrate and save the worst encounter."""
+        import json as _json
+        rec = getattr(self, "_worst_encounter", None)
+        if rec is None:
+            return
+        self._worst_encounter = None
+
+        self._log_action(
+            f"[yellow]Worst encounter: {rec['enemy_names']} "
+            f"(lost {rec['hp_lost']} HP, floor {rec['floor']})[/yellow]"
+        )
+
+        # Calibrate to ~50% win rate
+        calibrated_hp = self._calibrate_encounter(rec)
+        if calibrated_hp is not None:
+            rec["calibrated_hp"] = calibrated_hp
+            self._log_action(f"[yellow]Calibrated: ~50% win rate at {calibrated_hp} HP[/yellow]")
+
+        rec["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        from pathlib import Path as _P
         path = _P(__file__).resolve().parents[3] / "betaone_checkpoints" / "recorded_encounters.jsonl"
         with open(path, "a", encoding="utf-8") as f:
-            f.write(_json.dumps(record) + "\n")
+            f.write(_json.dumps(rec) + "\n")
 
     def _calibrate_encounter(self, enc: dict) -> int | None:
         """Binary search on player HP to find ~50% MCTS win rate."""
@@ -3525,6 +3553,9 @@ class Runner:
             self._combat_logged = False
             self.logger.log_run_end(gs, "defeat")
             result = "defeat"
+
+        # Save the worst encounter from this run (most HP lost)
+        self._save_worst_encounter()
 
         if self._store_run_started:
             self.store.log_combat_end(

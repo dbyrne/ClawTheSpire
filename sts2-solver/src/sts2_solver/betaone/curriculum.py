@@ -255,7 +255,14 @@ class CombatCurriculum:
 
     @property
     def config(self) -> TierConfig:
-        return TIER_CONFIGS[min(self.tier, len(TIER_CONFIGS) - 1)]
+        cfg = TIER_CONFIGS[min(self.tier, len(TIER_CONFIGS) - 1)]
+        # Override player_hp with average calibrated HP from recorded encounters
+        if getattr(self, "use_recorded_only", False) and self.recorded_encounters:
+            avg_hp = int(sum(r.get("calibrated_hp", 70) for r in self.recorded_encounters)
+                         / len(self.recorded_encounters))
+            cfg = TierConfig(name="Recorded encounters", deck_mode="recorded",
+                             promote_threshold=cfg.promote_threshold, player_hp=avg_hp)
+        return cfg
 
     @property
     def max_tier(self) -> int:
@@ -271,26 +278,28 @@ class CombatCurriculum:
         return TIER_CONFIGS[idx]
 
     def sample_encounters(self, n: int) -> list[list[str]]:
+        # Recorded-only mode: all encounters from the recorded pool
+        if getattr(self, "use_recorded_only", False) and self.recorded_encounters:
+            self._recorded_samples = []
+            encounters = []
+            for _ in range(n):
+                rec = stdlib_random.choice(self.recorded_encounters)
+                encounters.append(rec["enemy_ids"])
+                self._recorded_samples.append(rec)
+            return encounters
+
         cfg = self.config
 
         if cfg.deck_mode == "review_all":
             encounters = []
-            self._recorded_samples = []  # parallel list: recorded encounter or None
             for _ in range(n):
-                # 20% chance to use a recorded death encounter (if any exist)
-                if self.recorded_encounters and stdlib_random.random() < 0.20:
-                    rec = stdlib_random.choice(self.recorded_encounters)
-                    encounters.append(rec["enemy_ids"])
-                    self._recorded_samples.append(rec)
+                prev = self._random_previous_tier()
+                if prev.custom_encounters:
+                    encounters.append(stdlib_random.choice(prev.custom_encounters))
+                elif prev.encounter_level >= 0:
+                    encounters.append(stdlib_random.choice(self.encounter_pools[prev.encounter_level]))
                 else:
-                    self._recorded_samples.append(None)
-                    prev = self._random_previous_tier()
-                    if prev.custom_encounters:
-                        encounters.append(stdlib_random.choice(prev.custom_encounters))
-                    elif prev.encounter_level >= 0:
-                        encounters.append(stdlib_random.choice(self.encounter_pools[prev.encounter_level]))
-                    else:
-                        encounters.append(stdlib_random.choice(self.encounter_pools[0]))
+                    encounters.append(stdlib_random.choice(self.encounter_pools[0]))
             return encounters
 
         if cfg.custom_encounters:
