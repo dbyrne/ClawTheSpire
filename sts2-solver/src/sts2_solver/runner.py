@@ -1192,7 +1192,7 @@ class Runner:
             run = gs.get("run") or {}
             hand = (combat.get("player") or {}).get("hand") or []
             self._combat_encounter = {
-                "enemy_ids": [e.get("id", e.get("name", "?")) for e in enemies],
+                "enemy_ids": [e.get("enemy_id", e.get("id", e.get("name", "?"))) for e in enemies],
                 "enemy_names": [e.get("name", "?") for e in enemies],
                 "enemy_hps": [e.get("max_hp", 0) for e in enemies],
                 "deck": [c.get("card_id", c.get("id", "?")) for c in (run.get("deck") or [])],
