@@ -1188,6 +1188,21 @@ class Runner:
             self._combat_move_indices = {}
             self.turn_count = 0
 
+            # Snapshot encounter for recording
+            run = gs.get("run") or {}
+            hand = (combat.get("player") or {}).get("hand") or []
+            self._combat_encounter = {
+                "enemy_ids": [e.get("id", e.get("name", "?")) for e in enemies],
+                "enemy_names": [e.get("name", "?") for e in enemies],
+                "enemy_hps": [e.get("max_hp", 0) for e in enemies],
+                "deck": [c.get("id", "?") for c in (run.get("deck") or [])],
+                "player_hp": player.get("current_hp", 0),
+                "player_max_hp": player.get("max_hp", 70),
+                "floor": run.get("floor", 0),
+                "act": run.get("act_id", ""),
+                "relics": [r.get("id", r.get("name", "?")) for r in (run.get("relics") or [])],
+            }
+
             if self._store_run_started:
                 run = gs.get("run") or {}
                 self.store.log_combat_start(
@@ -1553,6 +1568,7 @@ class Runner:
         if combat_won_by_card:
             # Already confirmed all enemies dead above; gs is current state
             self._log_action("[bold green]Combat won![/bold green]")
+            self._record_encounter("win")
             self.logger.log_combat_end(gs, "win")
             self._combat_logged = False
             if self._store_run_started:
@@ -1579,6 +1595,7 @@ class Runner:
                     )
                     if all_dead:
                         self._log_action("[bold green]Combat won![/bold green]")
+                        self._record_encounter("win")
                         self.logger.log_combat_end(post, "win")
                         self._combat_logged = False
                         if self._store_run_started:
@@ -3365,6 +3382,21 @@ class Runner:
     # Game over
     # ------------------------------------------------------------------
 
+    def _record_encounter(self, outcome: str) -> None:
+        """Record a combat encounter to recorded_encounters.jsonl."""
+        import json as _json
+        enc = getattr(self, "_combat_encounter", None)
+        if enc is None:
+            return
+        from pathlib import Path as _P
+        record = {**enc, "outcome": outcome, "turns": self.turn_count,
+                  "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S")}
+        path = _P(__file__).resolve().parents[3] / "betaone_checkpoints" / "recorded_encounters.jsonl"
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(_json.dumps(record) + "\n")
+        if outcome == "defeat":
+            self._log_action(f"[yellow]Recorded death encounter: {enc['enemy_names']}[/yellow]")
+
     def _handle_game_over(self) -> None:
         gs = self.game_state
         run = gs.get("run") or {}
@@ -3385,6 +3417,7 @@ class Runner:
             self._log_action(
                 f"[bold red]DEFEAT[/bold red] Floor {floor} | HP {hp}"
             )
+            self._record_encounter("defeat")
             self.logger.log_combat_end(gs, "defeat")
             self._combat_logged = False
             self.logger.log_run_end(gs, "defeat")
