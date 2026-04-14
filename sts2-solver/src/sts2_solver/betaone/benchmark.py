@@ -132,7 +132,7 @@ def eval_mcts(
     onnx_path: str, card_vocab_json: str,
     monster_json: str, profiles_json: str,
     encounters: list, decks: list, player_hp: int,
-    seeds: list[int], num_sims: int = 150,
+    seeds: list[int], num_sims: int = 300,
 ) -> float:
     """Evaluate using MCTS search."""
     r = sts2_engine.betaone_mcts_selfplay(
@@ -303,17 +303,31 @@ def run_benchmark(
             total_games += recorded_combats
 
         rec_wr = total_wins / max(total_games, 1)
+
+        # Eval scenarios — raw policy quality (skip for PPO+MCTS since it uses search)
+        eval_score = None
+        if label != "PPO+MCTS":
+            from .eval import run_eval
+            import io, contextlib
+            # Suppress eval's verbose output
+            f = io.StringIO()
+            with contextlib.redirect_stdout(f):
+                eval_result = run_eval(ckpt_path)
+            eval_score = eval_result["passed"] / max(eval_result["total"], 1)
+
         elapsed = time.time() - t0
-        results[label] = (fe_wr, rec_wr)
+        results[label] = (fe_wr, rec_wr, eval_score)
         mode = "MCTS" if use_mcts else "policy"
-        print(f"  {label:18s} final={fe_wr:5.1%}  recorded={rec_wr:5.1%}  ({mode}, {elapsed:.0f}s)")
+        eval_str = f"  eval={eval_score:5.1%}" if eval_score is not None else "  eval=  N/A"
+        print(f"  {label:18s} final={fe_wr:5.1%}  recorded={rec_wr:5.1%}{eval_str}  ({mode}, {elapsed:.0f}s)")
 
     # --- Summary table ---
     if results:
-        print(f"\n{'':20s} {'Final Exam':>10s}  {'Recorded':>10s}")
-        print("-" * 44)
-        for name, (fe, rec) in results.items():
-            print(f"  {name:18s} {fe:9.1%}  {rec:9.1%}")
+        print(f"\n{'':20s} {'Final Exam':>10s}  {'Recorded':>10s}  {'Eval':>7s}")
+        print("-" * 53)
+        for name, (fe, rec, ev) in results.items():
+            ev_str = f"{ev:6.1%}" if ev is not None else "   N/A"
+            print(f"  {name:18s} {fe:9.1%}  {rec:9.1%}  {ev_str}")
 
     return results
 
