@@ -3525,7 +3525,9 @@ class Runner:
 
             return best_hp
         except Exception as e:
+            import traceback
             self._log_action(f"[red]Calibration failed: {e}[/red]")
+            traceback.print_exc()
             return None
 
     def _handle_game_over(self) -> None:
