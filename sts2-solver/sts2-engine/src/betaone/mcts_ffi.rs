@@ -230,3 +230,89 @@ pub fn betaone_mcts_fight_combat(
     dict.set_item("num_sims", num_sims)?;
     Ok(dict.into())
 }
+
+// ---------------------------------------------------------------------------
+// Single MCTS search from a given CombatState
+// ---------------------------------------------------------------------------
+
+/// Run one MCTS search on a CombatState. Returns chosen action index and policy.
+#[pyfunction]
+#[pyo3(signature = (
+    state_json,
+    onnx_path,
+    card_vocab_json,
+    num_sims = 100,
+    temperature = 0.0,
+    seed = 42,
+    gen_id = 0
+))]
+pub fn betaone_mcts_search(
+    py: Python<'_>,
+    state_json: &str,
+    onnx_path: &str,
+    card_vocab_json: &str,
+    num_sims: usize,
+    temperature: f32,
+    seed: u64,
+    gen_id: i64,
+) -> PyResult<PyObject> {
+    let state: CombatState = serde_json::from_str(state_json)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("state: {e}")))?;
+    let card_vocab: CardVocab = serde_json::from_str(card_vocab_json).unwrap_or_default();
+    let onnx = onnx_path.to_string();
+    let cache_key = format!("{}:{}", onnx_path, gen_id);
+
+    let result = py.allow_threads(move || {
+        MCTS_CACHE.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            let needs_reload = match &*cache {
+                Some(c) => c.cache_key != cache_key,
+                None => true,
+            };
+            if needs_reload {
+                match BetaOneInference::new(&onnx) {
+                    Ok(inf) => {
+                        *cache = Some(CachedBetaOneMCTS { cache_key, inference: inf });
+                    }
+                    Err(e) => return Err(format!("ONNX: {e}")),
+                }
+            }
+
+            let inference = &cache.as_ref().unwrap().inference;
+            let adapter = BetaOneMCTSAdapter::new(inference, &card_vocab);
+            let card_db = CardDB::default();
+            let mut rng = StdRng::seed_from_u64(seed);
+
+            let actions = enumerate_actions(&state);
+            if actions.is_empty() {
+                return Ok((0usize, vec![1.0f32], 0.0f64));
+            }
+
+            let mcts_engine = MCTS::new(&card_db, &adapter);
+            let sr = mcts_engine.search(&state, num_sims, temperature, &mut rng);
+
+            // Find chosen action index
+            let chosen_idx = actions.iter().position(|a| {
+                match (&sr.action, a) {
+                    (Action::EndTurn, Action::EndTurn) => true,
+                    (Action::PlayCard { card_idx: a, target_idx: at },
+                     Action::PlayCard { card_idx: b, target_idx: bt }) => a == b && at == bt,
+                    (Action::UsePotion { potion_idx: a }, Action::UsePotion { potion_idx: b }) => a == b,
+                    (Action::ChooseCard { choice_idx: a }, Action::ChooseCard { choice_idx: b }) => a == b,
+                    _ => false,
+                }
+            }).unwrap_or(0);
+
+            Ok((chosen_idx, sr.policy, sr.root_value))
+        })
+    });
+
+    let (chosen_idx, policy, root_value) = result
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+
+    let dict = PyDict::new(py);
+    dict.set_item("chosen_idx", chosen_idx)?;
+    dict.set_item("policy", policy)?;
+    dict.set_item("root_value", root_value)?;
+    Ok(dict.into())
+}

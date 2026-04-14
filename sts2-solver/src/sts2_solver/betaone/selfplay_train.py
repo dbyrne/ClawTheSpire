@@ -204,7 +204,29 @@ def train(
             start_gen = ckpt.get("gen", 0) + 1
             best_win_rate = ckpt.get("win_rate", 0.0)
         except RuntimeError:
-            print("Architecture mismatch — cold start")
+            # Dimension-aware warm-start for older/different checkpoints
+            old_state = ckpt["model_state_dict"]
+            new_state = network.state_dict()
+            loaded, skipped = 0, 0
+            for key in new_state:
+                if key not in old_state:
+                    skipped += 1
+                    continue
+                old_t = old_state[key]
+                new_t = new_state[key]
+                if old_t.shape == new_t.shape:
+                    new_state[key] = old_t
+                    loaded += 1
+                elif old_t.dim() == new_t.dim() and all(
+                    o <= n for o, n in zip(old_t.shape, new_t.shape)
+                ):
+                    slices = tuple(slice(0, o) for o in old_t.shape)
+                    new_state[key][slices] = old_t
+                    loaded += 1
+                else:
+                    skipped += 1
+            network.load_state_dict(new_state)
+            print(f"Warm-start: {loaded} loaded, {skipped} new/skipped")
             for f in [history_path, progress_path]:
                 if os.path.exists(f):
                     os.remove(f)
