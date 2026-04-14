@@ -27,6 +27,7 @@ import torch.nn as nn
 
 import sts2_engine
 
+from .calibrate import calibrate_all
 from .curriculum import CombatCurriculum, TIER_CONFIGS
 from .deck_gen import build_random_deck_json, _make_starter
 from .network import (
@@ -329,6 +330,23 @@ def train(
     regressed_tiers: set[int] = set()
     regressed_detail: dict[int, float] = {}
 
+    # Calibration tracking for recorded-encounters mode
+    avg_calibrated_hp: float | None = None
+    cal_hp_history: list[list] = []  # [[gen, avg_hp], ...]
+
+    if recorded_encounters:
+        # Initial calibration at startup
+        onnx_path = export_onnx(network, onnx_dir)
+        print("Running initial HP calibration...")
+        curriculum.recorded_encounters, avg_calibrated_hp = calibrate_all(
+            curriculum.recorded_encounters, monster_json, profiles_json,
+            card_vocab_json, onnx_path,
+            encounters_path=recorded_path,
+            num_sims=50, combats=32,
+        )
+        if avg_calibrated_hp is not None:
+            cal_hp_history.append([0, round(avg_calibrated_hp, 1)])
+
     for gen in range(start_gen, num_generations + 1):
         t0 = time.time()
 
@@ -340,6 +358,18 @@ def train(
 
         # Export current network
         onnx_path = export_onnx(network, onnx_dir)
+
+        # Recalibrate recorded encounters every 200 gens
+        if recorded_encounters and gen % 200 == 0:
+            print(f"Gen {gen}: recalibrating recorded encounters...")
+            curriculum.recorded_encounters, avg_calibrated_hp = calibrate_all(
+                curriculum.recorded_encounters, monster_json, profiles_json,
+                card_vocab_json, onnx_path,
+                encounters_path=recorded_path,
+                num_sims=50, combats=32,
+            )
+            if avg_calibrated_hp is not None:
+                cal_hp_history.append([gen, round(avg_calibrated_hp, 1)])
 
         # Regression check every 50 gens: eval all previous tiers (skip in locked tier mode)
         if gen % 50 == 0 and curriculum.tier > 0 and lock_tier is None:
@@ -609,6 +639,9 @@ def train(
             "temperature": round(temperature, 3),
             "gen_time": round(elapsed, 2),
             "timestamp": time.time(),
+            "recorded_encounters": len(curriculum.recorded_encounters) if recorded_encounters else None,
+            "avg_calibrated_hp": round(avg_calibrated_hp, 1) if avg_calibrated_hp is not None else None,
+            "cal_hp_history": cal_hp_history if recorded_encounters else None,
         }
         with open(history_path, "a") as f:
             f.write(json.dumps(record) + "\n")

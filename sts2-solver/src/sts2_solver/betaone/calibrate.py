@@ -89,6 +89,57 @@ def calibrate_encounter(enc: dict, monster_json: str, profiles_json: str,
     return best_hp
 
 
+def calibrate_all(records: list[dict], monster_json: str, profiles_json: str,
+                  card_vocab_json: str, onnx_path: str,
+                  encounters_path: str | Path | None = None,
+                  num_sims: int = 50, combats: int = 32,
+                  quiet: bool = False) -> tuple[list[dict], float | None]:
+    """Calibrate all recorded encounters in-place.
+
+    Returns (records, avg_calibrated_hp).  Writes updated records to disk
+    if *encounters_path* is provided.
+    """
+    if not records:
+        return records, None
+
+    if not quiet:
+        print(f"Calibrating {len(records)} encounters ({num_sims} sims, {combats} combats/HP)")
+
+    updated = 0
+    hp_values: list[int] = []
+    for i, rec in enumerate(records):
+        enemy_names = rec.get("enemy_names", rec.get("enemy_ids", ["?"]))
+        old_hp = rec.get("calibrated_hp", "-")
+        if not quiet:
+            print(f"  [{i+1}/{len(records)}] {enemy_names} (current cal={old_hp})")
+
+        hp = calibrate_encounter(rec, monster_json, profiles_json, card_vocab_json,
+                                 onnx_path, num_sims=num_sims, combats=combats)
+        if hp is not None:
+            rec["calibrated_hp"] = hp
+            hp_values.append(hp)
+            if not quiet:
+                print(f"    → calibrated_hp = {hp}")
+            updated += 1
+        else:
+            # Keep existing calibrated_hp if recalibration skipped
+            if rec.get("calibrated_hp") is not None:
+                hp_values.append(rec["calibrated_hp"])
+            if not quiet:
+                print(f"    → skipped")
+
+    if encounters_path is not None:
+        with open(encounters_path, "w", encoding="utf-8") as f:
+            for rec in records:
+                f.write(json.dumps(rec) + "\n")
+
+    avg_hp = sum(hp_values) / len(hp_values) if hp_values else None
+    if not quiet:
+        print(f"  Calibration done: {updated}/{len(records)} updated, avg HP = {avg_hp:.1f}" if avg_hp else
+              f"  Calibration done: no valid encounters")
+    return records, avg_hp
+
+
 def main():
     parser = argparse.ArgumentParser(description="Calibrate recorded encounters")
     parser.add_argument("--sims", type=int, default=50, help="MCTS simulations per decision")
@@ -118,28 +169,9 @@ def main():
     lines = path.read_text(encoding="utf-8").strip().split("\n")
     records = [json.loads(l) for l in lines if l.strip()]
 
-    print(f"Calibrating {len(records)} encounters ({args.sims} sims, {args.combats} combats/HP)\n")
-
-    updated = 0
-    for i, rec in enumerate(records):
-        enemy_names = rec.get("enemy_names", rec.get("enemy_ids", ["?"]))
-        old_hp = rec.get("calibrated_hp", "-")
-        print(f"[{i+1}/{len(records)}] {enemy_names} (current cal={old_hp})")
-
-        hp = calibrate_encounter(rec, monster_json, profiles_json, card_vocab_json,
-                                 onnx_path, num_sims=args.sims, combats=args.combats)
-        if hp is not None:
-            rec["calibrated_hp"] = hp
-            print(f"  → calibrated_hp = {hp}\n")
-            updated += 1
-        else:
-            print(f"  → skipped\n")
-
-    with open(path, "w", encoding="utf-8") as f:
-        for rec in records:
-            f.write(json.dumps(rec) + "\n")
-
-    print(f"Done. Updated {updated}/{len(records)} encounters.")
+    calibrate_all(records, monster_json, profiles_json, card_vocab_json,
+                  onnx_path, encounters_path=path,
+                  num_sims=args.sims, combats=args.combats)
 
 
 if __name__ == "__main__":

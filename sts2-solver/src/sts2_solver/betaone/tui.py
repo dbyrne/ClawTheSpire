@@ -76,6 +76,16 @@ def _sparkline(values: list[float], width: int = 20) -> str:
     return "".join(blocks[min(int((v - lo) / span * (len(blocks) - 1)), len(blocks) - 1)] for v in recent)
 
 
+def _is_selfplay(progress: dict) -> bool:
+    """Detect if this is a self-play run (MCTS, no entropy/reward)."""
+    return progress.get("num_sims") is not None
+
+
+def _is_recorded(progress: dict) -> bool:
+    """Detect if training on recorded encounters from live games."""
+    return progress.get("recorded_encounters") is not None
+
+
 def build(progress: dict, history: list[dict], age: float,
           promoted_at: dict[int, int] | None = None) -> Group:
     promoted_at = promoted_at or {}
@@ -99,9 +109,23 @@ def build(progress: dict, history: list[dict], age: float,
     eta_s = (total - gen) * gen_time
     eta = f"{eta_s / 60:.0f}m" if eta_s < 3600 else f"{eta_s / 3600:.1f}h"
 
+    selfplay = _is_selfplay(progress)
+    recorded = _is_recorded(progress)
+    if selfplay:
+        mode_label = "[bold magenta]MCTS Self-Play[/bold magenta]"
+    elif recorded:
+        mode_label = "[bold yellow]PPO (Recorded)[/bold yellow]"
+    else:
+        mode_label = "[bold cyan]PPO[/bold cyan]"
+    extra = ""
+    if selfplay:
+        extra = f"  [dim]{progress.get('num_sims', '?')} sims[/dim]"
+    elif recorded:
+        extra = f"  [dim]{progress.get('recorded_encounters', '?')} encounters[/dim]"
+
     header = Text.from_markup(
-        f"  [bold cyan]BetaOne[/bold cyan]  Gen [bold]{gen}[/bold]/{total}  "
-        f"{status}  ETA {eta}  [dim]{gen_time:.1f}s/gen[/dim]"
+        f"  [bold cyan]BetaOne[/bold cyan] {mode_label}  Gen [bold]{gen}[/bold]/{total}  "
+        f"{status}  ETA {eta}  [dim]{gen_time:.1f}s/gen[/dim]{extra}"
     )
 
     # --- Curriculum ---
@@ -210,11 +234,20 @@ def build(progress: dict, history: list[dict], age: float,
         "[dim]Value Loss[/dim]", f"{progress.get('value_loss', 0):.4f}",
         "[dim]Avg Reward[/dim]", f"{progress.get('avg_reward', 0):+.4f}",
     )
-    mt.add_row(
-        "[dim]Temperature[/dim]", f"{progress.get('temperature', 0):.2f}",
-        "[dim]Steps/gen[/dim]", f"{progress.get('steps', 0):,}",
-        "[dim]Best WR[/dim]", f"{progress.get('best_win_rate', 0):.1%}",
-    )
+    if recorded:
+        cal_hp = progress.get("avg_calibrated_hp")
+        cal_hp_s = f"[bold]{cal_hp:.0f}[/bold]" if cal_hp is not None else "[dim]--[/dim]"
+        mt.add_row(
+            "[dim]Temperature[/dim]", f"{progress.get('temperature', 0):.2f}",
+            "[dim]Steps/gen[/dim]", f"{progress.get('steps', 0):,}",
+            "[dim]Cal HP[/dim]", cal_hp_s,
+        )
+    else:
+        mt.add_row(
+            "[dim]Temperature[/dim]", f"{progress.get('temperature', 0):.2f}",
+            "[dim]Steps/gen[/dim]", f"{progress.get('steps', 0):,}",
+            "[dim]Best WR[/dim]", f"{progress.get('best_win_rate', 0):.1%}",
+        )
 
     # --- History ---
     ht = Table(box=None, padding=(0, 1), expand=True)
@@ -282,7 +315,25 @@ def build(progress: dict, history: list[dict], age: float,
             theo = sum(tier_rates) / len(tier_rates)
             theoretical_str = f"  [dim]Theoretical max (avg per-tier cum): [bold]{theo:.1%}[/bold] across {len(tier_rates)} tiers[/dim]"
 
+    # Calibration HP trend for recorded-encounters mode
+    cal_str = ""
+    if recorded:
+        cal_history = progress.get("cal_hp_history", [])
+        if len(cal_history) >= 2:
+            cal_vals = [h[1] for h in cal_history]
+            cal_spark = _sparkline(cal_vals, 20)
+            first, last = cal_vals[0], cal_vals[-1]
+            delta = last - first
+            delta_color = "green" if delta < 0 else "red" if delta > 0 else "dim"
+            cal_str = (f"  [dim]Cal HP trend:[/dim] {cal_spark} "
+                       f"[{delta_color}]{first:.0f} → {last:.0f} ({delta:+.0f})[/{delta_color}]"
+                       f"  [dim](every 200 gens)[/dim]")
+        elif cal_history:
+            cal_str = f"  [dim]Cal HP baseline: {cal_history[0][1]:.0f} (next recal at gen 200)[/dim]"
+
     footer = f"  {flag_str}\n  [dim]{promo_str}[/dim]"
+    if cal_str:
+        footer += f"\n{cal_str}"
     if theoretical_str:
         footer += f"\n{theoretical_str}"
 
