@@ -1195,7 +1195,7 @@ class Runner:
                 "enemy_ids": [e.get("id", e.get("name", "?")) for e in enemies],
                 "enemy_names": [e.get("name", "?") for e in enemies],
                 "enemy_hps": [e.get("max_hp", 0) for e in enemies],
-                "deck": [c.get("id", "?") for c in (run.get("deck") or [])],
+                "deck": [c.get("card_id", c.get("id", "?")) for c in (run.get("deck") or [])],
                 "player_hp": player.get("current_hp", 0),
                 "player_max_hp": player.get("max_hp", 70),
                 "floor": run.get("floor", 0),
