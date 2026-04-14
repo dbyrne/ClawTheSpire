@@ -124,6 +124,13 @@ TIER_CONFIGS: list[TierConfig] = [
     TierConfig("Sly discard vs Boss", deck_mode="custom", promote_threshold=0.43,
                custom_encounters=[["CEREMONIAL_BEAST"], ["PHROG_PARASITE"]],
                custom_deck=_build_sly_discard_deck, player_hp=70),
+
+    # --- Weak deck vs hard enemies (from live game deaths) ---
+    TierConfig("Starter deck vs Bosses", deck_mode="random", promote_threshold=0.30,
+               custom_encounters=_PREVIOUSLY_IMPOSSIBLE,
+               deck_archetypes=None,  # any archetype
+               deck_min_size=12, deck_max_size=15, deck_min_removals=0, deck_max_removals=1,
+               player_hp=70),
 ]
 
 # Auto-generate final "exam" tier: average threshold of all previous tiers
