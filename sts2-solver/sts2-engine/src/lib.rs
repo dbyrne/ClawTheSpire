@@ -25,5 +25,6 @@ fn sts2_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(ffi::mcts_search, m)?)?;
     m.add_function(wrap_pyfunction!(betaone::rollout::collect_betaone_rollouts, m)?)?;
     m.add_function(wrap_pyfunction!(betaone::mcts_ffi::betaone_mcts_fight_combat, m)?)?;
+    m.add_function(wrap_pyfunction!(betaone::selfplay::betaone_mcts_selfplay, m)?)?;
     Ok(())
 }
