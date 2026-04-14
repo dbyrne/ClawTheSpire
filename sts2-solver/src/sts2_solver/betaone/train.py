@@ -442,7 +442,7 @@ def train(
             hp_groups: dict[int, tuple[list, list]] = defaultdict(lambda: ([], []))
             for i, (enc_ids, dk) in enumerate(zip(cur_enc, cur_dks)):
                 rec = recorded_samples[i] if i < len(recorded_samples) else None
-                hp = rec.get("calibrated_hp", 70) if rec else cfg.player_hp
+                hp = rec.get("calibrated_hp", rec.get("player_hp", 70)) if rec else cfg.player_hp
                 hp_groups[hp][0].append(enc_ids)
                 hp_groups[hp][1].append(dk)
             for hp, (encs, dks_list) in hp_groups.items():

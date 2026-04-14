@@ -243,11 +243,8 @@ class CombatCurriculum:
             if not line:
                 continue
             rec = json.loads(line)
-            # Only use defeats with calibrated HP and valid deck
-            if (rec.get("outcome") == "defeat"
-                    and rec.get("calibrated_hp")
-                    and rec.get("deck")
-                    and rec["deck"][0] != "?"):
+            # Use any encounter with a valid deck
+            if rec.get("deck") and rec["deck"][0] != "?":
                 encounters.append(rec)
         if encounters:
             print(f"Curriculum: loaded {len(encounters)} recorded death encounters")

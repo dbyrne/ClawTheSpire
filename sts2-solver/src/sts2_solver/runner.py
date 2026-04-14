@@ -3417,7 +3417,7 @@ class Runner:
             self._worst_encounter = record
 
     def _save_worst_encounter(self) -> None:
-        """At end of run, calibrate and save the worst encounter."""
+        """At end of run, save the encounter where we lost the most HP."""
         import json as _json
         rec = getattr(self, "_worst_encounter", None)
         if rec is None:
@@ -3429,106 +3429,11 @@ class Runner:
             f"(lost {rec['hp_lost']} HP, floor {rec['floor']})[/yellow]"
         )
 
-        # Calibrate to ~50% win rate
-        calibrated_hp = self._calibrate_encounter(rec)
-        if calibrated_hp is not None:
-            rec["calibrated_hp"] = calibrated_hp
-            self._log_action(f"[yellow]Calibrated: ~50% win rate at {calibrated_hp} HP[/yellow]")
-
         rec["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
         from pathlib import Path as _P
         path = _P(__file__).resolve().parents[3] / "betaone_checkpoints" / "recorded_encounters.jsonl"
         with open(path, "a", encoding="utf-8") as f:
             f.write(_json.dumps(rec) + "\n")
-
-    def _calibrate_encounter(self, enc: dict) -> int | None:
-        """Binary search on player HP to find ~50% MCTS win rate."""
-        try:
-            import json as _json
-            import sts2_engine
-            from pathlib import Path as _P
-
-            betaone_dir = _P(__file__).resolve().parents[3] / "betaone_checkpoints"
-            onnx_path = str(betaone_dir / "onnx" / "betaone.onnx")
-            vocab_path = betaone_dir / "card_vocab.json"
-            if not vocab_path.exists():
-                return None
-            card_vocab_json = vocab_path.read_text(encoding="utf-8")
-
-            from .simulator import _load_enemy_profiles
-            profiles_json = _json.dumps(_load_enemy_profiles())
-
-            # Build monster data
-            data_dir = _P(__file__).resolve().parents[4] / "STS2-Agent" / "mcp_server" / "data" / "eng"
-            monsters_raw = _json.loads((data_dir / "monsters.json").read_text(encoding="utf-8"))
-            monsters = {m["id"]: {"name": m.get("name", m["id"]),
-                        "min_hp": m.get("min_hp") or 20,
-                        "max_hp": m.get("max_hp") or 20}
-                        for m in monsters_raw if m.get("id")}
-            monster_json = _json.dumps(monsters)
-
-            enemy_ids = enc["enemy_ids"]
-            deck = enc["deck"]
-            # Build deck JSON from card IDs
-            from .betaone.deck_gen import lookup_card
-            deck_cards = []
-            for cid in deck:
-                try:
-                    deck_cards.append(lookup_card(cid.rstrip("+")))
-                except Exception:
-                    pass
-            if not deck_cards:
-                return None
-            deck_json = _json.dumps(deck_cards)
-            encounters_json = _json.dumps([enemy_ids])
-
-            N = 32  # combats per HP level
-            lo, hi = 15, 70
-            self._log_action(f"[dim]Calibrating {enemy_ids} (binary search {lo}-{hi} HP)...[/dim]")
-
-            best_hp = None
-            best_diff = 1.0
-
-            for _ in range(6):  # ~6 iterations for binary search
-                mid = (lo + hi) // 2
-                r = sts2_engine.betaone_mcts_selfplay(
-                    encounters_json=encounters_json,
-                    decks_json=_json.dumps([deck_cards] * N),
-                    player_hp=mid, player_max_hp=70, player_max_energy=3,
-                    relics=[], potions_json="[]",
-                    monster_data_json=monster_json,
-                    enemy_profiles_json=profiles_json,
-                    onnx_path=onnx_path,
-                    card_vocab_json=card_vocab_json,
-                    num_sims=50, temperature=0.0,
-                    seeds=list(range(N)),
-                    add_noise=False,
-                )
-                wins = sum(1 for o in r["outcomes"] if o == "win")
-                wr = wins / max(len(r["outcomes"]), 1)
-                diff = abs(wr - 0.5)
-                self._log_action(f"[dim]  HP={mid}: {wins}/{N} = {wr:.0%}[/dim]")
-
-                if diff < best_diff:
-                    best_diff = diff
-                    best_hp = mid
-
-                if wr > 0.55:
-                    hi = mid - 1
-                elif wr < 0.45:
-                    lo = mid + 1
-                else:
-                    break  # close enough
-
-                if lo > hi:
-                    break
-
-            return best_hp
-        except Exception as e:
-            import traceback
-            self._log_action(f"[red]Calibration failed: {e}[/red]")
-            traceback.print_exc()
-            return None
 
     def _handle_game_over(self) -> None:
         gs = self.game_state
