@@ -312,6 +312,10 @@ pub struct CombatState {
     #[serde(default)]
     pub map_path: Vec<String>,
 
+    /// Set by MCTS when EndTurn is chosen — resolution deferred to expansion.
+    #[serde(skip, default)]
+    pub turn_ended: bool,
+
     // RNG for shuffle/random effects during combat
     #[serde(skip)]
     pub rng_seed: u64,
@@ -328,7 +332,7 @@ impl Default for CombatState {
             relics: HashSet::new(), floor: 0, gold: 0,
             pending_choice: None,
             act_id: String::new(), boss_id: String::new(),
-            map_path: vec![], rng_seed: 0,
+            map_path: vec![], turn_ended: false, rng_seed: 0,
         }
     }
 }

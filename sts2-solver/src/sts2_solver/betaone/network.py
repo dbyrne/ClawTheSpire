@@ -1,13 +1,15 @@
 """BetaOne network: combat-only policy + value with hand attention + card embeddings (~60K params).
 
 Architecture:
-  State (401) → split: base(111) + hand_cards(10,28) + hand_mask(10)
+  State (427) → split: base(137) + hand_cards(10,28) + hand_mask(10)
   Hand: card_embed(hand_ids) + hand_stats → Linear(44→32) → Q/K/V self-attention → pool → (32)
-  Trunk: cat(base, hand_pooled) = (143) → LayerNorm → Linear(128) → ReLU → Linear(128) → ReLU
+  Trunk: cat(base, hand_pooled) = (169) → LayerNorm → Linear(128) → ReLU → Linear(128) → ReLU
   Policy: card_embed(action_ids) + action_feats → Linear(51→64) keys, dot(query, keys) → logits
   Value:  Linear(128→64) → ReLU → Linear(64→1)
 
-Inputs:  state (B,401), action_features (B,30,35), action_mask (B,30),
+  Base state includes 26 binary relic flags for simulator-active relics.
+
+Inputs:  state (B,427), action_features (B,30,35), action_mask (B,30),
          hand_card_ids (B,10) int64, action_card_ids (B,30) int64
 Outputs: logits (B,30), value (B,1)
 """
@@ -21,8 +23,9 @@ import torch.nn.functional as F
 # These must match betaone/encode.rs constants exactly
 MAX_HAND = 10
 CARD_STATS_DIM = 28
-BASE_STATE_DIM = 111  # player(25) + enemies(80) + context(6)
-STATE_DIM = BASE_STATE_DIM + MAX_HAND * CARD_STATS_DIM + MAX_HAND  # 401
+RELIC_DIM = 26
+BASE_STATE_DIM = 137  # player(25) + enemies(80) + context(6) + relics(26) — must match Rust
+STATE_DIM = BASE_STATE_DIM + MAX_HAND * CARD_STATS_DIM + MAX_HAND  # 427
 ACTION_DIM = 35
 MAX_ACTIONS = 30
 HIDDEN_DIM = 128

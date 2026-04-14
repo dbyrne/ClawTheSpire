@@ -94,6 +94,26 @@ def encode_context(turn: int, hand_size: int, draw: int, discard: int, exhaust: 
             1.0 if pending_choice else 0.0]
 
 
+# Relic flag names in index order — must match Rust betaone/encode.rs RELIC_NAMES
+RELIC_FLAG_NAMES = [
+    "ANCHOR", "BLOOD_VIAL", "BRONZE_SCALES", "BAG_OF_MARBLES",
+    "FESTIVE_POPPER", "LANTERN", "ODDLY_SMOOTH_STONE", "AKABEKO",
+    "STRIKE_DUMMY", "RING_OF_THE_SNAKE", "BAG_OF_PREPARATION",
+    "KUNAI", "ORNAMENTAL_FAN", "NUNCHAKU", "SHURIKEN",
+    "LETTER_OPENER", "GAME_PIECE", "VELVET_CHOKER",
+    "CHANDELIER", "ART_OF_WAR", "POCKETWATCH",
+    "ORICHALCUM", "CLOAK_CLASP",
+    "BURNING_BLOOD", "BLACK_BLOOD", "MEAT_ON_THE_BONE",
+]
+
+from .network import RELIC_DIM
+
+def encode_relics(relics: set[str]) -> list[float]:
+    """Encode relic flags → RELIC_DIM floats."""
+    assert len(RELIC_FLAG_NAMES) == RELIC_DIM
+    return [1.0 if name in relics else 0.0 for name in RELIC_FLAG_NAMES]
+
+
 def encode_state(scenario: "Scenario") -> list[float]:
     """Encode a full scenario state → STATE_DIM floats."""
     v = encode_player(scenario.player)
@@ -105,6 +125,7 @@ def encode_state(scenario: "Scenario") -> list[float]:
         scenario.draw_size, scenario.discard_size, scenario.exhaust_size,
         pending_choice=scenario.pending_choice is not None,
     ))
+    v.extend(encode_relics(scenario.relics))
     # Individual hand cards (MAX_HAND × CARD_STATS_DIM) + hand mask (MAX_HAND)
     hand_cards = [0.0] * (MAX_HAND * CARD_STATS_DIM)
     hand_mask = [0.0] * MAX_HAND
@@ -240,6 +261,7 @@ class Scenario:
     actions: list[ActionSpec]           # legal actions
     best_actions: list[int]             # indices into actions that are CORRECT
     bad_actions: list[int] = field(default_factory=list)  # indices that are WRONG
+    relics: set[str] = field(default_factory=set)  # active relics
     turn: int = 3
     draw_size: int = 10
     discard_size: int = 5
@@ -1210,6 +1232,158 @@ def build_scenarios() -> list[Scenario]:
         ],
         best_actions=[0],       # power on turn 1 = card selection engine for rest of combat
         turn=1,
+    ))
+
+    # ===== RELIC-AWARE DECISIONS =====
+
+    # Orichalcum: if you have 0 block at end of turn, get +6 block.
+    # So with Orichalcum, ending turn at 0 block is fine vs small attacks.
+    scenarios.append(Scenario(
+        name="orichalcum_skip_block",
+        category="relic",
+        description="With Orichalcum (+6 block at end of turn if 0 block), attack instead of Defend vs 6 damage",
+        player={"hp": 50, "max_hp": 70, "energy": 1, "block": 0},
+        enemies=[enemy(30, 50, damage=6)],
+        hand=[strike(), defend()],
+        actions=[
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike enemy"),
+            ActionSpec("play_card", defend(), label="Defend"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # Strike — Orichalcum gives 6 block for free
+        bad_actions=[1],        # Defend wastes energy and disables Orichalcum
+        relics={"ORICHALCUM"},
+    ))
+
+    # Without Orichalcum (same state), should Defend against 6 damage
+    scenarios.append(Scenario(
+        name="no_orichalcum_must_block",
+        category="relic",
+        description="Without Orichalcum, must Defend vs 6 damage with 1 energy (low HP)",
+        player={"hp": 8, "max_hp": 70, "energy": 1, "block": 0},
+        enemies=[enemy(30, 50, damage=6)],
+        hand=[strike(), defend()],
+        actions=[
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike enemy"),
+            ActionSpec("play_card", defend(), label="Defend"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[1],       # Must Defend — no Orichalcum, can't tank 6
+        bad_actions=[2],        # End turn = take 6 to face at 8 HP
+    ))
+
+    # Anchor: +10 block at start of combat.
+    # On turn 1, already have 10 block → lean into offense.
+    scenarios.append(Scenario(
+        name="anchor_turn1_offense",
+        category="relic",
+        description="With Anchor (start with 10 block), go offensive on turn 1 vs 8 damage",
+        player={"hp": 50, "max_hp": 70, "energy": 3, "block": 10},
+        enemies=[enemy(40, 50, damage=8)],
+        hand=[strike(), strike(), strike(), defend(), defend()],
+        actions=[
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike enemy"),
+            ActionSpec("play_card", defend(), label="Defend"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # Strike — already have 10 block from Anchor
+        bad_actions=[1],        # Defend wastes the Anchor block
+        relics={"ANCHOR"},
+        turn=1,
+    ))
+
+    # Velvet Choker: +1 energy but can only play 6 cards per turn.
+    # With 4 energy and Velvet Choker, high-impact cards matter more.
+    # Play Blade Dance (3 Shivs = 3 plays consumed) vs multiple Strikes
+    scenarios.append(Scenario(
+        name="velvet_choker_play_limit",
+        category="relic",
+        description="With Velvet Choker (6 card limit), prefer end turn over low-impact 6th card",
+        player={"hp": 50, "max_hp": 70, "energy": 1, "block": 15,
+                "powers": {"_velvet_plays": 5}},
+        enemies=[enemy(30, 50, damage=10)],
+        hand=[strike(), defend()],
+        actions=[
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike (6th card)"),
+            ActionSpec("play_card", defend(), label="Defend (6th card)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # With block already high, squeeze out last strike
+        bad_actions=[1],        # More block is wasted (already at 15 vs 10 damage)
+        relics={"VELVET_CHOKER"},
+    ))
+
+    # Kunai: every 3rd attack → +1 Dexterity.
+    # Prefer Attack over Skill when close to Kunai trigger.
+    scenarios.append(Scenario(
+        name="kunai_attack_priority",
+        category="relic",
+        description="With Kunai (3 attacks → +1 Dex), prefer Strike to push toward trigger",
+        player={"hp": 50, "max_hp": 70, "energy": 2, "block": 0},
+        enemies=[enemy(35, 50, damage=8)],
+        hand=[strike(), strike(), defend(), defend()],
+        actions=[
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike enemy"),
+            ActionSpec("play_card", defend(), label="Defend"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # Strike — working toward Kunai trigger
+        relics={"KUNAI"},
+    ))
+
+    # Lantern: +1 energy on turn 1.
+    # On turn 1, we have 4 energy instead of 3 — play more aggressively.
+    scenarios.append(Scenario(
+        name="lantern_turn1_aggro",
+        category="relic",
+        description="With Lantern (+1 energy turn 1), play extra card instead of ending turn",
+        player={"hp": 50, "max_hp": 70, "energy": 2, "block": 5},
+        enemies=[enemy(35, 50, damage=10)],
+        hand=[strike(), strike(), defend()],
+        actions=[
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike enemy"),
+            ActionSpec("play_card", defend(), label="Defend"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # Use the extra energy from Lantern
+        bad_actions=[2],        # Don't waste Lantern energy
+        relics={"LANTERN"},
+        turn=1,
+    ))
+
+    # Burning Blood: +6 HP after combat.
+    # When HP is moderate and enemy is low, be more aggressive (less defensive).
+    scenarios.append(Scenario(
+        name="burning_blood_aggro",
+        category="relic",
+        description="With Burning Blood (+6 HP after combat), prefer offense when enemy is low",
+        player={"hp": 25, "max_hp": 70, "energy": 1, "block": 0},
+        enemies=[enemy(8, 50, damage=12)],
+        hand=[strike(), defend()],
+        actions=[
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike (likely lethal)"),
+            ActionSpec("play_card", defend(), label="Defend"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # Strike is lethal (6 dmg vs 8 HP) — heal 6 after
+        bad_actions=[2],        # End turn = take 12 damage
+        relics={"BURNING_BLOOD"},
+    ))
+
+    # Cloak Clasp: gain block equal to hand size at end of turn.
+    # Should factor in free block when deciding to end turn.
+    scenarios.append(Scenario(
+        name="cloak_clasp_end_turn_early",
+        category="relic",
+        description="With Cloak Clasp (+block = hand size at EoT), end turn to gain block from hand",
+        player={"hp": 40, "max_hp": 70, "energy": 0, "block": 0},
+        enemies=[enemy(30, 50, damage=5)],
+        hand=[strike(), defend(), defend(), neutralize()],
+        actions=[
+            ActionSpec("end_turn", label="End turn (gain 4 block from Cloak Clasp)"),
+        ],
+        best_actions=[0],       # End turn — Cloak Clasp gives 4 block from 4 cards
+        relics={"CLOAK_CLASP"},
     ))
 
     return scenarios

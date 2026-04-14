@@ -292,7 +292,7 @@ def train(
                 encounters_json=json.dumps(eval_enc),
                 decks_json=json.dumps(eval_decks),
                 player_hp=cfg.player_hp, player_max_hp=70, player_max_energy=3,
-                relics=[], potions_json="[]",
+                relics_json="[]", potions_json="[]",
                 monster_data_json=monster_json,
                 enemy_profiles_json=profiles_json,
                 onnx_path=onnx_path,
@@ -416,7 +416,7 @@ def train(
                     encounters_json=json.dumps(check_enc),
                     decks_json=json.dumps(check_decks_list),
                     player_hp=check_cfg.player_hp, player_max_hp=70, player_max_energy=3,
-                    relics=[], potions_json="[]",
+                    relics_json="[]", potions_json="[]",
                     monster_data_json=monster_json,
                     enemy_profiles_json=profiles_json,
                     onnx_path=onnx_path,
@@ -435,7 +435,13 @@ def train(
 
         # Build combat batches: current tier + regressed tier review (each with correct HP)
         cfg = curriculum.config
-        batches: list[tuple[list, list, int, int]] = []  # (encounters, decks, hp, count)
+        batches: list[tuple[list, list, list, int, int]] = []  # (encounters, decks, relics, hp, count)
+
+        def _extract_relics(rec) -> list[str]:
+            """Extract relic list from a recorded encounter sample."""
+            if rec is None:
+                return []
+            return list(rec.get("relics", []))
 
         # Regressed tier review batches
         n_review = 0
@@ -464,7 +470,8 @@ def train(
                         max_removals=review_cfg.deck_max_removals,
                         archetypes=review_cfg.deck_archetypes,
                     )))
-            batches.append((enc, dks, review_cfg.player_hp, review_per_tier))
+            # Synthetic encounters have no relics
+            batches.append((enc, dks, [[] for _ in range(review_per_tier)], review_cfg.player_hp, review_per_tier))
             n_review += review_per_tier
 
         # Current tier batch
@@ -491,17 +498,18 @@ def train(
 
             # Group recorded by calibrated HP
             from collections import defaultdict
-            hp_groups: dict[int, tuple[list, list]] = defaultdict(lambda: ([], []))
+            hp_groups: dict[int, tuple[list, list, list]] = defaultdict(lambda: ([], [], []))
             for i in range(n_rec_batch):
                 rec = rec_samples[i] if rec_samples and i < len(rec_samples) else None
                 hp = rec.get("calibrated_hp", rec.get("player_hp", 70)) if rec else 70
                 hp_groups[hp][0].append(rec_enc[i])
                 hp_groups[hp][1].append(rec_dks[i])
-            for hp, (encs, dks_list) in hp_groups.items():
-                batches.append((encs, dks_list, hp, len(encs)))
+                hp_groups[hp][2].append(_extract_relics(rec))
+            for hp, (encs, dks_list, rels_list) in hp_groups.items():
+                batches.append((encs, dks_list, rels_list, hp, len(encs)))
 
-            # Final exam at standard HP
-            batches.append((exam_enc, exam_dks, cfg.player_hp, n_exam_batch))
+            # Final exam at standard HP (no relics)
+            batches.append((exam_enc, exam_dks, [[] for _ in range(n_exam_batch)], cfg.player_hp, n_exam_batch))
         else:
             cur_enc = curriculum.sample_encounters(n_current)
             cur_dks = [json.loads(curriculum.sample_deck_json(combat_idx=i)) for i in range(n_current)]
@@ -510,16 +518,17 @@ def train(
             recorded_samples = getattr(curriculum, "_recorded_samples", None)
             if recorded_samples and any(r is not None for r in recorded_samples):
                 from collections import defaultdict
-                hp_groups: dict[int, tuple[list, list]] = defaultdict(lambda: ([], []))
+                hp_groups: dict[int, tuple[list, list, list]] = defaultdict(lambda: ([], [], []))
                 for i, (enc_ids, dk) in enumerate(zip(cur_enc, cur_dks)):
                     rec = recorded_samples[i] if i < len(recorded_samples) else None
                     hp = rec.get("calibrated_hp", rec.get("player_hp", 70)) if rec else cfg.player_hp
                     hp_groups[hp][0].append(enc_ids)
                     hp_groups[hp][1].append(dk)
-                for hp, (encs, dks_list) in hp_groups.items():
-                    batches.append((encs, dks_list, hp, len(encs)))
+                    hp_groups[hp][2].append(_extract_relics(rec))
+                for hp, (encs, dks_list, rels_list) in hp_groups.items():
+                    batches.append((encs, dks_list, rels_list, hp, len(encs)))
             else:
-                batches.append((cur_enc, cur_dks, cfg.player_hp, n_current))
+                batches.append((cur_enc, cur_dks, [[] for _ in range(n_current)], cfg.player_hp, n_current))
 
         # Collect rollouts — one call per HP level, merge results
         all_states, all_act_feat, all_act_masks = [], [], []
@@ -529,7 +538,7 @@ def train(
         seed_offset = gen * 100_000
         seed_idx = 0
 
-        for b_enc, b_dks, b_hp, b_count in batches:
+        for b_enc, b_dks, b_rels, b_hp, b_count in batches:
             if not b_enc:
                 continue
             b_seeds = [seed_offset + seed_idx + i for i in range(b_count)]
@@ -540,7 +549,7 @@ def train(
                 player_hp=b_hp,
                 player_max_hp=70,
                 player_max_energy=3,
-                relics=[],
+                relics_json=json.dumps(b_rels),
                 potions_json="[]",
                 monster_data_json=monster_json,
                 enemy_profiles_json=profiles_json,

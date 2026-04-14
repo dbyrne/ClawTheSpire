@@ -233,7 +233,7 @@ fn run_selfplay_combat(
     encounters_json,
     decks_json,
     player_hp, player_max_hp, player_max_energy,
-    relics,
+    relics_json,
     potions_json,
     monster_data_json,
     enemy_profiles_json,
@@ -252,7 +252,7 @@ pub fn betaone_mcts_selfplay(
     player_hp: i32,
     player_max_hp: i32,
     player_max_energy: i32,
-    relics: Vec<String>,
+    relics_json: &str,
     potions_json: &str,
     monster_data_json: &str,
     enemy_profiles_json: &str,
@@ -275,7 +275,12 @@ pub fn betaone_mcts_selfplay(
     let encounter_list: Vec<Vec<String>> = serde_json::from_str(encounters_json)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("encounters: {e}")))?;
     let card_vocab: CardVocab = serde_json::from_str(card_vocab_json).unwrap_or_default();
-    let relic_set: HashSet<String> = relics.into_iter().collect();
+    let relic_lists: Vec<Vec<String>> = serde_json::from_str(relics_json)
+        .unwrap_or_default();
+    let relic_sets: Vec<HashSet<String>> = relic_lists.into_iter()
+        .map(|v| v.into_iter().collect())
+        .collect();
+    let empty_relics: HashSet<String> = HashSet::new();
     let onnx = onnx_path.to_string();
     let cache_key = format!("{}:{}", onnx_path, gen_id);
 
@@ -290,6 +295,11 @@ pub fn betaone_mcts_selfplay(
                 let encounter_idx = i % encounter_list.len().max(1);
                 let enemy_ids = &encounter_list[encounter_idx];
                 let deck = &decks[i % decks.len()];
+                let relics = if relic_sets.is_empty() {
+                    &empty_relics
+                } else {
+                    &relic_sets[i % relic_sets.len()]
+                };
 
                 SELFPLAY_CACHE.with(|cache| {
                     let mut cache = cache.borrow_mut();
@@ -317,7 +327,7 @@ pub fn betaone_mcts_selfplay(
                     Some(run_selfplay_combat(
                         deck,
                         player_hp, player_max_hp, player_max_energy,
-                        enemy_ids, &relic_set, &potions,
+                        enemy_ids, relics, &potions,
                         &monsters, &profiles,
                         inference, &card_vocab,
                         num_sims, temperature, seed, add_noise,

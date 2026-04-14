@@ -115,7 +115,7 @@ def eval_policy(
         encounters_json=json.dumps(encounters),
         decks_json=json.dumps(decks),
         player_hp=player_hp, player_max_hp=70, player_max_energy=3,
-        relics=[], potions_json="[]",
+        relics_json="[]", potions_json="[]",
         monster_data_json=monster_json,
         enemy_profiles_json=profiles_json,
         onnx_path=onnx_path,
@@ -132,14 +132,14 @@ def eval_mcts(
     onnx_path: str, card_vocab_json: str,
     monster_json: str, profiles_json: str,
     encounters: list, decks: list, player_hp: int,
-    seeds: list[int], num_sims: int = 300,
+    seeds: list[int], num_sims: int = 400,
 ) -> float:
     """Evaluate using MCTS search."""
     r = sts2_engine.betaone_mcts_selfplay(
         encounters_json=json.dumps(encounters),
         decks_json=json.dumps(decks),
         player_hp=player_hp, player_max_hp=70, player_max_energy=3,
-        relics=[], potions_json="[]",
+        relics_json="[]", potions_json="[]",
         monster_data_json=monster_json,
         enemy_profiles_json=profiles_json,
         onnx_path=onnx_path,

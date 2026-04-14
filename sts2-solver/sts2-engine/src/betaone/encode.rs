@@ -20,11 +20,62 @@ pub const PLAYER_DIM: usize = 25;
 pub const ENEMY_FEATURES: usize = 16;
 pub const ENEMY_SLOTS: usize = 5;
 pub const CONTEXT_DIM: usize = 6;
+pub const RELIC_DIM: usize = 26;
 pub const MAX_HAND: usize = 10;
-const BASE_STATE_DIM: usize = PLAYER_DIM + ENEMY_SLOTS * ENEMY_FEATURES + CONTEXT_DIM;  // 106
+const BASE_STATE_DIM: usize = PLAYER_DIM + ENEMY_SLOTS * ENEMY_FEATURES + CONTEXT_DIM + RELIC_DIM;  // 137
 const HAND_CARDS_DIM: usize = MAX_HAND * CARD_STATS_DIM;  // 10 × 28 = 280
 const HAND_MASK_DIM: usize = MAX_HAND;                     // 10
-pub const STATE_DIM: usize = BASE_STATE_DIM + HAND_CARDS_DIM + HAND_MASK_DIM;  // 396
+pub const STATE_DIM: usize = BASE_STATE_DIM + HAND_CARDS_DIM + HAND_MASK_DIM;  // 427
+
+// Relic flag indices (within the RELIC_DIM block)
+mod relic_idx {
+    // Start-of-combat
+    pub const ANCHOR: usize = 0;
+    pub const BLOOD_VIAL: usize = 1;
+    pub const BRONZE_SCALES: usize = 2;
+    pub const BAG_OF_MARBLES: usize = 3;
+    pub const FESTIVE_POPPER: usize = 4;
+    pub const LANTERN: usize = 5;
+    pub const ODDLY_SMOOTH_STONE: usize = 6;
+    pub const AKABEKO: usize = 7;
+    pub const STRIKE_DUMMY: usize = 8;
+    // Turn-1 draw
+    pub const RING_OF_THE_SNAKE: usize = 9;
+    pub const BAG_OF_PREPARATION: usize = 10;
+    // Counted triggers (attacks)
+    pub const KUNAI: usize = 11;
+    pub const ORNAMENTAL_FAN: usize = 12;
+    pub const NUNCHAKU: usize = 13;
+    pub const SHURIKEN: usize = 14;
+    // Counted triggers (skills)
+    pub const LETTER_OPENER: usize = 15;
+    // Card-type triggers
+    pub const GAME_PIECE: usize = 16;
+    pub const VELVET_CHOKER: usize = 17;
+    // Turn triggers
+    pub const CHANDELIER: usize = 18;
+    pub const ART_OF_WAR: usize = 19;
+    pub const POCKETWATCH: usize = 20;
+    // End-of-turn
+    pub const ORICHALCUM: usize = 21;
+    pub const CLOAK_CLASP: usize = 22;
+    // End-of-combat healing
+    pub const BURNING_BLOOD: usize = 23;
+    pub const BLACK_BLOOD: usize = 24;
+    pub const MEAT_ON_THE_BONE: usize = 25;
+}
+
+/// Relic names in flag-index order, for encoding.
+const RELIC_NAMES: [&str; RELIC_DIM] = [
+    "ANCHOR", "BLOOD_VIAL", "BRONZE_SCALES", "BAG_OF_MARBLES",
+    "FESTIVE_POPPER", "LANTERN", "ODDLY_SMOOTH_STONE", "AKABEKO",
+    "STRIKE_DUMMY", "RING_OF_THE_SNAKE", "BAG_OF_PREPARATION",
+    "KUNAI", "ORNAMENTAL_FAN", "NUNCHAKU", "SHURIKEN",
+    "LETTER_OPENER", "GAME_PIECE", "VELVET_CHOKER",
+    "CHANDELIER", "ART_OF_WAR", "POCKETWATCH",
+    "ORICHALCUM", "CLOAK_CLASP",
+    "BURNING_BLOOD", "BLACK_BLOOD", "MEAT_ON_THE_BONE",
+];
 
 // Action layout: [card_stats | target | flags]
 const TARGET_DIM: usize = 4;
@@ -119,6 +170,14 @@ pub fn encode_state(state: &CombatState) -> [f32; STATE_DIM] {
     v[o + 4] = state.player.exhaust_pile.len() as f32 / 20.0;
     v[o + 5] = if state.pending_choice.is_some() { 1.0 } else { 0.0 };
     o += CONTEXT_DIM;
+
+    // --- Relic binary flags (RELIC_DIM = 26 dims) ---
+    for (i, name) in RELIC_NAMES.iter().enumerate() {
+        if state.relics.contains(*name) {
+            v[o + i] = 1.0;
+        }
+    }
+    o += RELIC_DIM;
 
     // --- Individual hand cards (MAX_HAND × CARD_STATS_DIM + MAX_HAND mask) ---
     let hand_len = state.player.hand.len().min(MAX_HAND);

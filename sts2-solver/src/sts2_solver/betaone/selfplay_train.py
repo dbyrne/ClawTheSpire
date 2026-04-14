@@ -398,9 +398,10 @@ def train(
         seeds = [gen * 100_000 + i for i in range(combats_per_gen)]
 
         if mixed:
-            # Mixed mode: split between recorded encounters and final exam
+            # Mixed mode: split between recorded encounters and archetype packages
+            from .packages import sample_packages_batch
             n_recorded = int(combats_per_gen * recorded_frac)
-            n_exam = combats_per_gen - n_recorded
+            n_packages = combats_per_gen - n_recorded
 
             # Recorded encounters portion
             curriculum.use_recorded_only = True
@@ -409,15 +410,12 @@ def train(
             rec_decks = [json.loads(curriculum.sample_deck_json(combat_idx=i))
                          for i in range(n_recorded)]
 
-            # Final exam portion
-            curriculum.use_recorded_only = False
-            curriculum.tier = curriculum.max_tier
-            exam_enc = curriculum.sample_encounters(n_exam)
-            exam_decks = [json.loads(curriculum.sample_deck_json(combat_idx=None))
-                          for _ in range(n_exam)]
+            # Archetype packages portion (replaces final exam)
+            pkg_rng = stdlib_random.Random(gen * 7919)
+            pkg_enc, pkg_decks, pkg_hps = sample_packages_batch(n_packages, rng=pkg_rng)
 
-            encounters = rec_enc + exam_enc
-            decks = rec_decks + exam_decks
+            encounters = rec_enc + pkg_enc
+            decks = rec_decks + pkg_decks
         else:
             encounters = curriculum.sample_encounters(combats_per_gen)
             decks = [json.loads(curriculum.sample_deck_json(combat_idx=i))
@@ -425,20 +423,36 @@ def train(
             rec_samples = getattr(curriculum, "_recorded_samples", None)
             n_recorded = combats_per_gen if recorded_encounters else 0
 
+        # Extract relics from recorded samples
+        def _extract_relics(rec) -> list[str]:
+            if rec is None:
+                return []
+            return list(rec.get("relics", []))
+
         # Group combats by HP level for batched self-play
         from collections import defaultdict
-        hp_groups: dict[int, tuple[list, list, list]] = defaultdict(lambda: ([], [], []))
+        hp_groups: dict[int, tuple[list, list, list, list]] = defaultdict(lambda: ([], [], [], []))
         for i in range(combats_per_gen):
             if mixed and i < n_recorded:
+                # Recorded encounter — use calibrated HP and relics
                 rec = rec_samples[i] if rec_samples and i < len(rec_samples) else None
-            elif not mixed and recorded_encounters:
+                hp = rec.get("calibrated_hp", rec.get("player_hp", 70)) if rec else 70
+                rels = _extract_relics(rec)
+            elif mixed:
+                # Archetype package — use package HP, no relics
+                hp = pkg_hps[i - n_recorded]
+                rels = []
+            elif recorded_encounters:
                 rec = rec_samples[i] if rec_samples and i < len(rec_samples) else None
+                hp = rec.get("calibrated_hp", rec.get("player_hp", 70)) if rec else 70
+                rels = _extract_relics(rec)
             else:
-                rec = None
-            hp = rec.get("calibrated_hp", rec.get("player_hp", 70)) if rec else cfg.player_hp
+                hp = cfg.player_hp
+                rels = []
             hp_groups[hp][0].append(encounters[i])
             hp_groups[hp][1].append(decks[i])
             hp_groups[hp][2].append(seeds[i])
+            hp_groups[hp][3].append(rels)
 
         # Self-play: MCTS combats (one call per HP level)
         all_outcomes = []
@@ -448,14 +462,14 @@ def train(
         gen_combat_indices = []
         combat_offset = 0
 
-        for hp, (grp_enc, grp_dks, grp_seeds) in hp_groups.items():
+        for hp, (grp_enc, grp_dks, grp_seeds, grp_rels) in hp_groups.items():
             rollout = sts2_engine.betaone_mcts_selfplay(
                 encounters_json=json.dumps(grp_enc),
                 decks_json=json.dumps(grp_dks),
                 player_hp=hp,
                 player_max_hp=70,
                 player_max_energy=3,
-                relics=[],
+                relics_json=json.dumps(grp_rels),
                 potions_json="[]",
                 monster_data_json=monster_json,
                 enemy_profiles_json=profiles_json,

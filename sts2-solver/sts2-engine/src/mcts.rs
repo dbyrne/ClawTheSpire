@@ -298,7 +298,7 @@ impl<'a> MCTS<'a> {
 
         let state = arena.nodes[node_idx].state.as_ref().unwrap();
 
-        // Check terminal
+        // Check terminal (pre-resolution — combat might already be over)
         if let Some(outcome) = is_combat_over(state) {
             arena.nodes[node_idx].is_terminal = true;
             arena.nodes[node_idx].is_expanded = true;
@@ -307,7 +307,46 @@ impl<'a> MCTS<'a> {
             return value;
         }
 
-        // Get legal actions
+        // Leaf value: NN evaluates current state directly.
+        // All nodes are evaluated pre-resolution (mid-turn or end-of-turn
+        // before enemy attacks), giving the value head a consistent phase.
+        let value = self.estimate_leaf_value(state);
+
+        // For EndTurn nodes: resolve end-of-turn effects NOW so children
+        // can be next-turn actions. The leaf value above was already captured
+        // from the pre-resolution state.
+        if state.turn_ended {
+            // Take ownership of state and AIs to avoid borrow conflicts
+            let mut resolved = arena.nodes[node_idx].state.take().unwrap();
+            let mut ais = arena.nodes[node_idx].enemy_ais.take();
+            resolved.turn_ended = false;
+            combat::end_turn(&mut resolved, self.card_db, rng);
+            combat::resolve_enemy_intents(&mut resolved);
+            combat::tick_enemy_powers(&mut resolved);
+
+            // Check terminal after resolution (player died to enemy attack,
+            // or enemy died to poison/thorns)
+            if let Some(outcome) = is_combat_over(&resolved) {
+                arena.nodes[node_idx].state = Some(resolved);
+                arena.nodes[node_idx].enemy_ais = ais;
+                arena.nodes[node_idx].is_terminal = true;
+                arena.nodes[node_idx].is_expanded = true;
+                let terminal = if outcome == "win" { 1.0 } else { -1.0 };
+                arena.nodes[node_idx].terminal_value = terminal;
+                return terminal;
+            }
+
+            combat::start_turn(&mut resolved, rng);
+            if let Some(ref mut ai_vec) = ais {
+                crate::enemy::sync_enemy_ais(&resolved, ai_vec, &std::collections::HashMap::new());
+                crate::enemy::set_enemy_intents(&mut resolved, ai_vec, rng);
+            }
+            arena.nodes[node_idx].state = Some(resolved);
+            arena.nodes[node_idx].enemy_ais = ais;
+        }
+
+        // Get legal actions from (possibly resolved) state
+        let state = arena.nodes[node_idx].state.as_ref().unwrap();
         let actions = enumerate_actions(state);
         if actions.is_empty() {
             arena.nodes[node_idx].is_expanded = true;
@@ -316,23 +355,9 @@ impl<'a> MCTS<'a> {
             return 0.0;
         }
 
-        // Neural network evaluation for policy — all actions treated equally
+        // Neural network policy priors
         let (logits, _policy_value) = self.inference.evaluate(state, &actions);
         let priors = if !actions.is_empty() { softmax(&logits) } else { vec![] };
-
-        // Leaf value: resolve through end-of-turn for mid-turn states so
-        // card plays and EndTurn are compared at the same phase boundary.
-        // The resolution is on a clone — the node's stored state is untouched.
-        let is_mid_turn = arena.nodes[node_idx].parent.map_or(true, |parent_idx| {
-            let act_idx = arena.nodes[node_idx].parent_action_idx;
-            !matches!(arena.nodes[parent_idx].legal_actions[act_idx], Action::EndTurn)
-        });
-
-        let value = if is_mid_turn {
-            self.resolve_and_evaluate(state, &arena.nodes[node_idx].enemy_ais, rng)
-        } else {
-            self.estimate_leaf_value(state)
-        };
 
         // Create child nodes (lazy — state=None)
         let mut children = Vec::with_capacity(actions.len());
@@ -371,68 +396,6 @@ impl<'a> MCTS<'a> {
         if v.is_finite() { v } else { 0.0 }
     }
 
-    /// Resolve a mid-turn state through end-of-turn, then evaluate.
-    /// Clones the state — the original is untouched for tree expansion.
-    fn resolve_and_evaluate(
-        &self,
-        state: &CombatState,
-        enemy_ais: &Option<Vec<crate::enemy::EnemyAI>>,
-        rng: &mut impl Rng,
-    ) -> f32 {
-        let mut resolved = state.clone();
-        // Auto-resolve any pending choice (e.g. Survivor's discard) using
-        // the combat head to pick the best option. The MCTS tree handles
-        // the real choice through ChooseCard children — this is just for
-        // the hypothetical leaf estimate.
-        if let Some(ref choice) = resolved.pending_choice {
-            let n = choice.num_choices.max(1) as usize;
-            let hand_len = resolved.player.hand.len();
-            let options = if let Some(ref valid) = choice.valid_indices {
-                valid.clone()
-            } else {
-                (0..hand_len).collect()
-            };
-            if options.len() <= 1 {
-                crate::effects::execute_choice(&mut resolved, 0, rng);
-            } else {
-                let mut best_idx = 0;
-                let mut best_val = f32::NEG_INFINITY;
-                for &i in &options {
-                    let mut test = resolved.clone();
-                    test.pending_choice = resolved.pending_choice.clone();
-                    crate::effects::execute_choice(&mut test, i, rng);
-                    let v = self.inference.value_only(&test);
-                    if v.is_finite() && v > best_val {
-                        best_val = v;
-                        best_idx = i;
-                    }
-                }
-                crate::effects::execute_choice(&mut resolved, best_idx, rng);
-            }
-        }
-        combat::end_turn(&mut resolved, self.card_db, rng);
-        combat::resolve_enemy_intents(&mut resolved);
-        combat::tick_enemy_powers(&mut resolved);
-
-        if let Some(outcome) = is_combat_over(&resolved) {
-            return if outcome == "win" { 1.0 } else { -1.0 };
-        }
-
-        // Start next turn so the combat head sees a realistic state
-        // (hand drawn, energy reset, new intents)
-        combat::start_turn(&mut resolved, rng);
-        if let Some(ais) = enemy_ais {
-            let mut ais_clone = ais.clone();
-            crate::enemy::sync_enemy_ais(
-                &resolved, &mut ais_clone, &std::collections::HashMap::new(),
-            );
-            crate::enemy::set_enemy_intents(&mut resolved, &mut ais_clone, rng);
-        }
-
-        let v = self.inference.value_only(&resolved);
-        if v.is_finite() { v } else { 0.0 }
-    }
-
     // --- Apply action to state ---
     fn apply_action(
         &self,
@@ -448,17 +411,10 @@ impl<'a> MCTS<'a> {
                 }
             }
             Action::EndTurn => {
-                combat::end_turn(state, self.card_db, rng);
-                combat::resolve_enemy_intents(state);
-                combat::tick_enemy_powers(state);
-                if is_combat_over(state).is_none() {
-                    combat::start_turn(state, rng);
-                    // Update enemy intents for the new turn if AI profiles available
-                    if let Some(ais) = enemy_ais {
-                        crate::enemy::sync_enemy_ais(state, ais, &std::collections::HashMap::new());
-                        crate::enemy::set_enemy_intents(state, ais, rng);
-                    }
-                }
+                // Don't resolve here — just mark the turn as ended.
+                // Resolution is deferred to expand() so the leaf evaluator
+                // sees the pre-resolution state (block vs incoming damage).
+                state.turn_ended = true;
             }
             Action::UsePotion { potion_idx } => {
                 combat::use_potion(state, *potion_idx);
