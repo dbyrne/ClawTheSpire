@@ -130,6 +130,11 @@ class Runner:
         self._onnx_combat_path: str | None = None
         self._vocab_json: str | None = None
         self._enemy_profiles_json: str | None = None
+
+        # BetaOne MCTS (alternative to AlphaZero)
+        self._use_betaone = False
+        self._betaone_onnx_path: str | None = None
+        self._betaone_card_vocab_json: str | None = None
         self._card_reward_handled = False  # Reset when leaving reward screen
         self._deck_select_stuck = False  # Track stuck deck_select screens
         self._stuck_since: float | None = None  # Timestamp when we got stuck
@@ -570,8 +575,30 @@ class Runner:
         import json as _json
         self._enemy_profiles_json = _json.dumps(_load_enemy_profiles())
         self.console.print(f"[dim]Exported ONNX models to {self._onnx_dir}[/dim]")
+
+        # BetaOne: check for betaone checkpoint and use if available
+        betaone_ckpt_dir = _Path(__file__).resolve().parents[3] / "betaone_checkpoints"
+        betaone_latest = betaone_ckpt_dir / "betaone_latest.pt"
+        betaone_vocab = betaone_ckpt_dir / "card_vocab.json"
+        if betaone_latest.exists() and betaone_vocab.exists():
+            from .betaone.network import BetaOneNetwork, export_onnx as betaone_export_onnx
+            import json as _json2
+            with open(betaone_vocab) as f:
+                card_vocab = _json2.load(f)
+            self._betaone_card_vocab_json = _json2.dumps(card_vocab)
+            betaone_net = BetaOneNetwork(num_cards=len(card_vocab))
+            betaone_ckpt = torch.load(betaone_latest, map_location="cpu", weights_only=False)
+            try:
+                betaone_net.load_state_dict(betaone_ckpt["model_state_dict"])
+                self._betaone_onnx_path = betaone_export_onnx(betaone_net, str(betaone_ckpt_dir / "onnx"))
+                self._use_betaone = True
+                self.console.print(f"[green]BetaOne MCTS active (gen {betaone_ckpt.get('gen', '?')})[/green]")
+            except RuntimeError as e:
+                self.console.print(f"[yellow]BetaOne checkpoint incompatible: {e}[/yellow]")
+
         self.logger.metadata = {
             "checkpoint": self._checkpoint_name or "none",
+            "betaone": self._use_betaone,
         }
         try:
             health = self.client.get_health()
@@ -582,6 +609,12 @@ class Runner:
 
     def _rust_mcts_search(self, sim_state, num_simulations=200, temperature=0):
         """Run MCTS via Rust engine. Returns (Action, policy, root_value)."""
+        if self._use_betaone:
+            return self._betaone_mcts_search(sim_state, num_simulations, temperature)
+        return self._alphazero_mcts_search(sim_state, num_simulations, temperature)
+
+    def _alphazero_mcts_search(self, sim_state, num_simulations=200, temperature=0):
+        """AlphaZero MCTS (3 ONNX models, full vocabs)."""
         import sts2_engine
         from .actions import Action
 
@@ -597,7 +630,27 @@ class Runner:
             enemy_profiles_json=self._enemy_profiles_json,
             onnx_combat_path=self._onnx_combat_path,
         )
+        return self._parse_mcts_result(result)
 
+    def _betaone_mcts_search(self, sim_state, num_simulations=100, temperature=0):
+        """BetaOne MCTS (1 ONNX model, card vocab only)."""
+        import sts2_engine
+        from .actions import Action
+
+        state_json = combat_state_to_json(sim_state)
+        result = sts2_engine.betaone_mcts_search(
+            state_json=state_json,
+            onnx_path=self._betaone_onnx_path,
+            card_vocab_json=self._betaone_card_vocab_json,
+            num_sims=num_simulations,
+            temperature=float(temperature),
+            seed=int(time.time() * 1000) & 0xFFFFFFFF,
+        )
+        return self._parse_mcts_result(result)
+
+    @staticmethod
+    def _parse_mcts_result(result):
+        from .actions import Action
         action_type = result["action_type"]
         if action_type == "end_turn":
             action = Action(action_type="end_turn")
