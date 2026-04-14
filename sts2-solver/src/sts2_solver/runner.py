@@ -1638,13 +1638,17 @@ class Runner:
                 self._log_action("  [dim]skip: discard_potion but no potions (transient)[/dim]")
                 return
             if self._combat_logged:
-                # First time: skip as transient. If it persists, execute it.
-                if not getattr(self, "_discard_potion_retries", 0):
-                    self._discard_potion_retries = 1
-                    self._log_action("  [dim]skip: discard_potion mid-combat (transient)[/dim]")
+                # Mid-combat with only discard_potion — likely transient/stale state.
+                # Wait and re-poll rather than acting or crashing.
+                retries = getattr(self, "_discard_potion_retries", 0)
+                if retries < 10:
+                    self._discard_potion_retries = retries + 1
+                    if retries == 0:
+                        self._log_action("  [dim]waiting: discard_potion mid-combat (stale state)[/dim]")
+                    time.sleep(0.5)
                     return
+                # After 10 retries (~5s), fall through and execute to avoid permanent stuck
                 self._discard_potion_retries = 0
-                # Fall through to execute the discard
             # Identify which potion is in slot 0
             potion_name = None
             for p in potions:
