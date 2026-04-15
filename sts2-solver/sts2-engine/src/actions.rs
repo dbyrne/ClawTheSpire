@@ -46,7 +46,13 @@ pub fn enumerate_actions(state: &CombatState) -> Vec<Action> {
         }
     }
 
-    actions.push(Action::EndTurn);
+    // Only offer EndTurn when there are real alternatives.
+    // If no cards/potions are playable, the caller auto-ends the turn
+    // without asking the network — this keeps EndTurn semantically
+    // meaningful ("I'm choosing to stop despite having options").
+    if !actions.is_empty() {
+        actions.push(Action::EndTurn);
+    }
     actions
 }
 

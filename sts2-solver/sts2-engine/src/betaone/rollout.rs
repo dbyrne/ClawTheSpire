@@ -203,7 +203,32 @@ fn run_single_combat(
 
             let actions = enumerate_actions(&state);
             if actions.is_empty() {
-                break;
+                // No playable cards/potions — auto end turn without network decision
+                let hp_before = state.player.hp;
+                let energy_at_end = state.player.energy;
+                let max_energy = state.player.max_energy;
+                let enemy_hp: Vec<i32> = state.enemies.iter().map(|e| e.hp).collect();
+
+                combat::end_turn(&mut state, &card_db, &mut rng);
+                enemy::sync_enemy_ais(&state, &mut enemy_ais, &profiles);
+                combat::resolve_enemy_intents(&mut state);
+                combat::tick_enemy_powers(&mut state);
+                enemy::sync_enemy_ais(&state, &mut enemy_ais, &profiles);
+
+                let mut reward = rewards::compute_turn_reward(
+                    &state, hp_before, &enemy_hp, energy_at_end, max_energy,
+                );
+
+                if let Some(outcome) = combat::is_combat_over(&state) {
+                    reward += rewards::terminal_reward(outcome, &state);
+                    final_outcome = outcome;
+                    if let Some(last) = steps.last_mut() {
+                        last.reward += reward;
+                        last.done = true;
+                    }
+                    break 'outer;
+                }
+                break; // Next turn
             }
 
             // Encode & evaluate

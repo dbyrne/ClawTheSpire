@@ -327,6 +327,8 @@ class Experiment:
             "passed": result["passed"],
             "total": result["total"],
             "score": round(result["passed"] / max(result["total"], 1), 4),
+            "end_turn_avg": result.get("end_turn_avg"),
+            "end_turn_high": result.get("end_turn_high", 0),
             "by_category": {
                 cat: {
                     "passed": sum(1 for r in results if r["passed"]),

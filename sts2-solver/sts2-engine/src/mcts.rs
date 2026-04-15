@@ -345,17 +345,54 @@ impl<'a> MCTS<'a> {
             arena.nodes[node_idx].enemy_ais = ais;
         }
 
-        // Get legal actions from (possibly resolved) state
-        let state = arena.nodes[node_idx].state.as_ref().unwrap();
-        let actions = enumerate_actions(state);
+        // Get legal actions from (possibly resolved) state.
+        // If empty, no playable cards/potions — auto end turn and re-enumerate.
+        let mut actions = {
+            let state = arena.nodes[node_idx].state.as_ref().unwrap();
+            enumerate_actions(state)
+        };
         if actions.is_empty() {
-            arena.nodes[node_idx].is_expanded = true;
-            arena.nodes[node_idx].is_terminal = true;
-            arena.nodes[node_idx].terminal_value = 0.0;
-            return 0.0;
+            // Forced end-of-turn: resolve without a network decision
+            let mut resolved = arena.nodes[node_idx].state.take().unwrap();
+            let mut ais = arena.nodes[node_idx].enemy_ais.take();
+            combat::end_turn(&mut resolved, self.card_db, rng);
+            combat::resolve_enemy_intents(&mut resolved);
+            combat::tick_enemy_powers(&mut resolved);
+
+            if let Some(outcome) = is_combat_over(&resolved) {
+                arena.nodes[node_idx].state = Some(resolved);
+                arena.nodes[node_idx].enemy_ais = ais;
+                arena.nodes[node_idx].is_terminal = true;
+                arena.nodes[node_idx].is_expanded = true;
+                let terminal = if outcome == "win" { 1.0 } else { -1.0 };
+                arena.nodes[node_idx].terminal_value = terminal;
+                return terminal;
+            }
+
+            combat::start_turn(&mut resolved, rng);
+            if let Some(ref mut ai_vec) = ais {
+                crate::enemy::sync_enemy_ais(&resolved, ai_vec, &std::collections::HashMap::new());
+                crate::enemy::set_enemy_intents(&mut resolved, ai_vec, rng);
+            }
+            arena.nodes[node_idx].state = Some(resolved);
+            arena.nodes[node_idx].enemy_ais = ais;
+
+            // Re-enumerate with the new turn's actions
+            actions = {
+                let state = arena.nodes[node_idx].state.as_ref().unwrap();
+                enumerate_actions(state)
+            };
+            if actions.is_empty() {
+                // Still no actions after new turn (shouldn't happen, but be safe)
+                arena.nodes[node_idx].is_expanded = true;
+                arena.nodes[node_idx].is_terminal = true;
+                arena.nodes[node_idx].terminal_value = 0.0;
+                return 0.0;
+            }
         }
 
         // Neural network policy priors
+        let state = arena.nodes[node_idx].state.as_ref().unwrap();
         let (logits, _policy_value) = self.inference.evaluate(state, &actions);
         let priors = if !actions.is_empty() { softmax(&logits) } else { vec![] };
 

@@ -653,12 +653,27 @@ fn test_enumerate_targeted_card_multiple_enemies() {
 }
 
 #[test]
-fn test_enumerate_no_energy_only_end_turn() {
+fn test_enumerate_no_energy_no_free_cards_returns_empty() {
+    // When no cards are playable, enumerate_actions returns empty.
+    // The caller auto-ends the turn without asking the network.
     let mut state = state_with(vec![strike()], vec![enemy(30)]);
     state.player.energy = 0;
     let actions = enumerate_actions(&state);
-    assert_eq!(actions.len(), 1);
-    assert!(matches!(actions[0], Action::EndTurn));
+    assert!(actions.is_empty(), "Forced end-turn should not be in action list");
+}
+
+#[test]
+fn test_enumerate_zero_cost_card_includes_end_turn() {
+    // When a 0-cost card is playable, EndTurn IS offered as a real choice.
+    let mut state = state_with(vec![Card {
+        id: "NEUTRALIZE".into(),
+        cost: 0,
+        ..Default::default()
+    }], vec![enemy(30)]);
+    state.player.energy = 0;
+    let actions = enumerate_actions(&state);
+    assert!(actions.len() >= 2, "Should have card play + EndTurn");
+    assert!(actions.iter().any(|a| matches!(a, Action::EndTurn)));
 }
 
 #[test]

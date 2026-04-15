@@ -138,7 +138,18 @@ fn run_selfplay_combat(
 
             let actions = enumerate_actions(&state);
             if actions.is_empty() {
-                break;
+                // No playable cards/potions — auto end turn
+                combat::end_turn(&mut state, &card_db, &mut rng);
+                enemy::sync_enemy_ais(&state, &mut enemy_ais, &profiles);
+                combat::resolve_enemy_intents(&mut state);
+                combat::tick_enemy_powers(&mut state);
+                enemy::sync_enemy_ais(&state, &mut enemy_ais, &profiles);
+
+                if let Some(outcome) = combat::is_combat_over(&state) {
+                    final_outcome = outcome;
+                    break 'outer;
+                }
+                break; // Next turn
             }
 
             // Encode state + actions BEFORE search (this is the training input)

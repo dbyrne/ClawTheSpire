@@ -1508,6 +1508,11 @@ def run_eval(checkpoint_path: str | None = None) -> dict:
         passed = chosen_idx in sc.best_actions
         is_bad = chosen_idx in sc.bad_actions
 
+        # Track End Turn probability
+        et_indices = [i for i, a in enumerate(sc.actions) if a.action_type == "end_turn"]
+        et_prob = probs[et_indices[0]] if et_indices else 0.0
+        et_is_best = any(i in sc.best_actions for i in et_indices) if et_indices else False
+
         result = {
             "name": sc.name,
             "passed": passed,
@@ -1518,6 +1523,8 @@ def run_eval(checkpoint_path: str | None = None) -> dict:
             "best_prob": max(probs[i] for i in sc.best_actions),
             "probs": {str(sc.actions[i]): round(probs[i], 3) for i in range(n_actions)},
             "value": round(value.item(), 3),
+            "end_turn_prob": round(et_prob, 3),
+            "end_turn_is_best": et_is_best,
         }
 
         cat = sc.category
@@ -1547,12 +1554,30 @@ def run_eval(checkpoint_path: str | None = None) -> dict:
                 print(f"        probs: {probs_str}")
         print()
 
+    # End Turn analysis
+    all_results = [r for results in results_by_category.values() for r in results]
+    et_scenarios = [r for r in all_results if "end_turn_prob" in r and not r["end_turn_is_best"]]
+    if et_scenarios:
+        et_probs = [r["end_turn_prob"] for r in et_scenarios]
+        avg_et = sum(et_probs) / len(et_probs)
+        high_et = [(r["name"], r["end_turn_prob"]) for r in et_scenarios if r["end_turn_prob"] > 0.20]
+        high_et.sort(key=lambda x: -x[1])
+        print(f"End Turn bias (scenarios where ET is wrong):")
+        print(f"  Avg ET prob: {avg_et:.1%} across {len(et_scenarios)} scenarios")
+        if high_et:
+            print(f"  High ET (>20%):")
+            for name, prob in high_et[:10]:
+                print(f"    {name}: {prob:.0%}")
+        print()
+
     return {
         "gen": gen,
         "passed": total_pass,
         "failed": total_fail,
         "total": total_pass + total_fail,
         "by_category": results_by_category,
+        "end_turn_avg": round(avg_et, 4) if et_scenarios else None,
+        "end_turn_high": len(high_et) if et_scenarios else 0,
     }
 
 
