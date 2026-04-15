@@ -277,6 +277,10 @@ def train(
         recorded_encounters_path=recorded_path,
     )
 
+    # --mixed implies --recorded-encounters
+    if mixed:
+        recorded_encounters = True
+
     if mixed:
         if not curriculum.recorded_encounters:
             print("No recorded encounters found — run the game bot first to build the pool")

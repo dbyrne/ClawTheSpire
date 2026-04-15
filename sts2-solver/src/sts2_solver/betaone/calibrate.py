@@ -37,6 +37,7 @@ def calibrate_encounter(enc: dict, monster_json: str, profiles_json: str,
     """Binary search on player HP to find ~50% MCTS win rate."""
     enemy_ids = enc["enemy_ids"]
     deck_ids = enc.get("deck", [])
+    relics = list(enc.get("relics", []))
 
     deck_cards = []
     for cid in deck_ids:
@@ -48,6 +49,9 @@ def calibrate_encounter(enc: dict, monster_json: str, profiles_json: str,
         print(f"  Skipping: no valid deck cards")
         return None
 
+    # All combats use the same relic set (from the recorded encounter)
+    relics_list = [relics] * combats
+
     lo, hi = 15, 70
     best_hp = None
     best_diff = 1.0
@@ -58,7 +62,7 @@ def calibrate_encounter(enc: dict, monster_json: str, profiles_json: str,
             encounters_json=json.dumps([enemy_ids] * combats),
             decks_json=json.dumps([deck_cards] * combats),
             player_hp=mid, player_max_hp=70, player_max_energy=3,
-            relics_json="[]", potions_json="[]",
+            relics_json=json.dumps(relics_list), potions_json="[]",
             monster_data_json=monster_json,
             enemy_profiles_json=profiles_json,
             onnx_path=onnx_path,
