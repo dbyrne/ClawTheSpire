@@ -223,15 +223,14 @@ def run_benchmark(
     monster_json = _build_monster_data_json()
     profiles_json = _load_solver_json("enemy_profiles.json")
 
-    # Find checkpoints
-    if ppo_checkpoint is None:
+    # Find checkpoints — only auto-discover if the other wasn't explicitly provided
+    if ppo_checkpoint is None and mcts_checkpoint is None:
         ppo_path = Path(__file__).resolve().parents[4] / "betaone_ppo_mixed" / "betaone_latest.pt"
         if not ppo_path.exists():
             ppo_path = _CHECKPOINTS / "betaone_latest.pt"
         ppo_checkpoint = str(ppo_path)
 
-    if mcts_checkpoint is None:
-        # Self-play checkpoint (solver-local dir)
+    if mcts_checkpoint is None and ppo_checkpoint is None:
         mcts_path = Path(__file__).resolve().parents[3] / "betaone_checkpoints" / "betaone_latest.pt"
         if not mcts_path.exists():
             mcts_path = None
@@ -247,14 +246,14 @@ def run_benchmark(
 
     # Collect checkpoints to eval: (label, path, use_mcts)
     evals: list[tuple[str, str, bool]] = []
-    if Path(ppo_checkpoint).exists():
+    if ppo_checkpoint and Path(ppo_checkpoint).exists():
         evals.append(("PPO", ppo_checkpoint, False))
         evals.append(("PPO+MCTS", ppo_checkpoint, True))
-    else:
+    elif ppo_checkpoint:
         print(f"PPO checkpoint not found: {ppo_checkpoint}")
     if mcts_checkpoint and Path(mcts_checkpoint).exists():
         evals.append(("MCTS", mcts_checkpoint, True))
-    else:
+    elif mcts_checkpoint:
         print(f"MCTS checkpoint not found: {mcts_checkpoint}")
 
     last_ckpt_path = None

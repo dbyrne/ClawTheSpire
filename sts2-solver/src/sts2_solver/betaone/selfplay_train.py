@@ -373,6 +373,18 @@ def train(
         print(f"Cold start: using existing calibrated HP (avg={avg_calibrated_hp:.1f})" if avg_calibrated_hp else
               "Cold start: no calibrated HP, using default 70")
 
+    # HP calibration for archetype packages — skip on cold start
+    if mixed and not cold_start:
+        from .packages import calibrate_packages
+        try:
+            onnx_path
+        except NameError:
+            onnx_path = export_onnx(network, onnx_dir)
+        print("Calibrating archetype packages...")
+        calibrate_packages(monster_json, profiles_json, card_vocab_json, onnx_path)
+    elif mixed:
+        print("Cold start: skipping package calibration (using default HP 50)")
+
     # Replay buffer
     replay = ReplayBuffer(max_steps=replay_capacity)
     print(f"Replay buffer: capacity {replay_capacity:,} steps")
@@ -392,6 +404,10 @@ def train(
                 encounters_path=recorded_path,
                 num_sims=50, combats=32,
             )
+        if mixed and gen % 200 == 0 and gen > start_gen:
+            from .packages import calibrate_packages
+            print(f"Gen {gen}: recalibrating archetype packages...")
+            calibrate_packages(monster_json, profiles_json, card_vocab_json, onnx_path)
 
         # Sample encounters and decks
         cfg = curriculum.config
