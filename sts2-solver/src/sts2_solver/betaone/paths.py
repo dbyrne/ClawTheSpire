@@ -1,0 +1,20 @@
+"""Centralized path constants for the BetaOne training pipeline.
+
+All path arithmetic lives here — no more parents[4] scattered across modules.
+"""
+
+from pathlib import Path
+
+# sts2-solver/ (the project root for the solver package)
+SOLVER_ROOT = Path(__file__).resolve().parents[3]
+
+# sts2_solver/ (the Python package root)
+SOLVER_PKG = SOLVER_ROOT / "src" / "sts2_solver"
+
+# STS2-Agent game data (monsters, cards, etc.)
+GAME_DATA_DIR = SOLVER_ROOT.parent / "STS2-Agent" / "mcp_server" / "data" / "eng"
+
+# Experiment infrastructure
+EXPERIMENTS_DIR = SOLVER_ROOT / "experiments"
+BENCHMARK_DIR = EXPERIMENTS_DIR / "_benchmark"
+TEMPLATES_DIR = EXPERIMENTS_DIR / "_templates"

@@ -1,0 +1,9 @@
+{"suite": "combat-4d5cf9c84d26", "mode": "policy", "timestamp": 1776259225.3542488, "checkpoint": "latest", "gen": 1803, "final_exam": 0.75, "recorded": 0.6686, "eval_score": 0.7903}
+{"suite": "combat-4d5cf9c84d26", "mode": "policy", "timestamp": 1776259317.359978, "checkpoint": "latest", "gen": 1803, "final_exam": 0.7812, "recorded": 0.6708, "eval_score": 0.7903}
+{"suite": "combat-4d5cf9c84d26", "mode": "mcts", "timestamp": 1776259317.359978, "checkpoint": "latest", "gen": 1803, "final_exam": 0.7812, "recorded": 0.7594}
+{"suite": "final-exam-5cf51dab89db", "mode": "policy", "timestamp": 1776259691.3561082, "checkpoint": "latest", "gen": 1803, "win_rate": 0.7617}
+{"suite": "final-exam-5cf51dab89db", "mode": "mcts", "timestamp": 1776259691.3571074, "checkpoint": "latest", "gen": 1803, "win_rate": 0.7773}
+{"suite": "recorded-b5a7c0f7771c", "mode": "policy", "timestamp": 1776260013.7144408, "checkpoint": "latest", "gen": 1803, "win_rate": 0.6708}
+{"suite": "recorded-b5a7c0f7771c", "mode": "mcts", "timestamp": 1776260013.7144408, "checkpoint": "latest", "gen": 1803, "win_rate": 0.7667}
+{"suite": "final-exam-5cf51dab89db", "mode": "policy", "timestamp": 1776260135.190067, "checkpoint": "latest", "gen": 1803, "win_rate": 0.7656, "wins": 196, "games": 256, "ci95_lo": 0.71, "ci95_hi": 0.8134}
+{"suite": "recorded-b5a7c0f7771c", "mode": "policy", "timestamp": 1776260136.0589821, "checkpoint": "latest", "gen": 1803, "win_rate": 0.6679, "wins": 919, "games": 1376, "ci95_lo": 0.6426, "ci95_hi": 0.6923}

@@ -1,0 +1,6 @@
+suite_id: final-exam-5cf51dab89db
+name: final-exam
+type: final-exam
+seed: 42
+combats: 256
+encounter_pool_hash: 2deb6e19bf4d

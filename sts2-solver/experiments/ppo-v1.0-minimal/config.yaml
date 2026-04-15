@@ -1,0 +1,39 @@
+name: ppo-v1.0-minimal
+method: ppo
+description: 'PPO v1.0: minimal MLP, 49K params. 2-layer trunk(105->128->128). First
+  working version.'
+created: '2026-04-12T17:21:00+00:00'
+parent: null
+parent_checkpoint: null
+architecture:
+  arch_version: 1
+  base_state_dim: 105
+  hidden_dim: 128
+  action_hidden: 64
+  hand_proj_dim: 0
+  card_embed_dim: 0
+  card_stats_dim: 0
+  relic_dim: 0
+  action_dim: 35
+  max_hand: 10
+  max_actions: 30
+  total_params: 49107
+  state_dim: 155
+  trunk_input: 105
+  trunk_layers: 2
+  num_cards: 0
+training:
+  generations: 5000
+  combats_per_gen: 256
+  lr: 0.0003
+  ppo:
+    entropy_coef: 0.03
+    clip_ratio: 0.2
+data:
+  mode: curriculum
+curriculum:
+  start_tier: 0
+  lock_tier: null
+  skip_to_final: false
+checkpoints:
+  save_every: 100

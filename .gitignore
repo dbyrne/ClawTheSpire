@@ -25,5 +25,12 @@ betaone_checkpoints/
 betaone_checkpoints_*/
 betaone_checkpoint_*.pt
 betaone_train.log
+betaone_ppo_*/
+betaone_v2.*/
 *.onnx
 *.pt
+
+# Experiments: track configs and templates, ignore data
+!sts2-solver/experiments/_benchmark/**
+!sts2-solver/experiments/_templates/**
+!sts2-solver/experiments/*/config.yaml

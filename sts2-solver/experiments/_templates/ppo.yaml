@@ -1,0 +1,32 @@
+name: ppo
+method: ppo
+description: "PPO training"
+
+training:
+  generations: 2000
+  combats_per_gen: 256
+  lr: 3e-4
+  ppo:
+    gamma: 0.99
+    lam: 0.95
+    temperature_start: 1.0
+    temperature_end: 0.5
+    entropy_coef: 0.03
+    clip_ratio: 0.2
+    value_coef: 0.5
+    max_grad_norm: 0.5
+    ppo_epochs: 4
+    ppo_batch_size: 256
+
+data:
+  mode: mixed
+  recorded_frac: 0.5
+
+curriculum:
+  start_tier: 0
+  skip_to_final: false
+  lock_tier: null
+
+checkpoints:
+  save_every: 50
+  keep_best: true

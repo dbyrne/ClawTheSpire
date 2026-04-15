@@ -28,56 +28,38 @@ import torch
 
 import sts2_engine
 
-from .network import BetaOneNetwork, export_onnx
+from .data_utils import (
+    build_monster_data_json,
+    load_solver_json,
+    build_card_vocab,
+)
+from .network import BetaOneNetwork, export_onnx, load_checkpoint
+from .paths import SOLVER_ROOT, SOLVER_PKG, BENCHMARK_DIR
 from .curriculum import CombatCurriculum, TIER_CONFIGS
 from .deck_gen import build_random_deck_json, _make_starter, lookup_card
 
 # ---------------------------------------------------------------------------
-# Paths
+# Paths — legacy defaults, overridable via CLI args
 # ---------------------------------------------------------------------------
 
-_DATA_DIR = Path(__file__).resolve().parents[4] / "STS2-Agent" / "mcp_server" / "data" / "eng"
-_SOLVER_DIR = Path(__file__).resolve().parents[1]
-_CHECKPOINTS = Path(__file__).resolve().parents[4] / "betaone_checkpoints"
+_CHECKPOINTS = SOLVER_ROOT.parent / "betaone_checkpoints"
 _BENCHMARK_FILE = _CHECKPOINTS / "benchmark_recorded.jsonl"
 
 
-def _load_json(filename: str) -> str:
-    path = _DATA_DIR / filename
-    return path.read_text(encoding="utf-8") if path.exists() else "[]"
-
-
-def _load_solver_json(filename: str) -> str:
-    path = _SOLVER_DIR / filename
-    return path.read_text(encoding="utf-8") if path.exists() else "{}"
-
-
-def _build_monster_data_json() -> str:
-    monsters_raw = json.loads(_load_json("monsters.json"))
-    monsters = {}
-    for m in monsters_raw:
-        mid = m.get("id", "")
-        if mid:
-            monsters[mid] = {
-                "name": m.get("name", mid),
-                "min_hp": m.get("min_hp") or 20,
-                "max_hp": m.get("max_hp") or m.get("min_hp") or 20,
-            }
-    return json.dumps(monsters)
-
-
 def _build_card_vocab() -> tuple[dict, str]:
-    vocab_path = _CHECKPOINTS / "card_vocab.json"
-    with open(vocab_path, encoding="utf-8") as f:
-        vocab = json.load(f)
-    return vocab, json.dumps(vocab)
+    """Load card vocab — tries canonical benchmark dir first, then legacy."""
+    for candidate in [BENCHMARK_DIR / "card_vocab.json", _CHECKPOINTS / "card_vocab.json"]:
+        if candidate.exists():
+            with open(candidate, encoding="utf-8") as f:
+                vocab = json.load(f)
+            return vocab, json.dumps(vocab)
+    raise FileNotFoundError("card_vocab.json not found in benchmark or checkpoints dir")
 
 
 def _load_checkpoint(path: str) -> tuple[BetaOneNetwork, dict]:
     card_vocab, _ = _build_card_vocab()
     net = BetaOneNetwork(num_cards=len(card_vocab))
-    ckpt = torch.load(path, map_location="cpu", weights_only=False)
-    net.load_state_dict(ckpt["model_state_dict"])
+    ckpt = load_checkpoint(path, network=net, strict=False)
     net.eval()
     return net, ckpt
 
@@ -89,7 +71,7 @@ def _load_checkpoint(path: str) -> tuple[BetaOneNetwork, dict]:
 def _sample_final_exam(combats: int, seed: int = 42) -> tuple[list, list]:
     """Sample encounters and decks for final exam."""
     random.seed(seed)
-    cur = CombatCurriculum(encounter_pool_path=str(_SOLVER_DIR / "encounter_pool.json"))
+    cur = CombatCurriculum(encounter_pool_path=str(SOLVER_PKG / "encounter_pool.json"))
     cur.tier = cur.max_tier
     encounters = cur.sample_encounters(combats)
     decks = [json.loads(cur.sample_deck_json(combat_idx=i)) for i in range(combats)]
@@ -209,7 +191,121 @@ def eval_recorded(onnx_path: str, card_vocab_json: str,
 
 
 # ---------------------------------------------------------------------------
-# Main
+# Clean benchmark API (experiment-aware)
+# ---------------------------------------------------------------------------
+
+def benchmark_checkpoint(
+    checkpoint_path: str,
+    suite_type: str = "final-exam",
+    mode: str = "both",
+    combats: int = 256,
+    recorded_combats: int = 32,
+    num_sims: int = 400,
+) -> list[dict]:
+    """Benchmark a single checkpoint against a specific suite.
+
+    Args:
+        checkpoint_path: Path to .pt checkpoint.
+        suite_type: "final-exam" (curriculum tier 10) or "recorded" (frozen death encounters).
+        mode: "policy" (network only), "mcts" (with search), or "both".
+        combats: Number of final exam combats (for final-exam suite).
+        recorded_combats: Combats per recorded encounter (for recorded suite).
+        num_sims: MCTS simulations (only for mcts mode).
+
+    Returns:
+        List of result dicts, one per mode run. Each has:
+        {mode, win_rate, elapsed, gen}
+    """
+    card_vocab, card_vocab_json = _build_card_vocab()
+    monster_json = build_monster_data_json()
+    profiles_json = load_solver_json("enemy_profiles.json")
+
+    # Load and export
+    net, ckpt = _load_checkpoint(checkpoint_path)
+    gen = ckpt.get("gen", "?")
+    onnx_path = export_onnx(net, str(_CHECKPOINTS / "eval_onnx"))
+
+    modes = []
+    if mode in ("policy", "both"):
+        modes.append("policy")
+    if mode in ("mcts", "both"):
+        modes.append("mcts")
+
+    results = []
+    for m in modes:
+        use_mcts = m == "mcts"
+        t0 = time.time()
+
+        if suite_type == "final-exam":
+            encounters, decks = _sample_final_exam(combats)
+            seeds = list(range(combats))
+            if use_mcts:
+                wr = eval_mcts(onnx_path, card_vocab_json, monster_json, profiles_json,
+                               encounters, decks, 70, seeds, num_sims=num_sims)
+            else:
+                wr = eval_policy(onnx_path, card_vocab_json, monster_json, profiles_json,
+                                 encounters, decks, 70, seeds)
+            n_games = combats
+            wins = int(wr * n_games + 0.5)
+
+        elif suite_type == "recorded":
+            rec_records = _load_recorded_benchmark()
+            wins, n_games = 0, 0
+            for i, rec in enumerate(rec_records):
+                deck = []
+                for cid in rec.get("deck", []):
+                    try:
+                        deck.append(lookup_card(cid.rstrip("+")))
+                    except Exception:
+                        pass
+                if not deck:
+                    continue
+                hp = rec.get("calibrated_hp", 70)
+                enc = [rec["enemy_ids"]] * recorded_combats
+                dks = [deck] * recorded_combats
+                seeds = [42 * 1000 + i * 100 + j for j in range(recorded_combats)]
+                if use_mcts:
+                    r = eval_mcts(onnx_path, card_vocab_json, monster_json, profiles_json,
+                                  enc, dks, hp, seeds, num_sims=num_sims)
+                else:
+                    r = eval_policy(onnx_path, card_vocab_json, monster_json, profiles_json,
+                                    enc, dks, hp, seeds)
+                wins += int(r * recorded_combats + 0.5)
+                n_games += recorded_combats
+            wr = wins / max(n_games, 1)
+        else:
+            raise ValueError(f"Unknown suite_type: {suite_type}")
+
+        # 95% confidence interval (Wilson score interval)
+        import math
+        z = 1.96
+        n = n_games
+        p_hat = wins / max(n, 1)
+        denom = 1 + z * z / n
+        center = (p_hat + z * z / (2 * n)) / denom
+        margin = z * math.sqrt((p_hat * (1 - p_hat) + z * z / (4 * n)) / n) / denom
+        ci_lo = max(0, center - margin)
+        ci_hi = min(1, center + margin)
+
+        elapsed = time.time() - t0
+        print(f"  {m:<10s} win_rate={wr:5.1%}  95%CI=[{ci_lo:.1%},{ci_hi:.1%}]  n={n_games}  ({elapsed:.0f}s)")
+
+        results.append({
+            "mode": m,
+            "gen": gen,
+            "win_rate": round(wr, 4),
+            "wins": wins,
+            "games": n_games,
+            "ci95_lo": round(ci_lo, 4),
+            "ci95_hi": round(ci_hi, 4),
+            "elapsed": round(elapsed, 1),
+        })
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Legacy benchmark API (kept for backwards compatibility)
 # ---------------------------------------------------------------------------
 
 def run_benchmark(
@@ -220,8 +316,8 @@ def run_benchmark(
 ):
     """Run 3x2 benchmark table."""
     card_vocab, card_vocab_json = _build_card_vocab()
-    monster_json = _build_monster_data_json()
-    profiles_json = _load_solver_json("enemy_profiles.json")
+    monster_json = build_monster_data_json()
+    profiles_json = load_solver_json("enemy_profiles.json")
 
     # Find checkpoints — only auto-discover if the other wasn't explicitly provided
     if ppo_checkpoint is None and mcts_checkpoint is None:

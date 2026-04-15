@@ -33,6 +33,46 @@ ACTION_HIDDEN = 64
 HAND_PROJ_DIM = 32
 CARD_EMBED_DIM = 16
 
+# Architecture versioning — bump ARCH_VERSION on any change that breaks
+# checkpoint compatibility (any dimension constant above).
+ARCH_VERSION = 2
+
+ARCH_META = {
+    "arch_version": ARCH_VERSION,
+    "base_state_dim": BASE_STATE_DIM,
+    "hidden_dim": HIDDEN_DIM,
+    "action_hidden": ACTION_HIDDEN,
+    "hand_proj_dim": HAND_PROJ_DIM,
+    "card_embed_dim": CARD_EMBED_DIM,
+    "card_stats_dim": CARD_STATS_DIM,
+    "relic_dim": RELIC_DIM,
+    "action_dim": ACTION_DIM,
+    "max_hand": MAX_HAND,
+    "max_actions": MAX_ACTIONS,
+}
+
+
+class ArchitectureMismatchError(RuntimeError):
+    """Raised when a checkpoint's architecture doesn't match current code."""
+    pass
+
+
+def network_stats(num_cards: int = 120) -> dict:
+    """Return architecture stats: param count, layer shapes, input/output dims."""
+    net = BetaOneNetwork(num_cards=num_cards)
+    layers = {}
+    for name, param in net.named_parameters():
+        layers[name] = list(param.shape)
+    return {
+        "total_params": net.param_count(),
+        "num_cards": num_cards,
+        "state_dim": STATE_DIM,
+        "trunk_input": BASE_STATE_DIM + HAND_PROJ_DIM,
+        "trunk_hidden": HIDDEN_DIM,
+        "policy_hidden": ACTION_HIDDEN,
+        "layers": layers,
+    }
+
 
 class BetaOneNetwork(nn.Module):
     def __init__(self, num_cards: int = 120):
@@ -159,3 +199,74 @@ def export_onnx(network: BetaOneNetwork, output_dir: str) -> str:
         opset_version=17,
     )
     return path
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint save / load with architecture metadata
+# ---------------------------------------------------------------------------
+
+def save_checkpoint(
+    network: BetaOneNetwork,
+    optimizer: torch.optim.Optimizer,
+    path: str,
+    *,
+    gen: int,
+    win_rate: float,
+    **extra,
+) -> None:
+    """Save a checkpoint with embedded architecture metadata."""
+    data = {
+        "arch_meta": ARCH_META,
+        "model_state_dict": network.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "gen": gen,
+        "win_rate": win_rate,
+    }
+    data.update(extra)
+    torch.save(data, path)
+
+
+def load_checkpoint(
+    path: str,
+    network: BetaOneNetwork | None = None,
+    optimizer: torch.optim.Optimizer | None = None,
+    strict: bool = True,
+) -> dict:
+    """Load a checkpoint, validating architecture compatibility.
+
+    Args:
+        path: Path to .pt checkpoint file.
+        network: If provided, loads model weights into it.
+        optimizer: If provided, loads optimizer state into it.
+        strict: If True and checkpoint has arch_meta, raises
+            ArchitectureMismatchError on dimension mismatches.
+
+    Returns:
+        The full checkpoint dict.
+    """
+    ckpt = torch.load(path, map_location="cpu", weights_only=False)
+
+    saved_meta = ckpt.get("arch_meta")
+    if saved_meta and strict:
+        mismatches = []
+        for key in ARCH_META:
+            saved_val = saved_meta.get(key)
+            current_val = ARCH_META[key]
+            if saved_val is not None and saved_val != current_val:
+                mismatches.append(f"  {key}: checkpoint={saved_val}, current={current_val}")
+        if mismatches:
+            detail = "\n".join(mismatches)
+            raise ArchitectureMismatchError(
+                f"Checkpoint {os.path.basename(path)} architecture mismatch:\n{detail}"
+            )
+
+    if network is not None:
+        network.load_state_dict(ckpt["model_state_dict"])
+
+    if optimizer is not None:
+        try:
+            optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        except (ValueError, KeyError):
+            pass  # optimizer reset is fine
+
+    return ckpt

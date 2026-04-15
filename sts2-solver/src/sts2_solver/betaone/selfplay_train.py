@@ -31,6 +31,14 @@ import sts2_engine
 
 from .calibrate import calibrate_all
 from .curriculum import CombatCurriculum, TIER_CONFIGS
+from .paths import SOLVER_PKG
+from .data_utils import (
+    load_game_json,
+    load_solver_json,
+    build_monster_data_json,
+    build_card_vocab,
+    find_latest_checkpoint,
+)
 from .deck_gen import build_random_deck_json, _make_starter
 from .network import (
     ACTION_DIM,
@@ -39,75 +47,10 @@ from .network import (
     STATE_DIM,
     BetaOneNetwork,
     export_onnx,
+    save_checkpoint,
+    load_checkpoint,
+    ArchitectureMismatchError,
 )
-
-# ---------------------------------------------------------------------------
-# Data loading (shared with train.py)
-# ---------------------------------------------------------------------------
-
-_DATA_DIR = Path(__file__).resolve().parents[4] / "STS2-Agent" / "mcp_server" / "data" / "eng"
-_SOLVER_DIR = Path(__file__).resolve().parents[1]
-
-
-def _load_json(filename: str) -> str:
-    path = _DATA_DIR / filename
-    if not path.exists():
-        return "[]"
-    return path.read_text(encoding="utf-8")
-
-
-def _load_solver_json(filename: str) -> str:
-    path = _SOLVER_DIR / filename
-    if not path.exists():
-        return "{}"
-    return path.read_text(encoding="utf-8")
-
-
-def _build_monster_data_json() -> str:
-    monsters_raw = json.loads(_load_json("monsters.json"))
-    monsters = {}
-    for m in monsters_raw:
-        mid = m.get("id", "")
-        if mid:
-            monsters[mid] = {
-                "name": m.get("name", mid),
-                "min_hp": m.get("min_hp") or 20,
-                "max_hp": m.get("max_hp") or m.get("min_hp") or 20,
-            }
-    return json.dumps(monsters)
-
-
-def _build_card_vocab(output_dir: str) -> tuple[dict[str, int], str]:
-    vocab_path = os.path.join(output_dir, "card_vocab.json")
-    if os.path.exists(vocab_path):
-        with open(vocab_path, encoding="utf-8") as f:
-            vocab = json.load(f)
-        return vocab, json.dumps(vocab)
-    cards_raw = json.loads(_load_json("cards.json"))
-    vocab: dict[str, int] = {"<PAD>": 0, "<UNK>": 1}
-    for c in cards_raw:
-        base_id = c["id"].rstrip("+")
-        if base_id not in vocab:
-            vocab[base_id] = len(vocab)
-    with open(vocab_path, "w", encoding="utf-8") as f:
-        json.dump(vocab, f, indent=2)
-    print(f"Card vocab: {len(vocab)} entries")
-    return vocab, json.dumps(vocab)
-
-
-def _find_latest_checkpoint(output_dir: str) -> str | None:
-    latest = os.path.join(output_dir, "betaone_latest.pt")
-    if os.path.exists(latest):
-        return latest
-    import glob
-    pattern = os.path.join(output_dir, "betaone_gen*.pt")
-    ckpts = glob.glob(pattern)
-    if not ckpts:
-        return None
-    def gen_num(p: str) -> int:
-        base = os.path.basename(p)
-        return int(base.replace("betaone_gen", "").replace(".pt", ""))
-    return max(ckpts, key=gen_num)
 
 
 # ---------------------------------------------------------------------------
@@ -253,12 +196,12 @@ def train(
     os.makedirs(onnx_dir, exist_ok=True)
 
     # Load game data
-    monster_json = _build_monster_data_json()
-    profiles_json = _load_solver_json("enemy_profiles.json")
-    enc_pool_path = str(_SOLVER_DIR / "encounter_pool.json")
+    monster_json = build_monster_data_json()
+    profiles_json = load_solver_json("enemy_profiles.json")
+    enc_pool_path = str(SOLVER_PKG / "encounter_pool.json")
 
     # Card vocabulary
-    card_vocab, card_vocab_json = _build_card_vocab(output_dir)
+    card_vocab, card_vocab_json = build_card_vocab(output_dir)
     num_cards = len(card_vocab)
 
     # Network + optimizer
@@ -270,8 +213,7 @@ def train(
     # recorded_encounters.jsonl lives alongside checkpoints; resolve relative
     # to the project root (4 dirs up from this file) so it works regardless
     # of the working directory.
-    project_root = Path(__file__).resolve().parents[4]
-    recorded_path = str(project_root / output_dir / "recorded_encounters.jsonl")
+    recorded_path = str(Path(output_dir) / "recorded_encounters.jsonl")
     curriculum = CombatCurriculum(
         encounter_pool_path=enc_pool_path,
         recorded_encounters_path=recorded_path,
@@ -308,7 +250,7 @@ def train(
 
     # Resume from checkpoint (unless cold start)
     if not cold_start:
-        latest_ckpt = _find_latest_checkpoint(output_dir)
+        latest_ckpt = find_latest_checkpoint(output_dir)
         if latest_ckpt:
             ckpt = torch.load(latest_ckpt, weights_only=False)
             try:
