@@ -423,6 +423,11 @@ def cmd_suites(args):
         print(f"  {sid:<28s} {stype:<12s} {details}")
 
 
+def cmd_dashboard(args):
+    from .tui import main as tui_main
+    tui_main()
+
+
 def cmd_archive(args):
     exp = Experiment(args.name)
     if not exp.exists:
@@ -523,6 +528,10 @@ def main():
     p.add_argument("--refresh", action="store_true",
                     help="Compute and register current suites")
     p.set_defaults(func=cmd_suites)
+
+    # dashboard
+    p = sub.add_parser("dashboard", help="Live experiment dashboard TUI")
+    p.set_defaults(func=cmd_dashboard)
 
     # archive
     p = sub.add_parser("archive", help="Archive an experiment")
