@@ -137,6 +137,7 @@ class ExperimentConfig:
                 "cold_start": ck.get("cold_start", False),
                 "training_set_id": d.get("training_set"),
                 "encounter_set_id": d.get("encounter_set"),
+                "turn_boundary_eval": mcts.get("turn_boundary_eval", False),
             }
         else:  # ppo
             ppo = t.get("ppo", {})

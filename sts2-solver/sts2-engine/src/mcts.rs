@@ -119,11 +119,15 @@ pub struct MCTS<'a> {
     card_db: &'a CardDB,
     inference: &'a dyn Inference,
     pub add_noise: bool,
+    /// When true, leaf evaluation plays out the rest of the current turn
+    /// using greedy policy before calling V(s) at the next turn boundary.
+    /// This gives the value function clean, resolved states to evaluate.
+    pub turn_boundary_eval: bool,
 }
 
 impl<'a> MCTS<'a> {
     pub fn new(card_db: &'a CardDB, inference: &'a dyn Inference) -> Self {
-        MCTS { card_db, inference, add_noise: false }
+        MCTS { card_db, inference, add_noise: false, turn_boundary_eval: false }
     }
 
     /// Run MCTS search from the given state. Returns action, policy, and root value.
@@ -296,26 +300,36 @@ impl<'a> MCTS<'a> {
             arena.nodes[node_idx].enemy_ais = new_ais;
         }
 
-        let state = arena.nodes[node_idx].state.as_ref().unwrap();
-
         // Check terminal (pre-resolution — combat might already be over)
-        if let Some(outcome) = is_combat_over(state) {
-            arena.nodes[node_idx].is_terminal = true;
-            arena.nodes[node_idx].is_expanded = true;
-            let value = if outcome == "win" { 1.0 } else { -1.0 };
-            arena.nodes[node_idx].terminal_value = value;
-            return value;
+        {
+            let state = arena.nodes[node_idx].state.as_ref().unwrap();
+            if let Some(outcome) = is_combat_over(state) {
+                let value = terminal_value(outcome, state);
+                arena.nodes[node_idx].is_terminal = true;
+                arena.nodes[node_idx].is_expanded = true;
+                arena.nodes[node_idx].terminal_value = value;
+                return value;
+            }
         }
 
-        // Leaf value: NN evaluates current state directly.
-        // All nodes are evaluated pre-resolution (mid-turn or end-of-turn
-        // before enemy attacks), giving the value head a consistent phase.
-        let value = self.estimate_leaf_value(state);
+        // Leaf value estimation.
+        // turn_boundary_eval: play out rest of turn with greedy policy,
+        //   resolve end-of-turn, evaluate V(next_turn_start).
+        // default: evaluate V(state) directly (pre-resolution).
+        let value = if self.turn_boundary_eval {
+            let state = arena.nodes[node_idx].state.as_ref().unwrap();
+            let ais = arena.nodes[node_idx].enemy_ais.clone();
+            self.estimate_leaf_value_turn_boundary(state, &ais, rng)
+        } else {
+            let state = arena.nodes[node_idx].state.as_ref().unwrap();
+            self.estimate_leaf_value(state)
+        };
 
         // For EndTurn nodes: resolve end-of-turn effects NOW so children
         // can be next-turn actions. The leaf value above was already captured
         // from the pre-resolution state.
-        if state.turn_ended {
+        let turn_ended = arena.nodes[node_idx].state.as_ref().unwrap().turn_ended;
+        if turn_ended {
             // Take ownership of state and AIs to avoid borrow conflicts
             let mut resolved = arena.nodes[node_idx].state.take().unwrap();
             let mut ais = arena.nodes[node_idx].enemy_ais.take();
@@ -327,13 +341,13 @@ impl<'a> MCTS<'a> {
             // Check terminal after resolution (player died to enemy attack,
             // or enemy died to poison/thorns)
             if let Some(outcome) = is_combat_over(&resolved) {
+                let tv = terminal_value(outcome, &resolved);
                 arena.nodes[node_idx].state = Some(resolved);
                 arena.nodes[node_idx].enemy_ais = ais;
                 arena.nodes[node_idx].is_terminal = true;
                 arena.nodes[node_idx].is_expanded = true;
-                let terminal = if outcome == "win" { 1.0 } else { -1.0 };
-                arena.nodes[node_idx].terminal_value = terminal;
-                return terminal;
+                arena.nodes[node_idx].terminal_value = tv;
+                return tv;
             }
 
             combat::start_turn(&mut resolved, rng);
@@ -360,13 +374,13 @@ impl<'a> MCTS<'a> {
             combat::tick_enemy_powers(&mut resolved);
 
             if let Some(outcome) = is_combat_over(&resolved) {
+                let tv = terminal_value(outcome, &resolved);
                 arena.nodes[node_idx].state = Some(resolved);
                 arena.nodes[node_idx].enemy_ais = ais;
                 arena.nodes[node_idx].is_terminal = true;
                 arena.nodes[node_idx].is_expanded = true;
-                let terminal = if outcome == "win" { 1.0 } else { -1.0 };
-                arena.nodes[node_idx].terminal_value = terminal;
-                return terminal;
+                arena.nodes[node_idx].terminal_value = tv;
+                return tv;
             }
 
             combat::start_turn(&mut resolved, rng);
@@ -427,9 +441,86 @@ impl<'a> MCTS<'a> {
     // --- Leaf value estimation ---
     fn estimate_leaf_value(&self, state: &CombatState) -> f32 {
         if let Some(outcome) = is_combat_over(state) {
-            return if outcome == "win" { 1.0 } else { -1.0 };
+            return terminal_value(outcome, state);
         }
         let v = self.inference.value_only(state);
+        if v.is_finite() { v } else { 0.0 }
+    }
+
+    /// Play out the rest of the current turn using greedy policy, resolve
+    /// end-of-turn effects, then evaluate V(next_turn_start).
+    ///
+    /// This gives the value function a clean turn-boundary state where all
+    /// within-turn effects (damage, block, poison ticks, draw) are resolved.
+    fn estimate_leaf_value_turn_boundary(
+        &self,
+        state: &CombatState,
+        enemy_ais: &Option<Vec<crate::enemy::EnemyAI>>,
+        rng: &mut impl Rng,
+    ) -> f32 {
+        if let Some(outcome) = is_combat_over(state) {
+            return terminal_value(outcome, state);
+        }
+
+        // If turn already ended (EndTurn node), skip the playout — we just
+        // need to resolve and evaluate at the next turn start.
+        let mut sim = state.clone();
+
+        if !sim.turn_ended {
+            // Play out remaining card plays using greedy policy
+            for _ in 0..15 {
+                if is_combat_over(&sim).is_some() {
+                    break;
+                }
+
+                let actions = enumerate_actions(&sim);
+                if actions.is_empty() {
+                    break;
+                }
+
+                // Get greedy action from policy network
+                let (logits, _) = self.inference.evaluate(&sim, &actions);
+                let chosen = logits.iter().enumerate()
+                    .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                    .map(|(i, _)| i)
+                    .unwrap_or(0);
+
+                match &actions[chosen] {
+                    Action::EndTurn => break,
+                    Action::PlayCard { card_idx, target_idx } => {
+                        if combat::can_play_card(&sim, *card_idx) {
+                            combat::play_card(&mut sim, *card_idx, *target_idx, self.card_db, rng);
+                        }
+                    }
+                    Action::UsePotion { potion_idx } => {
+                        combat::use_potion(&mut sim, *potion_idx);
+                    }
+                    Action::ChooseCard { choice_idx } => {
+                        crate::effects::execute_choice(&mut sim, *choice_idx, rng);
+                    }
+                }
+            }
+        }
+
+        // Resolve end-of-turn: discard, enemy attacks, power ticks
+        sim.turn_ended = false;
+        combat::end_turn(&mut sim, self.card_db, rng);
+        combat::resolve_enemy_intents(&mut sim);
+        combat::tick_enemy_powers(&mut sim);
+
+        if let Some(outcome) = is_combat_over(&sim) {
+            return terminal_value(outcome, &sim);
+        }
+
+        // Start next turn and set enemy intents so the state is complete
+        combat::start_turn(&mut sim, rng);
+        if let Some(ais) = enemy_ais {
+            let mut ai_clone = ais.clone();
+            crate::enemy::sync_enemy_ais(&sim, &mut ai_clone, &std::collections::HashMap::new());
+            crate::enemy::set_enemy_intents(&mut sim, &mut ai_clone, rng);
+        }
+
+        let v = self.inference.value_only(&sim);
         if v.is_finite() { v } else { 0.0 }
     }
 
@@ -460,6 +551,20 @@ impl<'a> MCTS<'a> {
                 crate::effects::execute_choice(state, *choice_idx, rng);
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Terminal value
+// ---------------------------------------------------------------------------
+
+/// HP-scaled terminal value: wins are worth more when finishing with high HP.
+fn terminal_value(outcome: &str, state: &CombatState) -> f32 {
+    if outcome == "win" {
+        let hp_frac = state.player.hp.max(0) as f32 / state.player.max_hp.max(1) as f32;
+        1.0 + 0.3 * hp_frac
+    } else {
+        -1.0
     }
 }
 

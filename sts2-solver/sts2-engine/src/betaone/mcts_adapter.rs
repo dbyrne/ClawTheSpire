@@ -43,9 +43,10 @@ impl<'a> Inference for BetaOneMCTSAdapter<'a> {
         let (_, value) = self.inference.evaluate(
             &state_enc, &act_feat, &act_mask, &hand_ids, &action_ids, 0,
         );
-        // Clamp to [-1, 1]: the value head has no tanh and can overshoot,
+        // Clamp to valid range: the value head has no tanh and can overshoot,
         // which flattens MCTS value differences and causes skipped turns.
-        value.clamp(-1.0, 1.0)
+        // Upper bound is 1.3 (max HP-scaled terminal = 1.0 + 0.3).
+        value.clamp(-1.0, 1.3)
     }
 
     fn run_value(&self, state: &CombatState) -> f32 {

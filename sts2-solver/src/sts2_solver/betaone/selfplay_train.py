@@ -190,6 +190,7 @@ def train(
     cold_start: bool = False,
     training_set_id: str | None = None,
     encounter_set_id: str | None = None,
+    turn_boundary_eval: bool = False,
 ):
     os.makedirs(output_dir, exist_ok=True)
     onnx_dir = os.path.join(output_dir, "onnx")
@@ -331,6 +332,7 @@ def train(
                 seeds=b_seeds,
                 gen_id=gen,
                 add_noise=True,
+                turn_boundary_eval=turn_boundary_eval,
             )
 
             n_steps = rollout["total_steps"]
@@ -356,12 +358,16 @@ def train(
             print(f"Gen {gen}: no steps, skipping")
             continue
 
-        # Build value targets from outcomes
+        # Build value targets from outcomes (HP-scaled: win → 1.0 + 0.3*hp_frac, lose → -1.0)
         combat_indices = np.array(gen_combat_indices, dtype=np.int64)
         gen_values = np.zeros(T, dtype=np.float32)
         for ci, outcome in enumerate(all_outcomes):
             mask = combat_indices == ci
-            gen_values[mask] = 1.0 if outcome == "win" else -1.0
+            if outcome == "win":
+                hp_frac = max(all_final_hps[ci], 0) / 70.0  # max_hp=70
+                gen_values[mask] = 1.0 + 0.3 * hp_frac
+            else:
+                gen_values[mask] = -1.0
 
         # Add to replay buffer
         replay.add_generation(
