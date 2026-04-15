@@ -453,8 +453,13 @@ def cmd_generate(args):
         print("Must specify --checkpoint (experiment name or path)")
         sys.exit(1)
 
+    include_recorded = not args.packages_only
+    include_packages = not args.recorded_only
     print(f"Generating encounter set from: {ckpt_path}")
-    print(f"  Sims: {args.sims}, Combats/HP: {args.combats}, Decks/encounter: {args.decks_per}")
+    print(f"  Recorded: {'yes' if include_recorded else 'no'}")
+    print(f"  Packages: {'yes' if include_packages else 'no'}" +
+          (f" ({args.decks_per} decks/encounter)" if include_packages else ""))
+    print(f"  Sims: {args.sims}, Combats/HP: {args.combats}")
 
     # Export ONNX
     ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
@@ -471,15 +476,31 @@ def cmd_generate(args):
     monster_json = build_monster_data_json()
     profiles_json = load_solver_json("enemy_profiles.json")
 
-    recorded_path = str(BENCHMARK_DIR / "benchmark_recorded.jsonl")
+    recorded_path = str(BENCHMARK_DIR / "benchmark_recorded.jsonl") if include_recorded else None
 
-    encounters = generate_combined(
-        monster_json, profiles_json, card_vocab_json, onnx_path,
-        recorded_path=recorded_path,
-        decks_per=args.decks_per,
-        num_sims=args.sims,
-        combats=args.combats,
-    )
+    from .generate_encounters import generate_from_packages, generate_from_recorded
+    encounters = []
+
+    if include_recorded and recorded_path:
+        import os
+        if os.path.exists(recorded_path):
+            import json
+            with open(recorded_path, encoding="utf-8") as f:
+                records = [json.loads(l) for l in f if l.strip()]
+            print(f"\nCalibrating {len(records)} recorded encounters...")
+            encounters.extend(generate_from_recorded(
+                records, monster_json, profiles_json, card_vocab_json, onnx_path,
+                num_sims=args.sims, combats=args.combats,
+            ))
+
+    if include_packages:
+        print(f"\nGenerating package encounters ({args.decks_per} decks/encounter)...")
+        encounters.extend(generate_from_packages(
+            monster_json, profiles_json, card_vocab_json, onnx_path,
+            decks_per=args.decks_per,
+            num_sims=args.sims,
+            combats=args.combats,
+        ))
 
     es_id = save_encounter_set(
         name=args.name,
@@ -639,10 +660,14 @@ def main():
     p.set_defaults(func=cmd_calibrate)
 
     # generate
-    p = sub.add_parser("generate", help="Generate an encounter set from packages + recorded")
+    p = sub.add_parser("generate", help="Generate an encounter set")
     p.add_argument("name", help="Friendly name for the encounter set")
     p.add_argument("--checkpoint", required=True,
                     help="Experiment name or checkpoint path to calibrate against")
+    p.add_argument("--packages-only", action="store_true",
+                    help="Only generate from archetype packages (no recorded)")
+    p.add_argument("--recorded-only", action="store_true",
+                    help="Only generate from recorded death encounters (no packages)")
     p.add_argument("--decks-per", type=int, default=3,
                     help="Random deck variants per package encounter (default: 3)")
     p.add_argument("--sims", type=int, default=400,
