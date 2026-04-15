@@ -1,0 +1,13 @@
+encounter_set_id: es-9aa58d8105be
+name: base-es-v1
+encounter_count: 189
+avg_hp: 32.1
+source:
+  type: combined
+  calibrated_with:
+    checkpoint: ppo-v2-relics
+    gen: 1803
+    method: mcts
+    sims: 400
+    combats_per_hp: 64
+    decks_per_encounter: 3
