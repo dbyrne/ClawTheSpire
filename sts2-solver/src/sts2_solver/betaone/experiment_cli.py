@@ -113,53 +113,47 @@ def cmd_benchmark(args):
         sys.exit(1)
 
     from .benchmark import benchmark_checkpoint
-    from .suite import get_current_final_exam_suite, get_current_recorded_suite
+    from .suite import get_encounter_set_suite, get_current_final_exam_suite, get_current_recorded_suite
 
     ckpt_path = str(exp.dir / "betaone_latest.pt")
     if args.checkpoint and args.checkpoint != "latest":
         ckpt_path = str(exp.dir / f"betaone_{args.checkpoint}.pt")
 
-    # Determine which suites to run
-    suite_types = []
+    # Build list of (encounter_set_id_or_none, suite_type_for_legacy, label)
+    benchmarks_to_run = []
     if args.suite in ("final-exam", "all"):
-        suite_types.append("final-exam")
+        benchmarks_to_run.append((None, "final-exam", "final-exam"))
     if args.suite in ("recorded", "all"):
-        suite_types.append("recorded")
-    if args.suite in ("training-set", "encounter-set"):
-        suite_types.append("encounter-set")
+        benchmarks_to_run.append((None, "recorded", "recorded"))
+    if args.suite in ("encounter-set", "training-set", "all"):
+        es_name = (args.encounter_set or args.training_set
+                   or exp.config.data.get("encounter_set")
+                   or exp.config.data.get("training_set"))
+        if es_name:
+            benchmarks_to_run.append((es_name, None, es_name))
+        elif args.suite not in ("all",):
+            print("  No encounter set specified (use --encounter-set or set in config)")
 
-    for suite_type in suite_types:
-        if suite_type == "final-exam":
+    for es_id, legacy_type, label in benchmarks_to_run:
+        # Resolve suite ID for result tagging
+        if es_id:
+            _, sid = get_encounter_set_suite(es_id)
+        elif legacy_type == "final-exam":
             _, sid = get_current_final_exam_suite()
-        elif suite_type == "recorded":
+        else:
             _, sid = get_current_recorded_suite()
-        elif suite_type == "encounter-set":
-            es_name = (args.encounter_set or args.training_set
-                       or exp.config.data.get("encounter_set")
-                       or exp.config.data.get("training_set"))
-            if not es_name:
-                print("  No encounter set specified (use --encounter-set or set in config)")
-                continue
-            from .suite import get_encounter_set_suite
-            _, sid = get_encounter_set_suite(es_name)
 
         print(f"\nBenchmarking: {exp.config.name}")
-        print(f"  Suite: {sid} ({suite_type})")
+        print(f"  Encounter set: {label} ({sid})")
         print(f"  Mode: {args.mode}")
-
-        ts_for_bench = None
-        if suite_type == "encounter-set":
-            ts_for_bench = (args.encounter_set or args.training_set
-                            or exp.config.data.get("encounter_set")
-                            or exp.config.data.get("training_set"))
 
         results = benchmark_checkpoint(
             ckpt_path,
-            suite_type=suite_type,
+            suite_type=legacy_type,
             mode=args.mode,
             combats=args.combats,
             num_sims=args.sims,
-            ts_id=ts_for_bench,
+            ts_id=es_id,
         )
 
         for result in results:

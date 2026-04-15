@@ -1,4 +1,10 @@
-"""Generate encounter sets from package definitions or recorded deaths.
+"""Generate encounter sets from various sources.
+
+Sources:
+  - Archetype packages (random decks, calibrated HP)
+  - Recorded death encounters (fixed decks, calibrated HP)
+  - Curriculum final exam (mixed encounters at fixed HP)
+  - Canonical recorded benchmark file (fixed decks, existing calibrated HP)
 
 Usage:
     # From packages (generates random decks, calibrates HP, freezes)
@@ -221,5 +227,73 @@ def generate_combined(
         monster_json, profiles_json, card_vocab_json, onnx_path,
         decks_per=decks_per, num_sims=num_sims, combats=combats,
     ))
+
+    return encounters
+
+
+def generate_final_exam(
+    combats: int = 256,
+    seed: int = 42,
+    player_hp: int = 70,
+) -> list[dict]:
+    """Generate a final exam encounter set from the curriculum.
+
+    Samples mixed encounters at a fixed seed so the set is deterministic.
+    All encounters use the same fixed HP (default 70).
+    """
+    import random as rng_mod
+    from .curriculum import CombatCurriculum
+    from .paths import SOLVER_PKG
+
+    rng_mod.seed(seed)
+    cur = CombatCurriculum(encounter_pool_path=str(SOLVER_PKG / "encounter_pool.json"))
+    cur.tier = cur.max_tier
+
+    enemies_list = cur.sample_encounters(combats)
+    encounters = []
+    for i, enemy_ids in enumerate(enemies_list):
+        deck_json = cur.sample_deck_json(combat_idx=i)
+        deck = json.loads(deck_json)
+        encounters.append({
+            "enemies": enemy_ids,
+            "deck": deck,
+            "hp": player_hp,
+            "relics": [],
+        })
+
+    return encounters
+
+
+def generate_from_benchmark_recorded(
+    benchmark_path: str,
+) -> list[dict]:
+    """Generate an encounter set from the canonical benchmark_recorded.jsonl.
+
+    Uses existing calibrated_hp values as-is (no recalibration).
+    Converts card IDs to full card dicts.
+    """
+    import os
+    if not os.path.exists(benchmark_path):
+        return []
+
+    with open(benchmark_path, encoding="utf-8") as f:
+        records = [json.loads(l) for l in f if l.strip()]
+
+    encounters = []
+    for rec in records:
+        deck = []
+        for cid in rec.get("deck", []):
+            try:
+                deck.append(lookup_card(cid.rstrip("+")))
+            except Exception:
+                pass
+        if not deck:
+            continue
+        encounters.append({
+            "enemies": rec["enemy_ids"],
+            "deck": deck,
+            "hp": rec.get("calibrated_hp", 70),
+            "relics": list(rec.get("relics", [])),
+        })
 
     return encounters

@@ -194,6 +194,38 @@ def eval_recorded(onnx_path: str, card_vocab_json: str,
 # Clean benchmark API (experiment-aware)
 # ---------------------------------------------------------------------------
 
+def _resolve_encounters(
+    encounter_set_id: str | None = None,
+    suite_type: str | None = None,
+    combats: int = 256,
+) -> list[dict]:
+    """Resolve an encounter set from ID, or generate built-in sets on the fly."""
+    # Explicit encounter set
+    if encounter_set_id:
+        try:
+            from .encounter_set import load_encounter_set
+            return load_encounter_set(encounter_set_id)
+        except FileNotFoundError:
+            pass
+        # Fall back to legacy training set
+        try:
+            from .training_set import load_training_set
+            ts = load_training_set(encounter_set_id)
+            return ts.get("recorded_data", [])
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Encounter set not found: {encounter_set_id}")
+
+    # Built-in generators (legacy suite types)
+    if suite_type == "final-exam":
+        from .generate_encounters import generate_final_exam
+        return generate_final_exam(combats=combats)
+    elif suite_type == "recorded":
+        from .generate_encounters import generate_from_benchmark_recorded
+        return generate_from_benchmark_recorded(str(_BENCHMARK_FILE))
+    else:
+        raise ValueError(f"Must specify encounter_set_id or a valid suite_type, got: {suite_type}")
+
+
 def benchmark_checkpoint(
     checkpoint_path: str,
     suite_type: str = "final-exam",
@@ -203,19 +235,20 @@ def benchmark_checkpoint(
     num_sims: int = 400,
     ts_id: str | None = None,
 ) -> list[dict]:
-    """Benchmark a single checkpoint against a specific suite.
+    """Benchmark a checkpoint against an encounter set.
+
+    All benchmarks go through the same code path: load encounters,
+    group by HP, run combats, aggregate results.
 
     Args:
         checkpoint_path: Path to .pt checkpoint.
-        suite_type: "final-exam" (curriculum tier 10) or "recorded" (frozen death encounters).
-        mode: "policy" (network only), "mcts" (with search), or "both".
-        combats: Number of final exam combats (for final-exam suite).
-        recorded_combats: Combats per recorded encounter (for recorded suite).
-        num_sims: MCTS simulations (only for mcts mode).
-
-    Returns:
-        List of result dicts, one per mode run. Each has:
-        {mode, win_rate, elapsed, gen}
+        suite_type: Legacy suite type for built-in sets ("final-exam", "recorded").
+            Ignored when ts_id is provided.
+        mode: "policy", "mcts", or "both".
+        combats: Number of encounters for final-exam generation.
+        recorded_combats: Combats per encounter (repeated for statistical power).
+        num_sims: MCTS simulations per decision.
+        ts_id: Encounter set ID or friendly name. Overrides suite_type.
     """
     card_vocab, card_vocab_json = _build_card_vocab()
     monster_json = build_monster_data_json()
@@ -225,6 +258,13 @@ def benchmark_checkpoint(
     net, ckpt = _load_checkpoint(checkpoint_path)
     gen = ckpt.get("gen", "?")
     onnx_path = export_onnx(net, str(_CHECKPOINTS / "eval_onnx"))
+
+    # Resolve encounters — one code path for everything
+    encounters = _resolve_encounters(
+        encounter_set_id=ts_id,
+        suite_type=suite_type,
+        combats=combats,
+    )
 
     modes = []
     if mode in ("policy", "both"):
@@ -237,93 +277,43 @@ def benchmark_checkpoint(
         use_mcts = m == "mcts"
         t0 = time.time()
 
-        if suite_type == "final-exam":
-            encounters, decks = _sample_final_exam(combats)
-            seeds = list(range(combats))
+        # Run each encounter repeated_combats times, grouped by HP
+        wins, n_games = 0, 0
+        from collections import defaultdict
+        hp_groups: dict[int, list[tuple[int, dict]]] = defaultdict(list)
+        for i, enc in enumerate(encounters):
+            hp = enc.get("hp", enc.get("calibrated_hp", 70))
+            hp_groups[hp].append((i, enc))
+
+        for hp, enc_list in hp_groups.items():
+            batch_enc, batch_dks, batch_rels, batch_seeds = [], [], [], []
+            for i, enc in enc_list:
+                deck = enc.get("deck", [])
+                if deck and isinstance(deck[0], str):
+                    deck = [lookup_card(cid.rstrip("+")) for cid in deck
+                            if lookup_card(cid.rstrip("+")) is not None]
+                if not deck:
+                    continue
+                enemies = enc.get("enemies", enc.get("enemy_ids", []))
+                rels = enc.get("relics", [])
+                for j in range(recorded_combats):
+                    batch_enc.append(enemies)
+                    batch_dks.append(deck)
+                    batch_rels.append(list(rels))
+                    batch_seeds.append(42 * 1000 + i * 100 + j)
+
+            if not batch_enc:
+                continue
+
             if use_mcts:
                 wr = eval_mcts(onnx_path, card_vocab_json, monster_json, profiles_json,
-                               encounters, decks, 70, seeds, num_sims=num_sims)
+                               batch_enc, batch_dks, hp, batch_seeds, num_sims=num_sims)
             else:
                 wr = eval_policy(onnx_path, card_vocab_json, monster_json, profiles_json,
-                                 encounters, decks, 70, seeds)
-            n_games = combats
-            wins = int(wr * n_games + 0.5)
-
-        elif suite_type in ("training-set", "encounter-set"):
-            # Load encounters — try encounter set first, fall back to legacy training set
-            es_encounters = None
-            if ts_id:
-                try:
-                    from .encounter_set import load_encounter_set
-                    es_encounters = load_encounter_set(ts_id)
-                except FileNotFoundError:
-                    pass
-            if es_encounters is None and ts_id:
-                from .training_set import load_training_set
-                ts = load_training_set(ts_id)
-                es_encounters = ts.get("recorded_data", [])
-
-            total_wins, total_games = 0, 0
-            for i, enc_data in enumerate(es_encounters or []):
-                # Encounter set format: deck is already full card dicts
-                deck = enc_data.get("deck", [])
-                # Legacy training set format: deck might be card IDs
-                if deck and isinstance(deck[0], str):
-                    converted = []
-                    for cid in deck:
-                        try:
-                            converted.append(lookup_card(cid.rstrip("+")))
-                        except Exception:
-                            pass
-                    deck = converted
-                if not deck:
-                    continue
-                hp = enc_data.get("hp", enc_data.get("calibrated_hp", 70))
-                enemies = enc_data.get("enemies", enc_data.get("enemy_ids", []))
-                rels = enc_data.get("relics", [])
-                enc = [enemies] * recorded_combats
-                dks = [deck] * recorded_combats
-                rels_batch = [list(rels)] * recorded_combats
-                seeds_batch = [42 * 1000 + i * 100 + j for j in range(recorded_combats)]
-                if use_mcts:
-                    r = eval_mcts(onnx_path, card_vocab_json, monster_json, profiles_json,
-                                  enc, dks, hp, seeds_batch, num_sims=num_sims)
-                else:
-                    r = eval_policy(onnx_path, card_vocab_json, monster_json, profiles_json,
-                                    enc, dks, hp, seeds_batch)
-                total_wins += int(r * recorded_combats + 0.5)
-                total_games += recorded_combats
-            wr = total_wins / max(total_games, 1)
-            wins = total_wins
-            n_games = total_games
-
-        elif suite_type == "recorded":
-            rec_records = _load_recorded_benchmark()
-            wins, n_games = 0, 0
-            for i, rec in enumerate(rec_records):
-                deck = []
-                for cid in rec.get("deck", []):
-                    try:
-                        deck.append(lookup_card(cid.rstrip("+")))
-                    except Exception:
-                        pass
-                if not deck:
-                    continue
-                hp = rec.get("calibrated_hp", 70)
-                enc = [rec["enemy_ids"]] * recorded_combats
-                dks = [deck] * recorded_combats
-                seeds = [42 * 1000 + i * 100 + j for j in range(recorded_combats)]
-                if use_mcts:
-                    r = eval_mcts(onnx_path, card_vocab_json, monster_json, profiles_json,
-                                  enc, dks, hp, seeds, num_sims=num_sims)
-                else:
-                    r = eval_policy(onnx_path, card_vocab_json, monster_json, profiles_json,
-                                    enc, dks, hp, seeds)
-                wins += int(r * recorded_combats + 0.5)
-                n_games += recorded_combats
-            wr = wins / max(n_games, 1)
-        else:
-            raise ValueError(f"Unknown suite_type: {suite_type}")
+                                 batch_enc, batch_dks, hp, batch_seeds)
+            batch_wins = int(wr * len(batch_enc) + 0.5)
+            wins += batch_wins
+            n_games += len(batch_enc)
 
         # 95% confidence interval (Wilson score interval)
         import math
