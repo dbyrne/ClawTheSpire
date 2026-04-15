@@ -1,0 +1,13 @@
+training_set_id: ts-5960159b295f
+name: draw-combo-v1
+recorded_file: recorded-5eeac12b2630.jsonl
+recorded_count: 20
+recorded_avg_hp: 29.8
+packages_file: packages-9edc5a958de6.json
+packages_count: 72
+calibrated_with:
+  checkpoint: ppo-v2-relics
+  gen: 1803
+  method: mcts
+  sims: 400
+  combats_per_hp: 64

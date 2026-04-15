@@ -25,10 +25,15 @@ def _content_hash(data: str) -> str:
 
 
 def load_training_set(ts_id: str) -> dict:
-    """Load a training set by ID. Returns the full definition."""
+    """Load a training set by ID or friendly name. Returns the full definition."""
     path = TRAINING_SETS_DIR / f"{ts_id}.yaml"
     if not path.exists():
-        raise FileNotFoundError(f"Training set not found: {path}")
+        # Try without ts- prefix
+        alt = TRAINING_SETS_DIR / f"ts-{ts_id}.yaml"
+        if alt.exists():
+            path = alt
+        else:
+            raise FileNotFoundError(f"Training set not found: {ts_id}")
     with open(path, encoding="utf-8") as f:
         ts = yaml.safe_load(f)
 
@@ -105,6 +110,13 @@ def save_training_set(
     }
     with open(TRAINING_SETS_DIR / f"{ts_id}.yaml", "w", encoding="utf-8") as f:
         yaml.dump(ts, f, default_flow_style=False, sort_keys=False)
+
+    # Friendly-name alias for easy lookup
+    if name != ts_id:
+        friendly_path = TRAINING_SETS_DIR / f"{name}.yaml"
+        if not friendly_path.exists():
+            with open(friendly_path, "w", encoding="utf-8") as f:
+                yaml.dump(ts, f, default_flow_style=False, sort_keys=False)
 
     return ts_id
 

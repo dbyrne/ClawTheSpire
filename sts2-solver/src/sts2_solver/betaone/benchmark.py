@@ -201,6 +201,7 @@ def benchmark_checkpoint(
     combats: int = 256,
     recorded_combats: int = 32,
     num_sims: int = 400,
+    ts_id: str | None = None,
 ) -> list[dict]:
     """Benchmark a single checkpoint against a specific suite.
 
@@ -247,6 +248,37 @@ def benchmark_checkpoint(
                                  encounters, decks, 70, seeds)
             n_games = combats
             wins = int(wr * n_games + 0.5)
+
+        elif suite_type == "training-set":
+            from .training_set import load_training_set
+            ts = load_training_set(ts_id) if ts_id else {}
+            ts_recorded = ts.get("recorded_data", [])
+            total_wins, total_games = 0, 0
+            for i, rec in enumerate(ts_recorded):
+                deck = []
+                for cid in rec.get("deck", []):
+                    try:
+                        deck.append(lookup_card(cid.rstrip("+")))
+                    except Exception:
+                        pass
+                if not deck:
+                    continue
+                hp = rec.get("calibrated_hp", 70)
+                enc = [rec["enemy_ids"]] * recorded_combats
+                dks = [deck] * recorded_combats
+                rels = [list(rec.get("relics", []))] * recorded_combats
+                seeds_batch = [42 * 1000 + i * 100 + j for j in range(recorded_combats)]
+                if use_mcts:
+                    r = eval_mcts(onnx_path, card_vocab_json, monster_json, profiles_json,
+                                  enc, dks, hp, seeds_batch, num_sims=num_sims)
+                else:
+                    r = eval_policy(onnx_path, card_vocab_json, monster_json, profiles_json,
+                                    enc, dks, hp, seeds_batch)
+                total_wins += int(r * recorded_combats + 0.5)
+                total_games += recorded_combats
+            wr = total_wins / max(total_games, 1)
+            wins = total_wins
+            n_games = total_games
 
         elif suite_type == "recorded":
             rec_records = _load_recorded_benchmark()

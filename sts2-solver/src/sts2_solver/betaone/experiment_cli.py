@@ -125,16 +125,29 @@ def cmd_benchmark(args):
         suite_types.append("final-exam")
     if args.suite in ("recorded", "all"):
         suite_types.append("recorded")
+    if args.suite == "training-set":
+        suite_types.append("training-set")
 
     for suite_type in suite_types:
         if suite_type == "final-exam":
             _, sid = get_current_final_exam_suite()
-        else:
+        elif suite_type == "recorded":
             _, sid = get_current_recorded_suite()
+        elif suite_type == "training-set":
+            from .suite import get_training_set_suite
+            ts_name = args.training_set or exp.config.data.get("training_set")
+            if not ts_name:
+                print("  No training set specified (use --training-set or set in config)")
+                continue
+            _, sid = get_training_set_suite(ts_name)
 
         print(f"\nBenchmarking: {exp.config.name}")
         print(f"  Suite: {sid} ({suite_type})")
         print(f"  Mode: {args.mode}")
+
+        ts_for_bench = None
+        if suite_type == "training-set":
+            ts_for_bench = args.training_set or exp.config.data.get("training_set")
 
         results = benchmark_checkpoint(
             ckpt_path,
@@ -142,6 +155,7 @@ def cmd_benchmark(args):
             mode=args.mode,
             combats=args.combats,
             num_sims=args.sims,
+            ts_id=ts_for_bench,
         )
 
         for result in results:
@@ -390,12 +404,15 @@ def cmd_training_sets(args):
     if not sets:
         print("No training sets. Create one with: sts2-experiment calibrate --checkpoint <name>")
         return
-    print(f"{'Training Set ID':<28s} {'Recorded':>8s} {'Packages':>8s} {'Avg HP':>7s} {'Calibrated From'}")
-    print("-" * 80)
+    print(f"{'Name':<32s} {'ID':<18s} {'Rec':>4s} {'Pkg':>4s} {'HP':>5s} {'Calibrated From'}")
+    print("-" * 85)
     for ts in sets:
         cal = ts.get("calibrated_with", {})
         src = cal.get("checkpoint", "?")
-        print(f"  {ts['training_set_id']:<26s} {ts.get('recorded_count', 0):>8d} {ts.get('packages_count', 0):>8d} {ts.get('recorded_avg_hp', 0):>7.1f}   {src}")
+        name = ts.get("name", "")
+        tid = ts.get("training_set_id", "?")
+        tid_short = tid[:16] if len(tid) > 16 else tid
+        print(f"  {name:<30s} {tid_short:<18s} {ts.get('recorded_count', 0):>4d} {ts.get('packages_count', 0):>4d} {ts.get('recorded_avg_hp', 0):>5.1f}   {src}")
 
 
 def cmd_suites(args):
@@ -489,8 +506,10 @@ def main():
     # benchmark
     p = sub.add_parser("benchmark", help="Run combat benchmark for an experiment")
     p.add_argument("name", help="Experiment name")
-    p.add_argument("--suite", choices=["final-exam", "recorded", "all"], default="all",
-                    help="Which suite: final-exam, recorded, or all (default)")
+    p.add_argument("--suite", choices=["final-exam", "recorded", "training-set", "all"], default="all",
+                    help="Which suite: final-exam, recorded, training-set, or all (default)")
+    p.add_argument("--training-set", default=None,
+                    help="Training set name/ID for --suite training-set")
     p.add_argument("--mode", choices=["policy", "mcts", "both"], default="both",
                     help="Inference mode: policy (network only), mcts (with search), both (default)")
     p.add_argument("--checkpoint", default="latest",

@@ -112,6 +112,8 @@ def suite_id(suite: dict) -> str:
         key = f"{suite['encounter_pool_hash']}:{suite['seed']}:{suite['combats']}"
     elif stype == "recorded":
         key = f"{suite['recorded_hash']}:{suite['recorded_count']}:{suite['combats_per']}"
+    elif stype == "training-set":
+        key = f"{suite['training_set_id']}:{suite['recorded_hash']}"
     elif stype == "eval":
         key = f"{suite['scenario_hash']}:{suite['scenario_count']}"
     else:
@@ -170,6 +172,29 @@ def get_current_recorded_suite() -> tuple[dict, str]:
     suite = compute_recorded_suite(
         recorded_path=str(BENCHMARK_DIR / "benchmark_recorded.jsonl"),
     )
+    sid = save_suite(suite)
+    return suite, sid
+
+
+def compute_training_set_suite(ts_id: str) -> dict:
+    """Suite for benchmarking against a training set's encounters."""
+    from .training_set import load_training_set
+    ts = load_training_set(ts_id)
+    recorded = ts.get("recorded_data", [])
+    rec_hash = _content_hash(json.dumps(recorded, sort_keys=True)) if recorded else "empty"
+    return {
+        "name": f"ts-{ts.get('name', ts_id)}",
+        "type": "training-set",
+        "training_set_id": ts.get("training_set_id", ts_id),
+        "training_set_name": ts.get("name", ts_id),
+        "recorded_count": len(recorded),
+        "recorded_hash": rec_hash,
+    }
+
+
+def get_training_set_suite(ts_id: str) -> tuple[dict, str]:
+    """Compute and save a training set benchmark suite. Returns (suite, suite_id)."""
+    suite = compute_training_set_suite(ts_id)
     sid = save_suite(suite)
     return suite, sid
 
