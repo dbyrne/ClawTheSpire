@@ -27,17 +27,14 @@ import torch.nn as nn
 
 import sts2_engine
 
-from .calibrate import calibrate_all
-from .curriculum import CombatCurriculum, TIER_CONFIGS
-from .paths import SOLVER_PKG
 from .data_utils import (
-    load_game_json,
     load_solver_json,
     build_monster_data_json,
     build_card_vocab,
     find_latest_checkpoint,
+    setup_training_data,
+    sample_combat_batches,
 )
-from .deck_gen import build_random_deck_json, _make_starter
 from .network import (
     ACTION_DIM,
     MAX_ACTIONS,
@@ -98,53 +95,19 @@ def train(
     optimizer = torch.optim.Adam(network.parameters(), lr=lr)
     print(f"BetaOne network: {network.param_count():,} parameters ({num_cards} card vocab)")
 
-    # Load training set if provided (immutable, pre-calibrated encounters)
-    ts_data = None
-    if training_set_id:
-        from .training_set import load_training_set
-        ts_data = load_training_set(training_set_id)
-        ts_recorded = ts_data.get("recorded_data", [])
-        ts_packages = ts_data.get("packages_data", {})
-        print(f"Training set: {training_set_id}")
-        print(f"  Recorded: {len(ts_recorded)} encounters")
-        print(f"  Packages: {sum(len(v) for v in ts_packages.values())} encounter-HP pairs across {len(ts_packages)} archetypes")
-        # Force mixed mode with training set
-        mixed = True
-        recorded_encounters = True
-
-    # Curriculum
-    recorded_path = str(Path(output_dir) / "recorded_encounters.jsonl")
-    curriculum = CombatCurriculum(encounter_pool_path=enc_pool_path, recorded_encounters_path=recorded_path)
-
-    if mixed:
-        recorded_encounters = True
-
-    if ts_data:
-        # Training set mode: load recorded encounters from training set
-        curriculum.recorded_encounters = ts_recorded
-        curriculum.tier = curriculum.max_tier
-        # Load package calibration
-        from .packages import PACKAGES
-        for pkg in PACKAGES:
-            pkg_hps = ts_packages.get(pkg.name, {})
-            pkg.calibrated_hps = pkg_hps
-        n_rec = len(ts_recorded)
-        n_pkg = sum(len(v) for v in ts_packages.values())
-        print(f"Mixed mode: {recorded_frac:.0%} recorded ({n_rec}) + {1-recorded_frac:.0%} packages ({n_pkg} calibrated)")
-    elif mixed:
-        if not curriculum.recorded_encounters:
-            print("No recorded encounters found — run the game bot first to build the pool")
-            return
-        curriculum.tier = curriculum.max_tier
-        n_rec = len(curriculum.recorded_encounters)
-        print(f"Mixed mode: {recorded_frac:.0%} recorded ({n_rec} encounters) + {1-recorded_frac:.0%} archetype packages")
-    elif recorded_encounters:
-        if not curriculum.recorded_encounters:
-            print("No recorded encounters found — run the game bot first to build the pool")
-            return
-        curriculum.use_recorded_only = True
-        curriculum.tier = curriculum.max_tier
-        print(f"Training on {len(curriculum.recorded_encounters)} recorded encounters")
+    # Set up training data (shared with selfplay_train.py)
+    td = setup_training_data(
+        output_dir=output_dir,
+        training_set_id=training_set_id,
+        mixed=mixed,
+        recorded_encounters=recorded_encounters,
+        recorded_frac=recorded_frac,
+        skip_to_final=skip_to_final,
+    )
+    curriculum = td["curriculum"]
+    recorded_encounters = td["recorded_encounters"]
+    mixed = td["mixed"]
+    recorded_frac = td["recorded_frac"]
 
     best_win_rate = 0.0
     cumulative_wins = 0
@@ -300,12 +263,12 @@ def train(
     else:
         print("Cold start — no checkpoint found")
 
-    # When using a training set, skip all runtime calibration.
-    # Calibration is done offline via `sts2-experiment calibrate`.
-    if not ts_data:
-        # Legacy mode: calibrate at startup (only if no training set)
+    # No runtime calibration when using training sets.
+    # Legacy calibration preserved for backward compatibility without training sets.
+    if not td["ts_data"]:
         if recorded_encounters:
             from .calibrate import calibrate_all
+            recorded_path = str(Path(output_dir) / "recorded_encounters.jsonl")
             onnx_path = export_onnx(network, onnx_dir)
             print("Running initial HP calibration...")
             curriculum.recorded_encounters, _ = calibrate_all(
@@ -333,80 +296,11 @@ def train(
         # Export current network
         onnx_path = export_onnx(network, onnx_dir)
 
-        # No runtime recalibration or regression checks when using training sets.
-        # Calibration is done offline. Regression checks are removed —
-        # the training set defines the full encounter distribution.
-
-        # Build combat batches (each with correct HP)
-        cfg = curriculum.config
-        batches: list[tuple[list, list, list, int, int]] = []  # (encounters, decks, relics, hp, count)
-
-        def _extract_relics(rec) -> list[str]:
-            """Extract relic list from a recorded encounter sample."""
-            if rec is None:
-                return []
-            return list(rec.get("relics", []))
-
-        n_current = combats_per_gen
-
-        if mixed:
-            # Mixed mode: split between recorded encounters and archetype packages
-            from .packages import sample_packages_batch
-            import random as stdlib_random
-
-            n_rec_batch = int(n_current * recorded_frac)
-            n_pkg_batch = n_current - n_rec_batch
-
-            # Recorded encounters portion
-            curriculum.use_recorded_only = True
-            rec_enc = curriculum.sample_encounters(n_rec_batch)
-            rec_samples = getattr(curriculum, "_recorded_samples", None)
-            rec_dks = [json.loads(curriculum.sample_deck_json(combat_idx=i))
-                       for i in range(n_rec_batch)]
-
-            # Archetype packages portion
-            pkg_rng = stdlib_random.Random(gen * 7919)
-            pkg_enc, pkg_decks, pkg_hps = sample_packages_batch(n_pkg_batch, rng=pkg_rng)
-
-            # Group recorded by calibrated HP
-            from collections import defaultdict
-            hp_groups: dict[int, tuple[list, list, list]] = defaultdict(lambda: ([], [], []))
-            for i in range(n_rec_batch):
-                rec = rec_samples[i] if rec_samples and i < len(rec_samples) else None
-                hp = rec.get("calibrated_hp", rec.get("player_hp", 70)) if rec else 70
-                hp_groups[hp][0].append(rec_enc[i])
-                hp_groups[hp][1].append(rec_dks[i])
-                hp_groups[hp][2].append(_extract_relics(rec))
-            for hp, (encs, dks_list, rels_list) in hp_groups.items():
-                batches.append((encs, dks_list, rels_list, hp, len(encs)))
-
-            # Group packages by calibrated HP (no relics for synthetic packages)
-            pkg_hp_groups: dict[int, tuple[list, list, list]] = defaultdict(lambda: ([], [], []))
-            for i in range(n_pkg_batch):
-                pkg_hp_groups[pkg_hps[i]][0].append(pkg_enc[i])
-                pkg_hp_groups[pkg_hps[i]][1].append(pkg_decks[i])
-                pkg_hp_groups[pkg_hps[i]][2].append([])  # no relics
-            for hp, (encs, dks_list, rels_list) in pkg_hp_groups.items():
-                batches.append((encs, dks_list, rels_list, hp, len(encs)))
-        else:
-            cur_enc = curriculum.sample_encounters(n_current)
-            cur_dks = [json.loads(curriculum.sample_deck_json(combat_idx=i)) for i in range(n_current)]
-
-            # For recorded encounters, group by calibrated HP
-            recorded_samples = getattr(curriculum, "_recorded_samples", None)
-            if recorded_samples and any(r is not None for r in recorded_samples):
-                from collections import defaultdict
-                hp_groups: dict[int, tuple[list, list, list]] = defaultdict(lambda: ([], [], []))
-                for i, (enc_ids, dk) in enumerate(zip(cur_enc, cur_dks)):
-                    rec = recorded_samples[i] if i < len(recorded_samples) else None
-                    hp = rec.get("calibrated_hp", rec.get("player_hp", 70)) if rec else cfg.player_hp
-                    hp_groups[hp][0].append(enc_ids)
-                    hp_groups[hp][1].append(dk)
-                    hp_groups[hp][2].append(_extract_relics(rec))
-                for hp, (encs, dks_list, rels_list) in hp_groups.items():
-                    batches.append((encs, dks_list, rels_list, hp, len(encs)))
-            else:
-                batches.append((cur_enc, cur_dks, [[] for _ in range(n_current)], cfg.player_hp, n_current))
+        # Sample encounters grouped by HP (shared with selfplay_train.py)
+        batches = sample_combat_batches(
+            curriculum, combats_per_gen, mixed, recorded_encounters,
+            recorded_frac, gen,
+        )
 
         # Collect rollouts — one call per HP level, merge results
         all_states, all_act_feat, all_act_masks = [], [], []

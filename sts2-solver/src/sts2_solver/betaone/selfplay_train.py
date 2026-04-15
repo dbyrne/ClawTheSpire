@@ -29,17 +29,14 @@ import torch.nn.functional as F
 
 import sts2_engine
 
-from .calibrate import calibrate_all
-from .curriculum import CombatCurriculum, TIER_CONFIGS
-from .paths import SOLVER_PKG
 from .data_utils import (
-    load_game_json,
     load_solver_json,
     build_monster_data_json,
     build_card_vocab,
     find_latest_checkpoint,
+    setup_training_data,
+    sample_combat_batches,
 )
-from .deck_gen import build_random_deck_json, _make_starter
 from .network import (
     ACTION_DIM,
     MAX_ACTIONS,
@@ -210,38 +207,19 @@ def train(
     optimizer = torch.optim.Adam(network.parameters(), lr=lr)
     print(f"BetaOne self-play: {network.param_count():,} params, {num_cards} card vocab")
 
-    # Curriculum
-    # recorded_encounters.jsonl lives alongside checkpoints; resolve relative
-    # to the project root (4 dirs up from this file) so it works regardless
-    # of the working directory.
-    recorded_path = str(Path(output_dir) / "recorded_encounters.jsonl")
-    curriculum = CombatCurriculum(
-        encounter_pool_path=enc_pool_path,
-        recorded_encounters_path=recorded_path,
+    # Set up training data (shared with train.py)
+    td = setup_training_data(
+        output_dir=output_dir,
+        training_set_id=training_set_id,
+        mixed=mixed,
+        recorded_encounters=recorded_encounters,
+        recorded_frac=recorded_frac,
+        skip_to_final=skip_to_final,
     )
-
-    # --mixed implies --recorded-encounters
-    if mixed:
-        recorded_encounters = True
-
-    if mixed:
-        if not curriculum.recorded_encounters:
-            print("No recorded encounters found — run the game bot first to build the pool")
-            return
-        curriculum.tier = curriculum.max_tier
-        n_rec = len(curriculum.recorded_encounters)
-        print(f"Mixed mode: {recorded_frac:.0%} recorded ({n_rec} encounters) + {1-recorded_frac:.0%} archetype packages")
-    elif recorded_encounters:
-        if not curriculum.recorded_encounters:
-            print("No recorded encounters found — run the game bot first to build the pool")
-            return
-        curriculum.use_recorded_only = True
-        curriculum.tier = curriculum.max_tier
-        print(f"Training on {len(curriculum.recorded_encounters)} recorded encounters")
-    elif skip_to_final:
-        curriculum.tier = curriculum.max_tier
-        curriculum.consecutive_good = 0
-        curriculum.gens_at_tier = 0
+    curriculum = td["curriculum"]
+    recorded_encounters = td["recorded_encounters"]
+    mixed = td["mixed"]
+    recorded_frac = td["recorded_frac"]
 
     best_win_rate = 0.0
     start_gen = 1
@@ -298,39 +276,7 @@ def train(
             if os.path.exists(f):
                 os.remove(f)
 
-    # HP calibration for recorded encounters — skip on cold start
-    # (random network can't win anything, so calibration fails).
-    # Use existing calibrated_hp values from the file instead.
-    avg_calibrated_hp: float | None = None
-    if recorded_encounters and not cold_start:
-        onnx_path = export_onnx(network, onnx_dir)
-        print("Running initial HP calibration...")
-        curriculum.recorded_encounters, avg_calibrated_hp = calibrate_all(
-            curriculum.recorded_encounters, monster_json, profiles_json,
-            card_vocab_json, onnx_path,
-            encounters_path=recorded_path,
-            num_sims=50, combats=32,
-        )
-        if avg_calibrated_hp is not None:
-            print(f"Avg calibrated HP: {avg_calibrated_hp:.1f}")
-    elif recorded_encounters:
-        # Cold start: use existing calibrated HP from file, or default to max
-        hp_vals = [r.get("calibrated_hp", 70) for r in curriculum.recorded_encounters]
-        avg_calibrated_hp = sum(hp_vals) / len(hp_vals) if hp_vals else None
-        print(f"Cold start: using existing calibrated HP (avg={avg_calibrated_hp:.1f})" if avg_calibrated_hp else
-              "Cold start: no calibrated HP, using default 70")
-
-    # HP calibration for archetype packages — skip on cold start
-    if mixed and not cold_start:
-        from .packages import calibrate_packages
-        try:
-            onnx_path
-        except NameError:
-            onnx_path = export_onnx(network, onnx_dir)
-        print("Calibrating archetype packages...")
-        calibrate_packages(monster_json, profiles_json, card_vocab_json, onnx_path)
-    elif mixed:
-        print("Cold start: skipping package calibration (using default HP 50)")
+    # No runtime calibration — use pre-calibrated training set HPs.
 
     # Replay buffer
     replay = ReplayBuffer(max_steps=replay_capacity)
@@ -342,80 +288,12 @@ def train(
         # Export ONNX
         onnx_path = export_onnx(network, onnx_dir)
 
-        # Recalibrate every 200 gens
-        if recorded_encounters and gen % 200 == 0 and gen > start_gen:
-            print(f"Gen {gen}: recalibrating recorded encounters...")
-            curriculum.recorded_encounters, avg_calibrated_hp = calibrate_all(
-                curriculum.recorded_encounters, monster_json, profiles_json,
-                card_vocab_json, onnx_path,
-                encounters_path=recorded_path,
-                num_sims=50, combats=32,
-            )
-        if mixed and gen % 200 == 0 and gen > start_gen:
-            from .packages import calibrate_packages
-            print(f"Gen {gen}: recalibrating archetype packages...")
-            calibrate_packages(monster_json, profiles_json, card_vocab_json, onnx_path)
-
-        # Sample encounters and decks
-        cfg = curriculum.config
+        # Sample encounters grouped by HP (shared with train.py)
+        batches = sample_combat_batches(
+            curriculum, combats_per_gen, mixed, recorded_encounters,
+            recorded_frac, gen,
+        )
         seeds = [gen * 100_000 + i for i in range(combats_per_gen)]
-
-        if mixed:
-            # Mixed mode: split between recorded encounters and archetype packages
-            from .packages import sample_packages_batch
-            n_recorded = int(combats_per_gen * recorded_frac)
-            n_packages = combats_per_gen - n_recorded
-
-            # Recorded encounters portion
-            curriculum.use_recorded_only = True
-            rec_enc = curriculum.sample_encounters(n_recorded)
-            rec_samples = getattr(curriculum, "_recorded_samples", None)
-            rec_decks = [json.loads(curriculum.sample_deck_json(combat_idx=i))
-                         for i in range(n_recorded)]
-
-            # Archetype packages portion (replaces final exam)
-            pkg_rng = stdlib_random.Random(gen * 7919)
-            pkg_enc, pkg_decks, pkg_hps = sample_packages_batch(n_packages, rng=pkg_rng)
-
-            encounters = rec_enc + pkg_enc
-            decks = rec_decks + pkg_decks
-        else:
-            encounters = curriculum.sample_encounters(combats_per_gen)
-            decks = [json.loads(curriculum.sample_deck_json(combat_idx=i))
-                     for i in range(combats_per_gen)]
-            rec_samples = getattr(curriculum, "_recorded_samples", None)
-            n_recorded = combats_per_gen if recorded_encounters else 0
-
-        # Extract relics from recorded samples
-        def _extract_relics(rec) -> list[str]:
-            if rec is None:
-                return []
-            return list(rec.get("relics", []))
-
-        # Group combats by HP level for batched self-play
-        from collections import defaultdict
-        hp_groups: dict[int, tuple[list, list, list, list]] = defaultdict(lambda: ([], [], [], []))
-        for i in range(combats_per_gen):
-            if mixed and i < n_recorded:
-                # Recorded encounter — use calibrated HP and relics
-                rec = rec_samples[i] if rec_samples and i < len(rec_samples) else None
-                hp = rec.get("calibrated_hp", rec.get("player_hp", 70)) if rec else 70
-                rels = _extract_relics(rec)
-            elif mixed:
-                # Archetype package — use package HP, no relics
-                hp = pkg_hps[i - n_recorded]
-                rels = []
-            elif recorded_encounters:
-                rec = rec_samples[i] if rec_samples and i < len(rec_samples) else None
-                hp = rec.get("calibrated_hp", rec.get("player_hp", 70)) if rec else 70
-                rels = _extract_relics(rec)
-            else:
-                hp = cfg.player_hp
-                rels = []
-            hp_groups[hp][0].append(encounters[i])
-            hp_groups[hp][1].append(decks[i])
-            hp_groups[hp][2].append(seeds[i])
-            hp_groups[hp][3].append(rels)
 
         # Self-play: MCTS combats (one call per HP level)
         all_outcomes = []
@@ -424,15 +302,22 @@ def train(
         gen_hand_ids, gen_action_ids, gen_policies = [], [], []
         gen_combat_indices = []
         combat_offset = 0
+        seed_idx = 0
 
-        for hp, (grp_enc, grp_dks, grp_seeds, grp_rels) in hp_groups.items():
+        for b_enc, b_dks, b_rels, b_hp, b_count in batches:
+            if not b_enc:
+                continue
+            b_seeds = [seeds[seed_idx + i] if seed_idx + i < len(seeds)
+                       else gen * 100_000 + seed_idx + i
+                       for i in range(b_count)]
+            seed_idx += b_count
             rollout = sts2_engine.betaone_mcts_selfplay(
-                encounters_json=json.dumps(grp_enc),
-                decks_json=json.dumps(grp_dks),
-                player_hp=hp,
+                encounters_json=json.dumps(b_enc),
+                decks_json=json.dumps(b_dks),
+                player_hp=b_hp,
                 player_max_hp=70,
                 player_max_energy=3,
-                relics_json=json.dumps(grp_rels),
+                relics_json=json.dumps(b_rels),
                 potions_json="[]",
                 monster_data_json=monster_json,
                 enemy_profiles_json=profiles_json,
@@ -440,7 +325,7 @@ def train(
                 card_vocab_json=card_vocab_json,
                 num_sims=num_sims,
                 temperature=temperature,
-                seeds=grp_seeds,
+                seeds=b_seeds,
                 gen_id=gen,
                 add_noise=True,
             )
@@ -528,9 +413,9 @@ def train(
 
         elapsed = time.time() - t0
 
-        # Curriculum update
+        # Curriculum update (hold when using training set or recorded encounters)
         tier_before = curriculum.tier
-        tier_change = curriculum.update(win_rate) if not recorded_encounters else "hold"
+        tier_change = "hold" if (recorded_encounters or td.get("ts_data")) else curriculum.update(win_rate)
 
         print(
             f"Gen {gen:4d} | "
