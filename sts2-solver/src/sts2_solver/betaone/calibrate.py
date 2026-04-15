@@ -90,6 +90,11 @@ def calibrate_encounter(enc: dict, monster_json: str, profiles_json: str,
         if lo > hi:
             break
 
+    # If still 100% WR at the floor, this encounter is too easy — skip it
+    if best_hp is not None and best_diff > 0.4:
+        print(f"  Skipping: uncalibratable (best WR ~{0.5-best_diff:.0%}-{0.5+best_diff:.0%} at HP {best_hp})")
+        return None
+
     return best_hp
 
 
@@ -110,7 +115,9 @@ def calibrate_all(records: list[dict], monster_json: str, profiles_json: str,
         print(f"Calibrating {len(records)} encounters ({num_sims} sims, {combats} combats/HP)")
 
     updated = 0
+    excluded = 0
     hp_values: list[int] = []
+    kept_records: list[dict] = []
     for i, rec in enumerate(records):
         enemy_names = rec.get("enemy_names", rec.get("enemy_ids", ["?"]))
         old_hp = rec.get("calibrated_hp", "-")
@@ -122,26 +129,26 @@ def calibrate_all(records: list[dict], monster_json: str, profiles_json: str,
         if hp is not None:
             rec["calibrated_hp"] = hp
             hp_values.append(hp)
+            kept_records.append(rec)
             if not quiet:
                 print(f"    -> calibrated_hp = {hp}")
             updated += 1
         else:
-            # Keep existing calibrated_hp if recalibration skipped
-            if rec.get("calibrated_hp") is not None:
-                hp_values.append(rec["calibrated_hp"])
+            excluded += 1
             if not quiet:
-                print(f"    -> skipped")
+                print(f"    -> excluded")
 
     if encounters_path is not None:
         with open(encounters_path, "w", encoding="utf-8") as f:
-            for rec in records:
+            for rec in kept_records:
                 f.write(json.dumps(rec) + "\n")
 
     avg_hp = sum(hp_values) / len(hp_values) if hp_values else None
     if not quiet:
-        print(f"  Calibration done: {updated}/{len(records)} updated, avg HP = {avg_hp:.1f}" if avg_hp else
+        ex_str = f", {excluded} excluded" if excluded else ""
+        print(f"  Calibration done: {updated}/{len(records)} calibrated{ex_str}, avg HP = {avg_hp:.1f}" if avg_hp else
               f"  Calibration done: no valid encounters")
-    return records, avg_hp
+    return kept_records, avg_hp
 
 
 def main():
