@@ -173,8 +173,6 @@ def generate_from_recorded(
             continue
 
         relics = list(rec.get("relics", []))
-        if "RING_OF_THE_SNAKE" not in relics:
-            relics.insert(0, "RING_OF_THE_SNAKE")
 
         hp = _calibrate_hp(
             enemy_ids, deck, relics,
