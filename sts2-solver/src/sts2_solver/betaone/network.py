@@ -100,7 +100,7 @@ class BetaOneNetwork(nn.Module):
         self.policy_query = nn.Linear(HIDDEN_DIM, ACTION_HIDDEN)
         self.action_encoder = nn.Linear(CARD_EMBED_DIM + ACTION_DIM, ACTION_HIDDEN)
 
-        # Value: state → scalar (clamped to [-1,1] at inference in Rust)
+        # Value: state → scalar (clamped to [-1, 1.3] at inference in Rust)
         self.value_head = nn.Sequential(
             nn.Linear(HIDDEN_DIM, 64),
             nn.ReLU(),

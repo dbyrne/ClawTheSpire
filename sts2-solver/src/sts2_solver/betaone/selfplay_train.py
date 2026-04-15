@@ -281,6 +281,7 @@ def train(
                 os.remove(f)
 
     # No runtime calibration — use pre-calibrated training set HPs.
+    player_max_hp = 70
 
     # Replay buffer
     replay = ReplayBuffer(max_steps=replay_capacity)
@@ -319,7 +320,7 @@ def train(
                 encounters_json=json.dumps(b_enc),
                 decks_json=json.dumps(b_dks),
                 player_hp=b_hp,
-                player_max_hp=70,
+                player_max_hp=player_max_hp,
                 player_max_energy=3,
                 relics_json=json.dumps(b_rels),
                 potions_json="[]",
@@ -364,7 +365,7 @@ def train(
         for ci, outcome in enumerate(all_outcomes):
             mask = combat_indices == ci
             if outcome == "win":
-                hp_frac = max(all_final_hps[ci], 0) / 70.0  # max_hp=70
+                hp_frac = max(all_final_hps[ci], 0) / max(player_max_hp, 1)
                 gen_values[mask] = 1.0 + 0.3 * hp_frac
             else:
                 gen_values[mask] = -1.0
