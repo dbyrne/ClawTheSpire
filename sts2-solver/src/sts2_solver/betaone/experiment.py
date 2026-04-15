@@ -267,14 +267,18 @@ class Experiment:
 
         exp = Experiment.create(new_name, config=config, overrides=overrides)
 
-        # Copy checkpoint
+        # Copy checkpoint with gen reset to 0
         if checkpoint == "latest":
             src_ckpt = source.dir / "betaone_latest.pt"
         else:
             src_ckpt = source.dir / f"betaone_{checkpoint}.pt"
 
         if src_ckpt.exists():
-            shutil.copy2(src_ckpt, exp.dir / "betaone_latest.pt")
+            import torch
+            ckpt = torch.load(str(src_ckpt), map_location="cpu", weights_only=False)
+            ckpt["gen"] = 0
+            ckpt["win_rate"] = 0.0
+            torch.save(ckpt, str(exp.dir / "betaone_latest.pt"))
 
         return exp
 
