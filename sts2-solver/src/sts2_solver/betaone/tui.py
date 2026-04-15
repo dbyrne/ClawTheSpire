@@ -193,12 +193,11 @@ def build_dashboard(experiments: list[dict]) -> Group:
 
     parts.append(overview)
 
-    # === Benchmark results table ===
+    # === Benchmark results table (sorted by suite, then best WR) ===
     bench_rows = []
     for exp in experiments:
         for b in exp.get("benchmarks", []):
             suite = b.get("suite", "?")
-            # Shorten suite ID
             if "-" in suite:
                 suite_short = suite.split("-")[0] + "-" + suite.split("-")[1][:6]
             else:
@@ -215,26 +214,34 @@ def build_dashboard(experiments: list[dict]) -> Group:
             })
 
     if bench_rows:
-        bench_table = Table(title="Latest Benchmarks", expand=True, show_lines=False)
-        bench_table.add_column("Experiment", style="cyan", max_width=24)
+        bench_table = Table(title="Benchmarks (by suite, best first)", expand=True, show_lines=False)
         bench_table.add_column("Suite", max_width=16)
-        bench_table.add_column("Mode", max_width=8)
+        bench_table.add_column("Mode", max_width=10)
+        bench_table.add_column("Experiment", style="cyan", max_width=26)
         bench_table.add_column("WR", justify="right", max_width=7)
         bench_table.add_column("95% CI", justify="right", max_width=16)
         bench_table.add_column("N", justify="right", max_width=6)
 
-        # Show most recent per experiment (last 2-3 per exp)
+        # Deduplicate: keep most recent per (experiment, suite, mode)
         seen = {}
         for row in reversed(bench_rows):
             key = (row["name"], row["suite"], row["mode"])
             if key not in seen:
                 seen[key] = row
-        for key in sorted(seen.keys()):
-            row = seen[key]
+
+        # Sort by suite, then mode, then best WR descending
+        sorted_rows = sorted(seen.values(),
+                             key=lambda r: (r["suite"], r["mode"], -r["wr"]))
+
+        prev_suite = None
+        for row in sorted_rows:
             mode_str = f"{row['mode']}" + (f"-{row['sims']}" if row['sims'] > 0 else "")
             ci = f"[{row['ci_lo']:.1%}, {row['ci_hi']:.1%}]"
+            # Visual separator between suites
+            suite_display = row["suite"] if row["suite"] != prev_suite else ""
+            prev_suite = row["suite"]
             bench_table.add_row(
-                row["name"], row["suite"], mode_str,
+                suite_display, mode_str, row["name"],
                 f"{row['wr']:.1%}", ci, str(row["n"]),
             )
         parts.append(bench_table)
