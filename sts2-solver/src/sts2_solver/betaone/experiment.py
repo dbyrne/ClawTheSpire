@@ -278,7 +278,7 @@ class Experiment:
         if not EXPERIMENTS_DIR.exists():
             return []
         results = []
-        for d in sorted(EXPERIMENTS_DIR.iterdir()):
+        for d in sorted(EXPERIMENTS_DIR.iterdir(), key=lambda p: p.stat().st_mtime):
             if d.name.startswith("_") or not d.is_dir():
                 continue
             config_path = d / "config.yaml"

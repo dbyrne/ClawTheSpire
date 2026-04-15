@@ -74,7 +74,7 @@ def _collect_experiments() -> list[dict]:
         return []
 
     experiments = []
-    for d in sorted(EXPERIMENTS_DIR.iterdir()):
+    for d in sorted(EXPERIMENTS_DIR.iterdir(), key=lambda p: p.stat().st_mtime):
         if d.name.startswith("_") or not d.is_dir():
             continue
         config_path = d / "config.yaml"
