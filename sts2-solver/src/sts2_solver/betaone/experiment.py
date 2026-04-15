@@ -214,7 +214,13 @@ class Experiment:
 
         # Ensure architecture matches current code and compute network stats
         config.architecture = dict(ARCH_META)
-        num_cards = config.architecture.get("num_cards", 120)
+        # Use actual card vocab size if available
+        vocab_path = BENCHMARK_DIR / "card_vocab.json"
+        if vocab_path.exists():
+            import json as _json
+            num_cards = len(_json.loads(vocab_path.read_text(encoding="utf-8")))
+        else:
+            num_cards = config.architecture.get("num_cards", 120)
         stats = network_stats(num_cards)
         config.architecture["num_cards"] = stats["num_cards"]
         config.architecture["total_params"] = stats["total_params"]
