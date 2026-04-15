@@ -107,22 +107,28 @@ class ExperimentConfig:
         c = self.curriculum
         ck = self.checkpoints
 
+        def _float(v, default=0.0):
+            """Coerce string-encoded floats from YAML (e.g., '3e-4')."""
+            if v is None:
+                return default
+            return float(v)
+
         if self.method == "mcts_selfplay":
             mcts = t.get("mcts", {})
             return {
                 "num_generations": t.get("generations", 3000),
                 "combats_per_gen": t.get("combats_per_gen", 256),
                 "num_sims": mcts.get("num_sims", 400),
-                "lr": t.get("lr", 3e-4),
-                "value_coef": mcts.get("value_coef", 1.0),
+                "lr": _float(t.get("lr"), 3e-4),
+                "value_coef": _float(mcts.get("value_coef"), 1.0),
                 "train_epochs": mcts.get("train_epochs", 4),
                 "batch_size": t.get("batch_size", 512),
-                "temperature": mcts.get("temperature", 1.0),
+                "temperature": _float(mcts.get("temperature"), 1.0),
                 "replay_capacity": mcts.get("replay_capacity", 200_000),
                 "skip_to_final": c.get("skip_to_final", False),
                 "recorded_encounters": d.get("mode") in ("recorded", "mixed"),
                 "mixed": d.get("mode") == "mixed",
-                "recorded_frac": d.get("recorded_frac", 0.5),
+                "recorded_frac": _float(d.get("recorded_frac"), 0.5),
                 "cold_start": ck.get("cold_start", False),
             }
         else:  # ppo
@@ -130,22 +136,22 @@ class ExperimentConfig:
             return {
                 "num_generations": t.get("generations", 2000),
                 "combats_per_gen": t.get("combats_per_gen", 256),
-                "lr": t.get("lr", 3e-4),
-                "gamma": ppo.get("gamma", 0.99),
-                "lam": ppo.get("lam", 0.95),
-                "temperature_start": ppo.get("temperature_start", 1.0),
-                "temperature_end": ppo.get("temperature_end", 0.5),
-                "entropy_coef": ppo.get("entropy_coef", 0.03),
-                "clip_ratio": ppo.get("clip_ratio", 0.2),
-                "value_coef": ppo.get("value_coef", 0.5),
-                "max_grad_norm": ppo.get("max_grad_norm", 0.5),
+                "lr": _float(t.get("lr"), 3e-4),
+                "gamma": _float(ppo.get("gamma"), 0.99),
+                "lam": _float(ppo.get("lam"), 0.95),
+                "temperature_start": _float(ppo.get("temperature_start"), 1.0),
+                "temperature_end": _float(ppo.get("temperature_end"), 0.5),
+                "entropy_coef": _float(ppo.get("entropy_coef"), 0.03),
+                "clip_ratio": _float(ppo.get("clip_ratio"), 0.2),
+                "value_coef": _float(ppo.get("value_coef"), 0.5),
+                "max_grad_norm": _float(ppo.get("max_grad_norm"), 0.5),
                 "ppo_epochs": ppo.get("ppo_epochs", 4),
                 "ppo_batch_size": ppo.get("ppo_batch_size", 256),
                 "skip_to_final": c.get("skip_to_final", False),
                 "lock_tier": c.get("lock_tier"),
                 "recorded_encounters": d.get("mode") in ("recorded", "mixed"),
                 "mixed": d.get("mode") == "mixed",
-                "recorded_frac": d.get("recorded_frac", 0.5),
+                "recorded_frac": _float(d.get("recorded_frac"), 0.5),
             }
 
 
@@ -345,6 +351,7 @@ class Experiment:
         entry = {
             "suite": suite_id,
             "mode": result["mode"],
+            "mcts_sims": result.get("mcts_sims", 0),
             "timestamp": time.time(),
             "checkpoint": checkpoint,
             "gen": result.get("gen"),

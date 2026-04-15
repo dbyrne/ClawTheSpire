@@ -5,7 +5,7 @@ description: "MCTS self-play training"
 training:
   generations: 3000
   combats_per_gen: 256
-  lr: 3e-4
+  lr: 0.0003
   batch_size: 512
   mcts:
     num_sims: 400

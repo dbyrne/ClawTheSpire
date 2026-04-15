@@ -298,6 +298,7 @@ def benchmark_checkpoint(
             "games": n_games,
             "ci95_lo": round(ci_lo, 4),
             "ci95_hi": round(ci_hi, 4),
+            "mcts_sims": num_sims if use_mcts else 0,
             "elapsed": round(elapsed, 1),
         })
 

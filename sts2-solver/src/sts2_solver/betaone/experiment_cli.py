@@ -133,6 +133,7 @@ def cmd_benchmark(args):
             suite_type=suite_type,
             mode=args.mode,
             combats=args.combats,
+            num_sims=args.sims,
         )
 
         for result in results:
@@ -383,6 +384,8 @@ def main():
                     help="Checkpoint to benchmark (default: latest)")
     p.add_argument("--combats", type=int, default=256,
                     help="Number of combats for final exam")
+    p.add_argument("--sims", type=int, default=400,
+                    help="MCTS simulations per decision (default: 400)")
     p.set_defaults(func=cmd_benchmark)
 
     # compare

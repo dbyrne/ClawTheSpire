@@ -5,7 +5,7 @@ description: "PPO training"
 training:
   generations: 2000
   combats_per_gen: 256
-  lr: 3e-4
+  lr: 0.0003
   ppo:
     gamma: 0.99
     lam: 0.95
