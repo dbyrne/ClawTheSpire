@@ -125,29 +125,33 @@ def cmd_benchmark(args):
         suite_types.append("final-exam")
     if args.suite in ("recorded", "all"):
         suite_types.append("recorded")
-    if args.suite == "training-set":
-        suite_types.append("training-set")
+    if args.suite in ("training-set", "encounter-set"):
+        suite_types.append("encounter-set")
 
     for suite_type in suite_types:
         if suite_type == "final-exam":
             _, sid = get_current_final_exam_suite()
         elif suite_type == "recorded":
             _, sid = get_current_recorded_suite()
-        elif suite_type == "training-set":
-            from .suite import get_training_set_suite
-            ts_name = args.training_set or exp.config.data.get("training_set")
-            if not ts_name:
-                print("  No training set specified (use --training-set or set in config)")
+        elif suite_type == "encounter-set":
+            es_name = (args.encounter_set or args.training_set
+                       or exp.config.data.get("encounter_set")
+                       or exp.config.data.get("training_set"))
+            if not es_name:
+                print("  No encounter set specified (use --encounter-set or set in config)")
                 continue
-            _, sid = get_training_set_suite(ts_name)
+            from .suite import get_encounter_set_suite
+            _, sid = get_encounter_set_suite(es_name)
 
         print(f"\nBenchmarking: {exp.config.name}")
         print(f"  Suite: {sid} ({suite_type})")
         print(f"  Mode: {args.mode}")
 
         ts_for_bench = None
-        if suite_type == "training-set":
-            ts_for_bench = args.training_set or exp.config.data.get("training_set")
+        if suite_type == "encounter-set":
+            ts_for_bench = (args.encounter_set or args.training_set
+                            or exp.config.data.get("encounter_set")
+                            or exp.config.data.get("training_set"))
 
         results = benchmark_checkpoint(
             ckpt_path,
@@ -398,21 +402,107 @@ def cmd_calibrate(args):
     print(f"    training_set: {ts_id}")
 
 
-def cmd_training_sets(args):
+def cmd_encounter_sets(args):
+    from .encounter_set import list_encounter_sets
+    sets = list_encounter_sets()
+    # Also show legacy training sets
     from .training_set import list_training_sets
-    sets = list_training_sets()
-    if not sets:
-        print("No training sets. Create one with: sts2-experiment calibrate --checkpoint <name>")
+    legacy = list_training_sets()
+
+    if not sets and not legacy:
+        print("No encounter sets. Create one with: sts2-experiment generate --checkpoint <name>")
         return
-    print(f"{'Name':<32s} {'ID':<18s} {'Rec':>4s} {'Pkg':>4s} {'HP':>5s} {'Calibrated From'}")
-    print("-" * 85)
-    for ts in sets:
-        cal = ts.get("calibrated_with", {})
-        src = cal.get("checkpoint", "?")
-        name = ts.get("name", "")
-        tid = ts.get("training_set_id", "?")
-        tid_short = tid[:16] if len(tid) > 16 else tid
-        print(f"  {name:<30s} {tid_short:<18s} {ts.get('recorded_count', 0):>4d} {ts.get('packages_count', 0):>4d} {ts.get('recorded_avg_hp', 0):>5.1f}   {src}")
+
+    if sets:
+        print(f"{'Name':<28s} {'ID':<18s} {'Count':>6s} {'HP':>5s} {'Source'}")
+        print("-" * 80)
+        for es in sets:
+            src = es.get("source", {})
+            src_str = src.get("calibrated_with", {}).get("checkpoint", "?") if isinstance(src, dict) else "?"
+            name = es.get("name", "")
+            eid = es.get("encounter_set_id", "?")
+            eid_short = eid[:16] if len(eid) > 16 else eid
+            print(f"  {name:<26s} {eid_short:<18s} {es.get('encounter_count', 0):>6d} {es.get('avg_hp', 0):>5.1f}   {src_str}")
+
+    if legacy:
+        print(f"\nLegacy training sets (use encounter sets instead):")
+        for ts in legacy:
+            cal = ts.get("calibrated_with", {})
+            src = cal.get("checkpoint", "?")
+            name = ts.get("name", "")
+            print(f"  {name:<26s} rec={ts.get('recorded_count', 0)} pkg={ts.get('packages_count', 0)}  from {src}")
+
+
+def cmd_generate(args):
+    """Generate an encounter set from packages + recorded encounters."""
+    from .generate_encounters import generate_combined
+    from .encounter_set import save_encounter_set
+    from .data_utils import build_monster_data_json, load_solver_json
+    from .network import BetaOneNetwork, export_onnx
+    from .paths import BENCHMARK_DIR
+    import torch
+
+    # Load checkpoint
+    if args.checkpoint:
+        exp = Experiment(args.checkpoint)
+        if exp.exists:
+            ckpt_path = str(exp.dir / "betaone_latest.pt")
+        else:
+            ckpt_path = args.checkpoint
+    else:
+        print("Must specify --checkpoint (experiment name or path)")
+        sys.exit(1)
+
+    print(f"Generating encounter set from: {ckpt_path}")
+    print(f"  Sims: {args.sims}, Combats/HP: {args.combats}, Decks/encounter: {args.decks_per}")
+
+    # Export ONNX
+    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    import json as _json
+    vocab_path = BENCHMARK_DIR / "card_vocab.json"
+    card_vocab = _json.loads(vocab_path.read_text(encoding="utf-8"))
+    card_vocab_json = _json.dumps(card_vocab)
+    net = BetaOneNetwork(num_cards=len(card_vocab))
+    net.load_state_dict(ckpt["model_state_dict"])
+    from .encounter_set import ENCOUNTER_SETS_DIR
+    onnx_dir = str(ENCOUNTER_SETS_DIR / "_calibration_onnx")
+    onnx_path = export_onnx(net, onnx_dir)
+
+    monster_json = build_monster_data_json()
+    profiles_json = load_solver_json("enemy_profiles.json")
+
+    recorded_path = str(BENCHMARK_DIR / "benchmark_recorded.jsonl")
+
+    encounters = generate_combined(
+        monster_json, profiles_json, card_vocab_json, onnx_path,
+        recorded_path=recorded_path,
+        decks_per=args.decks_per,
+        num_sims=args.sims,
+        combats=args.combats,
+    )
+
+    es_id = save_encounter_set(
+        name=args.name,
+        encounters=encounters,
+        source={
+            "type": "combined",
+            "calibrated_with": {
+                "checkpoint": args.checkpoint,
+                "gen": ckpt.get("gen", "?"),
+                "method": "mcts",
+                "sims": args.sims,
+                "combats_per_hp": args.combats,
+                "decks_per_encounter": args.decks_per,
+            },
+        },
+    )
+
+    print(f"\nEncounter set saved: {es_id}")
+    print(f"  Name: {args.name}")
+    print(f"  Encounters: {len(encounters)}")
+    print(f"\nUse in experiment config:")
+    print(f"  data:")
+    print(f"    encounter_set: {args.name}")
 
 
 def cmd_suites(args):
@@ -506,10 +596,12 @@ def main():
     # benchmark
     p = sub.add_parser("benchmark", help="Run combat benchmark for an experiment")
     p.add_argument("name", help="Experiment name")
-    p.add_argument("--suite", choices=["final-exam", "recorded", "training-set", "all"], default="all",
-                    help="Which suite: final-exam, recorded, training-set, or all (default)")
+    p.add_argument("--suite", choices=["final-exam", "recorded", "training-set", "encounter-set", "all"], default="all",
+                    help="Which suite: final-exam, recorded, encounter-set, training-set (legacy), or all")
     p.add_argument("--training-set", default=None,
-                    help="Training set name/ID for --suite training-set")
+                    help="Training set name/ID (legacy, use --encounter-set)")
+    p.add_argument("--encounter-set", default=None,
+                    help="Encounter set name/ID for --suite encounter-set")
     p.add_argument("--mode", choices=["policy", "mcts", "both"], default="both",
                     help="Inference mode: policy (network only), mcts (with search), both (default)")
     p.add_argument("--checkpoint", default="latest",
@@ -546,9 +638,26 @@ def main():
                     help="Combats per HP level (default: 64)")
     p.set_defaults(func=cmd_calibrate)
 
-    # training-sets
-    p = sub.add_parser("training-sets", help="List available training sets")
-    p.set_defaults(func=cmd_training_sets)
+    # generate
+    p = sub.add_parser("generate", help="Generate an encounter set from packages + recorded")
+    p.add_argument("name", help="Friendly name for the encounter set")
+    p.add_argument("--checkpoint", required=True,
+                    help="Experiment name or checkpoint path to calibrate against")
+    p.add_argument("--decks-per", type=int, default=3,
+                    help="Random deck variants per package encounter (default: 3)")
+    p.add_argument("--sims", type=int, default=400,
+                    help="MCTS sims for calibration (default: 400)")
+    p.add_argument("--combats", type=int, default=64,
+                    help="Combats per HP level in calibration (default: 64)")
+    p.set_defaults(func=cmd_generate)
+
+    # encounter-sets
+    p = sub.add_parser("encounter-sets", help="List available encounter sets")
+    p.set_defaults(func=cmd_encounter_sets)
+
+    # training-sets (legacy alias)
+    p = sub.add_parser("training-sets", help="List training sets (legacy, use encounter-sets)")
+    p.set_defaults(func=cmd_encounter_sets)
 
     # suites
     p = sub.add_parser("suites", help="List benchmark suites")

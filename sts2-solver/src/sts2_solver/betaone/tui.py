@@ -60,17 +60,19 @@ def _format_time_ago(seconds: float) -> str:
 
 
 def _resolve_ts_name(ts_id: str) -> str:
-    """Resolve a training set ID to its friendly name."""
+    """Resolve a training/encounter set ID to its friendly name."""
     from .paths import BENCHMARK_DIR
-    ts_path = BENCHMARK_DIR / "training_sets" / f"{ts_id}.yaml"
-    if ts_path.exists():
-        try:
-            import yaml
-            with open(ts_path) as f:
-                data = yaml.safe_load(f)
-            return data.get("name", ts_id)
-        except Exception:
-            pass
+    import yaml as _yaml
+    # Check encounter sets first
+    for subdir in ["encounter_sets", "training_sets"]:
+        ts_path = BENCHMARK_DIR / subdir / f"{ts_id}.yaml"
+        if ts_path.exists():
+            try:
+                with open(ts_path) as f:
+                    data = _yaml.safe_load(f)
+                return data.get("name", ts_id)
+            except Exception:
+                pass
     return ts_id
 
 
@@ -166,11 +168,8 @@ def build_dashboard(experiments: list[dict]) -> Group:
         eval_str = f"{ev['score']:.0%}" if ev and "score" in ev else "-"
         et_str = f"{ev['end_turn_avg']:.0%}" if ev and ev.get("end_turn_avg") else "-"
 
-        ts = exp["data"].get("training_set", "")
-        # Resolve friendly name from training set YAML
-        ts_str = "-"
-        if ts:
-            ts_str = _resolve_ts_name(ts)
+        ts = exp["data"].get("encounter_set") or exp["data"].get("training_set", "")
+        ts_str = _resolve_ts_name(ts) if ts else "-"
 
         if exp["method"] == "ppo":
             method = "PPO"
@@ -275,31 +274,30 @@ def build_dashboard(experiments: list[dict]) -> Group:
         parts.append(spark)
 
     # === Footer ===
-    # === Training sets section ===
-    from .training_set import list_training_sets
-    ts_list = list_training_sets()
-    if ts_list:
-        ts_table = Table(title="Training Sets", expand=True, show_lines=False)
-        ts_table.add_column("Name", style="cyan", max_width=28)
-        ts_table.add_column("Recorded", justify="right", max_width=8)
-        ts_table.add_column("Packages", justify="right", max_width=8)
-        ts_table.add_column("Avg HP", justify="right", max_width=7)
-        ts_table.add_column("Calibrated From", max_width=20)
-        ts_table.add_column("ID", style="dim", max_width=18)
+    # === Encounter sets section ===
+    from .encounter_set import list_encounter_sets
+    es_list = list_encounter_sets()
+    if es_list:
+        es_table = Table(title="Encounter Sets", expand=True, show_lines=False)
+        es_table.add_column("Name", style="cyan", max_width=28)
+        es_table.add_column("Count", justify="right", max_width=6)
+        es_table.add_column("Avg HP", justify="right", max_width=7)
+        es_table.add_column("Calibrated From", max_width=20)
+        es_table.add_column("ID", style="dim", max_width=18)
 
-        for ts in ts_list:
-            cal = ts.get("calibrated_with", {})
-            ts_table.add_row(
-                ts.get("name", "?"),
-                str(ts.get("recorded_count", 0)),
-                str(ts.get("packages_count", 0)),
-                f"{ts.get('recorded_avg_hp', 0):.0f}",
+        for es in es_list:
+            src = es.get("source", {})
+            cal = src.get("calibrated_with", {}) if isinstance(src, dict) else {}
+            es_table.add_row(
+                es.get("name", "?"),
+                str(es.get("encounter_count", 0)),
+                f"{es.get('avg_hp', 0):.0f}",
                 cal.get("checkpoint", "?"),
-                ts.get("training_set_id", "?")[:16],
+                es.get("encounter_set_id", "?")[:16],
             )
-        parts.append(ts_table)
+        parts.append(es_table)
 
-    footer = Text(f"  {len(experiments)} experiments | {len(ts_list)} training sets | refresh 2s | Ctrl+C to exit", style="dim")
+    footer = Text(f"  {len(experiments)} experiments | {len(es_list)} encounter sets | refresh 2s | Ctrl+C to exit", style="dim")
     parts.append(footer)
 
     return Group(*parts)

@@ -249,24 +249,41 @@ def benchmark_checkpoint(
             n_games = combats
             wins = int(wr * n_games + 0.5)
 
-        elif suite_type == "training-set":
-            from .training_set import load_training_set
-            ts = load_training_set(ts_id) if ts_id else {}
-            ts_recorded = ts.get("recorded_data", [])
+        elif suite_type in ("training-set", "encounter-set"):
+            # Load encounters — try encounter set first, fall back to legacy training set
+            es_encounters = None
+            if ts_id:
+                try:
+                    from .encounter_set import load_encounter_set
+                    es_encounters = load_encounter_set(ts_id)
+                except FileNotFoundError:
+                    pass
+            if es_encounters is None and ts_id:
+                from .training_set import load_training_set
+                ts = load_training_set(ts_id)
+                es_encounters = ts.get("recorded_data", [])
+
             total_wins, total_games = 0, 0
-            for i, rec in enumerate(ts_recorded):
-                deck = []
-                for cid in rec.get("deck", []):
-                    try:
-                        deck.append(lookup_card(cid.rstrip("+")))
-                    except Exception:
-                        pass
+            for i, enc_data in enumerate(es_encounters or []):
+                # Encounter set format: deck is already full card dicts
+                deck = enc_data.get("deck", [])
+                # Legacy training set format: deck might be card IDs
+                if deck and isinstance(deck[0], str):
+                    converted = []
+                    for cid in deck:
+                        try:
+                            converted.append(lookup_card(cid.rstrip("+")))
+                        except Exception:
+                            pass
+                    deck = converted
                 if not deck:
                     continue
-                hp = rec.get("calibrated_hp", 70)
-                enc = [rec["enemy_ids"]] * recorded_combats
+                hp = enc_data.get("hp", enc_data.get("calibrated_hp", 70))
+                enemies = enc_data.get("enemies", enc_data.get("enemy_ids", []))
+                rels = enc_data.get("relics", [])
+                enc = [enemies] * recorded_combats
                 dks = [deck] * recorded_combats
-                rels = [list(rec.get("relics", []))] * recorded_combats
+                rels_batch = [list(rels)] * recorded_combats
                 seeds_batch = [42 * 1000 + i * 100 + j for j in range(recorded_combats)]
                 if use_mcts:
                     r = eval_mcts(onnx_path, card_vocab_json, monster_json, profiles_json,

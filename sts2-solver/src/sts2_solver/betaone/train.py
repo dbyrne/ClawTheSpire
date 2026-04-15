@@ -76,6 +76,7 @@ def train(
     mixed: bool = False,
     recorded_frac: float = 0.5,
     training_set_id: str | None = None,
+    encounter_set_id: str | None = None,
 ):
     os.makedirs(output_dir, exist_ok=True)
     onnx_dir = os.path.join(output_dir, "onnx")
@@ -104,6 +105,7 @@ def train(
         recorded_encounters=recorded_encounters,
         recorded_frac=recorded_frac,
         skip_to_final=skip_to_final,
+        encounter_set_id=encounter_set_id,
     )
     curriculum = td["curriculum"]
     recorded_encounters = td["recorded_encounters"]
@@ -300,7 +302,7 @@ def train(
         # Sample encounters grouped by HP (shared with selfplay_train.py)
         batches = sample_combat_batches(
             curriculum, combats_per_gen, mixed, recorded_encounters,
-            recorded_frac, gen,
+            recorded_frac, gen, encounter_set=td.get("encounter_set"),
         )
 
         # Collect rollouts — one call per HP level, merge results

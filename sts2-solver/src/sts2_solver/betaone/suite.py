@@ -113,7 +113,9 @@ def suite_id(suite: dict) -> str:
     elif stype == "recorded":
         key = f"{suite['recorded_hash']}:{suite['recorded_count']}:{suite['combats_per']}"
     elif stype == "training-set":
-        key = f"{suite['training_set_id']}:{suite['recorded_hash']}"
+        key = f"{suite.get('training_set_id', '')}:{suite.get('recorded_hash', '')}"
+    elif stype == "encounter-set":
+        key = f"{suite['encounter_set_id']}:{suite['content_hash']}"
     elif stype == "eval":
         key = f"{suite['scenario_hash']}:{suite['scenario_count']}"
     else:
@@ -176,27 +178,40 @@ def get_current_recorded_suite() -> tuple[dict, str]:
     return suite, sid
 
 
-def compute_training_set_suite(ts_id: str) -> dict:
-    """Suite for benchmarking against a training set's encounters."""
-    from .training_set import load_training_set
-    ts = load_training_set(ts_id)
-    recorded = ts.get("recorded_data", [])
-    rec_hash = _content_hash(json.dumps(recorded, sort_keys=True)) if recorded else "empty"
+def compute_encounter_set_suite(es_id: str) -> dict:
+    """Suite for benchmarking against an encounter set."""
+    from .encounter_set import load_encounter_set, load_encounter_set_meta
+    try:
+        encounters = load_encounter_set(es_id)
+        meta = load_encounter_set_meta(es_id) or {}
+    except FileNotFoundError:
+        # Fall back to legacy training set
+        from .training_set import load_training_set
+        ts = load_training_set(es_id)
+        encounters = ts.get("recorded_data", [])
+        meta = {"name": ts.get("name", es_id), "training_set_id": ts.get("training_set_id", es_id)}
+
+    content = json.dumps(encounters, sort_keys=True)
     return {
-        "name": f"ts-{ts.get('name', ts_id)}",
-        "type": "training-set",
-        "training_set_id": ts.get("training_set_id", ts_id),
-        "training_set_name": ts.get("name", ts_id),
-        "recorded_count": len(recorded),
-        "recorded_hash": rec_hash,
+        "name": f"es-{meta.get('name', es_id)}",
+        "type": "encounter-set",
+        "encounter_set_id": meta.get("encounter_set_id", es_id),
+        "encounter_set_name": meta.get("name", es_id),
+        "encounter_count": len(encounters),
+        "content_hash": _content_hash(content),
     }
 
 
-def get_training_set_suite(ts_id: str) -> tuple[dict, str]:
-    """Compute and save a training set benchmark suite. Returns (suite, suite_id)."""
-    suite = compute_training_set_suite(ts_id)
+def get_encounter_set_suite(es_id: str) -> tuple[dict, str]:
+    """Compute and save an encounter set benchmark suite. Returns (suite, suite_id)."""
+    suite = compute_encounter_set_suite(es_id)
     sid = save_suite(suite)
     return suite, sid
+
+
+# Legacy aliases
+compute_training_set_suite = compute_encounter_set_suite
+get_training_set_suite = get_encounter_set_suite
 
 
 def get_current_eval_suite() -> tuple[dict, str]:
