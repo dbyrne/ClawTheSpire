@@ -27,6 +27,7 @@ import torch.nn as nn
 
 import sts2_engine
 
+from .paths import SOLVER_PKG
 from .data_utils import (
     load_solver_json,
     build_monster_data_json,
@@ -414,7 +415,7 @@ def train(
         # Per-tier cumulative (persisted across runs via checkpoint)
         tk = str(tier_before)
         prev = tier_cumulative.get(tk, [0, 0])
-        tier_cumulative[tk] = [prev[0] + tier_wins, prev[1] + len(tier_outcomes)]
+        tier_cumulative[tk] = [prev[0] + tier_wins, prev[1] + n_episodes]
         if lock_tier is not None:
             tier_change = "hold"
             curriculum.gens_at_tier += 1
@@ -450,7 +451,7 @@ def train(
             "steps": T,
             "episodes": n_episodes,
             "tier": tier_before,
-            "tier_name": TIER_CONFIGS[tier_before].name,
+            "tier_name": curriculum.config.name,
             "gens_at_tier": curriculum.gens_at_tier,
             "tier_change": tier_change,
             "policy_loss": round(metrics["policy_loss"], 5),

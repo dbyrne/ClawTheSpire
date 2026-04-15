@@ -29,6 +29,7 @@ import torch.nn.functional as F
 
 import sts2_engine
 
+from .paths import SOLVER_PKG
 from .data_utils import (
     load_solver_json,
     build_monster_data_json,
@@ -439,7 +440,7 @@ def train(
             "buffer_size": buf_size,
             "episodes": n_combats,
             "tier": tier_before,
-            "tier_name": cfg.name,
+            "tier_name": curriculum.config.name,
             "tier_change": tier_change,
             "gens_at_tier": curriculum.gens_at_tier,
             "policy_loss": round(avg_ploss, 5),
