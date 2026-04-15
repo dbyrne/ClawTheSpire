@@ -28,27 +28,26 @@ sts2-experiment generate <name> --checkpoint <exp>  # generate encounter set
     [--packages-only]              # only archetype packages (no recorded)
     [--recorded-only]              # only recorded death encounters (no packages)
     [--decks-per N]                # deck variants per package encounter (default: 3)
-    [--sims N] [--combats N]       # calibration fidelity
+    [--combats N]                  # combats per HP level in calibration (uses policy, fast)
 sts2-experiment encounter-sets                      # list all encounter sets
 
 # Benchmarking
-sts2-experiment benchmark <name> --suite <s> --mode <m> --sims <n> --combats <n>
-    suites: final-exam, recorded, encounter-set, all
+sts2-experiment benchmark <name> --encounter-set <name> --mode <m>
     modes: policy, mcts, both
-    --encounter-set <name>         # for --suite encounter-set
-sts2-experiment eval <name>                         # eval harness (saves with suite ID)
-sts2-experiment suites --refresh                    # list/register benchmark suites
+    --repeats N                    # times to repeat each encounter (default: 1)
+    --sims N                       # MCTS sims for mcts mode (default: 400)
+    Results accumulate: running the same benchmark again adds to
+    existing wins/games for tighter CIs, not duplicate rows.
+sts2-experiment eval <name>                         # eval harness (separate from encounters)
 ```
 
 Key concepts:
-- **Encounter sets** are immutable, flat JSONL files of frozen combat encounters (enemies, deck, HP, relics). Used for BOTH training and benchmarking. Generated from archetype packages and/or recorded death encounters.
-- **Two generators** produce encounter sets: package generator (archetypes -> random decks -> calibrate HP -> freeze) and live game recorder (death encounters -> calibrate HP -> freeze). Both output the same flat format.
+- **Encounter sets** are immutable, flat JSONL files of frozen combat encounters (enemies, deck, HP, relics). Used for BOTH training and benchmarking. One concept, one code path.
+- **Two generators** produce encounter sets: package generator (archetypes -> random decks -> calibrate HP via policy sampling -> freeze) and live game recorder (death encounters -> calibrate HP -> freeze). Both output the same flat format.
+- **Benchmarks accumulate**: running the same benchmark multiple times adds wins/games to existing results for tighter CIs. No duplicate rows.
 - **Eval harness** is separate — curated decision scenarios, not combat encounters.
 - **Inference mode** (policy vs mcts-N) is separate from training method. Any checkpoint can be benchmarked either way.
-- **Benchmarks track**: suite ID, mode, MCTS sims, wins/games, 95% CI (Wilson score).
-- **Eval tracks**: score, per-category breakdown, End Turn bias (avg ET prob on wrong scenarios).
 - Forking resets gen to 0 and records parent lineage.
-- Legacy `training-sets` and `calibrate` commands still work but are deprecated.
 
 ## Steps
 
@@ -152,10 +151,10 @@ Also show latest eval if available from `$EXP_DIR/benchmarks/eval.jsonl`:
 
 If no benchmarks have been run yet, suggest:
 ```
-sts2-experiment benchmark {name} --suite all --mode both
-sts2-experiment benchmark {name} --suite encounter-set --encounter-set <name> --mode both
+sts2-experiment benchmark {name} --encounter-set base-es-v1 --mode both --repeats 5
 sts2-experiment eval {name}
 ```
+To tighten CIs later, just run the same command again — results accumulate.
 
 ### Step 5: Flag concerns
 
@@ -209,7 +208,7 @@ Based on the analysis, give ONE concrete next step. Examples:
 - If MCTS plateauing -> "Try more sims: `sts2-experiment fork <name>-800s --from <name> -o training.mcts.num_sims=800`"
 - If encounter set too hard for cold start -> "Warm-start: `sts2-experiment fork <name>-warm --from <strong-exp>`"
 - If encounter set too easy -> "Regenerate: `sts2-experiment generate <name> --checkpoint <current-exp>`"
-- If no benchmarks yet -> "Run benchmarks: `sts2-experiment benchmark <name> --suite all --mode both --combats 1000`"
-- If want to benchmark against encounter set -> "`sts2-experiment benchmark <name> --suite encounter-set --encounter-set <name>`"
+- If no benchmarks yet -> "Run benchmarks: `sts2-experiment benchmark <name> --encounter-set base-es-v1 --mode both --repeats 5`"
+- If CIs too wide -> "Run again to accumulate: same command, results merge automatically"
 - If training healthy and progressing -> "Training on track. Let it cook."
 - If stopped -> "Resume with: `sts2-experiment train <name>`"
