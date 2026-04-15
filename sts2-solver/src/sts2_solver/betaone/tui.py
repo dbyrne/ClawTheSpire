@@ -324,15 +324,26 @@ def build_dashboard(experiments: list[dict]) -> Group:
         gen_times = [r.get("gen_time", 0) for r in history]
         n_hist = len(history)
 
-        def _window(vals, n=25):
+        # Window size = buffer turnover in gens (for MCTS), else 25
+        mcts_cfg = exp.get("training", {}).get("mcts", {})
+        replay_cap = mcts_cfg.get("replay_capacity", 0)
+        avg_steps = sum(r.get("steps", 0) for r in history) / max(len(history), 1)
+        if replay_cap and avg_steps > 0:
+            win_n = max(5, min(50, round(replay_cap / avg_steps)))
+        else:
+            win_n = 25  # default for PPO
+
+        def _window(vals, n=None):
+            n = n or win_n
             w = vals[-n:]
             return min(w), max(w), sum(w) / len(w)
 
-        def _avg(vals, n=25):
+        def _avg(vals, n=None):
+            n = n or win_n
             w = vals[-n:]
             return sum(w) / len(w) if w else 0.0
 
-        has_delta = n_hist >= 50
+        has_delta = n_hist >= win_n * 2
 
         color = exp_color_map.get(exp["name"], "white")
         header = Text()
@@ -347,7 +358,7 @@ def build_dashboard(experiments: list[dict]) -> Group:
             eta_str = f"{remaining_s/60:.0f}m left"
         else:
             eta_str = f"{remaining_s:.0f}s left"
-        header.append(f"  gen {gen_now}/{gen_total}  {gen_times[-1]:.0f}s/gen  ~{eta_str}", style="dim")
+        header.append(f"  gen {gen_now}/{gen_total}  {gen_times[-1]:.0f}s/gen  ~{eta_str}  window={win_n}", style="dim")
         parts.append(header)
 
         # Render one candlestick line per metric
@@ -390,9 +401,9 @@ def build_dashboard(experiments: list[dict]) -> Group:
             line.append(f"  {fmt_val(mean)}", style="bold")
             line.append(f"  [{fmt_val(lo)}, {fmt_val(hi)}]", style="dim")
 
-            # Delta from previous 25
+            # Delta from previous window
             if has_delta:
-                prev_mean = _avg(vals[-50:-25])
+                prev_mean = _avg(vals[-win_n * 2:-win_n])
                 d = mean - prev_mean
                 if higher_is_better:
                     style = "green" if d > 0 else "red" if d < 0 else "dim"
