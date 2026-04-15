@@ -33,17 +33,16 @@ def _calibrate_hp(
     profiles_json: str,
     card_vocab_json: str,
     onnx_path: str,
-    num_sims: int = 400,
     combats: int = 64,
 ) -> int | None:
-    """Binary search on player HP to find ~50% MCTS win rate for one encounter."""
+    """Binary search on player HP to find ~50% policy win rate for one encounter."""
     lo, hi = 15, 70
     best_hp = None
     best_diff = 1.0
 
     for _ in range(6):
         mid = (lo + hi) // 2
-        r = sts2_engine.betaone_mcts_selfplay(
+        r = sts2_engine.collect_betaone_rollouts(
             encounters_json=json.dumps([enemy_ids] * combats),
             decks_json=json.dumps([deck] * combats),
             player_hp=mid, player_max_hp=70, player_max_energy=3,
@@ -52,10 +51,10 @@ def _calibrate_hp(
             monster_data_json=monster_json,
             enemy_profiles_json=profiles_json,
             onnx_path=onnx_path,
-            card_vocab_json=card_vocab_json,
-            num_sims=num_sims, temperature=0.0,
+            temperature=0.01,
             seeds=list(range(combats)),
-            add_noise=False,
+            gen_id=0,
+            card_vocab_json=card_vocab_json,
         )
         wins = sum(1 for o in r["outcomes"] if o == "win")
         wr = wins / max(len(r["outcomes"]), 1)
@@ -89,7 +88,6 @@ def generate_from_packages(
     card_vocab_json: str,
     onnx_path: str,
     decks_per: int = 3,
-    num_sims: int = 400,
     combats: int = 64,
     rng: stdlib_random.Random | None = None,
 ) -> list[dict]:
@@ -125,7 +123,7 @@ def generate_from_packages(
             hp = _calibrate_hp(
                 enemy_ids, decks[0], [],
                 monster_json, profiles_json, card_vocab_json, onnx_path,
-                num_sims=num_sims, combats=combats,
+                combats=combats,
             )
             if hp is None:
                 continue
@@ -150,7 +148,6 @@ def generate_from_recorded(
     profiles_json: str,
     card_vocab_json: str,
     onnx_path: str,
-    num_sims: int = 400,
     combats: int = 64,
 ) -> list[dict]:
     """Generate encounters from recorded death encounters.
@@ -180,7 +177,7 @@ def generate_from_recorded(
         hp = _calibrate_hp(
             enemy_ids, deck, relics,
             monster_json, profiles_json, card_vocab_json, onnx_path,
-            num_sims=num_sims, combats=combats,
+            combats=combats,
         )
         if hp is None:
             continue

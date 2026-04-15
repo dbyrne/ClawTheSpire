@@ -113,54 +113,40 @@ def cmd_benchmark(args):
         sys.exit(1)
 
     from .benchmark import benchmark_checkpoint
-    from .suite import get_encounter_set_suite, get_current_final_exam_suite, get_current_recorded_suite
+    from .encounter_set import load_encounter_set
+    from .suite import get_encounter_set_suite
 
     ckpt_path = str(exp.dir / "betaone_latest.pt")
     if args.checkpoint and args.checkpoint != "latest":
         ckpt_path = str(exp.dir / f"betaone_{args.checkpoint}.pt")
 
-    # Build list of (encounter_set_id_or_none, suite_type_for_legacy, label)
-    benchmarks_to_run = []
-    if args.suite in ("final-exam", "all"):
-        benchmarks_to_run.append((None, "final-exam", "final-exam"))
-    if args.suite in ("recorded", "all"):
-        benchmarks_to_run.append((None, "recorded", "recorded"))
-    if args.suite in ("encounter-set", "training-set", "all"):
-        es_name = (args.encounter_set or args.training_set
-                   or exp.config.data.get("encounter_set")
-                   or exp.config.data.get("training_set"))
-        if es_name:
-            benchmarks_to_run.append((es_name, None, es_name))
-        elif args.suite not in ("all",):
-            print("  No encounter set specified (use --encounter-set or set in config)")
+    es_name = (args.encounter_set
+               or exp.config.data.get("encounter_set")
+               or exp.config.data.get("training_set"))
+    if not es_name:
+        print("No encounter set specified. Use --encounter-set <name> or set in config.")
+        sys.exit(1)
 
-    for es_id, legacy_type, label in benchmarks_to_run:
-        # Resolve suite ID for result tagging
-        if es_id:
-            _, sid = get_encounter_set_suite(es_id)
-        elif legacy_type == "final-exam":
-            _, sid = get_current_final_exam_suite()
-        else:
-            _, sid = get_current_recorded_suite()
+    encounters = load_encounter_set(es_name)
+    _, sid = get_encounter_set_suite(es_name)
 
-        print(f"\nBenchmarking: {exp.config.name}")
-        print(f"  Encounter set: {label} ({sid})")
-        print(f"  Mode: {args.mode}")
+    print(f"Benchmarking: {exp.config.name}")
+    print(f"  Encounter set: {es_name} ({len(encounters)} encounters)")
+    print(f"  Mode: {args.mode}, repeats: {args.repeats}")
 
-        results = benchmark_checkpoint(
-            ckpt_path,
-            suite_type=legacy_type,
-            mode=args.mode,
-            combats=args.combats,
-            num_sims=args.sims,
-            ts_id=es_id,
-        )
+    results = benchmark_checkpoint(
+        ckpt_path,
+        encounter_set=encounters,
+        mode=args.mode,
+        repeats=args.repeats,
+        num_sims=args.sims,
+    )
 
-        for result in results:
-            exp.save_benchmark(result, suite_id=sid,
-                               checkpoint=args.checkpoint or "latest")
+    for result in results:
+        exp.save_benchmark(result, suite_id=sid,
+                           checkpoint=args.checkpoint or "latest")
 
-        print(f"  {len(results)} result(s) saved -> {exp.benchmarks_dir / 'results.jsonl'}")
+    print(f"  {len(results)} result(s) saved -> {exp.benchmarks_dir / 'results.jsonl'}")
 
 
 def cmd_eval(args):
@@ -453,7 +439,7 @@ def cmd_generate(args):
     print(f"  Recorded: {'yes' if include_recorded else 'no'}")
     print(f"  Packages: {'yes' if include_packages else 'no'}" +
           (f" ({args.decks_per} decks/encounter)" if include_packages else ""))
-    print(f"  Sims: {args.sims}, Combats/HP: {args.combats}")
+    print(f"  Combats/HP: {args.combats} (policy calibration)")
 
     # Export ONNX
     ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
@@ -484,7 +470,7 @@ def cmd_generate(args):
             print(f"\nCalibrating {len(records)} recorded encounters...")
             encounters.extend(generate_from_recorded(
                 records, monster_json, profiles_json, card_vocab_json, onnx_path,
-                num_sims=args.sims, combats=args.combats,
+                combats=args.combats,
             ))
 
     if include_packages:
@@ -492,7 +478,6 @@ def cmd_generate(args):
         encounters.extend(generate_from_packages(
             monster_json, profiles_json, card_vocab_json, onnx_path,
             decks_per=args.decks_per,
-            num_sims=args.sims,
             combats=args.combats,
         ))
 
@@ -504,8 +489,7 @@ def cmd_generate(args):
             "calibrated_with": {
                 "checkpoint": args.checkpoint,
                 "gen": ckpt.get("gen", "?"),
-                "method": "mcts",
-                "sims": args.sims,
+                "method": "policy",
                 "combats_per_hp": args.combats,
                 "decks_per_encounter": args.decks_per,
             },
@@ -609,20 +593,16 @@ def main():
     p.set_defaults(func=cmd_eval)
 
     # benchmark
-    p = sub.add_parser("benchmark", help="Run combat benchmark for an experiment")
+    p = sub.add_parser("benchmark", help="Benchmark against an encounter set")
     p.add_argument("name", help="Experiment name")
-    p.add_argument("--suite", choices=["final-exam", "recorded", "training-set", "encounter-set", "all"], default="all",
-                    help="Which suite: final-exam, recorded, encounter-set, training-set (legacy), or all")
-    p.add_argument("--training-set", default=None,
-                    help="Training set name/ID (legacy, use --encounter-set)")
     p.add_argument("--encounter-set", default=None,
-                    help="Encounter set name/ID for --suite encounter-set")
+                    help="Encounter set name (default: from experiment config)")
     p.add_argument("--mode", choices=["policy", "mcts", "both"], default="both",
-                    help="Inference mode: policy (network only), mcts (with search), both (default)")
+                    help="Inference mode: policy, mcts, or both (default)")
+    p.add_argument("--repeats", type=int, default=1,
+                    help="Times to repeat each encounter (default: 1)")
     p.add_argument("--checkpoint", default="latest",
                     help="Checkpoint to benchmark (default: latest)")
-    p.add_argument("--combats", type=int, default=256,
-                    help="Number of combats for final exam")
     p.add_argument("--sims", type=int, default=400,
                     help="MCTS simulations per decision (default: 400)")
     p.set_defaults(func=cmd_benchmark)
@@ -664,8 +644,6 @@ def main():
                     help="Only generate from recorded death encounters (no packages)")
     p.add_argument("--decks-per", type=int, default=3,
                     help="Random deck variants per package encounter (default: 3)")
-    p.add_argument("--sims", type=int, default=400,
-                    help="MCTS sims for calibration (default: 400)")
     p.add_argument("--combats", type=int, default=64,
                     help="Combats per HP level in calibration (default: 64)")
     p.set_defaults(func=cmd_generate)

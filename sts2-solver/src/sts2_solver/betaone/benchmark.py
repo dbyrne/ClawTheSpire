@@ -1,59 +1,37 @@
-"""Benchmark BetaOne checkpoints against fixed evaluation sets.
+"""Benchmark BetaOne checkpoints against encounter sets.
 
-Two evaluation sets (columns):
-  1. Final exam:  mixed encounters from all curriculum tiers, 70 HP
-  2. Recorded:    43 death encounters from live games, frozen calibrated HP
-
-Three evaluation modes (rows):
-  1. PPO:           policy sampling (no MCTS tree search)
-  2. PPO + MCTS:    same PPO checkpoint, MCTS at inference
-  3. MCTS cold:     MCTS self-play trained checkpoint, MCTS at inference
+One code path: load encounter set, run each encounter N times, report WR with CI.
 
 Usage:
-    python -m sts2_solver.betaone.benchmark                         # full 3x2 table
-    python -m sts2_solver.betaone.benchmark --ppo path/to.pt        # specific PPO checkpoint
-    python -m sts2_solver.betaone.benchmark --mcts path/to.pt       # specific MCTS checkpoint
+    python -m sts2_solver.betaone.benchmark --checkpoint path/to.pt --encounter-set name
 """
 
 from __future__ import annotations
 
-import argparse
 import json
+import math
 import os
-import random
 import time
 from pathlib import Path
 
-import torch
-
 import sts2_engine
 
-from .data_utils import (
-    build_monster_data_json,
-    load_solver_json,
-    build_card_vocab,
-)
+from .data_utils import build_monster_data_json, load_solver_json
 from .network import BetaOneNetwork, export_onnx, load_checkpoint
 from .paths import SOLVER_ROOT, SOLVER_PKG, BENCHMARK_DIR
-from .curriculum import CombatCurriculum, TIER_CONFIGS
-from .deck_gen import build_random_deck_json, _make_starter, lookup_card
+from .deck_gen import lookup_card
 
-# ---------------------------------------------------------------------------
-# Paths — legacy defaults, overridable via CLI args
-# ---------------------------------------------------------------------------
 
 _CHECKPOINTS = SOLVER_ROOT.parent / "betaone_checkpoints"
-_BENCHMARK_FILE = _CHECKPOINTS / "benchmark_recorded.jsonl"
 
 
 def _build_card_vocab() -> tuple[dict, str]:
-    """Load card vocab — tries canonical benchmark dir first, then legacy."""
     for candidate in [BENCHMARK_DIR / "card_vocab.json", _CHECKPOINTS / "card_vocab.json"]:
         if candidate.exists():
             with open(candidate, encoding="utf-8") as f:
                 vocab = json.load(f)
             return vocab, json.dumps(vocab)
-    raise FileNotFoundError("card_vocab.json not found in benchmark or checkpoints dir")
+    raise FileNotFoundError("card_vocab.json not found")
 
 
 def _load_checkpoint(path: str) -> tuple[BetaOneNetwork, dict]:
@@ -64,207 +42,70 @@ def _load_checkpoint(path: str) -> tuple[BetaOneNetwork, dict]:
     return net, ckpt
 
 
-# ---------------------------------------------------------------------------
-# Eval primitives
-# ---------------------------------------------------------------------------
-
-def _sample_final_exam(combats: int, seed: int = 42) -> tuple[list, list]:
-    """Sample encounters and decks for final exam."""
-    random.seed(seed)
-    cur = CombatCurriculum(encounter_pool_path=str(SOLVER_PKG / "encounter_pool.json"))
-    cur.tier = cur.max_tier
-    encounters = cur.sample_encounters(combats)
-    decks = [json.loads(cur.sample_deck_json(combat_idx=i)) for i in range(combats)]
-    return encounters, decks
-
-
-def _load_recorded_benchmark() -> list[dict]:
-    """Load frozen recorded encounters benchmark."""
-    if not _BENCHMARK_FILE.exists():
-        return []
-    with open(_BENCHMARK_FILE, encoding="utf-8") as f:
-        return [json.loads(l) for l in f if l.strip()]
-
-
-def eval_policy(
+def _eval_batch(
     onnx_path: str, card_vocab_json: str,
     monster_json: str, profiles_json: str,
     encounters: list, decks: list, player_hp: int,
-    seeds: list[int],
-) -> float:
-    """Evaluate using policy sampling (PPO-style, no MCTS)."""
-    r = sts2_engine.collect_betaone_rollouts(
-        encounters_json=json.dumps(encounters),
-        decks_json=json.dumps(decks),
-        player_hp=player_hp, player_max_hp=70, player_max_energy=3,
-        relics_json="[]", potions_json="[]",
-        monster_data_json=monster_json,
-        enemy_profiles_json=profiles_json,
-        onnx_path=onnx_path,
-        temperature=0.01,
-        seeds=seeds,
-        gen_id=0,
-        card_vocab_json=card_vocab_json,
-    )
-    wins = sum(1 for o in r["outcomes"] if o == "win")
-    return wins / max(len(r["outcomes"]), 1)
-
-
-def eval_mcts(
-    onnx_path: str, card_vocab_json: str,
-    monster_json: str, profiles_json: str,
-    encounters: list, decks: list, player_hp: int,
-    seeds: list[int], num_sims: int = 400,
-) -> float:
-    """Evaluate using MCTS search."""
-    r = sts2_engine.betaone_mcts_selfplay(
-        encounters_json=json.dumps(encounters),
-        decks_json=json.dumps(decks),
-        player_hp=player_hp, player_max_hp=70, player_max_energy=3,
-        relics_json="[]", potions_json="[]",
-        monster_data_json=monster_json,
-        enemy_profiles_json=profiles_json,
-        onnx_path=onnx_path,
-        card_vocab_json=card_vocab_json,
-        num_sims=num_sims, temperature=0.0,
-        seeds=seeds,
-        add_noise=False,
-    )
-    wins = sum(1 for o in r["outcomes"] if o == "win")
-    return wins / max(len(r["outcomes"]), 1)
-
-
-def eval_final_exam(onnx_path: str, card_vocab_json: str,
-                    monster_json: str, profiles_json: str,
-                    use_mcts: bool, combats: int = 128) -> float:
-    """Final exam benchmark."""
-    encounters, decks = _sample_final_exam(combats)
-    seeds = list(range(combats))
+    seeds: list[int], use_mcts: bool, num_sims: int,
+) -> int:
+    """Run a batch of combats at a single HP level. Returns win count."""
     if use_mcts:
-        return eval_mcts(onnx_path, card_vocab_json, monster_json, profiles_json,
-                         encounters, decks, 70, seeds)
-    return eval_policy(onnx_path, card_vocab_json, monster_json, profiles_json,
-                       encounters, decks, 70, seeds)
-
-
-def eval_recorded(onnx_path: str, card_vocab_json: str,
-                  monster_json: str, profiles_json: str,
-                  use_mcts: bool, combats_per: int = 32) -> float:
-    """Recorded encounters benchmark with frozen HP."""
-    records = _load_recorded_benchmark()
-    if not records:
-        return 0.0
-
-    total_wins = 0
-    total_games = 0
-
-    for i, rec in enumerate(records):
-        enemy_ids = rec["enemy_ids"]
-        hp = rec.get("calibrated_hp", 70)
-        deck_ids = rec.get("deck", [])
-
-        deck = []
-        for cid in deck_ids:
-            try:
-                deck.append(lookup_card(cid.rstrip("+")))
-            except Exception:
-                pass
-        if not deck:
-            continue
-
-        encounters = [enemy_ids] * combats_per
-        decks = [deck] * combats_per
-        seeds = [42 * 1000 + i * 100 + j for j in range(combats_per)]
-
-        if use_mcts:
-            wr = eval_mcts(onnx_path, card_vocab_json, monster_json, profiles_json,
-                           encounters, decks, hp, seeds)
-        else:
-            wr = eval_policy(onnx_path, card_vocab_json, monster_json, profiles_json,
-                             encounters, decks, hp, seeds)
-
-        wins = int(wr * combats_per + 0.5)
-        total_wins += wins
-        total_games += combats_per
-
-    return total_wins / max(total_games, 1)
-
-
-# ---------------------------------------------------------------------------
-# Clean benchmark API (experiment-aware)
-# ---------------------------------------------------------------------------
-
-def _resolve_encounters(
-    encounter_set_id: str | None = None,
-    suite_type: str | None = None,
-    combats: int = 256,
-) -> list[dict]:
-    """Resolve an encounter set from ID, or generate built-in sets on the fly."""
-    # Explicit encounter set
-    if encounter_set_id:
-        try:
-            from .encounter_set import load_encounter_set
-            return load_encounter_set(encounter_set_id)
-        except FileNotFoundError:
-            pass
-        # Fall back to legacy training set
-        try:
-            from .training_set import load_training_set
-            ts = load_training_set(encounter_set_id)
-            return ts.get("recorded_data", [])
-        except FileNotFoundError:
-            raise FileNotFoundError(f"Encounter set not found: {encounter_set_id}")
-
-    # Built-in generators (legacy suite types)
-    if suite_type == "final-exam":
-        from .generate_encounters import generate_final_exam
-        return generate_final_exam(combats=combats)
-    elif suite_type == "recorded":
-        from .generate_encounters import generate_from_benchmark_recorded
-        return generate_from_benchmark_recorded(str(_BENCHMARK_FILE))
+        r = sts2_engine.betaone_mcts_selfplay(
+            encounters_json=json.dumps(encounters),
+            decks_json=json.dumps(decks),
+            player_hp=player_hp, player_max_hp=70, player_max_energy=3,
+            relics_json="[]", potions_json="[]",
+            monster_data_json=monster_json,
+            enemy_profiles_json=profiles_json,
+            onnx_path=onnx_path,
+            card_vocab_json=card_vocab_json,
+            num_sims=num_sims, temperature=0.0,
+            seeds=seeds,
+            add_noise=False,
+        )
     else:
-        raise ValueError(f"Must specify encounter_set_id or a valid suite_type, got: {suite_type}")
+        r = sts2_engine.collect_betaone_rollouts(
+            encounters_json=json.dumps(encounters),
+            decks_json=json.dumps(decks),
+            player_hp=player_hp, player_max_hp=70, player_max_energy=3,
+            relics_json="[]", potions_json="[]",
+            monster_data_json=monster_json,
+            enemy_profiles_json=profiles_json,
+            onnx_path=onnx_path,
+            temperature=0.01,
+            seeds=seeds,
+            gen_id=0,
+            card_vocab_json=card_vocab_json,
+        )
+    return sum(1 for o in r["outcomes"] if o == "win")
 
 
 def benchmark_checkpoint(
     checkpoint_path: str,
-    suite_type: str = "final-exam",
+    encounter_set: list[dict],
     mode: str = "both",
-    combats: int = 256,
-    recorded_combats: int = 32,
+    repeats: int = 1,
     num_sims: int = 400,
-    ts_id: str | None = None,
 ) -> list[dict]:
     """Benchmark a checkpoint against an encounter set.
 
-    All benchmarks go through the same code path: load encounters,
-    group by HP, run combats, aggregate results.
-
     Args:
         checkpoint_path: Path to .pt checkpoint.
-        suite_type: Legacy suite type for built-in sets ("final-exam", "recorded").
-            Ignored when ts_id is provided.
+        encounter_set: List of {enemies, deck, hp, relics} dicts.
         mode: "policy", "mcts", or "both".
-        combats: Number of encounters for final-exam generation.
-        recorded_combats: Combats per encounter (repeated for statistical power).
+        repeats: Times to repeat each encounter (for statistical power).
         num_sims: MCTS simulations per decision.
-        ts_id: Encounter set ID or friendly name. Overrides suite_type.
+
+    Returns:
+        List of result dicts, one per mode.
     """
     card_vocab, card_vocab_json = _build_card_vocab()
     monster_json = build_monster_data_json()
     profiles_json = load_solver_json("enemy_profiles.json")
 
-    # Load and export
     net, ckpt = _load_checkpoint(checkpoint_path)
     gen = ckpt.get("gen", "?")
     onnx_path = export_onnx(net, str(_CHECKPOINTS / "eval_onnx"))
-
-    # Resolve encounters — one code path for everything
-    encounters = _resolve_encounters(
-        encounter_set_id=ts_id,
-        suite_type=suite_type,
-        combats=combats,
-    )
 
     modes = []
     if mode in ("policy", "both"):
@@ -277,16 +118,16 @@ def benchmark_checkpoint(
         use_mcts = m == "mcts"
         t0 = time.time()
 
-        # Run each encounter repeated_combats times, grouped by HP
-        wins, n_games = 0, 0
+        # Group encounters by HP for batched execution
         from collections import defaultdict
         hp_groups: dict[int, list[tuple[int, dict]]] = defaultdict(list)
-        for i, enc in enumerate(encounters):
+        for i, enc in enumerate(encounter_set):
             hp = enc.get("hp", enc.get("calibrated_hp", 70))
             hp_groups[hp].append((i, enc))
 
+        wins, n_games = 0, 0
         for hp, enc_list in hp_groups.items():
-            batch_enc, batch_dks, batch_rels, batch_seeds = [], [], [], []
+            batch_enc, batch_dks, batch_seeds = [], [], []
             for i, enc in enc_list:
                 deck = enc.get("deck", [])
                 if deck and isinstance(deck[0], str):
@@ -295,28 +136,24 @@ def benchmark_checkpoint(
                 if not deck:
                     continue
                 enemies = enc.get("enemies", enc.get("enemy_ids", []))
-                rels = enc.get("relics", [])
-                for j in range(recorded_combats):
+                for j in range(repeats):
                     batch_enc.append(enemies)
                     batch_dks.append(deck)
-                    batch_rels.append(list(rels))
                     batch_seeds.append(42 * 1000 + i * 100 + j)
 
             if not batch_enc:
                 continue
 
-            if use_mcts:
-                wr = eval_mcts(onnx_path, card_vocab_json, monster_json, profiles_json,
-                               batch_enc, batch_dks, hp, batch_seeds, num_sims=num_sims)
-            else:
-                wr = eval_policy(onnx_path, card_vocab_json, monster_json, profiles_json,
-                                 batch_enc, batch_dks, hp, batch_seeds)
-            batch_wins = int(wr * len(batch_enc) + 0.5)
+            batch_wins = _eval_batch(
+                onnx_path, card_vocab_json, monster_json, profiles_json,
+                batch_enc, batch_dks, hp, batch_seeds, use_mcts, num_sims,
+            )
             wins += batch_wins
             n_games += len(batch_enc)
 
-        # 95% confidence interval (Wilson score interval)
-        import math
+        wr = wins / max(n_games, 1)
+
+        # Wilson 95% CI
         z = 1.96
         n = n_games
         p_hat = wins / max(n, 1)
@@ -342,146 +179,3 @@ def benchmark_checkpoint(
         })
 
     return results
-
-
-# ---------------------------------------------------------------------------
-# Legacy benchmark API (kept for backwards compatibility)
-# ---------------------------------------------------------------------------
-
-def run_benchmark(
-    ppo_checkpoint: str | None = None,
-    mcts_checkpoint: str | None = None,
-    combats: int = 256,
-    recorded_combats: int = 32,
-):
-    """Run 3x2 benchmark table."""
-    card_vocab, card_vocab_json = _build_card_vocab()
-    monster_json = build_monster_data_json()
-    profiles_json = load_solver_json("enemy_profiles.json")
-
-    # Find checkpoints — only auto-discover if the other wasn't explicitly provided
-    if ppo_checkpoint is None and mcts_checkpoint is None:
-        ppo_path = Path(__file__).resolve().parents[4] / "betaone_ppo_mixed" / "betaone_latest.pt"
-        if not ppo_path.exists():
-            ppo_path = _CHECKPOINTS / "betaone_latest.pt"
-        ppo_checkpoint = str(ppo_path)
-
-    if mcts_checkpoint is None and ppo_checkpoint is None:
-        mcts_path = Path(__file__).resolve().parents[3] / "betaone_checkpoints" / "betaone_latest.pt"
-        if not mcts_path.exists():
-            mcts_path = None
-        mcts_checkpoint = str(mcts_path) if mcts_path else None
-
-    results = {}
-
-    # Pre-sample encounters so all models face the same ones
-    print("Sampling shared encounters...")
-    fe_encounters, fe_decks = _sample_final_exam(combats)
-    fe_seeds = list(range(combats))
-    rec_records = _load_recorded_benchmark()
-
-    # Collect checkpoints to eval: (label, path, use_mcts)
-    evals: list[tuple[str, str, bool]] = []
-    if ppo_checkpoint and Path(ppo_checkpoint).exists():
-        evals.append(("PPO", ppo_checkpoint, False))
-        evals.append(("PPO+MCTS", ppo_checkpoint, True))
-    elif ppo_checkpoint:
-        print(f"PPO checkpoint not found: {ppo_checkpoint}")
-    if mcts_checkpoint and Path(mcts_checkpoint).exists():
-        evals.append(("MCTS", mcts_checkpoint, True))
-    elif mcts_checkpoint:
-        print(f"MCTS checkpoint not found: {mcts_checkpoint}")
-
-    last_ckpt_path = None
-    for label, ckpt_path, use_mcts in evals:
-        if ckpt_path != last_ckpt_path:
-            net, ckpt = _load_checkpoint(ckpt_path)
-            gen = ckpt.get("gen", "?")
-            onnx_path = export_onnx(net, str(_CHECKPOINTS / "eval_onnx"))
-            print(f"\n{label} checkpoint: gen {gen} ({Path(ckpt_path).parent.name})")
-            last_ckpt_path = ckpt_path
-
-        t0 = time.time()
-
-        # Final exam — shared encounters
-        if use_mcts:
-            fe_wr = eval_mcts(onnx_path, card_vocab_json, monster_json, profiles_json,
-                              fe_encounters, fe_decks, 70, fe_seeds)
-        else:
-            fe_wr = eval_policy(onnx_path, card_vocab_json, monster_json, profiles_json,
-                                fe_encounters, fe_decks, 70, fe_seeds)
-
-        # Recorded — shared encounters with frozen HP
-        total_wins, total_games = 0, 0
-        for i, rec in enumerate(rec_records):
-            deck = []
-            for cid in rec.get("deck", []):
-                try:
-                    deck.append(lookup_card(cid.rstrip("+")))
-                except Exception:
-                    pass
-            if not deck:
-                continue
-
-            hp = rec.get("calibrated_hp", 70)
-            enc = [rec["enemy_ids"]] * recorded_combats
-            dks = [deck] * recorded_combats
-            seeds = [42 * 1000 + i * 100 + j for j in range(recorded_combats)]
-
-            if use_mcts:
-                wr = eval_mcts(onnx_path, card_vocab_json, monster_json, profiles_json,
-                               enc, dks, hp, seeds)
-            else:
-                wr = eval_policy(onnx_path, card_vocab_json, monster_json, profiles_json,
-                                 enc, dks, hp, seeds)
-            total_wins += int(wr * recorded_combats + 0.5)
-            total_games += recorded_combats
-
-        rec_wr = total_wins / max(total_games, 1)
-
-        # Eval scenarios — raw policy quality (skip for PPO+MCTS since it uses search)
-        eval_score = None
-        if label != "PPO+MCTS":
-            from .eval import run_eval
-            import io, contextlib
-            # Suppress eval's verbose output
-            f = io.StringIO()
-            with contextlib.redirect_stdout(f):
-                eval_result = run_eval(ckpt_path)
-            eval_score = eval_result["passed"] / max(eval_result["total"], 1)
-
-        elapsed = time.time() - t0
-        results[label] = (fe_wr, rec_wr, eval_score)
-        mode = "MCTS" if use_mcts else "policy"
-        eval_str = f"  eval={eval_score:5.1%}" if eval_score is not None else "  eval=  N/A"
-        print(f"  {label:18s} final={fe_wr:5.1%}  recorded={rec_wr:5.1%}{eval_str}  ({mode}, {elapsed:.0f}s)")
-
-    # --- Summary table ---
-    if results:
-        print(f"\n{'':20s} {'Final Exam':>10s}  {'Recorded':>10s}  {'Eval':>7s}")
-        print("-" * 53)
-        for name, (fe, rec, ev) in results.items():
-            ev_str = f"{ev:6.1%}" if ev is not None else "   N/A"
-            print(f"  {name:18s} {fe:9.1%}  {rec:9.1%}  {ev_str}")
-
-    return results
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Benchmark BetaOne checkpoints")
-    parser.add_argument("--ppo", default=None, help="Path to PPO checkpoint")
-    parser.add_argument("--mcts", default=None, help="Path to MCTS self-play checkpoint")
-    parser.add_argument("--combats", type=int, default=256, help="Combats for final exam")
-    parser.add_argument("--recorded-combats", type=int, default=32, help="Combats per recorded encounter")
-    args = parser.parse_args()
-
-    run_benchmark(
-        ppo_checkpoint=args.ppo,
-        mcts_checkpoint=args.mcts,
-        combats=args.combats,
-        recorded_combats=args.recorded_combats,
-    )
-
-
-if __name__ == "__main__":
-    main()
