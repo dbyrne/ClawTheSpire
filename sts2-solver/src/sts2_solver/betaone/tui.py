@@ -59,6 +59,21 @@ def _format_time_ago(seconds: float) -> str:
         return f"{seconds/86400:.1f}d ago"
 
 
+def _resolve_ts_name(ts_id: str) -> str:
+    """Resolve a training set ID to its friendly name."""
+    from .paths import BENCHMARK_DIR
+    ts_path = BENCHMARK_DIR / "training_sets" / f"{ts_id}.yaml"
+    if ts_path.exists():
+        try:
+            import yaml
+            with open(ts_path) as f:
+                data = yaml.safe_load(f)
+            return data.get("name", ts_id)
+        except Exception:
+            pass
+    return ts_id
+
+
 def _status_text(age: float) -> Text:
     if age < 120:
         return Text("RUNNING", style="bold green")
@@ -152,7 +167,10 @@ def build_dashboard(experiments: list[dict]) -> Group:
         et_str = f"{ev['end_turn_avg']:.0%}" if ev and ev.get("end_turn_avg") else "-"
 
         ts = exp["data"].get("training_set", "")
-        ts_str = ts[:16] + ".." if ts and len(ts) > 18 else (ts or "-")
+        # Resolve friendly name from training set YAML
+        ts_str = "-"
+        if ts:
+            ts_str = _resolve_ts_name(ts)
 
         if exp["method"] == "ppo":
             method = "PPO"
@@ -257,7 +275,31 @@ def build_dashboard(experiments: list[dict]) -> Group:
         parts.append(spark)
 
     # === Footer ===
-    footer = Text(f"  {len(experiments)} experiments | refresh 2s | Ctrl+C to exit", style="dim")
+    # === Training sets section ===
+    from .training_set import list_training_sets
+    ts_list = list_training_sets()
+    if ts_list:
+        ts_table = Table(title="Training Sets", expand=True, show_lines=False)
+        ts_table.add_column("Name", style="cyan", max_width=28)
+        ts_table.add_column("Recorded", justify="right", max_width=8)
+        ts_table.add_column("Packages", justify="right", max_width=8)
+        ts_table.add_column("Avg HP", justify="right", max_width=7)
+        ts_table.add_column("Calibrated From", max_width=20)
+        ts_table.add_column("ID", style="dim", max_width=18)
+
+        for ts in ts_list:
+            cal = ts.get("calibrated_with", {})
+            ts_table.add_row(
+                ts.get("name", "?"),
+                str(ts.get("recorded_count", 0)),
+                str(ts.get("packages_count", 0)),
+                f"{ts.get('recorded_avg_hp', 0):.0f}",
+                cal.get("checkpoint", "?"),
+                ts.get("training_set_id", "?")[:16],
+            )
+        parts.append(ts_table)
+
+    footer = Text(f"  {len(experiments)} experiments | {len(ts_list)} training sets | refresh 2s | Ctrl+C to exit", style="dim")
     parts.append(footer)
 
     return Group(*parts)
