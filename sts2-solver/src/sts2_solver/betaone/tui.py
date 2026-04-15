@@ -123,6 +123,7 @@ def build_dashboard(experiments: list[dict]) -> Group:
     overview.add_column("Best", justify="right", max_width=7)
     overview.add_column("Eval", justify="right", max_width=7)
     overview.add_column("ET Avg", justify="right", max_width=7)
+    overview.add_column("Buffer", justify="right", max_width=10)
     overview.add_column("Training Set", max_width=18)
 
     for exp in experiments:
@@ -159,8 +160,19 @@ def build_dashboard(experiments: list[dict]) -> Group:
             sims = exp.get("training", {}).get("mcts", {}).get("num_sims", "?")
             method = f"MCTS-{sims}"
 
+        # Replay buffer (MCTS only)
+        if exp["method"] != "ppo" and p:
+            buf_size = p.get("buffer_size", 0)
+            buf_cap = exp.get("training", {}).get("mcts", {}).get("replay_capacity", 0)
+            if buf_cap:
+                buf_str = f"{buf_size//1000}K/{buf_cap//1000}K"
+            else:
+                buf_str = f"{buf_size//1000}K" if buf_size else "-"
+        else:
+            buf_str = "-"
+
         overview.add_row(exp["name"], method, params_str, status,
-                         gen_str, wr, best, eval_str, et_str, ts_str)
+                         gen_str, wr, best, eval_str, et_str, buf_str, ts_str)
 
     parts.append(overview)
 
