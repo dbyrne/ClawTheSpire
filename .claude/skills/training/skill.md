@@ -14,6 +14,7 @@ Check training progress across experiments, analyze trends, and flag problems.
 Available subcommands (run from `C:/coding-projects/STS2/sts2-solver`):
 
 ```
+# Experiments
 sts2-experiment list                          # all experiments (chronological)
 sts2-experiment info <name>                   # detailed info + arch + eval
 sts2-experiment compare <n1> <n2> ...         # side-by-side (shows MCTS-N, params, eval)
@@ -21,22 +22,33 @@ sts2-experiment dashboard                     # live TUI with sparklines
 sts2-experiment train <name>                  # start/resume training
 sts2-experiment create <name> -t <template>   # new from template (ppo, mcts_selfplay)
 sts2-experiment fork <new> --from <src> -o k=v  # fork with overrides (resets gen to 0)
+
+# Encounter sets (unified training + benchmark data)
+sts2-experiment generate <name> --checkpoint <exp>  # generate encounter set
+    [--packages-only]              # only archetype packages (no recorded)
+    [--recorded-only]              # only recorded death encounters (no packages)
+    [--decks-per N]                # deck variants per package encounter (default: 3)
+    [--sims N] [--combats N]       # calibration fidelity
+sts2-experiment encounter-sets                      # list all encounter sets
+
+# Benchmarking
 sts2-experiment benchmark <name> --suite <s> --mode <m> --sims <n> --combats <n>
-    suites: final-exam, recorded, training-set, all
+    suites: final-exam, recorded, encounter-set, all
     modes: policy, mcts, both
-sts2-experiment eval <name>                   # eval harness (saves with suite ID)
-sts2-experiment calibrate --checkpoint <name> --sims N --combats N --name <friendly>
-sts2-experiment training-sets                 # list training sets (friendly names)
-sts2-experiment suites --refresh              # list/register benchmark suites
+    --encounter-set <name>         # for --suite encounter-set
+sts2-experiment eval <name>                         # eval harness (saves with suite ID)
+sts2-experiment suites --refresh                    # list/register benchmark suites
 ```
 
 Key concepts:
-- **Training sets** are immutable, pre-calibrated encounter collections with friendly names (e.g., `base-v1`, `draw-combo-v1`). No runtime calibration.
-- **Benchmark suites** are versioned by content hash. Results are only comparable within the same suite.
+- **Encounter sets** are immutable, flat JSONL files of frozen combat encounters (enemies, deck, HP, relics). Used for BOTH training and benchmarking. Generated from archetype packages and/or recorded death encounters.
+- **Two generators** produce encounter sets: package generator (archetypes -> random decks -> calibrate HP -> freeze) and live game recorder (death encounters -> calibrate HP -> freeze). Both output the same flat format.
+- **Eval harness** is separate — curated decision scenarios, not combat encounters.
 - **Inference mode** (policy vs mcts-N) is separate from training method. Any checkpoint can be benchmarked either way.
 - **Benchmarks track**: suite ID, mode, MCTS sims, wins/games, 95% CI (Wilson score).
 - **Eval tracks**: score, per-category breakdown, End Turn bias (avg ET prob on wrong scenarios).
 - Forking resets gen to 0 and records parent lineage.
+- Legacy `training-sets` and `calibrate` commands still work but are deprecated.
 
 ## Steps
 
@@ -85,7 +97,7 @@ Using bash with a python one-liner, compute from `betaone_history.jsonl`:
 
 **Status**: {Running/Stopped} ({elapsed} ago)
 **Architecture**: {total_params} params, trunk({trunk_input}->{hidden_dim}), arch v{version}
-**Training set**: {training_set_name or "none (legacy calibration)"}
+**Encounter set**: {encounter_set_name or "none (legacy calibration)"}
 **Parent**: {parent experiment if forked}
 **Speed**: {gen_time}s/gen, ~{steps/gen} steps/gen
 
@@ -110,7 +122,7 @@ Using bash with a python one-liner, compute from `betaone_history.jsonl`:
 | Method | PPO or MCTS-{sims} |
 | LR | {lr} |
 | Replay buffer | {current} / {capacity} (MCTS only) |
-| Training set | {name} ({recorded} rec + {packages} pkg) |
+| Encounter set | {name} ({count} encounters) |
 ```
 
 ### Step 4b: Show latest benchmark results
@@ -141,7 +153,7 @@ Also show latest eval if available from `$EXP_DIR/benchmarks/eval.jsonl`:
 If no benchmarks have been run yet, suggest:
 ```
 sts2-experiment benchmark {name} --suite all --mode both
-sts2-experiment benchmark {name} --suite training-set --training-set base-v1 --mode both
+sts2-experiment benchmark {name} --suite encounter-set --encounter-set <name> --mode both
 sts2-experiment eval {name}
 ```
 
@@ -159,8 +171,8 @@ Add a **Flags** section if ANY apply. Be specific about the threshold and curren
 | policy_loss > 0.5 (PPO, last 10 avg) | **Policy unstable** — consider smaller learning rate or clip_ratio. |
 | policy_loss increasing (MCTS, mature phase) | **Not learning from MCTS** — search signal may be too weak. Consider more sims. |
 | gen_time increasing steadily | **Slowing down** — check buffer size or model complexity. |
-| training WR >> 50% with immutable training set | **Training set too easy** — recalibrate with `sts2-experiment calibrate`. |
-| training WR << 30% with immutable training set | **Training set too hard** — calibrate against a weaker checkpoint or warm-start. |
+| training WR >> 50% with encounter set | **Encounter set too easy** — regenerate: `sts2-experiment generate <name> --checkpoint <current-exp>`. |
+| training WR << 30% with encounter set | **Encounter set too hard** — calibrate against a weaker checkpoint or warm-start from a strong model. |
 | benchmark CI overlaps between experiments | **Not statistically distinguishable** — need more combats (--combats 2000). |
 | End Turn avg > 15% in eval | **End Turn bias** — model preferring to end turn over free plays. |
 
@@ -184,10 +196,10 @@ If there are 2+ experiments with training data:
 cd C:/coding-projects/STS2/sts2-solver && python -m sts2_solver.betaone.experiment_cli compare {name1} {name2} ... 2>&1
 ```
 
-Also list available training sets for context:
+Also list available encounter sets for context:
 
 ```bash
-cd C:/coding-projects/STS2/sts2-solver && python -m sts2_solver.betaone.experiment_cli training-sets 2>&1
+cd C:/coding-projects/STS2/sts2-solver && python -m sts2_solver.betaone.experiment_cli encounter-sets 2>&1
 ```
 
 ### Step 8: Recommendation
@@ -195,9 +207,9 @@ cd C:/coding-projects/STS2/sts2-solver && python -m sts2_solver.betaone.experime
 Based on the analysis, give ONE concrete next step. Examples:
 - If entropy collapsing -> "Fork and restart: `sts2-experiment fork <name>-fix --from <name> -o training.ppo.entropy_coef=0.05`"
 - If MCTS plateauing -> "Try more sims: `sts2-experiment fork <name>-800s --from <name> -o training.mcts.num_sims=800`"
-- If training set too hard for cold start -> "Warm-start: `sts2-experiment fork <name>-warm --from <strong-exp>`"
-- If training set too easy -> "Recalibrate: `sts2-experiment calibrate --checkpoint <name> --sims 400 --combats 64 --name <new-ts>`"
+- If encounter set too hard for cold start -> "Warm-start: `sts2-experiment fork <name>-warm --from <strong-exp>`"
+- If encounter set too easy -> "Regenerate: `sts2-experiment generate <name> --checkpoint <current-exp>`"
 - If no benchmarks yet -> "Run benchmarks: `sts2-experiment benchmark <name> --suite all --mode both --combats 1000`"
-- If want to benchmark against training set -> "`sts2-experiment benchmark <name> --suite training-set --training-set base-v1`"
+- If want to benchmark against encounter set -> "`sts2-experiment benchmark <name> --suite encounter-set --encounter-set <name>`"
 - If training healthy and progressing -> "Training on track. Let it cook."
 - If stopped -> "Resume with: `sts2-experiment train <name>`"
