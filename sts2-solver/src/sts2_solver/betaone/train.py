@@ -163,8 +163,15 @@ def train(
     print(f"BetaOne network: {network.param_count():,} parameters ({num_cards} card vocab)")
 
     # Curriculum
-    recorded_path = os.path.join(output_dir, "recorded_encounters.jsonl")
+    # Resolve recorded_encounters.jsonl relative to the project root (4 dirs up
+    # from this file) so it works regardless of the working directory.
+    project_root = Path(__file__).resolve().parents[4]
+    recorded_path = str(project_root / output_dir / "recorded_encounters.jsonl")
     curriculum = CombatCurriculum(encounter_pool_path=enc_pool_path, recorded_encounters_path=recorded_path)
+
+    # --mixed implies --recorded-encounters
+    if mixed:
+        recorded_encounters = True
 
     if mixed:
         if not curriculum.recorded_encounters:
@@ -172,7 +179,7 @@ def train(
             return
         curriculum.tier = curriculum.max_tier
         n_rec = len(curriculum.recorded_encounters)
-        print(f"Mixed mode: {recorded_frac:.0%} recorded ({n_rec} encounters) + {1-recorded_frac:.0%} final exam")
+        print(f"Mixed mode: {recorded_frac:.0%} recorded ({n_rec} encounters) + {1-recorded_frac:.0%} archetype packages")
     elif recorded_encounters:
         if not curriculum.recorded_encounters:
             print("No recorded encounters found — run the game bot first to build the pool")
@@ -355,6 +362,13 @@ def train(
         if avg_calibrated_hp is not None:
             cal_hp_history.append([0, round(avg_calibrated_hp, 1)])
 
+    if mixed:
+        from .packages import calibrate_packages
+        if not recorded_encounters:
+            onnx_path = export_onnx(network, onnx_dir)
+        print("Calibrating archetype packages...")
+        calibrate_packages(monster_json, profiles_json, card_vocab_json, onnx_path)
+
     for gen in range(start_gen, num_generations + 1):
         t0 = time.time()
 
@@ -367,7 +381,7 @@ def train(
         # Export current network
         onnx_path = export_onnx(network, onnx_dir)
 
-        # Recalibrate recorded encounters every 200 gens
+        # Recalibrate every 200 gens
         if recorded_encounters and gen % 200 == 0:
             print(f"Gen {gen}: recalibrating recorded encounters...")
             curriculum.recorded_encounters, avg_calibrated_hp = calibrate_all(
@@ -378,6 +392,10 @@ def train(
             )
             if avg_calibrated_hp is not None:
                 cal_hp_history.append([gen, round(avg_calibrated_hp, 1)])
+        if mixed and gen % 200 == 0:
+            from .packages import calibrate_packages
+            print(f"Gen {gen}: recalibrating archetype packages...")
+            calibrate_packages(monster_json, profiles_json, card_vocab_json, onnx_path)
 
         # Regression check every 50 gens: eval all previous tiers (skip in locked tier mode)
         if gen % 50 == 0 and curriculum.tier > 0 and lock_tier is None:
@@ -478,9 +496,12 @@ def train(
         n_current = combats_per_gen - n_review
 
         if mixed:
-            # Mixed mode: split between recorded encounters and final exam
+            # Mixed mode: split between recorded encounters and archetype packages
+            from .packages import sample_packages_batch
+            import random as stdlib_random
+
             n_rec_batch = int(n_current * recorded_frac)
-            n_exam_batch = n_current - n_rec_batch
+            n_pkg_batch = n_current - n_rec_batch
 
             # Recorded encounters portion
             curriculum.use_recorded_only = True
@@ -489,12 +510,9 @@ def train(
             rec_dks = [json.loads(curriculum.sample_deck_json(combat_idx=i))
                        for i in range(n_rec_batch)]
 
-            # Final exam portion
-            curriculum.use_recorded_only = False
-            curriculum.tier = curriculum.max_tier
-            exam_enc = curriculum.sample_encounters(n_exam_batch)
-            exam_dks = [json.loads(curriculum.sample_deck_json(combat_idx=None))
-                        for _ in range(n_exam_batch)]
+            # Archetype packages portion
+            pkg_rng = stdlib_random.Random(gen * 7919)
+            pkg_enc, pkg_decks, pkg_hps = sample_packages_batch(n_pkg_batch, rng=pkg_rng)
 
             # Group recorded by calibrated HP
             from collections import defaultdict
@@ -508,8 +526,14 @@ def train(
             for hp, (encs, dks_list, rels_list) in hp_groups.items():
                 batches.append((encs, dks_list, rels_list, hp, len(encs)))
 
-            # Final exam at standard HP (no relics)
-            batches.append((exam_enc, exam_dks, [[] for _ in range(n_exam_batch)], cfg.player_hp, n_exam_batch))
+            # Group packages by calibrated HP (no relics for synthetic packages)
+            pkg_hp_groups: dict[int, tuple[list, list, list]] = defaultdict(lambda: ([], [], []))
+            for i in range(n_pkg_batch):
+                pkg_hp_groups[pkg_hps[i]][0].append(pkg_enc[i])
+                pkg_hp_groups[pkg_hps[i]][1].append(pkg_decks[i])
+                pkg_hp_groups[pkg_hps[i]][2].append([])  # no relics
+            for hp, (encs, dks_list, rels_list) in pkg_hp_groups.items():
+                batches.append((encs, dks_list, rels_list, hp, len(encs)))
         else:
             cur_enc = curriculum.sample_encounters(n_current)
             cur_dks = [json.loads(curriculum.sample_deck_json(combat_idx=i)) for i in range(n_current)]
