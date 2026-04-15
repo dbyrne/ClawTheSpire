@@ -366,29 +366,69 @@ class Experiment:
 
     def save_benchmark(self, result: dict, suite_id: str | None = None,
                        checkpoint: str = "latest") -> None:
-        """Append a single benchmark result to benchmarks/results.jsonl.
+        """Save a benchmark result, aggregating with existing results.
 
-        Args:
-            result: Dict with mode, win_rate, wins, games, ci95_lo, ci95_hi, gen.
-            suite_id: Benchmark suite this was measured against.
-            checkpoint: Which checkpoint was tested.
+        If a result with the same (suite, mode, mcts_sims) key exists,
+        wins and games are summed and WR/CI recomputed from the totals.
+        This lets you accumulate results across runs for tighter CIs.
         """
+        import math
+
         self.benchmarks_dir.mkdir(exist_ok=True)
-        entry = {
-            "suite": suite_id,
-            "mode": result["mode"],
-            "mcts_sims": result.get("mcts_sims", 0),
-            "timestamp": time.time(),
-            "checkpoint": checkpoint,
-            "gen": result.get("gen"),
-            "win_rate": result["win_rate"],
-            "wins": result.get("wins"),
-            "games": result.get("games"),
-            "ci95_lo": result.get("ci95_lo"),
-            "ci95_hi": result.get("ci95_hi"),
-        }
-        with open(self.benchmarks_dir / "results.jsonl", "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry) + "\n")
+        path = self.benchmarks_dir / "results.jsonl"
+
+        key = (suite_id, result["mode"], result.get("mcts_sims", 0))
+        new_wins = result.get("wins", 0)
+        new_games = result.get("games", 0)
+
+        # Read existing results, find matching row
+        rows = []
+        merged = False
+        if path.exists():
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    row = json.loads(line)
+                    row_key = (row.get("suite"), row.get("mode"), row.get("mcts_sims", 0))
+                    if row_key == key:
+                        # Aggregate: sum wins and games
+                        row["wins"] = row.get("wins", 0) + new_wins
+                        row["games"] = row.get("games", 0) + new_games
+                        n = row["games"]
+                        row["win_rate"] = round(row["wins"] / max(n, 1), 4)
+                        # Recompute Wilson CI
+                        z = 1.96
+                        p_hat = row["wins"] / max(n, 1)
+                        denom = 1 + z * z / n
+                        center = (p_hat + z * z / (2 * n)) / denom
+                        margin = z * math.sqrt((p_hat * (1 - p_hat) + z * z / (4 * n)) / n) / denom
+                        row["ci95_lo"] = round(max(0, center - margin), 4)
+                        row["ci95_hi"] = round(min(1, center + margin), 4)
+                        row["timestamp"] = time.time()
+                        row["gen"] = result.get("gen")
+                        merged = True
+                    rows.append(row)
+
+        if not merged:
+            rows.append({
+                "suite": suite_id,
+                "mode": result["mode"],
+                "mcts_sims": result.get("mcts_sims", 0),
+                "timestamp": time.time(),
+                "checkpoint": checkpoint,
+                "gen": result.get("gen"),
+                "win_rate": result["win_rate"],
+                "wins": new_wins,
+                "games": new_games,
+                "ci95_lo": result.get("ci95_lo"),
+                "ci95_hi": result.get("ci95_hi"),
+            })
+
+        # Rewrite file
+        with open(path, "w", encoding="utf-8") as f:
+            for row in rows:
+                f.write(json.dumps(row) + "\n")
 
 
 # ---------------------------------------------------------------------------
