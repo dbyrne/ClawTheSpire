@@ -263,90 +263,6 @@ def build_dashboard(experiments: list[dict]) -> Group:
             )
         parts.append(bench_table)
 
-    # === Active training sparklines ===
-    for exp in experiments:
-        p = exp["progress"]
-        if not p:
-            continue
-        age = time.time() - p.get("timestamp", 0)
-        if age > 600:
-            continue  # skip stopped experiments
-
-        history = exp["history"]
-        if len(history) < 3:
-            continue
-
-        # Mini sparkline of win rate + rolling 25-gen averages
-        wrs = [r.get("win_rate", 0) for r in history]
-        pls = [r.get("policy_loss", 0) for r in history]
-        vls = [r.get("value_loss", 0) for r in history]
-        gen_times = [r.get("gen_time", 0) for r in history]
-        n_hist = len(history)
-
-        # Rolling 25-gen averages
-        def _avg(vals, n=25):
-            window = vals[-n:]
-            return sum(window) / len(window) if window else 0.0
-
-        def _delta_str(curr, prev, fmt=".1f", pct=False):
-            diff = curr - prev
-            sign = "+" if diff >= 0 else ""
-            if pct:
-                return f" {sign}{diff*100:{fmt}}"
-            return f" {sign}{diff:{fmt}}"
-
-        wr_avg25 = _avg(wrs)
-        pl_avg25 = _avg(pls)
-        vl_avg25 = _avg(vls)
-
-        # Previous 25 window (for delta)
-        has_delta = n_hist >= 50
-        if has_delta:
-            wr_prev25 = _avg(wrs[-50:-25])
-            pl_prev25 = _avg(pls[-50:-25])
-            vl_prev25 = _avg(vls[-50:-25])
-
-        spark = Text()
-        color = exp_color_map.get(exp["name"], "white")
-        spark.append(f"  {exp['name']}", style=color)
-
-        # Sparkline
-        spark.append(f"  WR: ", style="dim")
-        for wr in wrs[-15:]:
-            if wr >= 0.6:
-                spark.append("█", style="green")
-            elif wr >= 0.4:
-                spark.append("▆", style="yellow")
-            else:
-                spark.append("▂", style="red")
-
-        # Win rate avg25
-        spark.append(f"  avg25: ", style="dim")
-        spark.append(f"{wr_avg25:.1%}", style="bold")
-        if has_delta:
-            d = wr_avg25 - wr_prev25
-            style = "green" if d > 0.005 else "red" if d < -0.005 else "dim"
-            spark.append(f" ({'+' if d >= 0 else ''}{d*100:.1f})", style=style)
-
-        # Policy loss avg25
-        spark.append(f"  pi: ", style="dim")
-        spark.append(f"{pl_avg25:.3f}", style="white")
-        if has_delta:
-            d = pl_avg25 - pl_prev25
-            style = "green" if d < -0.001 else "red" if d > 0.001 else "dim"
-            spark.append(f" ({'+' if d >= 0 else ''}{d:.3f})", style=style)
-
-        # Value loss avg25
-        spark.append(f"  v: ", style="dim")
-        spark.append(f"{vl_avg25:.3f}", style="white")
-        if has_delta:
-            d = vl_avg25 - vl_prev25
-            style = "green" if d < -0.001 else "red" if d > 0.001 else "dim"
-            spark.append(f" ({'+' if d >= 0 else ''}{d:.3f})", style=style)
-
-        spark.append(f"  {gen_times[-1]:.0f}s/gen", style="dim")
-        parts.append(spark)
-
     # === Encounter sets section ===
     from .encounter_set import list_encounter_sets
     es_list = list_encounter_sets()
@@ -388,6 +304,77 @@ def build_dashboard(experiments: list[dict]) -> Group:
                 ts.get("training_set_id", "?")[:16],
             )
         parts.append(es_table)
+
+    # === Active training sparklines ===
+    for exp in experiments:
+        p = exp["progress"]
+        if not p:
+            continue
+        age = time.time() - p.get("timestamp", 0)
+        if age > 600:
+            continue  # skip stopped experiments
+
+        history = exp["history"]
+        if len(history) < 3:
+            continue
+
+        # Mini sparkline of win rate + rolling 25-gen averages
+        wrs = [r.get("win_rate", 0) for r in history]
+        pls = [r.get("policy_loss", 0) for r in history]
+        vls = [r.get("value_loss", 0) for r in history]
+        gen_times = [r.get("gen_time", 0) for r in history]
+        n_hist = len(history)
+
+        def _avg(vals, n=25):
+            window = vals[-n:]
+            return sum(window) / len(window) if window else 0.0
+
+        wr_avg25 = _avg(wrs)
+        pl_avg25 = _avg(pls)
+        vl_avg25 = _avg(vls)
+
+        has_delta = n_hist >= 50
+        if has_delta:
+            wr_prev25 = _avg(wrs[-50:-25])
+            pl_prev25 = _avg(pls[-50:-25])
+            vl_prev25 = _avg(vls[-50:-25])
+
+        spark = Text()
+        color = exp_color_map.get(exp["name"], "white")
+        spark.append(f"  {exp['name']}", style=color)
+
+        spark.append(f"  WR: ", style="dim")
+        for wr in wrs[-15:]:
+            if wr >= 0.6:
+                spark.append("█", style="green")
+            elif wr >= 0.4:
+                spark.append("▆", style="yellow")
+            else:
+                spark.append("▂", style="red")
+
+        spark.append(f"  avg25: ", style="dim")
+        spark.append(f"{wr_avg25:.1%}", style="bold")
+        if has_delta:
+            d = wr_avg25 - wr_prev25
+            style = "green" if d > 0.005 else "red" if d < -0.005 else "dim"
+            spark.append(f" ({'+' if d >= 0 else ''}{d*100:.1f})", style=style)
+
+        spark.append(f"  pi: ", style="dim")
+        spark.append(f"{pl_avg25:.3f}", style="white")
+        if has_delta:
+            d = pl_avg25 - pl_prev25
+            style = "green" if d < -0.001 else "red" if d > 0.001 else "dim"
+            spark.append(f" ({'+' if d >= 0 else ''}{d:.3f})", style=style)
+
+        spark.append(f"  v: ", style="dim")
+        spark.append(f"{vl_avg25:.3f}", style="white")
+        if has_delta:
+            d = vl_avg25 - vl_prev25
+            style = "green" if d < -0.001 else "red" if d > 0.001 else "dim"
+            spark.append(f" ({'+' if d >= 0 else ''}{d:.3f})", style=style)
+
+        spark.append(f"  {gen_times[-1]:.0f}s/gen", style="dim")
+        parts.append(spark)
 
     # === Footer ===
     footer = Text(f"  {len(experiments)} experiments | {len(all_sets)} encounter sets | refresh 2s | Ctrl+C to exit", style="dim")
