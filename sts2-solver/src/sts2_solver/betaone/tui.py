@@ -153,7 +153,11 @@ def build_dashboard(experiments: list[dict]) -> Group:
         ts = exp["data"].get("training_set", "")
         ts_str = ts[:16] + ".." if ts and len(ts) > 18 else (ts or "-")
 
-        method = "PPO" if exp["method"] == "ppo" else "MCTS"
+        if exp["method"] == "ppo":
+            method = "PPO"
+        else:
+            sims = exp.get("training", {}).get("mcts", {}).get("num_sims", "?")
+            method = f"MCTS-{sims}"
 
         overview.add_row(exp["name"], method, params_str, status,
                          gen_str, wr, best, eval_str, et_str, ts_str)

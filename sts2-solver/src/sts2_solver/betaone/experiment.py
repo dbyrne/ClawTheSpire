@@ -286,9 +286,14 @@ class Experiment:
                 continue
             config = ExperimentConfig.from_yaml(config_path)
             progress = _read_progress(d / "betaone_progress.json")
+            if config.method == "ppo":
+                method_str = "PPO"
+            else:
+                sims = config.training.get("mcts", {}).get("num_sims", "?")
+                method_str = f"MCTS-{sims}"
             results.append({
                 "name": config.name,
-                "method": config.method,
+                "method": method_str,
                 "description": config.description,
                 "created": config.created,
                 "gen": progress.get("gen", 0) if progress else 0,

@@ -22,6 +22,14 @@ from .experiment import Experiment, ExperimentConfig
 from .paths import EXPERIMENTS_DIR, TEMPLATES_DIR
 
 
+def _format_method(config) -> str:
+    """Format method string with sim count for MCTS."""
+    if config.method == "ppo":
+        return "PPO"
+    sims = config.training.get("mcts", {}).get("num_sims", "?")
+    return f"MCTS-{sims}"
+
+
 def _parse_overrides(override_strs: list[str] | None) -> dict:
     """Parse 'key=value' strings into a dict, coercing types."""
     if not override_strs:
@@ -184,7 +192,7 @@ def cmd_compare(args):
         eval_result = info.get("latest_eval")
         rows.append({
             "name": name,
-            "method": config.method,
+            "method": _format_method(config),
             "params": config.architecture.get("total_params", "?"),
             "gen": progress.get("gen", "?"),
             "wr": progress.get("win_rate", "?"),
