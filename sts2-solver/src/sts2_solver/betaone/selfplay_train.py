@@ -190,6 +190,7 @@ def train(
     recorded_frac: float = 0.5,
     replay_capacity: int = 200_000,
     cold_start: bool = False,
+    training_set_id: str | None = None,
 ):
     os.makedirs(output_dir, exist_ok=True)
     onnx_dir = os.path.join(output_dir, "onnx")

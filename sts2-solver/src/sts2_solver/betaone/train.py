@@ -77,6 +77,7 @@ def train(
     recorded_encounters: bool = False,
     mixed: bool = False,
     recorded_frac: float = 0.5,
+    training_set_id: str | None = None,
 ):
     os.makedirs(output_dir, exist_ok=True)
     onnx_dir = os.path.join(output_dir, "onnx")
@@ -97,17 +98,40 @@ def train(
     optimizer = torch.optim.Adam(network.parameters(), lr=lr)
     print(f"BetaOne network: {network.param_count():,} parameters ({num_cards} card vocab)")
 
+    # Load training set if provided (immutable, pre-calibrated encounters)
+    ts_data = None
+    if training_set_id:
+        from .training_set import load_training_set
+        ts_data = load_training_set(training_set_id)
+        ts_recorded = ts_data.get("recorded_data", [])
+        ts_packages = ts_data.get("packages_data", {})
+        print(f"Training set: {training_set_id}")
+        print(f"  Recorded: {len(ts_recorded)} encounters")
+        print(f"  Packages: {sum(len(v) for v in ts_packages.values())} encounter-HP pairs across {len(ts_packages)} archetypes")
+        # Force mixed mode with training set
+        mixed = True
+        recorded_encounters = True
+
     # Curriculum
-    # Resolve recorded_encounters.jsonl relative to the project root (4 dirs up
-    # from this file) so it works regardless of the working directory.
     recorded_path = str(Path(output_dir) / "recorded_encounters.jsonl")
     curriculum = CombatCurriculum(encounter_pool_path=enc_pool_path, recorded_encounters_path=recorded_path)
 
-    # --mixed implies --recorded-encounters
     if mixed:
         recorded_encounters = True
 
-    if mixed:
+    if ts_data:
+        # Training set mode: load recorded encounters from training set
+        curriculum.recorded_encounters = ts_recorded
+        curriculum.tier = curriculum.max_tier
+        # Load package calibration
+        from .packages import PACKAGES
+        for pkg in PACKAGES:
+            pkg_hps = ts_packages.get(pkg.name, {})
+            pkg.calibrated_hps = pkg_hps
+        n_rec = len(ts_recorded)
+        n_pkg = sum(len(v) for v in ts_packages.values())
+        print(f"Mixed mode: {recorded_frac:.0%} recorded ({n_rec}) + {1-recorded_frac:.0%} packages ({n_pkg} calibrated)")
+    elif mixed:
         if not curriculum.recorded_encounters:
             print("No recorded encounters found — run the game bot first to build the pool")
             return
@@ -276,32 +300,26 @@ def train(
     else:
         print("Cold start — no checkpoint found")
 
-    regressed_tiers: set[int] = set()
-    regressed_detail: dict[int, float] = {}
-
-    # Calibration tracking for recorded-encounters mode
-    avg_calibrated_hp: float | None = None
-    cal_hp_history: list[list] = []  # [[gen, avg_hp], ...]
-
-    if recorded_encounters:
-        # Initial calibration at startup
-        onnx_path = export_onnx(network, onnx_dir)
-        print("Running initial HP calibration...")
-        curriculum.recorded_encounters, avg_calibrated_hp = calibrate_all(
-            curriculum.recorded_encounters, monster_json, profiles_json,
-            card_vocab_json, onnx_path,
-            encounters_path=recorded_path,
-            num_sims=50, combats=32,
-        )
-        if avg_calibrated_hp is not None:
-            cal_hp_history.append([0, round(avg_calibrated_hp, 1)])
-
-    if mixed:
-        from .packages import calibrate_packages
-        if not recorded_encounters:
+    # When using a training set, skip all runtime calibration.
+    # Calibration is done offline via `sts2-experiment calibrate`.
+    if not ts_data:
+        # Legacy mode: calibrate at startup (only if no training set)
+        if recorded_encounters:
+            from .calibrate import calibrate_all
             onnx_path = export_onnx(network, onnx_dir)
-        print("Calibrating archetype packages...")
-        calibrate_packages(monster_json, profiles_json, card_vocab_json, onnx_path)
+            print("Running initial HP calibration...")
+            curriculum.recorded_encounters, _ = calibrate_all(
+                curriculum.recorded_encounters, monster_json, profiles_json,
+                card_vocab_json, onnx_path,
+                encounters_path=recorded_path,
+                num_sims=50, combats=32,
+            )
+        if mixed:
+            from .packages import calibrate_packages
+            if not recorded_encounters:
+                onnx_path = export_onnx(network, onnx_dir)
+            print("Calibrating archetype packages...")
+            calibrate_packages(monster_json, profiles_json, card_vocab_json, onnx_path)
 
     for gen in range(start_gen, num_generations + 1):
         t0 = time.time()
@@ -315,77 +333,11 @@ def train(
         # Export current network
         onnx_path = export_onnx(network, onnx_dir)
 
-        # Recalibrate every 200 gens
-        if recorded_encounters and gen % 200 == 0:
-            print(f"Gen {gen}: recalibrating recorded encounters...")
-            curriculum.recorded_encounters, avg_calibrated_hp = calibrate_all(
-                curriculum.recorded_encounters, monster_json, profiles_json,
-                card_vocab_json, onnx_path,
-                encounters_path=recorded_path,
-                num_sims=50, combats=32,
-            )
-            if avg_calibrated_hp is not None:
-                cal_hp_history.append([gen, round(avg_calibrated_hp, 1)])
-        if mixed and gen % 200 == 0:
-            from .packages import calibrate_packages
-            print(f"Gen {gen}: recalibrating archetype packages...")
-            calibrate_packages(monster_json, profiles_json, card_vocab_json, onnx_path)
+        # No runtime recalibration or regression checks when using training sets.
+        # Calibration is done offline. Regression checks are removed —
+        # the training set defines the full encounter distribution.
 
-        # Regression check every 50 gens: eval all previous tiers (skip in locked tier mode)
-        if gen % 50 == 0 and curriculum.tier > 0 and lock_tier is None:
-            regressed_tiers.clear()
-            regressed_detail: dict[int, float] = {}
-            for check_tier in range(curriculum.tier):
-                check_cfg = TIER_CONFIGS[check_tier]
-                n_check = 50
-                check_enc = []
-                check_decks_list = []
-                for _ in range(n_check):
-                    if check_cfg.custom_encounters:
-                        check_enc.append(random.choice(check_cfg.custom_encounters))
-                    elif check_cfg.encounter_level >= 0:
-                        check_enc.append(random.choice(
-                            curriculum.encounter_pools[check_cfg.encounter_level]))
-                    else:
-                        check_enc.append(random.choice(curriculum.encounter_pools[0]))
-                    if check_cfg.custom_deck is not None:
-                        deck = check_cfg.custom_deck() if callable(check_cfg.custom_deck) else check_cfg.custom_deck
-                        check_decks_list.append(deck)
-                    elif check_cfg.deck_mode == "starter":
-                        check_decks_list.append(json.loads(json.dumps(_make_starter())))
-                    elif check_cfg.deck_mode == "review_all":
-                        check_decks_list.append(json.loads(json.dumps(_make_starter())))
-                    else:
-                        check_decks_list.append(json.loads(build_random_deck_json(
-                            rng=curriculum.deck_rng,
-                            min_size=check_cfg.deck_min_size,
-                            max_size=check_cfg.deck_max_size,
-                            min_removals=check_cfg.deck_min_removals,
-                            max_removals=check_cfg.deck_max_removals,
-                            archetypes=check_cfg.deck_archetypes,
-                        )))
-                check_rollout = sts2_engine.collect_betaone_rollouts(
-                    encounters_json=json.dumps(check_enc),
-                    decks_json=json.dumps(check_decks_list),
-                    player_hp=check_cfg.player_hp, player_max_hp=70, player_max_energy=3,
-                    relics_json="[]", potions_json="[]",
-                    monster_data_json=monster_json,
-                    enemy_profiles_json=profiles_json,
-                    onnx_path=onnx_path,
-                    temperature=0.01,
-                    seeds=[gen * 100_000 + 90_000 + i for i in range(n_check)],
-                    gen_id=gen,
-                    card_vocab_json=card_vocab_json,
-                )
-                check_wr = sum(1 for o in check_rollout["outcomes"] if o == "win") / max(len(check_rollout["outcomes"]), 1)
-                if check_wr < check_cfg.promote_threshold * 0.9:  # 90% of original threshold
-                    regressed_tiers.add(check_tier)
-                    regressed_detail[check_tier] = check_wr
-            if regressed_tiers:
-                parts = [f"T{t} {regressed_detail[t]:.0%}/{TIER_CONFIGS[t].promote_threshold:.0%}" for t in sorted(regressed_tiers)]
-                print(f"  Regression detected: {', '.join(parts)} — adding review combats")
-
-        # Build combat batches: current tier + regressed tier review (each with correct HP)
+        # Build combat batches (each with correct HP)
         cfg = curriculum.config
         batches: list[tuple[list, list, list, int, int]] = []  # (encounters, decks, relics, hp, count)
 
@@ -395,39 +347,7 @@ def train(
                 return []
             return list(rec.get("relics", []))
 
-        # Regressed tier review batches
-        n_review = 0
-        for review_tier_idx in regressed_tiers:
-            review_cfg = TIER_CONFIGS[review_tier_idx]
-            review_per_tier = combats_per_gen // 8
-            enc = []
-            dks = []
-            for _ in range(review_per_tier):
-                if review_cfg.custom_encounters:
-                    enc.append(random.choice(review_cfg.custom_encounters))
-                else:
-                    pool = curriculum.encounter_pools[review_cfg.encounter_level]
-                    enc.append(random.choice(pool))
-                if review_cfg.custom_deck is not None:
-                    deck = review_cfg.custom_deck() if callable(review_cfg.custom_deck) else review_cfg.custom_deck
-                    dks.append(deck)
-                elif review_cfg.deck_mode == "starter":
-                    dks.append(json.loads(json.dumps(_make_starter())))
-                else:
-                    dks.append(json.loads(build_random_deck_json(
-                        rng=curriculum.deck_rng,
-                        min_size=review_cfg.deck_min_size,
-                        max_size=review_cfg.deck_max_size,
-                        min_removals=review_cfg.deck_min_removals,
-                        max_removals=review_cfg.deck_max_removals,
-                        archetypes=review_cfg.deck_archetypes,
-                    )))
-            # Synthetic encounters have no relics
-            batches.append((enc, dks, [[] for _ in range(review_per_tier)], review_cfg.player_hp, review_per_tier))
-            n_review += review_per_tier
-
-        # Current tier batch
-        n_current = combats_per_gen - n_review
+        n_current = combats_per_gen
 
         if mixed:
             # Mixed mode: split between recorded encounters and archetype packages
@@ -581,13 +501,11 @@ def train(
             batch_size=ppo_batch_size,
         )
 
-        # Stats — use current-tier combats only (exclude review) for promotion
+        # Stats
         outcomes = rollout["outcomes"]
         n_episodes = len(outcomes)
-        n_review = n_episodes - n_current  # review combats are first in the list
-        tier_outcomes = outcomes[n_review:]  # current-tier combats only
-        tier_wins = sum(1 for o in tier_outcomes if o == "win")
-        tier_wr = tier_wins / max(len(tier_outcomes), 1)
+        tier_wins = sum(1 for o in outcomes if o == "win")
+        tier_wr = tier_wins / max(n_episodes, 1)
 
         all_wins = sum(1 for o in outcomes if o == "win")
         win_rate = all_wins / max(n_episodes, 1)  # blended (for logging)
@@ -630,8 +548,8 @@ def train(
             "gen": gen,
             "win_rate": round(tier_wr, 4),
             "tier_wr": round(tier_wr, 4),
-            "regressed": sorted(regressed_tiers) if regressed_tiers else None,
-            "regressed_detail": {str(k): round(v, 3) for k, v in regressed_detail.items()} if regressed_tiers else None,
+            "regressed": None,
+            "regressed_detail": None,
             "cumulative_win_rate": round(cumulative_wins / max(cumulative_games, 1), 4),
             "avg_hp": round(float(avg_hp), 1),
             "avg_reward": round(avg_reward, 4),
@@ -648,8 +566,7 @@ def train(
             "gen_time": round(elapsed, 2),
             "timestamp": time.time(),
             "recorded_encounters": len(curriculum.recorded_encounters) if recorded_encounters else None,
-            "avg_calibrated_hp": round(avg_calibrated_hp, 1) if avg_calibrated_hp is not None else None,
-            "cal_hp_history": cal_hp_history if recorded_encounters else None,
+            "training_set": training_set_id,
         }
         with open(history_path, "a") as f:
             f.write(json.dumps(record) + "\n")

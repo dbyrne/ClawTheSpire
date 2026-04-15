@@ -290,6 +290,106 @@ def cmd_info(args):
                 print(f"  {cat}: {status}")
 
 
+def cmd_calibrate(args):
+    """Run offline calibration to produce an immutable training set."""
+    from .calibrate import calibrate_all
+    from .packages import PACKAGES, calibrate_packages
+    from .data_utils import build_monster_data_json, load_solver_json, build_card_vocab
+    from .network import BetaOneNetwork, export_onnx
+    from .training_set import save_training_set, TRAINING_SETS_DIR
+    from .paths import BENCHMARK_DIR
+    import torch
+
+    # Load checkpoint
+    if args.checkpoint:
+        exp = Experiment(args.checkpoint)
+        if exp.exists:
+            ckpt_path = str(exp.dir / "betaone_latest.pt")
+        else:
+            ckpt_path = args.checkpoint
+    else:
+        print("Must specify --checkpoint (experiment name or path)")
+        sys.exit(1)
+
+    print(f"Calibrating from: {ckpt_path}")
+    print(f"  Sims: {args.sims}, Combats/HP: {args.combats}")
+
+    # Load model and export ONNX
+    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    vocab_path = BENCHMARK_DIR / "card_vocab.json"
+    import json as _json
+    card_vocab = _json.loads(vocab_path.read_text(encoding="utf-8"))
+    card_vocab_json = _json.dumps(card_vocab)
+    net = BetaOneNetwork(num_cards=len(card_vocab))
+    net.load_state_dict(ckpt["model_state_dict"])
+    onnx_dir = str(TRAINING_SETS_DIR / "_calibration_onnx")
+    onnx_path = export_onnx(net, onnx_dir)
+
+    monster_json = build_monster_data_json()
+    profiles_json = load_solver_json("enemy_profiles.json")
+
+    # Calibrate recorded encounters
+    rec_path = BENCHMARK_DIR / "benchmark_recorded.jsonl"
+    if rec_path.exists():
+        import json
+        with open(rec_path, encoding="utf-8") as f:
+            records = [json.loads(l) for l in f if l.strip()]
+        print(f"\nCalibrating {len(records)} recorded encounters...")
+        calibrated_records, avg_hp = calibrate_all(
+            records, monster_json, profiles_json,
+            card_vocab_json, onnx_path,
+            num_sims=args.sims, combats=args.combats,
+        )
+    else:
+        calibrated_records = []
+
+    # Calibrate packages
+    print(f"\nCalibrating archetype packages...")
+    calibrate_packages(monster_json, profiles_json, card_vocab_json, onnx_path,
+                       num_sims=args.sims, combats=args.combats)
+
+    # Collect package HPs
+    package_hps = {}
+    for pkg in PACKAGES:
+        if pkg.calibrated_hps:
+            package_hps[pkg.name] = dict(pkg.calibrated_hps)
+
+    # Save training set
+    name = args.name or f"calibrated-from-{args.checkpoint}"
+    ts_id = save_training_set(
+        name=name,
+        recorded_encounters=calibrated_records,
+        package_hps=package_hps,
+        calibrated_with={
+            "checkpoint": args.checkpoint,
+            "gen": ckpt.get("gen", "?"),
+            "method": "mcts",
+            "sims": args.sims,
+            "combats_per_hp": args.combats,
+        },
+    )
+    print(f"\nTraining set saved: {ts_id}")
+    print(f"  Recorded: {len(calibrated_records)} encounters")
+    print(f"  Packages: {sum(len(v) for v in package_hps.values())} encounter-HP pairs")
+    print(f"\nUse in experiment config:")
+    print(f"  data:")
+    print(f"    training_set: {ts_id}")
+
+
+def cmd_training_sets(args):
+    from .training_set import list_training_sets
+    sets = list_training_sets()
+    if not sets:
+        print("No training sets. Create one with: sts2-experiment calibrate --checkpoint <name>")
+        return
+    print(f"{'Training Set ID':<28s} {'Recorded':>8s} {'Packages':>8s} {'Avg HP':>7s} {'Calibrated From'}")
+    print("-" * 80)
+    for ts in sets:
+        cal = ts.get("calibrated_with", {})
+        src = cal.get("checkpoint", "?")
+        print(f"  {ts['training_set_id']:<26s} {ts.get('recorded_count', 0):>8d} {ts.get('packages_count', 0):>8d} {ts.get('recorded_avg_hp', 0):>7.1f}   {src}")
+
+
 def cmd_suites(args):
     from .suite import list_suites, get_current_final_exam_suite, get_current_recorded_suite, get_current_eval_suite
 
@@ -401,6 +501,22 @@ def main():
     p = sub.add_parser("info", help="Show detailed experiment info")
     p.add_argument("name", help="Experiment name")
     p.set_defaults(func=cmd_info)
+
+    # calibrate
+    p = sub.add_parser("calibrate", help="Run offline calibration to produce a training set")
+    p.add_argument("--checkpoint", required=True,
+                    help="Experiment name or checkpoint path to calibrate against")
+    p.add_argument("--name", default=None,
+                    help="Name for the training set")
+    p.add_argument("--sims", type=int, default=400,
+                    help="MCTS sims for calibration (default: 400)")
+    p.add_argument("--combats", type=int, default=64,
+                    help="Combats per HP level (default: 64)")
+    p.set_defaults(func=cmd_calibrate)
+
+    # training-sets
+    p = sub.add_parser("training-sets", help="List available training sets")
+    p.set_defaults(func=cmd_training_sets)
 
     # suites
     p = sub.add_parser("suites", help="List benchmark suites")

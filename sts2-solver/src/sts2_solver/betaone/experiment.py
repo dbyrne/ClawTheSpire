@@ -53,7 +53,7 @@ class ExperimentConfig:
     training: dict = field(default_factory=dict)
 
     # Data source
-    data: dict = field(default_factory=lambda: {"mode": "mixed", "recorded_frac": 0.5})
+    data: dict = field(default_factory=lambda: {"mode": "mixed", "recorded_frac": 0.5, "training_set": None})
 
     # Curriculum
     curriculum: dict = field(default_factory=lambda: {
@@ -130,6 +130,7 @@ class ExperimentConfig:
                 "mixed": d.get("mode") == "mixed",
                 "recorded_frac": _float(d.get("recorded_frac"), 0.5),
                 "cold_start": ck.get("cold_start", False),
+                "training_set_id": d.get("training_set"),
             }
         else:  # ppo
             ppo = t.get("ppo", {})
@@ -152,6 +153,7 @@ class ExperimentConfig:
                 "recorded_encounters": d.get("mode") in ("recorded", "mixed"),
                 "mixed": d.get("mode") == "mixed",
                 "recorded_frac": _float(d.get("recorded_frac"), 0.5),
+                "training_set_id": d.get("training_set"),
             }
 
 
