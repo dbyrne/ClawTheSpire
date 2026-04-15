@@ -321,27 +321,28 @@ def build_dashboard(experiments: list[dict]) -> Group:
                 spark.append("▂", style="red")
 
         # Win rate avg25
-        spark.append(f" {wr_avg25:.1%}", style="bold")
+        spark.append(f"  avg25: ", style="dim")
+        spark.append(f"{wr_avg25:.1%}", style="bold")
         if has_delta:
             d = wr_avg25 - wr_prev25
             style = "green" if d > 0.005 else "red" if d < -0.005 else "dim"
-            spark.append(f" {'+' if d >= 0 else ''}{d*100:.1f}", style=style)
+            spark.append(f" ({'+' if d >= 0 else ''}{d*100:.1f})", style=style)
 
         # Policy loss avg25
-        spark.append(f"  pi:", style="dim")
+        spark.append(f"  pi: ", style="dim")
         spark.append(f"{pl_avg25:.3f}", style="white")
         if has_delta:
             d = pl_avg25 - pl_prev25
             style = "green" if d < -0.001 else "red" if d > 0.001 else "dim"
-            spark.append(f" {'+' if d >= 0 else ''}{d:.3f}", style=style)
+            spark.append(f" ({'+' if d >= 0 else ''}{d:.3f})", style=style)
 
         # Value loss avg25
-        spark.append(f"  v:", style="dim")
+        spark.append(f"  v: ", style="dim")
         spark.append(f"{vl_avg25:.3f}", style="white")
         if has_delta:
             d = vl_avg25 - vl_prev25
             style = "green" if d < -0.001 else "red" if d > 0.001 else "dim"
-            spark.append(f" {'+' if d >= 0 else ''}{d:.3f}", style=style)
+            spark.append(f" ({'+' if d >= 0 else ''}{d:.3f})", style=style)
 
         spark.append(f"  {gen_times[-1]:.0f}s/gen", style="dim")
         parts.append(spark)
