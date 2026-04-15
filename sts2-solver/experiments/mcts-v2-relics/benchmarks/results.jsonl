@@ -1,4 +1,0 @@
-{"suite": "final-exam-5cf51dab89db", "mode": "policy", "timestamp": 1776261092.5680113, "checkpoint": "latest", "gen": 352, "win_rate": 0.707, "wins": 181, "games": 256, "ci95_lo": 0.649, "ci95_hi": 0.759}
-{"suite": "final-exam-5cf51dab89db", "mode": "mcts", "timestamp": 1776261092.5690088, "checkpoint": "latest", "gen": 352, "win_rate": 0.688, "wins": 176, "games": 256, "ci95_lo": 0.628, "ci95_hi": 0.741}
-{"suite": "recorded-b5a7c0f7771c", "mode": "policy", "timestamp": 1776261092.5690088, "checkpoint": "latest", "gen": 352, "win_rate": 0.684, "wins": 941, "games": 1376, "ci95_lo": 0.659, "ci95_hi": 0.708}
-{"suite": "recorded-b5a7c0f7771c", "mode": "mcts", "timestamp": 1776261092.5769348, "checkpoint": "latest", "gen": 352, "win_rate": 0.739, "wins": 1017, "games": 1376, "ci95_lo": 0.715, "ci95_hi": 0.762}
