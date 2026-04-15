@@ -305,7 +305,7 @@ def build_dashboard(experiments: list[dict]) -> Group:
             )
         parts.append(es_table)
 
-    # === Active training sparklines ===
+    # === Active training candlesticks ===
     for exp in experiments:
         p = exp["progress"]
         if not p:
@@ -318,63 +318,99 @@ def build_dashboard(experiments: list[dict]) -> Group:
         if len(history) < 3:
             continue
 
-        # Mini sparkline of win rate + rolling 25-gen averages
         wrs = [r.get("win_rate", 0) for r in history]
         pls = [r.get("policy_loss", 0) for r in history]
         vls = [r.get("value_loss", 0) for r in history]
         gen_times = [r.get("gen_time", 0) for r in history]
         n_hist = len(history)
 
-        def _avg(vals, n=25):
-            window = vals[-n:]
-            return sum(window) / len(window) if window else 0.0
+        def _window(vals, n=25):
+            w = vals[-n:]
+            return min(w), max(w), sum(w) / len(w)
 
-        wr_avg25 = _avg(wrs)
-        pl_avg25 = _avg(pls)
-        vl_avg25 = _avg(vls)
+        def _avg(vals, n=25):
+            w = vals[-n:]
+            return sum(w) / len(w) if w else 0.0
 
         has_delta = n_hist >= 50
-        if has_delta:
-            wr_prev25 = _avg(wrs[-50:-25])
-            pl_prev25 = _avg(pls[-50:-25])
-            vl_prev25 = _avg(vls[-50:-25])
 
-        spark = Text()
         color = exp_color_map.get(exp["name"], "white")
-        spark.append(f"  {exp['name']}", style=color)
+        header = Text()
+        header.append(f"  {exp['name']}", style=color)
+        header.append(f"  gen {p.get('gen', 0)}/{p.get('num_generations', '?')}  {gen_times[-1]:.0f}s/gen", style="dim")
+        parts.append(header)
 
-        spark.append(f"  WR: ", style="dim")
-        for wr in wrs[-15:]:
-            if wr >= 0.6:
-                spark.append("█", style="green")
-            elif wr >= 0.4:
-                spark.append("▆", style="yellow")
-            else:
-                spark.append("▂", style="red")
+        # Render one candlestick line per metric
+        def _candle_line(label, vals, scale_lo, scale_hi, fmt_val, fmt_delta,
+                         higher_is_better=True, bar_width=30):
+            lo, hi, mean = _window(vals)
+            line = Text()
+            line.append(f"    {label:>3s} ", style="dim")
 
-        spark.append(f"  avg25: ", style="dim")
-        spark.append(f"{wr_avg25:.1%}", style="bold")
-        if has_delta:
-            d = wr_avg25 - wr_prev25
-            style = "green" if d > 0.005 else "red" if d < -0.005 else "dim"
-            spark.append(f" ({'+' if d >= 0 else ''}{d*100:.1f})", style=style)
+            # Build bar: · = empty, ░ = range, █ = mean
+            bar = [' '] * bar_width
+            span = scale_hi - scale_lo
+            if span <= 0:
+                span = 1.0
 
-        spark.append(f"  pi: ", style="dim")
-        spark.append(f"{pl_avg25:.3f}", style="white")
-        if has_delta:
-            d = pl_avg25 - pl_prev25
-            style = "green" if d < -0.001 else "red" if d > 0.001 else "dim"
-            spark.append(f" ({'+' if d >= 0 else ''}{d:.3f})", style=style)
+            def pos(v):
+                return max(0, min(bar_width - 1, int((v - scale_lo) / span * (bar_width - 1))))
 
-        spark.append(f"  v: ", style="dim")
-        spark.append(f"{vl_avg25:.3f}", style="white")
-        if has_delta:
-            d = vl_avg25 - vl_prev25
-            style = "green" if d < -0.001 else "red" if d > 0.001 else "dim"
-            spark.append(f" ({'+' if d >= 0 else ''}{d:.3f})", style=style)
+            lo_p = pos(lo)
+            hi_p = pos(hi)
+            mean_p = pos(mean)
 
-        spark.append(f"  {gen_times[-1]:.0f}s/gen", style="dim")
-        parts.append(spark)
+            for i in range(bar_width):
+                if lo_p <= i <= hi_p:
+                    bar[i] = '░'
+                else:
+                    bar[i] = '·'
+            bar[mean_p] = '█'
+
+            # Render bar with colors
+            for i, ch in enumerate(bar):
+                if ch == '█':
+                    line.append(ch, style="bold white")
+                elif ch == '░':
+                    line.append(ch, style="bright_black")
+                else:
+                    line.append(ch, style="dim")
+
+            # Numeric summary
+            line.append(f"  {fmt_val(mean)}", style="bold")
+            line.append(f"  [{fmt_val(lo)}, {fmt_val(hi)}]", style="dim")
+
+            # Delta from previous 25
+            if has_delta:
+                prev_mean = _avg(vals[-50:-25])
+                d = mean - prev_mean
+                if higher_is_better:
+                    style = "green" if d > 0 else "red" if d < 0 else "dim"
+                else:
+                    style = "green" if d < 0 else "red" if d > 0 else "dim"
+                sign = "+" if d >= 0 else ""
+                line.append(f"  {sign}{fmt_delta(d)}", style=style)
+
+            return line
+
+        parts.append(_candle_line(
+            "WR", wrs, 0.0, 0.80,
+            fmt_val=lambda v: f"{v:.1%}",
+            fmt_delta=lambda d: f"{d*100:.1f}pp",
+            higher_is_better=True,
+        ))
+        parts.append(_candle_line(
+            "pi", pls, 0.5, 2.0,
+            fmt_val=lambda v: f"{v:.3f}",
+            fmt_delta=lambda d: f"{d:.3f}",
+            higher_is_better=False,
+        ))
+        parts.append(_candle_line(
+            "v", vls, 0.0, 1.0,
+            fmt_val=lambda v: f"{v:.3f}",
+            fmt_delta=lambda d: f"{d:.3f}",
+            higher_is_better=False,
+        ))
 
     # === Footer ===
     footer = Text(f"  {len(experiments)} experiments | {len(all_sets)} encounter sets | refresh 2s | Ctrl+C to exit", style="dim")
