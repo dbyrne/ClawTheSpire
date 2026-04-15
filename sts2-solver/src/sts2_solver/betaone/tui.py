@@ -125,13 +125,27 @@ def _collect_experiments() -> list[dict]:
     return experiments
 
 
+EXP_COLORS = [
+    "cyan", "green", "yellow", "magenta", "blue",
+    "red", "bright_cyan", "bright_green", "bright_yellow", "bright_magenta",
+    "bright_blue", "bright_red", "dark_orange", "purple", "turquoise2",
+]
+
+
+def _exp_color(idx: int) -> str:
+    return EXP_COLORS[idx % len(EXP_COLORS)]
+
+
 def build_dashboard(experiments: list[dict]) -> Group:
     """Build the full dashboard layout."""
     parts = []
 
+    # Assign colors to experiments
+    exp_color_map = {exp["name"]: _exp_color(i) for i, exp in enumerate(experiments)}
+
     # === Experiment overview table ===
     overview = Table(title="Experiments", expand=True, show_lines=False)
-    overview.add_column("Name", style="cyan", max_width=28)
+    overview.add_column("Name", max_width=28)
     overview.add_column("Method", max_width=10)
     overview.add_column("Params", justify="right", max_width=8)
     overview.add_column("Status", max_width=10)
@@ -188,7 +202,9 @@ def build_dashboard(experiments: list[dict]) -> Group:
         else:
             buf_str = "-"
 
-        overview.add_row(exp["name"], method, params_str, status,
+        color = exp_color_map.get(exp["name"], "white")
+        name_text = Text(exp["name"], style=color)
+        overview.add_row(name_text, method, params_str, status,
                          gen_str, wr, best, eval_str, et_str, buf_str, ts_str)
 
     parts.append(overview)
@@ -217,7 +233,7 @@ def build_dashboard(experiments: list[dict]) -> Group:
         bench_table = Table(title="Benchmarks (best first per encounter set)", expand=True, show_lines=False)
         bench_table.add_column("Encounter Set", max_width=16)
         bench_table.add_column("Mode", max_width=10)
-        bench_table.add_column("Experiment", style="cyan", max_width=26)
+        bench_table.add_column("Experiment", max_width=26)
         bench_table.add_column("WR", justify="right", max_width=7)
         bench_table.add_column("95% CI", justify="right", max_width=16)
         bench_table.add_column("N", justify="right", max_width=6)
@@ -240,8 +256,9 @@ def build_dashboard(experiments: list[dict]) -> Group:
             # Visual separator between suites
             suite_display = row["suite"] if row["suite"] != prev_suite else ""
             prev_suite = row["suite"]
+            color = exp_color_map.get(row["name"], "white")
             bench_table.add_row(
-                suite_display, mode_str, row["name"],
+                suite_display, mode_str, Text(row["name"], style=color),
                 f"{row['wr']:.1%}", ci, str(row["n"]),
             )
         parts.append(bench_table)
@@ -266,7 +283,8 @@ def build_dashboard(experiments: list[dict]) -> Group:
         gen_times = [r.get("gen_time", 0) for r in history]
 
         spark = Text()
-        spark.append(f"  {exp['name']}", style="cyan")
+        color = exp_color_map.get(exp["name"], "white")
+        spark.append(f"  {exp['name']}", style=color)
         spark.append(f"  WR: ", style="dim")
         for wr in wrs[-15:]:
             if wr >= 0.6:
