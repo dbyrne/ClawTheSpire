@@ -141,7 +141,7 @@ def build_dashboard(experiments: list[dict]) -> Group:
     overview.add_column("Eval", justify="right", max_width=7)
     overview.add_column("ET Avg", justify="right", max_width=7)
     overview.add_column("Buffer", justify="right", max_width=10)
-    overview.add_column("Training Set", max_width=18)
+    overview.add_column("Encounter Set", max_width=18)
 
     for exp in experiments:
         p = exp["progress"]
@@ -214,8 +214,8 @@ def build_dashboard(experiments: list[dict]) -> Group:
             })
 
     if bench_rows:
-        bench_table = Table(title="Benchmarks (by suite, best first)", expand=True, show_lines=False)
-        bench_table.add_column("Suite", max_width=16)
+        bench_table = Table(title="Benchmarks (best first per encounter set)", expand=True, show_lines=False)
+        bench_table.add_column("Encounter Set", max_width=16)
         bench_table.add_column("Mode", max_width=10)
         bench_table.add_column("Experiment", style="cyan", max_width=26)
         bench_table.add_column("WR", justify="right", max_width=7)
@@ -280,11 +280,19 @@ def build_dashboard(experiments: list[dict]) -> Group:
         spark.append(f"  {gen_times[-1]:.0f}s/gen", style="dim")
         parts.append(spark)
 
-    # === Footer ===
     # === Encounter sets section ===
     from .encounter_set import list_encounter_sets
     es_list = list_encounter_sets()
-    if es_list:
+
+    # Also include legacy training sets
+    try:
+        from .training_set import list_training_sets
+        legacy_ts = list_training_sets()
+    except Exception:
+        legacy_ts = []
+
+    all_sets = es_list + legacy_ts
+    if all_sets:
         es_table = Table(title="Encounter Sets", expand=True, show_lines=False)
         es_table.add_column("Name", style="cyan", max_width=28)
         es_table.add_column("Count", justify="right", max_width=6)
@@ -302,9 +310,20 @@ def build_dashboard(experiments: list[dict]) -> Group:
                 cal.get("checkpoint", "?"),
                 es.get("encounter_set_id", "?")[:16],
             )
+        for ts in legacy_ts:
+            cal = ts.get("calibrated_with", {})
+            count = ts.get("recorded_count", 0) + ts.get("packages_count", 0)
+            es_table.add_row(
+                ts.get("name", "?") + " (legacy)",
+                str(count),
+                f"{ts.get('recorded_avg_hp', 0):.0f}",
+                cal.get("checkpoint", "?"),
+                ts.get("training_set_id", "?")[:16],
+            )
         parts.append(es_table)
 
-    footer = Text(f"  {len(experiments)} experiments | {len(es_list)} encounter sets | refresh 2s | Ctrl+C to exit", style="dim")
+    # === Footer ===
+    footer = Text(f"  {len(experiments)} experiments | {len(all_sets)} encounter sets | refresh 2s | Ctrl+C to exit", style="dim")
     parts.append(footer)
 
     return Group(*parts)
