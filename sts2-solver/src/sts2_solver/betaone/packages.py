@@ -55,6 +55,7 @@ class Package:
     deck_max_size: int = 22
     deck_min_removals: int = 1
     deck_max_removals: int = 3
+    core_cards: list[str] = field(default_factory=list)  # guaranteed in every deck
     default_hp: int = 50  # before calibration
     calibrated_hps: dict[str, int] = field(default_factory=dict)  # encounter_key → HP
 
@@ -72,8 +73,19 @@ PACKAGES: list[Package] = [
     ),
     Package(
         name="draw",
-        archetypes=["draw_cycle", "block"],  # draw + block for survivability
+        archetypes=["draw_cycle", "block"],
         encounters=ALL_HARD,
+        deck_min_removals=3,
+        deck_max_removals=5,
+        core_cards=["BACKFLIP", "ADRENALINE", "PREPARED"],
+    ),
+    Package(
+        name="combo",
+        archetypes=["shiv", "draw_cycle"],
+        encounters=ALL_HARD,
+        deck_min_removals=3,
+        deck_max_removals=5,
+        core_cards=["BURST", "BLADE_DANCE", "ACROBATICS"],
     ),
     Package(
         name="sly",
@@ -84,6 +96,7 @@ PACKAGES: list[Package] = [
         name="debuff_damage",
         archetypes=["debuff", "damage"],
         encounters=ALL_HARD,
+        core_cards=["SKEWER", "DAGGER_THROW"],
     ),
 ]
 
@@ -112,6 +125,7 @@ def sample_package(
         min_removals=pkg.deck_min_removals,
         max_removals=pkg.deck_max_removals,
         archetypes=pkg.archetypes,
+        core_cards=pkg.core_cards or None,
     )
 
     # Use calibrated HP if available, otherwise default
@@ -171,6 +185,7 @@ def calibrate_packages(
                     min_removals=pkg.deck_min_removals,
                     max_removals=pkg.deck_max_removals,
                     archetypes=pkg.archetypes,
+                    core_cards=pkg.core_cards or None,
                 )
                 for _ in range(combats)
             ]

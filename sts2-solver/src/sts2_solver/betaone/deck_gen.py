@@ -229,6 +229,7 @@ def build_random_deck(
     min_removals: int = 1,
     max_removals: int = 3,
     archetypes: list[str] | None = None,
+    core_cards: list[str] | None = None,
 ) -> list[dict]:
     """Build a random Silent deck following archetype-based construction.
 
@@ -257,6 +258,13 @@ def build_random_deck(
             deck.pop(rng.choice(strikes))
         elif defends:
             deck.pop(rng.choice(defends))
+
+    # Insert guaranteed core cards (if specified)
+    if core_cards:
+        for cid in core_cards:
+            if cid in pool and cid not in deck_ids:
+                deck.append(dict(pool[cid]))
+                deck_ids.add(cid)
 
     # Fill to target with archetype-based additions
     arch_names = archetypes if archetypes else list(ARCHETYPES.keys())
