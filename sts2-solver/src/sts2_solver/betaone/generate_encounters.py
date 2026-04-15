@@ -136,7 +136,7 @@ def generate_from_packages(
                     "enemies": enemy_ids,
                     "deck": deck,
                     "hp": hp,
-                    "relics": [],
+                    "relics": ["RING_OF_THE_SNAKE"],
                 })
 
     return encounters
@@ -173,6 +173,8 @@ def generate_from_recorded(
             continue
 
         relics = list(rec.get("relics", []))
+        if "RING_OF_THE_SNAKE" not in relics:
+            relics.insert(0, "RING_OF_THE_SNAKE")
 
         hp = _calibrate_hp(
             enemy_ids, deck, relics,
