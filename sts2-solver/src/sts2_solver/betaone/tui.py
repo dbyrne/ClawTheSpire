@@ -337,12 +337,22 @@ def build_dashboard(experiments: list[dict]) -> Group:
         color = exp_color_map.get(exp["name"], "white")
         header = Text()
         header.append(f"  {exp['name']}", style=color)
-        header.append(f"  gen {p.get('gen', 0)}/{p.get('num_generations', '?')}  {gen_times[-1]:.0f}s/gen", style="dim")
+        gen_now = p.get('gen', 0)
+        gen_total = p.get('num_generations', 0)
+        avg_gen_time = sum(gen_times) / len(gen_times)
+        remaining_s = (gen_total - gen_now) * avg_gen_time if gen_total else 0
+        if remaining_s >= 3600:
+            eta_str = f"{remaining_s/3600:.1f}h left"
+        elif remaining_s >= 60:
+            eta_str = f"{remaining_s/60:.0f}m left"
+        else:
+            eta_str = f"{remaining_s:.0f}s left"
+        header.append(f"  gen {gen_now}/{gen_total}  {gen_times[-1]:.0f}s/gen  ~{eta_str}", style="dim")
         parts.append(header)
 
         # Render one candlestick line per metric
         def _candle_line(label, vals, scale_lo, scale_hi, fmt_val, fmt_delta,
-                         higher_is_better=True, bar_width=60):
+                         higher_is_better=True, bar_width=80):
             lo, hi, mean = _window(vals)
             line = Text()
             line.append(f"    {label:>3s} ", style="dim")
@@ -396,7 +406,7 @@ def build_dashboard(experiments: list[dict]) -> Group:
         parts.append(_candle_line(
             "WR", wrs, 0.0, 0.80,
             fmt_val=lambda v: f"{v:.1%}",
-            fmt_delta=lambda d: f"{d*100:.1f}pp",
+            fmt_delta=lambda d: f"{d*100:.1f}%",
             higher_is_better=True,
         ))
         parts.append(_candle_line(
