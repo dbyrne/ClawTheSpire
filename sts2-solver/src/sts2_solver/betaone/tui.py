@@ -342,7 +342,7 @@ def build_dashboard(experiments: list[dict]) -> Group:
 
         # Render one candlestick line per metric
         def _candle_line(label, vals, scale_lo, scale_hi, fmt_val, fmt_delta,
-                         higher_is_better=True, bar_width=30):
+                         higher_is_better=True, bar_width=60):
             lo, hi, mean = _window(vals)
             line = Text()
             line.append(f"    {label:>3s} ", style="dim")
