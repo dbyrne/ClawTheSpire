@@ -1,6 +1,6 @@
 name: mcts-lean-decks-pimc
 method: mcts_selfplay
-description: 'Determinized MCTS (PIMC) on lean-decks-v1. 10 determinizations x 40
+description: 'Determinized MCTS (PIMC) on lean-decks-v1. 4 determinizations x 100
   sims each (400 total). Pre-shuffles draw pile for each determinization so draw
   effects are evaluated across multiple possible draws, not one random sample.
   Same config as mcts-lean-decks for direct comparison.'
@@ -38,7 +38,7 @@ training:
     dense_value_targets: true
     gamma: 0.99
     c_puct: 1.5
-    determinizations: 10
+    determinizations: 4
 data:
   mode: encounter_set
   encounter_set: lean-decks-v1
