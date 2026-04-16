@@ -194,6 +194,7 @@ def train(
     dense_value_targets: bool = False,
     gamma: float = 0.99,
     c_puct: float = 2.5,
+    freeze_value_head: bool = False,
 ):
     os.makedirs(output_dir, exist_ok=True)
     onnx_dir = os.path.join(output_dir, "onnx")
@@ -210,8 +211,15 @@ def train(
 
     # Network + optimizer
     network = BetaOneNetwork(num_cards=num_cards)
-    optimizer = torch.optim.Adam(network.parameters(), lr=lr)
-    print(f"BetaOne self-play: {network.param_count():,} params, {num_cards} card vocab")
+    if freeze_value_head:
+        for param in network.value_head.parameters():
+            param.requires_grad = False
+        trainable = [p for p in network.parameters() if p.requires_grad]
+        optimizer = torch.optim.Adam(trainable, lr=lr)
+        print(f"BetaOne self-play: {network.param_count():,} params, {num_cards} card vocab (value head frozen)")
+    else:
+        optimizer = torch.optim.Adam(network.parameters(), lr=lr)
+        print(f"BetaOne self-play: {network.param_count():,} params, {num_cards} card vocab")
 
     # Set up training data (shared with train.py)
     td = setup_training_data(
@@ -432,7 +440,7 @@ def train(
                     b_states, b_act_feat, b_act_masks,
                     b_hand_ids, b_action_ids,
                     b_policies, b_values,
-                    value_coef=value_coef,
+                    value_coef=0.0 if freeze_value_head else value_coef,
                 )
                 total_ploss += metrics["policy_loss"]
                 total_vloss += metrics["value_loss"]

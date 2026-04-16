@@ -1,0 +1,49 @@
+name: mcts-frozen-value-head
+method: mcts_selfplay
+description: 'Expert Iteration: warm-start from PPO v5, freeze value head, train
+  only policy from MCTS visit counts. PPO value function preserved for search
+  quality (supports 53% MCTS benchmark). Policy should converge toward MCTS
+  search quality without value function degradation.'
+created: '2026-04-16T03:57:42+00:00'
+parent: ppo-v5-warmstart-ts
+parent_checkpoint: latest
+architecture:
+  arch_version: 2
+  base_state_dim: 137
+  hidden_dim: 128
+  action_hidden: 64
+  hand_proj_dim: 32
+  card_embed_dim: 16
+  card_stats_dim: 28
+  relic_dim: 26
+  action_dim: 35
+  max_hand: 10
+  max_actions: 30
+  num_cards: 578
+  total_params: 72371
+  state_dim: 427
+  trunk_input: 169
+training:
+  generations: 500
+  combats_per_gen: 256
+  lr: 0.0003
+  batch_size: 512
+  mcts:
+    num_sims: 400
+    temperature: 1.0
+    replay_capacity: 50000
+    train_epochs: 4
+    value_coef: 1.0
+    turn_boundary_eval: true
+    c_puct: 1.5
+    freeze_value_head: true
+data:
+  mode: encounter_set
+  encounter_set: base-es-v1
+curriculum:
+  start_tier: 0
+  skip_to_final: false
+checkpoints:
+  save_every: 50
+  keep_best: true
+  cold_start: false

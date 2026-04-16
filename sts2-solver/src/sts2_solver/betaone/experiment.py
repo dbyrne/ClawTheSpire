@@ -141,6 +141,7 @@ class ExperimentConfig:
                 "dense_value_targets": mcts.get("dense_value_targets", False),
                 "gamma": _float(mcts.get("gamma"), 0.99),
                 "c_puct": _float(mcts.get("c_puct"), 2.5),
+                "freeze_value_head": mcts.get("freeze_value_head", False),
             }
         else:  # ppo
             ppo = t.get("ppo", {})
