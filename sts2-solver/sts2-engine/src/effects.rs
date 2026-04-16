@@ -495,6 +495,7 @@ pub fn execute_generic_effect(
     card: &Card,
     target_idx: Option<usize>,
     rng: &mut impl Rng,
+    skip_draw: bool,
 ) {
     // HP loss first
     if card.hp_loss > 0 {
@@ -548,8 +549,8 @@ pub fn execute_generic_effect(
         }
     }
 
-    // Draw
-    if card.cards_draw > 0 {
+    // Draw (skipped for POMCP chance nodes — draw deferred to observation sampling)
+    if card.cards_draw > 0 && !skip_draw {
         draw_cards(state, card.cards_draw, rng);
     }
 

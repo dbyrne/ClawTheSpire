@@ -273,7 +273,7 @@ fn run_combat_nogil(
                     }
                     Action::PlayCard { card_idx, target_idx } => {
                         if combat::can_play_card(&state, *card_idx) {
-                            combat::play_card(&mut state, *card_idx, *target_idx, &card_db, &mut rng);
+                            combat::play_card(&mut state, *card_idx, *target_idx, &card_db, &mut rng, false);
                         }
                         cards_this_turn += 1;
                     }
@@ -626,7 +626,7 @@ pub fn step(state_json: &str, action_json: &str, seed: u64) -> PyResult<String> 
             let card_idx = action_data["card_idx"].as_u64().unwrap_or(0) as usize;
             let target_idx = action_data["target_idx"].as_u64().map(|v| v as usize);
             if combat::can_play_card(&state, card_idx) {
-                combat::play_card(&mut state, card_idx, target_idx, &card_db, &mut rng);
+                combat::play_card(&mut state, card_idx, target_idx, &card_db, &mut rng, false);
             }
         }
         "end_turn" => {

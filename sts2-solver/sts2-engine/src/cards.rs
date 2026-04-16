@@ -16,6 +16,7 @@ pub fn execute_card_effect(
     target_idx: Option<usize>,
     card_db: &CardDB,
     rng: &mut impl Rng,
+    skip_draw: bool,
 ) {
     let base = card.base_id();
     let upgraded = card.upgraded;
@@ -531,14 +532,14 @@ pub fn execute_card_effect(
             if let Some(card) = state.player.draw_pile.pop() {
                 let alive = state.alive_enemy_indices();
                 let target = alive.first().copied();
-                execute_card_effect(state, &card, target, card_db, rng);
+                execute_card_effect(state, &card, target, card_db, rng, false);
                 state.player.discard_pile.push(card);
             }
         }
 
         // --- Fallback: generic effect from card data ---
         _ => {
-            execute_generic_effect(state, card, target_idx, rng);
+            execute_generic_effect(state, card, target_idx, rng, skip_draw);
         }
     }
 }

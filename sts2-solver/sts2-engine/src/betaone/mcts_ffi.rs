@@ -202,7 +202,7 @@ pub fn betaone_mcts_fight_combat(
                         Action::PlayCard { card_idx, target_idx } => {
                             if combat::can_play_card(&state, *card_idx) {
                                 combat::play_card(
-                                    &mut state, *card_idx, *target_idx, &card_db, &mut rng,
+                                    &mut state, *card_idx, *target_idx, &card_db, &mut rng, false,
                                 );
                             }
                             if let Some(outcome) = combat::is_combat_over(&state) {

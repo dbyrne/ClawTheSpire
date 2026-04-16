@@ -139,6 +139,7 @@ pub fn play_card(
     target_idx: Option<usize>,
     card_db: &CardDB,
     rng: &mut impl Rng,
+    skip_draw: bool,
 ) {
     let mut card = state.player.hand[card_idx].clone();
     let cost = effective_cost(state, &card);
@@ -183,13 +184,13 @@ pub fn play_card(
     }
 
     // --- Execute card effect ---
-    crate::cards::execute_card_effect(state, &card, target_idx, card_db, rng);
+    crate::cards::execute_card_effect(state, &card, target_idx, card_db, rng, skip_draw);
 
     // Burst: replay Skill an extra time
     if card.card_type == CardType::Skill {
         let burst = state.player.get_power("Burst");
         if burst > 0 {
-            crate::cards::execute_card_effect(state, &card, target_idx, card_db, rng);
+            crate::cards::execute_card_effect(state, &card, target_idx, card_db, rng, skip_draw);
             state.player.add_power("Burst", -1);
             if state.player.get_power("Burst") <= 0 {
                 state.player.powers.remove("Burst");
@@ -521,7 +522,7 @@ pub fn end_turn(state: &mut CombatState, card_db: &CardDB, rng: &mut impl Rng) {
         let alive = state.alive_enemy_indices();
         if let (Some(idx), Some(&target)) = (attack_idx, alive.first()) {
             let card = state.player.hand.remove(idx);
-            crate::cards::execute_card_effect(state, &card, Some(target), card_db, rng);
+            crate::cards::execute_card_effect(state, &card, Some(target), card_db, rng, false);
             state.player.discard_pile.push(card);
         } else {
             break;

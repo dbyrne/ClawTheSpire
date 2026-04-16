@@ -637,7 +637,7 @@ impl<'a> MCTS<'a> {
                     Action::EndTurn => break,
                     Action::PlayCard { card_idx, target_idx } => {
                         if combat::can_play_card(&sim, *card_idx) {
-                            combat::play_card(&mut sim, *card_idx, *target_idx, self.card_db, rng);
+                            combat::play_card(&mut sim, *card_idx, *target_idx, self.card_db, rng, false);
                         }
                     }
                     Action::UsePotion { potion_idx } => {
@@ -683,7 +683,7 @@ impl<'a> MCTS<'a> {
         match action {
             Action::PlayCard { card_idx, target_idx } => {
                 if combat::can_play_card(state, *card_idx) {
-                    combat::play_card(state, *card_idx, *target_idx, self.card_db, rng);
+                    combat::play_card(state, *card_idx, *target_idx, self.card_db, rng, false);
                 }
             }
             Action::EndTurn => {
