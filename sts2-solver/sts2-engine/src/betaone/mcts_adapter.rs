@@ -45,8 +45,8 @@ impl<'a> Inference for BetaOneMCTSAdapter<'a> {
         );
         // Clamp to valid range: the value head has no tanh and can overshoot,
         // which flattens MCTS value differences and causes skipped turns.
-        // Upper bound is 1.3 (max HP-scaled terminal = 1.0 + 0.3).
-        value.clamp(-1.0, 1.3)
+        // Range accommodates MC returns from dense value targets (~[-1.5, 2.0]).
+        value.clamp(-2.0, 3.0)
     }
 
     fn run_value(&self, state: &CombatState) -> f32 {

@@ -191,6 +191,8 @@ def train(
     training_set_id: str | None = None,
     encounter_set_id: str | None = None,
     turn_boundary_eval: bool = False,
+    dense_value_targets: bool = False,
+    gamma: float = 0.99,
 ):
     os.makedirs(output_dir, exist_ok=True)
     onnx_dir = os.path.join(output_dir, "onnx")
@@ -305,6 +307,7 @@ def train(
         all_final_hps = []
         gen_states, gen_act_feat, gen_act_masks = [], [], []
         gen_hand_ids, gen_action_ids, gen_policies = [], [], []
+        gen_rewards = []
         gen_combat_indices = []
         combat_offset = 0
         seed_idx = 0
@@ -334,6 +337,7 @@ def train(
                 gen_id=gen,
                 add_noise=True,
                 turn_boundary_eval=turn_boundary_eval,
+                dense_value_targets=dense_value_targets,
             )
 
             n_steps = rollout["total_steps"]
@@ -351,6 +355,8 @@ def train(
             gen_action_ids.extend(np.array(rollout["action_card_ids"], dtype=np.int64).reshape(-1, MAX_ACTIONS))
             gen_policies.extend(np.array(rollout["policies"], dtype=np.float32).reshape(-1, MAX_ACTIONS))
             gen_combat_indices.extend(ci)
+            if dense_value_targets:
+                gen_rewards.extend(np.array(rollout["rewards"], dtype=np.float32))
             all_outcomes.extend(rollout["outcomes"])
             all_final_hps.extend(rollout["final_hps"])
 
@@ -359,16 +365,29 @@ def train(
             print(f"Gen {gen}: no steps, skipping")
             continue
 
-        # Build value targets from outcomes (HP-scaled: win → 1.0 + 0.3*hp_frac, lose → -1.0)
+        # Build value targets
         combat_indices = np.array(gen_combat_indices, dtype=np.int64)
         gen_values = np.zeros(T, dtype=np.float32)
-        for ci, outcome in enumerate(all_outcomes):
-            mask = combat_indices == ci
-            if outcome == "win":
-                hp_frac = max(all_final_hps[ci], 0) / max(player_max_hp, 1)
-                gen_values[mask] = 1.0 + 0.3 * hp_frac
-            else:
-                gen_values[mask] = -1.0
+        if dense_value_targets:
+            # Monte Carlo returns: G_t = sum_{k=t}^{T} gamma^{k-t} * r_k
+            rewards_arr = np.array(gen_rewards, dtype=np.float32)
+            for ci in range(len(all_outcomes)):
+                mask = combat_indices == ci
+                ep_r = rewards_arr[mask].copy()
+                G = 0.0
+                for t in reversed(range(len(ep_r))):
+                    G = ep_r[t] + gamma * G
+                    ep_r[t] = G
+                gen_values[mask] = ep_r
+        else:
+            # Broadcast game outcome (HP-scaled: win → 1.0 + 0.3*hp_frac, lose → -1.0)
+            for ci, outcome in enumerate(all_outcomes):
+                mask = combat_indices == ci
+                if outcome == "win":
+                    hp_frac = max(all_final_hps[ci], 0) / max(player_max_hp, 1)
+                    gen_values[mask] = 1.0 + 0.3 * hp_frac
+                else:
+                    gen_values[mask] = -1.0
 
         # Add to replay buffer
         replay.add_generation(

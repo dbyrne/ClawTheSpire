@@ -138,6 +138,8 @@ class ExperimentConfig:
                 "training_set_id": d.get("training_set"),
                 "encounter_set_id": d.get("encounter_set"),
                 "turn_boundary_eval": mcts.get("turn_boundary_eval", False),
+                "dense_value_targets": mcts.get("dense_value_targets", False),
+                "gamma": _float(mcts.get("gamma"), 0.99),
             }
         else:  # ppo
             ppo = t.get("ppo", {})

@@ -559,7 +559,8 @@ impl<'a> MCTS<'a> {
 // ---------------------------------------------------------------------------
 
 /// HP-scaled terminal value: wins are worth more when finishing with high HP.
-fn terminal_value(outcome: &str, state: &CombatState) -> f32 {
+/// Used by MCTS tree backup AND as terminal reward for dense value targets.
+pub fn terminal_value(outcome: &str, state: &CombatState) -> f32 {
     if outcome == "win" {
         let hp_frac = state.player.hp.max(0) as f32 / state.player.max_hp.max(1) as f32;
         1.0 + 0.3 * hp_frac
