@@ -348,6 +348,9 @@ def train(
                 turn_boundary_eval=turn_boundary_eval,
                 dense_value_targets=dense_value_targets,
                 c_puct=c_puct,
+                terminal_win_base=2.0 if freeze_value_head else 1.0,
+                terminal_win_hp_coef=0.5 if freeze_value_head else 0.3,
+                terminal_lose=-2.0 if freeze_value_head else -1.0,
             )
 
             n_steps = rollout["total_steps"]

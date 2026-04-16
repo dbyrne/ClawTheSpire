@@ -126,11 +126,18 @@ pub struct MCTS<'a> {
     /// Exploration constant for PUCT. Lower values trust backed-up Q values
     /// more; higher values trust the policy prior more.
     pub c_puct: f32,
+    /// Terminal value scale: (win_base, win_hp_coef, lose).
+    /// Default MCTS scale: (1.0, 0.3, -1.0). PPO scale: (2.0, 0.5, -2.0).
+    /// Must match the value head's training scale for consistent tree backup.
+    pub terminal_scale: (f32, f32, f32),
 }
 
 impl<'a> MCTS<'a> {
     pub fn new(card_db: &'a CardDB, inference: &'a dyn Inference) -> Self {
-        MCTS { card_db, inference, add_noise: false, turn_boundary_eval: false, c_puct: DEFAULT_C_PUCT }
+        MCTS {
+            card_db, inference, add_noise: false, turn_boundary_eval: false,
+            c_puct: DEFAULT_C_PUCT, terminal_scale: (1.0, 0.3, -1.0),
+        }
     }
 
     /// Run MCTS search from the given state. Returns action, policy, and root value.
@@ -307,7 +314,7 @@ impl<'a> MCTS<'a> {
         {
             let state = arena.nodes[node_idx].state.as_ref().unwrap();
             if let Some(outcome) = is_combat_over(state) {
-                let value = terminal_value(outcome, state);
+                let value = terminal_value_scaled(outcome, state, self.terminal_scale);
                 arena.nodes[node_idx].is_terminal = true;
                 arena.nodes[node_idx].is_expanded = true;
                 arena.nodes[node_idx].terminal_value = value;
@@ -344,7 +351,7 @@ impl<'a> MCTS<'a> {
             // Check terminal after resolution (player died to enemy attack,
             // or enemy died to poison/thorns)
             if let Some(outcome) = is_combat_over(&resolved) {
-                let tv = terminal_value(outcome, &resolved);
+                let tv = terminal_value_scaled(outcome, &resolved, self.terminal_scale);
                 arena.nodes[node_idx].state = Some(resolved);
                 arena.nodes[node_idx].enemy_ais = ais;
                 arena.nodes[node_idx].is_terminal = true;
@@ -377,7 +384,7 @@ impl<'a> MCTS<'a> {
             combat::tick_enemy_powers(&mut resolved);
 
             if let Some(outcome) = is_combat_over(&resolved) {
-                let tv = terminal_value(outcome, &resolved);
+                let tv = terminal_value_scaled(outcome, &resolved, self.terminal_scale);
                 arena.nodes[node_idx].state = Some(resolved);
                 arena.nodes[node_idx].enemy_ais = ais;
                 arena.nodes[node_idx].is_terminal = true;
@@ -444,7 +451,7 @@ impl<'a> MCTS<'a> {
     // --- Leaf value estimation ---
     fn estimate_leaf_value(&self, state: &CombatState) -> f32 {
         if let Some(outcome) = is_combat_over(state) {
-            return terminal_value(outcome, state);
+            return terminal_value_scaled(outcome, state, self.terminal_scale);
         }
         let v = self.inference.value_only(state);
         if v.is_finite() { v } else { 0.0 }
@@ -462,7 +469,7 @@ impl<'a> MCTS<'a> {
         rng: &mut impl Rng,
     ) -> f32 {
         if let Some(outcome) = is_combat_over(state) {
-            return terminal_value(outcome, state);
+            return terminal_value_scaled(outcome, state, self.terminal_scale);
         }
 
         // If turn already ended (EndTurn node), skip the playout — we just
@@ -512,7 +519,7 @@ impl<'a> MCTS<'a> {
         combat::tick_enemy_powers(&mut sim);
 
         if let Some(outcome) = is_combat_over(&sim) {
-            return terminal_value(outcome, &sim);
+            return terminal_value_scaled(outcome, &sim, self.terminal_scale);
         }
 
         // Start next turn and set enemy intents so the state is complete
@@ -561,15 +568,21 @@ impl<'a> MCTS<'a> {
 // Terminal value
 // ---------------------------------------------------------------------------
 
-/// HP-scaled terminal value: wins are worth more when finishing with high HP.
-/// Used by MCTS tree backup AND as terminal reward for dense value targets.
-pub fn terminal_value(outcome: &str, state: &CombatState) -> f32 {
+/// HP-scaled terminal value with configurable scale.
+pub fn terminal_value_scaled(outcome: &str, state: &CombatState, scale: (f32, f32, f32)) -> f32 {
+    let (win_base, win_hp_coef, lose) = scale;
     if outcome == "win" {
         let hp_frac = state.player.hp.max(0) as f32 / state.player.max_hp.max(1) as f32;
-        1.0 + 0.3 * hp_frac
+        win_base + win_hp_coef * hp_frac
     } else {
-        -1.0
+        lose
     }
+}
+
+/// HP-scaled terminal value with default MCTS scale (1.0 + 0.3*hp, -1.0).
+/// Used by dense value targets in selfplay.rs.
+pub fn terminal_value(outcome: &str, state: &CombatState) -> f32 {
+    terminal_value_scaled(outcome, state, (1.0, 0.3, -1.0))
 }
 
 // ---------------------------------------------------------------------------
