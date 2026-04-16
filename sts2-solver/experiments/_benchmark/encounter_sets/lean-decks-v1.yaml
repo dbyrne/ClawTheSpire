@@ -1,0 +1,11 @@
+encounter_set_id: es-02b5c202d164
+name: lean-decks-v1
+encounter_count: 189
+avg_hp: 32.1
+source:
+  description: base-es-v1 with basics reduced to 2 Strikes + 2 Defends, replaced with
+    archetype cards (shiv, poison, sly, damage, draw, block). 19% basics vs 42% in
+    base-es-v1. Designed to make draw/cycle valuable.
+  based_on: base-es-v1
+  modifications: Cut Strikes to 2, Defends to 2, added 2 random archetype pools per
+    encounter
