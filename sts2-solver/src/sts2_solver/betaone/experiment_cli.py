@@ -155,7 +155,7 @@ def cmd_eval(args):
         print(f"Experiment '{args.name}' not found.")
         sys.exit(1)
 
-    from .eval import run_eval
+    from .eval import run_eval, run_value_eval
     from .suite import get_current_eval_suite
 
     ckpt_path = str(exp.dir / "betaone_latest.pt")
@@ -170,10 +170,17 @@ def cmd_eval(args):
 
     # Save to experiment with suite tag
     exp.save_eval(result, suite_id=suite_id)
-    print(f"\nEval saved: {result['passed']}/{result['total']} "
+    print(f"\nPolicy eval saved: {result['passed']}/{result['total']} "
           f"({result['passed']/max(result['total'],1):.1%})")
     print(f"  Suite: {suite_id}")
     print(f"  -> {exp.benchmarks_dir / 'eval.jsonl'}")
+
+    # Value head eval
+    value_result = run_value_eval(ckpt_path)
+    exp.save_value_eval(value_result, suite_id=suite_id)
+    print(f"\nValue eval saved: {value_result['passed']}/{value_result['total']} "
+          f"({value_result['passed']/max(value_result['total'],1):.1%})")
+    print(f"  -> {exp.benchmarks_dir / 'value_eval.jsonl'}")
 
 
 def cmd_compare(args):

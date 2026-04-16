@@ -367,6 +367,21 @@ class Experiment:
         with open(self.benchmarks_dir / "eval.jsonl", "a", encoding="utf-8") as f:
             f.write(json.dumps(entry) + "\n")
 
+    def save_value_eval(self, result: dict, suite_id: str | None = None) -> None:
+        """Append value head eval results to benchmarks/value_eval.jsonl."""
+        self.benchmarks_dir.mkdir(exist_ok=True)
+        entry = {
+            "suite": suite_id,
+            "timestamp": time.time(),
+            "gen": result.get("gen", "?"),
+            "passed": result["passed"],
+            "total": result["total"],
+            "score": round(result["passed"] / max(result["total"], 1), 4),
+            "by_category": result.get("by_category", {}),
+        }
+        with open(self.benchmarks_dir / "value_eval.jsonl", "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+
     def save_benchmark(self, result: dict, suite_id: str | None = None,
                        checkpoint: str = "latest") -> None:
         """Save a benchmark result, aggregating with existing results.

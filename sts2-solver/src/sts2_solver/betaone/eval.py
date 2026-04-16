@@ -1582,6 +1582,286 @@ def run_eval(checkpoint_path: str | None = None) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Value head eval: does V(better_state) > V(worse_state)?
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ValueComparison:
+    name: str
+    category: str
+    description: str
+    better: dict          # state dict (player, enemies, hand, etc.) — should have higher V
+    worse: dict           # state dict — should have lower V
+    relics: set[str] = field(default_factory=set)
+
+
+def _vstate(player, enemies, hand=None, turn=3, draw_size=10, relics=None):
+    """Build a state dict for value comparison."""
+    return {
+        "player": player,
+        "enemies": enemies,
+        "hand": hand or [strike(), defend()],
+        "turn": turn,
+        "draw_size": draw_size,
+        "relics": relics or set(),
+    }
+
+
+def build_value_comparisons() -> list[ValueComparison]:
+    """Curated state pairs where one is obviously better."""
+    comps = []
+
+    base_player = {"hp": 50, "max_hp": 70, "energy": 3, "block": 0}
+    base_enemy = [enemy(40, 50, damage=10)]
+    base_hand = [strike(), strike(), defend(), defend()]
+
+    # === HP ADVANTAGE ===
+    comps.append(ValueComparison(
+        name="enemy_lower_hp",
+        category="hp",
+        description="Enemy at 20 HP better than enemy at 40 HP",
+        better=_vstate(base_player, [enemy(20, 50, damage=10)], base_hand),
+        worse=_vstate(base_player, [enemy(40, 50, damage=10)], base_hand),
+    ))
+    comps.append(ValueComparison(
+        name="player_higher_hp",
+        category="hp",
+        description="Player at 60 HP better than player at 25 HP",
+        better=_vstate({"hp": 60, "max_hp": 70, "energy": 3, "block": 0}, base_enemy, base_hand),
+        worse=_vstate({"hp": 25, "max_hp": 70, "energy": 3, "block": 0}, base_enemy, base_hand),
+    ))
+    comps.append(ValueComparison(
+        name="enemy_nearly_dead",
+        category="hp",
+        description="Enemy at 5 HP much better than enemy at 45 HP",
+        better=_vstate(base_player, [enemy(5, 50, damage=10)], base_hand),
+        worse=_vstate(base_player, [enemy(45, 50, damage=10)], base_hand),
+    ))
+
+    # === BLOCK / SURVIVAL ===
+    comps.append(ValueComparison(
+        name="block_vs_incoming",
+        category="defense",
+        description="10 block vs 15 incoming is better than 0 block",
+        better=_vstate({**base_player, "block": 10}, [enemy(40, 50, damage=15)], base_hand),
+        worse=_vstate({**base_player, "block": 0}, [enemy(40, 50, damage=15)], base_hand),
+    ))
+    comps.append(ValueComparison(
+        name="safe_hp_vs_lethal_range",
+        category="defense",
+        description="50 HP vs 8 HP against 10 incoming damage",
+        better=_vstate({"hp": 50, "max_hp": 70, "energy": 3, "block": 0}, base_enemy, base_hand),
+        worse=_vstate({"hp": 8, "max_hp": 70, "energy": 3, "block": 0}, base_enemy, base_hand),
+    ))
+
+    # === POISON ===
+    comps.append(ValueComparison(
+        name="poison_on_enemy",
+        category="poison",
+        description="Enemy with 10 Poison better than no Poison",
+        better=_vstate(base_player, [enemy(40, 50, damage=10, powers={"Poison": 10})], base_hand),
+        worse=_vstate(base_player, [enemy(40, 50, damage=10)], base_hand),
+    ))
+    comps.append(ValueComparison(
+        name="heavy_poison",
+        category="poison",
+        description="Enemy with 20 Poison much better than 3 Poison",
+        better=_vstate(base_player, [enemy(40, 50, damage=10, powers={"Poison": 20})], base_hand),
+        worse=_vstate(base_player, [enemy(40, 50, damage=10, powers={"Poison": 3})], base_hand),
+    ))
+
+    # === POWERS ===
+    comps.append(ValueComparison(
+        name="player_strength",
+        category="powers",
+        description="Strength 3 better than no Strength",
+        better=_vstate({**base_player, "powers": {"Strength": 3}}, base_enemy, base_hand),
+        worse=_vstate(base_player, base_enemy, base_hand),
+    ))
+    comps.append(ValueComparison(
+        name="player_dexterity",
+        category="powers",
+        description="Dexterity 2 better than no Dexterity",
+        better=_vstate({**base_player, "powers": {"Dexterity": 2}}, base_enemy, base_hand),
+        worse=_vstate(base_player, base_enemy, base_hand),
+    ))
+    comps.append(ValueComparison(
+        name="intangible",
+        category="powers",
+        description="Intangible 2 much better than no Intangible vs high damage",
+        better=_vstate({**base_player, "powers": {"Intangible": 2}}, [enemy(40, 50, damage=20)], base_hand),
+        worse=_vstate(base_player, [enemy(40, 50, damage=20)], base_hand),
+    ))
+    comps.append(ValueComparison(
+        name="noxious_fumes_power",
+        category="powers",
+        description="Noxious Fumes 2 (poison each turn) better than nothing",
+        better=_vstate({**base_player, "powers": {"Noxious Fumes": 2}}, base_enemy, base_hand),
+        worse=_vstate(base_player, base_enemy, base_hand),
+    ))
+
+    # === ENEMY DEBUFFS ===
+    comps.append(ValueComparison(
+        name="enemy_weak",
+        category="debuffs",
+        description="Enemy with Weak 2 better (deals 25% less damage)",
+        better=_vstate(base_player, [enemy(40, 50, damage=10, powers={"Weak": 2})], base_hand),
+        worse=_vstate(base_player, base_enemy, base_hand),
+    ))
+    comps.append(ValueComparison(
+        name="enemy_vulnerable",
+        category="debuffs",
+        description="Vulnerable enemy takes 50% more damage — better",
+        better=_vstate(base_player, [enemy(40, 50, damage=10, powers={"Vulnerable": 2})], base_hand),
+        worse=_vstate(base_player, base_enemy, base_hand),
+    ))
+
+    # === MULTI-ENEMY ===
+    comps.append(ValueComparison(
+        name="one_enemy_vs_two",
+        category="multi",
+        description="Facing 1 enemy better than facing 2",
+        better=_vstate(base_player, [enemy(30, 40, damage=8)], base_hand),
+        worse=_vstate(base_player, [enemy(30, 40, damage=8), enemy(30, 40, damage=8)], base_hand),
+    ))
+
+    # === TURN PROGRESSION ===
+    comps.append(ValueComparison(
+        name="early_turn_same_hp",
+        category="tempo",
+        description="Enemy at 30 HP on turn 2 better than turn 8 (more time to win)",
+        better=_vstate(base_player, [enemy(30, 50, damage=10)], base_hand, turn=2),
+        worse=_vstate(base_player, [enemy(30, 50, damage=10)], base_hand, turn=8),
+    ))
+
+    # === ENERGY ===
+    comps.append(ValueComparison(
+        name="more_energy",
+        category="resources",
+        description="3 energy with cards to play better than 0 energy",
+        better=_vstate({**base_player, "energy": 3}, base_enemy, base_hand),
+        worse=_vstate({**base_player, "energy": 0}, base_enemy, base_hand),
+    ))
+
+    return comps
+
+
+def _eval_value(net, state_dict, card_vocab) -> float:
+    """Get V(state) from the network."""
+    sc = Scenario(
+        name="", category="", description="",
+        player=state_dict["player"],
+        enemies=state_dict["enemies"],
+        hand=state_dict["hand"],
+        actions=[ActionSpec("end_turn", label="End turn")],
+        best_actions=[0],
+        relics=state_dict.get("relics", set()),
+        turn=state_dict.get("turn", 3),
+        draw_size=state_dict.get("draw_size", 10),
+    )
+    state_v = encode_state(sc)
+    state_t = torch.tensor([state_v], dtype=torch.float32)
+
+    # Dummy action/mask (value head doesn't depend on actions)
+    action_t = torch.zeros(1, MAX_ACTIONS, ACTION_DIM)
+    mask_t = torch.ones(1, MAX_ACTIONS, dtype=torch.bool)
+    hand_ids = torch.zeros(1, MAX_HAND, dtype=torch.long)
+    action_ids = torch.zeros(1, MAX_ACTIONS, dtype=torch.long)
+    if sc.hand:
+        for i, card in enumerate(sc.hand[:MAX_HAND]):
+            hand_ids[0, i] = _card_id_lookup(card, card_vocab)
+
+    with torch.no_grad():
+        _, value = net(state_t, action_t, mask_t, hand_ids, action_ids)
+
+    return value.item()
+
+
+def run_value_eval(checkpoint_path: str) -> dict:
+    """Test value head: does V(better) > V(worse) for obvious state pairs?"""
+    card_vocab = _load_card_vocab(checkpoint_path)
+    net = BetaOneNetwork(num_cards=len(card_vocab))
+
+    ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+    if "model_state_dict" in ckpt:
+        try:
+            net.load_state_dict(ckpt["model_state_dict"])
+        except RuntimeError:
+            new_state = net.state_dict()
+            old_state = ckpt["model_state_dict"]
+            for key in old_state:
+                if key in new_state and old_state[key].shape == new_state[key].shape:
+                    new_state[key] = old_state[key]
+                elif key in new_state:
+                    if new_state[key].dim() == 1:
+                        new_state[key] = torch.ones_like(new_state[key]) if "weight" in key else torch.zeros_like(new_state[key])
+                    slices = tuple(slice(0, o) for o in old_state[key].shape)
+                    new_state[key][slices] = old_state[key]
+            net.load_state_dict(new_state)
+        gen = ckpt.get("gen", "?")
+    else:
+        gen = 0
+    net.eval()
+
+    comparisons = build_value_comparisons()
+    results_by_category: dict[str, list[dict]] = {}
+    total_pass = 0
+    total_fail = 0
+
+    for comp in comparisons:
+        v_better = _eval_value(net, comp.better, card_vocab)
+        v_worse = _eval_value(net, comp.worse, card_vocab)
+        passed = v_better > v_worse
+        margin = v_better - v_worse
+
+        result = {
+            "name": comp.name,
+            "passed": passed,
+            "v_better": round(v_better, 4),
+            "v_worse": round(v_worse, 4),
+            "margin": round(margin, 4),
+        }
+
+        cat = comp.category
+        results_by_category.setdefault(cat, []).append(result)
+        if passed:
+            total_pass += 1
+        else:
+            total_fail += 1
+
+    # Print report
+    total = total_pass + total_fail
+    print(f"\n{'='*60}")
+    print(f"Value Head Eval — Gen {gen} — {total_pass}/{total} passed")
+    print(f"{'='*60}\n")
+
+    for cat, results in results_by_category.items():
+        cat_pass = sum(1 for r in results if r["passed"])
+        cat_total = len(results)
+        status = "PASS" if cat_pass == cat_total else "FAIL"
+        print(f"[{status}] {cat}: {cat_pass}/{cat_total}")
+
+        for r in results:
+            icon = "  ok" if r["passed"] else "MISS"
+            sign = "+" if r["margin"] >= 0 else ""
+            print(f"  {icon}  {r['name']:30s}  V={r['v_better']:+.3f} vs {r['v_worse']:+.3f}  margin={sign}{r['margin']:.3f}")
+        print()
+
+    return {
+        "gen": gen,
+        "passed": total_pass,
+        "total": total,
+        "by_category": {
+            cat: {
+                "passed": sum(1 for r in results if r["passed"]),
+                "total": len(results),
+            }
+            for cat, results in results_by_category.items()
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -1590,6 +1870,7 @@ def main():
     parser.add_argument("--checkpoint", default="betaone_checkpoints/betaone_latest.pt")
     args = parser.parse_args()
     run_eval(args.checkpoint)
+    run_value_eval(args.checkpoint)
 
 
 if __name__ == "__main__":
