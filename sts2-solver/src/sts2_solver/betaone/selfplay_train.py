@@ -196,6 +196,7 @@ def train(
     c_puct: float = 2.5,
     freeze_value_head: bool = False,
     determinizations: int = 1,
+    pomcp: bool = False,
 ):
     os.makedirs(output_dir, exist_ok=True)
     onnx_dir = os.path.join(output_dir, "onnx")
@@ -353,6 +354,7 @@ def train(
                 terminal_win_hp_coef=0.5 if freeze_value_head else 0.3,
                 terminal_lose=-2.0 if freeze_value_head else -1.0,
                 determinizations=determinizations,
+                pomcp=pomcp,
             )
 
             n_steps = rollout["total_steps"]

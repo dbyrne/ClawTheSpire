@@ -107,7 +107,7 @@ fn skill(id: &str, cost: i32, block: i32) -> Card {
 fn test_generic_damage() {
     let mut state = make_state_1e(50);
     let card = attack("STRIKE_SILENT", 1, 6);
-    execute_card_effect(&mut state, &card, Some(0), &card_db(), &mut rng());
+    execute_card_effect(&mut state, &card, Some(0), &card_db(), &mut rng(), false);
     assert_eq!(state.enemies[0].hp, 44);
 }
 
@@ -115,7 +115,7 @@ fn test_generic_damage() {
 fn test_generic_block() {
     let mut state = make_state_1e(50);
     let card = skill("DEFEND_SILENT", 1, 5);
-    execute_card_effect(&mut state, &card, None, &card_db(), &mut rng());
+    execute_card_effect(&mut state, &card, None, &card_db(), &mut rng(), false);
     assert_eq!(state.player.block, 5);
 }
 
@@ -126,7 +126,7 @@ fn test_generic_powers_applied_poison() {
     card.card_type = CardType::Skill;
     card.target = TargetType::AnyEnemy;
     card.powers_applied = vec![("Poison".into(), 5)];
-    execute_card_effect(&mut state, &card, Some(0), &card_db(), &mut rng());
+    execute_card_effect(&mut state, &card, Some(0), &card_db(), &mut rng(), false);
     assert_eq!(state.enemies[0].get_power("Poison"), 5);
 }
 
@@ -135,7 +135,7 @@ fn test_generic_powers_applied_weak() {
     let mut state = make_state_1e(50);
     let mut card = attack("NEUTRALIZE", 0, 3);
     card.powers_applied = vec![("Weak".into(), 1)];
-    execute_card_effect(&mut state, &card, Some(0), &card_db(), &mut rng());
+    execute_card_effect(&mut state, &card, Some(0), &card_db(), &mut rng(), false);
     assert_eq!(state.enemies[0].hp, 47);
     assert_eq!(state.enemies[0].get_power("Weak"), 1);
 }
@@ -147,7 +147,7 @@ fn test_generic_draw() {
     state.player.draw_pile.push(attack("S", 1, 6));
     let mut card = skill("BACKFLIP", 1, 5);
     card.cards_draw = 2;
-    execute_card_effect(&mut state, &card, None, &card_db(), &mut rng());
+    execute_card_effect(&mut state, &card, None, &card_db(), &mut rng(), false);
     assert_eq!(state.player.block, 5);
     assert_eq!(state.player.hand.len(), 2);
 }
@@ -160,7 +160,7 @@ fn test_generic_draw() {
 fn test_blade_dance_creates_shivs() {
     let mut state = make_state_1e(50);
     let card = make_card("BLADE_DANCE", CardType::Skill, 1);
-    execute_card_effect(&mut state, &card, None, &card_db(), &mut rng());
+    execute_card_effect(&mut state, &card, None, &card_db(), &mut rng(), false);
     assert_eq!(state.player.hand.len(), 3);
     assert!(state.player.hand.iter().all(|c| c.id == "SHIV"));
 }
@@ -169,7 +169,7 @@ fn test_blade_dance_creates_shivs() {
 fn test_cloak_and_dagger_block_plus_shiv() {
     let mut state = make_state_1e(50);
     let card = make_card("CLOAK_AND_DAGGER", CardType::Skill, 1);
-    execute_card_effect(&mut state, &card, None, &card_db(), &mut rng());
+    execute_card_effect(&mut state, &card, None, &card_db(), &mut rng(), false);
     assert_eq!(state.player.block, 6);
     assert_eq!(state.player.hand.len(), 1);
     assert_eq!(state.player.hand[0].id, "SHIV");
@@ -179,7 +179,7 @@ fn test_cloak_and_dagger_block_plus_shiv() {
 fn test_shiv_deals_damage() {
     let mut state = make_state_1e(50);
     let shiv = make_shiv();
-    execute_card_effect(&mut state, &shiv, Some(0), &card_db(), &mut rng());
+    execute_card_effect(&mut state, &shiv, Some(0), &card_db(), &mut rng(), false);
     assert_eq!(state.enemies[0].hp, 46); // 4 damage
 }
 
@@ -195,7 +195,7 @@ fn test_acrobatics_draw_and_discard() {
     }
     state.player.hand.push(skill("JUNK", 1, 0)); // something to discard
     let card = make_card("ACROBATICS", CardType::Skill, 1);
-    execute_card_effect(&mut state, &card, None, &card_db(), &mut rng());
+    execute_card_effect(&mut state, &card, None, &card_db(), &mut rng(), false);
     // Should draw 3 cards and create pending discard choice
     assert_eq!(state.player.hand.len(), 4); // 1 existing + 3 drawn
     assert!(state.pending_choice.is_some());
@@ -210,7 +210,7 @@ fn test_survivor_block_and_discard() {
     let mut state = make_state_1e(50);
     state.player.hand.push(attack("S", 1, 6)); // card to discard
     let card = make_card("SURVIVOR", CardType::Skill, 1);
-    execute_card_effect(&mut state, &card, None, &card_db(), &mut rng());
+    execute_card_effect(&mut state, &card, None, &card_db(), &mut rng(), false);
     assert_eq!(state.player.block, 8);
     assert!(state.pending_choice.is_some());
     assert_eq!(
@@ -227,7 +227,7 @@ fn test_survivor_block_and_discard() {
 fn test_noxious_fumes_power() {
     let mut state = make_state_2e(50, 50);
     let card = make_card("NOXIOUS_FUMES", CardType::Power, 1);
-    execute_card_effect(&mut state, &card, None, &card_db(), &mut rng());
+    execute_card_effect(&mut state, &card, None, &card_db(), &mut rng(), false);
     assert_eq!(state.player.get_power("Noxious Fumes"), 2);
 }
 
@@ -246,7 +246,7 @@ fn test_catalyst_doubles_poison() {
     let mut state = make_state_1e(50);
     state.enemies[0].add_power("Poison", 5);
     let card = make_card("CATALYST", CardType::Skill, 1);
-    execute_card_effect(&mut state, &card, Some(0), &card_db(), &mut rng());
+    execute_card_effect(&mut state, &card, Some(0), &card_db(), &mut rng(), false);
     assert_eq!(state.enemies[0].get_power("Poison"), 10); // 5 * 2
 }
 
@@ -254,7 +254,7 @@ fn test_catalyst_doubles_poison() {
 fn test_bouncing_flask_applies_poison_randomly() {
     let mut state = make_state_2e(50, 50);
     let card = make_card("BOUNCING_FLASK", CardType::Skill, 2);
-    execute_card_effect(&mut state, &card, None, &card_db(), &mut rng());
+    execute_card_effect(&mut state, &card, None, &card_db(), &mut rng(), false);
     let total_poison =
         state.enemies[0].get_power("Poison") + state.enemies[1].get_power("Poison");
     assert_eq!(total_poison, 9); // 3 poison * 3 hits
@@ -295,7 +295,7 @@ fn test_tracking_doubles_damage_to_weak() {
     state.player.add_power("Tracking", 1);
     state.enemies[0].add_power("Weak", 2);
     let card = attack("STRIKE", 1, 6);
-    execute_card_effect(&mut state, &card, Some(0), &card_db(), &mut rng());
+    execute_card_effect(&mut state, &card, Some(0), &card_db(), &mut rng(), false);
     // 6 damage * 2 (Tracking) = 12
     assert_eq!(state.enemies[0].hp, 88);
 }
@@ -306,7 +306,7 @@ fn test_tracking_no_effect_without_weak() {
     state.player.add_power("Tracking", 1);
     // No Weak on enemy
     let card = attack("STRIKE", 1, 6);
-    execute_card_effect(&mut state, &card, Some(0), &card_db(), &mut rng());
+    execute_card_effect(&mut state, &card, Some(0), &card_db(), &mut rng(), false);
     assert_eq!(state.enemies[0].hp, 94); // normal 6 damage
 }
 
@@ -318,12 +318,12 @@ fn test_tracking_no_effect_without_weak() {
 fn test_shadowmeld_doubles_block() {
     let mut state = make_state_1e(50);
     let card = make_card("SHADOWMELD", CardType::Skill, 1);
-    execute_card_effect(&mut state, &card, None, &card_db(), &mut rng());
+    execute_card_effect(&mut state, &card, None, &card_db(), &mut rng(), false);
     assert_eq!(state.player.get_power("_shadowmeld"), 1);
 
     // Now gain block — should be doubled
     let defend = skill("DEFEND", 1, 5);
-    execute_card_effect(&mut state, &defend, None, &card_db(), &mut rng());
+    execute_card_effect(&mut state, &defend, None, &card_db(), &mut rng(), false);
     assert_eq!(state.player.block, 10); // 5 * 2
 }
 
@@ -347,7 +347,7 @@ fn test_shadowmeld_resets_next_turn() {
 fn test_corrosive_wave_poisons_on_draw() {
     let mut state = make_state_2e(50, 50);
     let card = make_card("CORROSIVE_WAVE", CardType::Skill, 1);
-    execute_card_effect(&mut state, &card, None, &card_db(), &mut rng());
+    execute_card_effect(&mut state, &card, None, &card_db(), &mut rng(), false);
     assert_eq!(state.player.get_power("_corrosive_wave"), 3);
 
     // Now draw 2 cards
@@ -379,7 +379,7 @@ fn test_corrosive_wave_resets_next_turn() {
 fn test_ricochet_deals_damage_multiple_times() {
     let mut state = make_state_2e(100, 100);
     let card = make_card("RICOCHET", CardType::Attack, 2);
-    execute_card_effect(&mut state, &card, None, &card_db(), &mut rng());
+    execute_card_effect(&mut state, &card, None, &card_db(), &mut rng(), false);
     // 4 hits of 3 damage each = 12 total distributed randomly
     let total_damage = (100 - state.enemies[0].hp) + (100 - state.enemies[1].hp);
     assert_eq!(total_damage, 12);
@@ -396,7 +396,7 @@ fn test_murder_scales_with_draws() {
     state.player.add_power("_total_cards_drawn", 10);
     let mut card = make_card("MURDER", CardType::Attack, 3);
     card.target = TargetType::AnyEnemy;
-    execute_card_effect(&mut state, &card, Some(0), &card_db(), &mut rng());
+    execute_card_effect(&mut state, &card, Some(0), &card_db(), &mut rng(), false);
     // 1 base + 10 drawn = 11 damage
     assert_eq!(state.enemies[0].hp, 89);
 }
@@ -406,7 +406,7 @@ fn test_murder_early_combat_low_damage() {
     let mut state = make_state_1e(100);
     // No cards drawn yet
     let card = make_card("MURDER", CardType::Attack, 3);
-    execute_card_effect(&mut state, &card, Some(0), &card_db(), &mut rng());
+    execute_card_effect(&mut state, &card, Some(0), &card_db(), &mut rng(), false);
     // 1 base + 0 drawn = 1 damage
     assert_eq!(state.enemies[0].hp, 99);
 }
@@ -419,7 +419,7 @@ fn test_murder_early_combat_low_damage() {
 fn test_the_hunt_deals_damage() {
     let mut state = make_state_1e(50);
     let card = make_card("THE_HUNT", CardType::Attack, 1);
-    execute_card_effect(&mut state, &card, Some(0), &card_db(), &mut rng());
+    execute_card_effect(&mut state, &card, Some(0), &card_db(), &mut rng(), false);
     assert_eq!(state.enemies[0].hp, 40); // 10 damage
 }
 
@@ -436,7 +436,7 @@ fn test_knife_trap_plays_exhausted_shivs() {
     }
     state.player.exhaust_pile.push(attack("OTHER", 1, 5)); // non-shiv
     let card = make_card("KNIFE_TRAP", CardType::Skill, 2);
-    execute_card_effect(&mut state, &card, Some(0), &card_db(), &mut rng());
+    execute_card_effect(&mut state, &card, Some(0), &card_db(), &mut rng(), false);
     // 3 shivs * 4 damage each = 12 damage
     assert_eq!(state.enemies[0].hp, 88);
 }
@@ -449,7 +449,7 @@ fn test_knife_trap_with_accuracy() {
         state.player.exhaust_pile.push(make_shiv());
     }
     let card = make_card("KNIFE_TRAP", CardType::Skill, 2);
-    execute_card_effect(&mut state, &card, Some(0), &card_db(), &mut rng());
+    execute_card_effect(&mut state, &card, Some(0), &card_db(), &mut rng(), false);
     // 2 shivs * (4 + 4 Accuracy) = 16 damage
     assert_eq!(state.enemies[0].hp, 84);
 }
@@ -458,7 +458,7 @@ fn test_knife_trap_with_accuracy() {
 fn test_knife_trap_no_shivs() {
     let mut state = make_state_1e(100);
     let card = make_card("KNIFE_TRAP", CardType::Skill, 2);
-    execute_card_effect(&mut state, &card, Some(0), &card_db(), &mut rng());
+    execute_card_effect(&mut state, &card, Some(0), &card_db(), &mut rng(), false);
     assert_eq!(state.enemies[0].hp, 100); // no shivs = no damage
 }
 
@@ -472,7 +472,7 @@ fn test_nightmare_creates_pending_choice() {
     state.player.hand.push(attack("STRIKE", 1, 6));
     state.player.hand.push(skill("DEFEND", 1, 5));
     let card = make_card("NIGHTMARE", CardType::Skill, 3);
-    execute_card_effect(&mut state, &card, None, &card_db(), &mut rng());
+    execute_card_effect(&mut state, &card, None, &card_db(), &mut rng(), false);
     assert!(state.pending_choice.is_some());
     let pc = state.pending_choice.as_ref().unwrap();
     assert_eq!(pc.source_card_id, "NIGHTMARE");
@@ -486,7 +486,7 @@ fn test_nightmare_adds_copies_to_draw_pile() {
     state.player.hand.push(strike.clone());
     state.player.hand.push(skill("DEFEND", 1, 5));
     let card = make_card("NIGHTMARE", CardType::Skill, 3);
-    execute_card_effect(&mut state, &card, None, &card_db(), &mut rng());
+    execute_card_effect(&mut state, &card, None, &card_db(), &mut rng(), false);
 
     // Resolve: choose index 0 (Strike)
     let draw_before = state.player.draw_pile.len();
@@ -507,7 +507,7 @@ fn test_serpent_form_triggers_on_card_play() {
     state.player.hand.push(skill("DEFEND", 1, 5));
 
     // Play the card through play_card (not execute_card_effect) to trigger post-play hooks
-    combat::play_card(&mut state, 0, None, &card_db(), &mut rng());
+    combat::play_card(&mut state, 0, None, &card_db(), &mut rng(), false);
 
     // Serpent Form should deal 4 damage to the enemy
     assert_eq!(state.enemies[0].hp, 96);
@@ -522,7 +522,7 @@ fn test_phantom_blades_shivs_retain() {
     let mut state = make_state_1e(50);
     state.player.add_power("Phantom Blades", 9);
     let card = make_card("BLADE_DANCE", CardType::Skill, 1);
-    execute_card_effect(&mut state, &card, None, &card_db(), &mut rng());
+    execute_card_effect(&mut state, &card, None, &card_db(), &mut rng(), false);
     // All 3 shivs should have Retain
     assert!(state.player.hand.iter().all(|c| c.retain()));
 }
@@ -535,7 +535,7 @@ fn test_phantom_blades_first_shiv_bonus() {
     state.player.hand.push(shiv);
 
     // Play the shiv through play_card to trigger post-play hooks
-    combat::play_card(&mut state, 0, Some(0), &card_db(), &mut rng());
+    combat::play_card(&mut state, 0, Some(0), &card_db(), &mut rng(), false);
 
     // 4 (shiv) + 9 (phantom bonus) = 13 damage
     assert_eq!(state.enemies[0].hp, 87);
@@ -551,7 +551,7 @@ fn test_phantom_blades_second_shiv_no_bonus() {
     let shiv = make_shiv();
     state.player.hand.push(shiv);
 
-    combat::play_card(&mut state, 0, Some(0), &card_db(), &mut rng());
+    combat::play_card(&mut state, 0, Some(0), &card_db(), &mut rng(), false);
     // Only 4 damage (no bonus)
     assert_eq!(state.enemies[0].hp, 96);
 }
@@ -567,7 +567,7 @@ fn test_hand_trick_block_and_retain() {
     state.player.hand.push(defend);
 
     let card = make_card("HAND_TRICK", CardType::Skill, 1);
-    execute_card_effect(&mut state, &card, None, &card_db(), &mut rng());
+    execute_card_effect(&mut state, &card, None, &card_db(), &mut rng(), false);
 
     assert_eq!(state.player.block, 7);
     // The Defend in hand should now have Retain
@@ -581,7 +581,7 @@ fn test_hand_trick_no_skills_in_hand() {
     state.player.hand.push(atk);
 
     let card = make_card("HAND_TRICK", CardType::Skill, 1);
-    execute_card_effect(&mut state, &card, None, &card_db(), &mut rng());
+    execute_card_effect(&mut state, &card, None, &card_db(), &mut rng(), false);
 
     assert_eq!(state.player.block, 7);
     // Attack should not get Retain
@@ -596,7 +596,7 @@ fn test_hand_trick_no_skills_in_hand() {
 fn test_master_planner_stores_power() {
     let mut state = make_state_1e(50);
     let card = make_card("MASTER_PLANNER", CardType::Power, 2);
-    execute_card_effect(&mut state, &card, None, &card_db(), &mut rng());
+    execute_card_effect(&mut state, &card, None, &card_db(), &mut rng(), false);
     assert_eq!(state.player.get_power("_master_planner"), 1);
 }
 
@@ -608,7 +608,7 @@ fn test_master_planner_skills_gain_sly() {
     // Put a Defend in hand and play it
     let defend = skill("DEFEND_SILENT", 1, 5);
     state.player.hand.push(defend);
-    combat::play_card(&mut state, 0, None, &card_db(), &mut rng());
+    combat::play_card(&mut state, 0, None, &card_db(), &mut rng(), false);
 
     // The card should be in discard with Sly keyword
     assert_eq!(state.player.discard_pile.len(), 1);
@@ -622,7 +622,7 @@ fn test_master_planner_attacks_dont_gain_sly() {
 
     let strike = attack("STRIKE", 1, 6);
     state.player.hand.push(strike);
-    combat::play_card(&mut state, 0, Some(0), &card_db(), &mut rng());
+    combat::play_card(&mut state, 0, Some(0), &card_db(), &mut rng(), false);
 
     // Attack should NOT have Sly
     assert_eq!(state.player.discard_pile.len(), 1);
@@ -637,7 +637,7 @@ fn test_master_planner_attacks_dont_gain_sly() {
 fn test_predator_damage_and_draw_next_turn() {
     let mut state = make_state_1e(100);
     let card = make_card("PREDATOR", CardType::Attack, 2);
-    execute_card_effect(&mut state, &card, Some(0), &card_db(), &mut rng());
+    execute_card_effect(&mut state, &card, Some(0), &card_db(), &mut rng(), false);
     assert_eq!(state.enemies[0].hp, 85); // 15 damage
     assert_eq!(state.player.get_power("_predator_draw"), 2);
 }
@@ -647,7 +647,7 @@ fn test_fan_of_knives_aoe_and_draw() {
     let mut state = make_state_2e(50, 50);
     state.player.draw_pile.push(attack("S", 1, 6));
     let card = make_card("FAN_OF_KNIVES", CardType::Skill, 1);
-    execute_card_effect(&mut state, &card, None, &card_db(), &mut rng());
+    execute_card_effect(&mut state, &card, None, &card_db(), &mut rng(), false);
     assert_eq!(state.enemies[0].hp, 46); // 4 damage
     assert_eq!(state.enemies[1].hp, 46); // 4 damage
     assert_eq!(state.player.hand.len(), 1); // drew 1
@@ -663,7 +663,7 @@ fn test_dagger_throw() {
     state.player.draw_pile.push(attack("S", 1, 6));
     state.player.hand.push(skill("JUNK", 1, 0));
     let card = make_card("DAGGER_THROW", CardType::Attack, 1);
-    execute_card_effect(&mut state, &card, Some(0), &card_db(), &mut rng());
+    execute_card_effect(&mut state, &card, Some(0), &card_db(), &mut rng(), false);
     assert_eq!(state.enemies[0].hp, 41); // 9 damage
     assert_eq!(state.player.hand.len(), 2); // existing + 1 drawn
     assert!(state.pending_choice.is_some()); // discard pending
@@ -677,13 +677,13 @@ fn test_dagger_throw() {
 fn test_accuracy_boosts_shivs() {
     let mut state = make_state_1e(100);
     let acc = make_card("ACCURACY", CardType::Power, 1);
-    execute_card_effect(&mut state, &acc, None, &card_db(), &mut rng());
+    execute_card_effect(&mut state, &acc, None, &card_db(), &mut rng(), false);
     assert_eq!(state.player.get_power("Accuracy"), 4);
 
     // Now play a shiv
     let shiv = make_shiv();
     state.player.hand.push(shiv);
-    combat::play_card(&mut state, 0, Some(0), &card_db(), &mut rng());
+    combat::play_card(&mut state, 0, Some(0), &card_db(), &mut rng(), false);
     assert_eq!(state.enemies[0].hp, 92); // 4 + 4 Accuracy = 8
 }
 
@@ -692,12 +692,12 @@ fn test_footwork_dexterity() {
     let mut state = make_state_1e(50);
     let mut card = make_card("FOOTWORK", CardType::Power, 1);
     card.powers_applied = vec![("Dexterity".into(), 2)];
-    execute_card_effect(&mut state, &card, None, &card_db(), &mut rng());
+    execute_card_effect(&mut state, &card, None, &card_db(), &mut rng(), false);
     assert_eq!(state.player.get_power("Dexterity"), 2);
 
     // Block should be boosted
     let defend = skill("DEFEND", 1, 5);
-    execute_card_effect(&mut state, &defend, None, &card_db(), &mut rng());
+    execute_card_effect(&mut state, &defend, None, &card_db(), &mut rng(), false);
     assert_eq!(state.player.block, 7); // 5 + 2 Dex
 }
 
@@ -709,7 +709,7 @@ fn test_footwork_dexterity() {
 fn test_catalyst_with_no_poison() {
     let mut state = make_state_1e(100);
     let card = make_card("CATALYST", CardType::Skill, 1);
-    execute_card_effect(&mut state, &card, Some(0), &card_db(), &mut rng());
+    execute_card_effect(&mut state, &card, Some(0), &card_db(), &mut rng(), false);
     // No poison = no change
     assert_eq!(state.enemies[0].get_power("Poison"), 0);
 }
@@ -719,7 +719,7 @@ fn test_catalyst_doubles_existing_poison() {
     let mut state = make_state_1e(100);
     state.enemies[0].add_power("Poison", 8);
     let card = make_card("CATALYST", CardType::Skill, 1);
-    execute_card_effect(&mut state, &card, Some(0), &card_db(), &mut rng());
+    execute_card_effect(&mut state, &card, Some(0), &card_db(), &mut rng(), false);
     assert_eq!(state.enemies[0].get_power("Poison"), 16);
 }
 
@@ -752,7 +752,7 @@ fn test_tracking_neutralize_combo() {
     // Apply Weak via Neutralize
     let mut neutralize = attack("NEUTRALIZE", 0, 3);
     neutralize.powers_applied = vec![("Weak".into(), 1)];
-    execute_card_effect(&mut state, &neutralize, Some(0), &card_db(), &mut rng());
+    execute_card_effect(&mut state, &neutralize, Some(0), &card_db(), &mut rng(), false);
     // 3 damage * 2 (Tracking, enemy now Weak) = 6... but Weak is applied after damage
     // Actually powers_applied runs after damage in execute_generic_effect.
     // So Neutralize deals 3 damage, THEN applies Weak.
@@ -761,6 +761,6 @@ fn test_tracking_neutralize_combo() {
 
     // Now Strike should deal double
     let strike = attack("STRIKE", 1, 6);
-    execute_card_effect(&mut state, &strike, Some(0), &card_db(), &mut rng());
+    execute_card_effect(&mut state, &strike, Some(0), &card_db(), &mut rng(), false);
     assert_eq!(state.enemies[0].hp, 85); // 6 * 2 = 12
 }

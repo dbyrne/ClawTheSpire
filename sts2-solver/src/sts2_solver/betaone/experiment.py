@@ -143,6 +143,7 @@ class ExperimentConfig:
                 "c_puct": _float(mcts.get("c_puct"), 2.5),
                 "freeze_value_head": mcts.get("freeze_value_head", False),
                 "determinizations": mcts.get("determinizations", 1),
+                "pomcp": mcts.get("pomcp", False),
             }
         else:  # ppo
             ppo = t.get("ppo", {})

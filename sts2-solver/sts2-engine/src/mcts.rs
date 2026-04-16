@@ -27,6 +27,10 @@ struct Node {
     is_expanded: bool,
     is_terminal: bool,
     terminal_value: f32,
+    // POMCP chance node fields
+    is_chance: bool,                            // awaiting observation sampling
+    pending_draws: i32,                         // cards to draw at this chance node
+    observation_children: Vec<(String, usize)>, // (obs_key, child_node_idx)
 }
 
 impl Node {
@@ -44,6 +48,9 @@ impl Node {
             is_expanded: false,
             is_terminal: false,
             terminal_value: 0.0,
+            is_chance: false,
+            pending_draws: 0,
+            observation_children: Vec::new(),
         }
     }
 
@@ -132,8 +139,11 @@ pub struct MCTS<'a> {
     pub terminal_scale: (f32, f32, f32),
     /// Number of determinizations for draw pile. When > 1, runs K independent
     /// searches with pre-shuffled draw piles and averages visit counts.
-    /// Properly evaluates stochastic draw effects (Prepared, Backflip, etc).
     pub determinizations: usize,
+    /// Enable POMCP: chance nodes for stochastic draw effects.
+    /// Each simulation samples a fresh draw at chance nodes, properly evaluating
+    /// expected value of draw/cycle cards across multiple possible draws.
+    pub pomcp: bool,
 }
 
 impl<'a> MCTS<'a> {
@@ -141,7 +151,7 @@ impl<'a> MCTS<'a> {
         MCTS {
             card_db, inference, add_noise: false, turn_boundary_eval: false,
             c_puct: DEFAULT_C_PUCT, terminal_scale: (1.0, 0.3, -1.0),
-            determinizations: 1,
+            determinizations: 1, pomcp: false,
         }
     }
 
@@ -218,13 +228,16 @@ impl<'a> MCTS<'a> {
         for _ in 0..num_simulations {
             let leaf_idx = self.select(&arena, root_idx);
 
-            let value = if arena.nodes[leaf_idx].is_terminal {
-                arena.nodes[leaf_idx].terminal_value
+            let (value, backup_from) = if arena.nodes[leaf_idx].is_terminal {
+                (arena.nodes[leaf_idx].terminal_value, leaf_idx)
+            } else if arena.nodes[leaf_idx].is_chance {
+                self.sample_chance_child(&mut arena, leaf_idx, rng)
             } else {
-                self.expand(&mut arena, leaf_idx, rng)
+                let v = self.expand(&mut arena, leaf_idx, rng);
+                (v, leaf_idx)
             };
 
-            self.backup(&mut arena, leaf_idx, value);
+            self.backup(&mut arena, backup_from, value);
         }
 
         self.extract_result(&arena, root_idx, temperature, rng)
@@ -404,6 +417,12 @@ impl<'a> MCTS<'a> {
         let mut current = root_idx;
         loop {
             let node = &arena.nodes[current];
+
+            // Chance nodes: return to simulation loop for observation sampling
+            if node.is_chance {
+                return current;
+            }
+
             if !node.is_expanded || node.children.is_empty() {
                 return current;
             }
@@ -443,9 +462,20 @@ impl<'a> MCTS<'a> {
 
             let mut new_state = parent_state.clone();
             let mut new_ais = parent_ais;
-            self.apply_action(&mut new_state, &mut new_ais, action, rng);
+            let draw_count = self.apply_action(&mut new_state, &mut new_ais, action, rng);
             arena.nodes[node_idx].state = Some(new_state);
             arena.nodes[node_idx].enemy_ais = new_ais;
+
+            // POMCP: if the action created a chance node (draw deferred), mark it
+            if draw_count > 0 {
+                arena.nodes[node_idx].is_chance = true;
+                arena.nodes[node_idx].pending_draws = draw_count;
+                arena.nodes[node_idx].is_expanded = true;
+                // Evaluate pre-draw state for this node's leaf value
+                let state = arena.nodes[node_idx].state.as_ref().unwrap();
+                let v = self.estimate_leaf_value(state);
+                return v;
+            }
         }
 
         // Check terminal (pre-resolution — combat might already be over)
@@ -672,31 +702,138 @@ impl<'a> MCTS<'a> {
         if v.is_finite() { v } else { 0.0 }
     }
 
-    // --- Apply action to state ---
+    // --- Apply action to state, returns draw count if POMCP chance node ---
     fn apply_action(
         &self,
         state: &mut CombatState,
         enemy_ais: &mut Option<Vec<crate::enemy::EnemyAI>>,
         action: &Action,
         rng: &mut impl Rng,
-    ) {
+    ) -> i32 {
         match action {
             Action::PlayCard { card_idx, target_idx } => {
                 if combat::can_play_card(state, *card_idx) {
+                    let draw_count = if self.pomcp {
+                        self.action_draw_count(state, *card_idx)
+                    } else {
+                        0
+                    };
+                    if draw_count > 0 {
+                        // POMCP: execute card WITHOUT draws, create chance node
+                        combat::play_card(state, *card_idx, *target_idx, self.card_db, rng, true);
+                        return draw_count;
+                    }
                     combat::play_card(state, *card_idx, *target_idx, self.card_db, rng, false);
                 }
+                0
             }
             Action::EndTurn => {
-                // Don't resolve here — just mark the turn as ended.
-                // Resolution is deferred to expand() so the leaf evaluator
-                // sees the pre-resolution state (block vs incoming damage).
                 state.turn_ended = true;
+                0
             }
             Action::UsePotion { potion_idx } => {
                 combat::use_potion(state, *potion_idx);
+                0
             }
             Action::ChooseCard { choice_idx } => {
                 crate::effects::execute_choice(state, *choice_idx, rng);
+                0
+            }
+        }
+    }
+
+    /// How many cards would this action draw? (for POMCP chance node detection)
+    fn action_draw_count(&self, state: &CombatState, card_idx: usize) -> i32 {
+        if card_idx >= state.player.hand.len() {
+            return 0;
+        }
+        let card = &state.player.hand[card_idx];
+        // Generic path cards have cards_draw set
+        if card.cards_draw > 0 {
+            return card.cards_draw;
+        }
+        0
+    }
+
+    /// POMCP: sample a draw at a chance node, find or create observation child.
+    fn sample_chance_child(
+        &self,
+        arena: &mut Arena,
+        chance_idx: usize,
+        rng: &mut impl Rng,
+    ) -> (f32, usize) {
+        let pending = arena.nodes[chance_idx].pending_draws;
+
+        // Progressive widening: limit observation children to sqrt(visits+1)
+        let num_obs = arena.nodes[chance_idx].observation_children.len();
+        let visits = arena.nodes[chance_idx].visit_count;
+        let max_children = ((visits as f64 + 1.0).sqrt()).ceil() as usize;
+
+        // Clone state and draw cards with fresh RNG
+        let mut draw_state = arena.nodes[chance_idx].state.as_ref().unwrap().clone();
+        let draw_ais = arena.nodes[chance_idx].enemy_ais.clone();
+        crate::effects::draw_cards(&mut draw_state, pending, rng);
+
+        // Build observation key: sorted IDs of newly drawn cards
+        let hand_len = draw_state.player.hand.len();
+        let drawn_start = hand_len.saturating_sub(pending as usize);
+        let mut drawn_ids: Vec<String> = draw_state.player.hand[drawn_start..]
+            .iter()
+            .map(|c| c.id.clone())
+            .collect();
+        drawn_ids.sort();
+        let obs_key = drawn_ids.join("+");
+
+        // Look for existing observation child with this key
+        let existing_idx = arena.nodes[chance_idx].observation_children
+            .iter()
+            .find(|(k, _)| k == &obs_key)
+            .map(|(_, idx)| *idx);
+
+        if let Some(child_idx) = existing_idx {
+            // Existing observation: continue search from it
+            if arena.nodes[child_idx].is_expanded {
+                let leaf = self.select(arena, child_idx);
+                let (value, backup_from) = if arena.nodes[leaf].is_terminal {
+                    (arena.nodes[leaf].terminal_value, leaf)
+                } else if arena.nodes[leaf].is_chance {
+                    // Nested chance node (draw after draw)
+                    self.sample_chance_child(arena, leaf, rng)
+                } else {
+                    let v = self.expand(arena, leaf, rng);
+                    (v, leaf)
+                };
+                (value, backup_from)
+            } else {
+                let v = self.expand(arena, child_idx, rng);
+                (v, child_idx)
+            }
+        } else if num_obs < max_children {
+            // New observation within widening limit: create child
+            let mut child = Node::new(Some(draw_state), Some(chance_idx), 0);
+            child.enemy_ais = draw_ais;
+            let child_idx = arena.alloc(child);
+            arena.nodes[chance_idx].observation_children.push((obs_key, child_idx));
+            let v = self.expand(arena, child_idx, rng);
+            (v, child_idx)
+        } else {
+            // Over widening limit: reuse existing child (prefer matching key)
+            let pick = rng.random_range(0..num_obs);
+            let child_idx = arena.nodes[chance_idx].observation_children[pick].1;
+            if arena.nodes[child_idx].is_expanded {
+                let leaf = self.select(arena, child_idx);
+                let (value, backup_from) = if arena.nodes[leaf].is_terminal {
+                    (arena.nodes[leaf].terminal_value, leaf)
+                } else if arena.nodes[leaf].is_chance {
+                    self.sample_chance_child(arena, leaf, rng)
+                } else {
+                    let v = self.expand(arena, leaf, rng);
+                    (v, leaf)
+                };
+                (value, backup_from)
+            } else {
+                let v = self.expand(arena, child_idx, rng);
+                (v, child_idx)
             }
         }
     }

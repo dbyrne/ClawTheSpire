@@ -585,3 +585,140 @@ fn test_high_temperature_increases_entropy() {
         "Higher temperature should increase entropy: low={e_low:.3} high={e_high:.3}"
     );
 }
+
+// ===================================================================
+// POMCP chance nodes
+// ===================================================================
+
+/// A zero-cost Skill that draws 2 cards — triggers POMCP chance nodes
+/// when played under pomcp=true.
+fn draw_card() -> Card {
+    Card {
+        id: "DRAW2".into(),
+        name: "Draw Two".into(),
+        cost: 0,
+        card_type: CardType::Skill,
+        target: TargetType::Self_,
+        cards_draw: 2,
+        ..Default::default()
+    }
+}
+
+fn state_with_draw_pile(
+    hand: Vec<Card>,
+    draw_pile: Vec<Card>,
+    enemies: Vec<EnemyState>,
+) -> CombatState {
+    CombatState {
+        player: PlayerState {
+            hp: 70,
+            max_hp: 70,
+            energy: 3,
+            max_energy: 3,
+            hand,
+            draw_pile,
+            ..Default::default()
+        },
+        enemies,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn test_pomcp_returns_valid_result_with_draw_card() {
+    // DRAW2 in hand, 4 distinct cards in draw pile so observation keys vary.
+    let pile = vec![
+        Card { id: "C1".into(), cost: 1, card_type: CardType::Attack,
+               target: TargetType::AnyEnemy, damage: Some(4), ..Default::default() },
+        Card { id: "C2".into(), cost: 1, card_type: CardType::Skill,
+               target: TargetType::Self_, block: Some(3), ..Default::default() },
+        Card { id: "C3".into(), cost: 1, card_type: CardType::Attack,
+               target: TargetType::AnyEnemy, damage: Some(5), ..Default::default() },
+        Card { id: "C4".into(), cost: 1, card_type: CardType::Skill,
+               target: TargetType::Self_, block: Some(4), ..Default::default() },
+    ];
+    let state = state_with_draw_pile(
+        vec![draw_card(), strike(), defend()],
+        pile,
+        vec![enemy(50)],
+    );
+
+    let db = card_db();
+    let inf = ConstantInference { value: 0.0 };
+    let mut mcts = MCTS::new(&db, &inf);
+    mcts.pomcp = true;
+
+    let result = mcts.search(&state, 200, 1.0, &mut rng());
+
+    // Policy is a valid distribution over legal actions.
+    assert_eq!(result.policy.len(), result.child_visits.len());
+    assert!(!result.policy.is_empty(), "Expected legal actions");
+    let sum: f32 = result.policy.iter().sum();
+    assert!((sum - 1.0).abs() < 1e-4, "Policy should sum to 1, got {sum}");
+    assert!(result.policy.iter().all(|&p| p >= 0.0));
+}
+
+#[test]
+fn test_pomcp_and_baseline_both_succeed_on_draw_card() {
+    // Same state, same RNG seed — both modes should return legal actions.
+    // This confirms pomcp=true doesn't regress for the non-draw branches
+    // and exercises the chance-node expand path.
+    let pile = vec![
+        Card { id: "C1".into(), cost: 1, card_type: CardType::Attack,
+               target: TargetType::AnyEnemy, damage: Some(4), ..Default::default() },
+        Card { id: "C2".into(), cost: 1, card_type: CardType::Skill,
+               target: TargetType::Self_, block: Some(3), ..Default::default() },
+        Card { id: "C3".into(), cost: 1, card_type: CardType::Attack,
+               target: TargetType::AnyEnemy, damage: Some(5), ..Default::default() },
+    ];
+    let state = state_with_draw_pile(
+        vec![draw_card(), strike(), defend()],
+        pile,
+        vec![enemy(50)],
+    );
+
+    let db = card_db();
+    let inf = ConstantInference { value: 0.0 };
+
+    let mut mcts_pomcp = MCTS::new(&db, &inf);
+    mcts_pomcp.pomcp = true;
+    let r_pomcp = mcts_pomcp.search(&state, 150, 1.0, &mut StdRng::seed_from_u64(7));
+
+    let mcts_base = MCTS::new(&db, &inf);
+    let r_base = mcts_base.search(&state, 150, 1.0, &mut StdRng::seed_from_u64(7));
+
+    // Both produce actions from the same legal set, with well-formed policies.
+    let n = r_base.policy.len();
+    assert_eq!(r_pomcp.policy.len(), n, "Legal action count must match");
+    for r in [&r_pomcp, &r_base] {
+        let sum: f32 = r.policy.iter().sum();
+        assert!((sum - 1.0).abs() < 1e-4);
+        assert!(matches!(
+            r.action,
+            Action::PlayCard { .. } | Action::EndTurn
+        ));
+    }
+}
+
+#[test]
+fn test_pomcp_without_draw_card_matches_baseline_shape() {
+    // No draw card in hand → chance-node path never fires. pomcp=true
+    // should behave identically in terms of policy shape.
+    let state = state_with(vec![strike(), defend()], vec![enemy(100)]);
+
+    let db = card_db();
+    let inf = BiasedInference { bias_idx: 0, bias_logit: 2.0, value: 0.0 };
+
+    let mut mcts_pomcp = MCTS::new(&db, &inf);
+    mcts_pomcp.pomcp = true;
+    let r_pomcp = mcts_pomcp.search(&state, 200, 1.0, &mut StdRng::seed_from_u64(11));
+
+    let mcts_base = MCTS::new(&db, &inf);
+    let r_base = mcts_base.search(&state, 200, 1.0, &mut StdRng::seed_from_u64(11));
+
+    // Same seed + no chance nodes → identical policies.
+    assert_eq!(r_pomcp.policy.len(), r_base.policy.len());
+    for (a, b) in r_pomcp.policy.iter().zip(r_base.policy.iter()) {
+        assert!((a - b).abs() < 1e-5, "pomcp={a} baseline={b}");
+    }
+}
