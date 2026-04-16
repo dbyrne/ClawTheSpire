@@ -35,6 +35,9 @@ struct Node {
     /// (pending_choice setup, conditional block, etc.) is re-applied after
     /// observation sampling draws the cards.
     pending_post_draw_card: Option<Card>,
+    /// How many times the card's post-draw logic was skipped during defer.
+    /// Usually 1; >1 when Burst replayed the card.
+    pending_post_draw_count: i32,
 }
 
 impl Node {
@@ -56,6 +59,7 @@ impl Node {
             pending_draws: 0,
             observation_children: Vec::new(),
             pending_post_draw_card: None,
+            pending_post_draw_count: 0,
         }
     }
 
@@ -180,6 +184,15 @@ impl<'a> MCTS<'a> {
         temperature: f32,
         rng: &mut impl Rng,
     ) -> SearchResult {
+        // PIMC (determinizations > 1) pre-shuffles the draw pile per tree,
+        // making every chance-node draw deterministic inside that tree and
+        // defeating POMCP's resampling. They are mutually exclusive strategies
+        // for handling stochastic draws; picking one at a time is intentional.
+        assert!(
+            !(self.pomcp && self.determinizations > 1),
+            "pomcp and determinizations>1 are mutually exclusive stochastic-draw strategies"
+        );
+
         let d = self.determinizations.max(1);
         if d > 1 {
             return self.search_determinized(state, enemy_ais, num_simulations, temperature, rng, d);
@@ -472,10 +485,11 @@ impl<'a> MCTS<'a> {
             arena.nodes[node_idx].enemy_ais = new_ais;
 
             // POMCP: if the action queued deferred draws, mark as chance node
-            if let Some((draw_count, card)) = chance_info {
+            if let Some((draw_count, card, post_count)) = chance_info {
                 arena.nodes[node_idx].is_chance = true;
                 arena.nodes[node_idx].pending_draws = draw_count;
                 arena.nodes[node_idx].pending_post_draw_card = card;
+                arena.nodes[node_idx].pending_post_draw_count = post_count;
                 arena.nodes[node_idx].is_expanded = true;
                 // Evaluate pre-draw state for this node's leaf value
                 let state = arena.nodes[node_idx].state.as_ref().unwrap();
@@ -710,17 +724,16 @@ impl<'a> MCTS<'a> {
 
     /// Apply an action to the state. Returns chance-node info when POMCP is
     /// active and the action queued one or more draws via `state.defer_draws`.
-    /// The returned Card carries the post-draw logic (pending_choice /
-    /// conditional block) to re-apply at observation sampling — or None when
-    /// the deferred draw came from a path with no post-draw logic (Sly
-    /// discard, end-of-turn trigger, etc.).
+    /// The returned tuple is (draw_count, Option<Card>, post_draw_count): the
+    /// card (when present) carries the post-draw logic to replay at sampling,
+    /// and post_draw_count is how many times to apply it (>1 under Burst).
     fn apply_action(
         &self,
         state: &mut CombatState,
         _enemy_ais: &mut Option<Vec<crate::enemy::EnemyAI>>,
         action: &Action,
         rng: &mut impl Rng,
-    ) -> Option<(i32, Option<Card>)> {
+    ) -> Option<(i32, Option<Card>, i32)> {
         match action {
             Action::PlayCard { card_idx, target_idx } => {
                 if !combat::can_play_card(state, *card_idx) {
@@ -737,11 +750,13 @@ impl<'a> MCTS<'a> {
                 let card = state.player.hand[*card_idx].clone();
                 state.defer_draws = true;
                 state.pending_draws = 0;
+                state.pending_post_draw_count = 0;
                 combat::play_card(state, *card_idx, *target_idx, self.card_db, rng);
                 state.defer_draws = false;
                 let pending = std::mem::take(&mut state.pending_draws);
+                let post_count = std::mem::take(&mut state.pending_post_draw_count);
                 if pending > 0 {
-                    Some((pending, Some(card)))
+                    Some((pending, Some(card), post_count))
                 } else {
                     None
                 }
@@ -767,7 +782,7 @@ impl<'a> MCTS<'a> {
                 state.defer_draws = false;
                 let pending = std::mem::take(&mut state.pending_draws);
                 if pending > 0 {
-                    Some((pending, None))
+                    Some((pending, None, 0))
                 } else {
                     None
                 }
@@ -789,26 +804,31 @@ impl<'a> MCTS<'a> {
         let visits = arena.nodes[chance_idx].visit_count;
         let max_children = ((visits as f64 + 1.0).sqrt()).ceil() as usize;
 
-        // Clone state and draw cards with fresh RNG
+        // Clone state and draw cards with fresh RNG. Snapshot the hand length
+        // before the draw so the observation key reflects only the actually-
+        // drawn cards — draw_cards may pull fewer than `pending` if the hand
+        // hits MAX_HAND_SIZE or the deck and discard both run out.
         let mut draw_state = arena.nodes[chance_idx].state.as_ref().unwrap().clone();
         let draw_ais = arena.nodes[chance_idx].enemy_ais.clone();
+        let hand_before = draw_state.player.hand.len();
         crate::effects::draw_cards(&mut draw_state, pending, rng);
 
-        // Apply the card's deferred post-draw logic now that the hand reflects
-        // the sampled observation (pending_choice setup, ESCAPE_PLAN block, ...)
-        if let Some(card) = arena.nodes[chance_idx].pending_post_draw_card.clone() {
-            crate::cards::apply_post_draw_effect(&mut draw_state, &card, rng);
-        }
-
-        // Build observation key: sorted IDs of newly drawn cards
-        let hand_len = draw_state.player.hand.len();
-        let drawn_start = hand_len.saturating_sub(pending as usize);
-        let mut drawn_ids: Vec<String> = draw_state.player.hand[drawn_start..]
+        // Build observation key from cards actually drawn. Capture before the
+        // post-draw effect runs so the key isn't perturbed by hand-mutating
+        // side effects if any are added later.
+        let mut drawn_ids: Vec<String> = draw_state.player.hand[hand_before..]
             .iter()
             .map(|c| c.id.clone())
             .collect();
         drawn_ids.sort();
         let obs_key = drawn_ids.join("+");
+
+        // Apply the card's deferred post-draw logic now that the hand reflects
+        // the sampled observation (pending_choice setup, ESCAPE_PLAN block, ...)
+        if let Some(card) = arena.nodes[chance_idx].pending_post_draw_card.clone() {
+            let count = arena.nodes[chance_idx].pending_post_draw_count;
+            crate::cards::apply_post_draw_effect(&mut draw_state, &card, count, rng);
+        }
 
         // Look for existing observation child with this key
         let existing_idx = arena.nodes[chance_idx].observation_children

@@ -120,6 +120,15 @@ class ExperimentConfig:
 
         if self.method == "mcts_selfplay":
             mcts = t.get("mcts", {})
+            determinizations = mcts.get("determinizations", 1)
+            pomcp = mcts.get("pomcp", False)
+            if pomcp and determinizations > 1:
+                raise ValueError(
+                    "training.mcts.pomcp and training.mcts.determinizations>1 are "
+                    "mutually exclusive: PIMC pre-shuffles the pile per tree so "
+                    "POMCP chance-node resampling collapses to one observation. "
+                    "Pick one stochastic-draw strategy."
+                )
             return {
                 "num_generations": t.get("generations", 3000),
                 "combats_per_gen": t.get("combats_per_gen", 256),

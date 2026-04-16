@@ -857,7 +857,7 @@ fn test_apply_post_draw_effect_acrobatics_sets_choice() {
     let mut state = make_state_1e(50);
     state.player.hand = pile(&["A", "B", "C"]); // simulate post-draw hand
 
-    apply_post_draw_effect(&mut state, &card, &mut rng());
+    apply_post_draw_effect(&mut state, &card, 1, &mut rng());
 
     let pc = state.pending_choice.expect("pending_choice should be set");
     assert_eq!(pc.choice_type, "discard_from_hand");
@@ -886,7 +886,7 @@ fn test_apply_post_draw_effect_escape_plan_skill_gains_block() {
     let mut state = make_state_1e(50);
     state.player.hand = vec![skill("DRAWN_SKILL", 1, 0)]; // last() is Skill
 
-    apply_post_draw_effect(&mut state, &card, &mut rng());
+    apply_post_draw_effect(&mut state, &card, 1, &mut rng());
 
     assert_eq!(state.player.block, 3);
 }
@@ -897,9 +897,64 @@ fn test_apply_post_draw_effect_escape_plan_attack_no_block() {
     let mut state = make_state_1e(50);
     state.player.hand = vec![attack("DRAWN_ATTACK", 1, 4)]; // last() is Attack
 
-    apply_post_draw_effect(&mut state, &card, &mut rng());
+    apply_post_draw_effect(&mut state, &card, 1, &mut rng());
 
     assert_eq!(state.player.block, 0);
+}
+
+#[test]
+fn test_burst_prepared_stacks_discard_choices() {
+    // Burst replays PREPARED → two draw/discard cycles. With the additive
+    // helper, num_choices should stack to 2 instead of overwriting to 1.
+    use sts2_engine::combat as combat_lib;
+    let mut state = make_state_1e(50);
+    state.player.energy = 3;
+    state.player.add_power("Burst", 1);
+    state.player.hand = vec![make_card("PREPARED", CardType::Skill, 0)];
+    state.player.draw_pile = pile(&["A", "B", "C", "D"]);
+
+    combat_lib::play_card(&mut state, 0, None, &card_db(), &mut rng());
+
+    let pc = state.pending_choice.expect("pending_choice should be set");
+    assert_eq!(pc.num_choices, 2, "Burst replay should stack discard choices");
+    // Two draws (one per execution)
+    assert_eq!(state.player.hand.len(), 2);
+}
+
+#[test]
+fn test_apply_post_draw_effect_count_two_stacks_choices() {
+    // With count=2 (simulating Burst under defer_draws), apply_post_draw_effect
+    // should produce pending_choice with num_choices=2.
+    let card = make_card("PREPARED", CardType::Skill, 0);
+    let mut state = make_state_1e(50);
+    state.player.hand = pile(&["A"]);
+
+    apply_post_draw_effect(&mut state, &card, 2, &mut rng());
+
+    let pc = state.pending_choice.expect("choice should be set");
+    assert_eq!(pc.num_choices, 2);
+}
+
+#[test]
+fn test_defer_draws_counts_burst_prepared_executions() {
+    // Under defer_draws + Burst, PREPARED runs twice → pending_draws=2 and
+    // pending_post_draw_count=2 so chance-node sampling applies twice.
+    use sts2_engine::combat as combat_lib;
+    let mut state = make_state_1e(50);
+    state.player.energy = 3;
+    state.player.add_power("Burst", 1);
+    state.player.hand = vec![make_card("PREPARED", CardType::Skill, 0)];
+    state.player.draw_pile = pile(&["A", "B"]);
+    state.defer_draws = true;
+
+    combat_lib::play_card(&mut state, 0, None, &card_db(), &mut rng());
+
+    assert_eq!(state.pending_draws, 2);
+    assert_eq!(state.pending_post_draw_count, 2);
+    // Nothing actually drawn under defer
+    assert_eq!(state.player.hand.len(), 0);
+    // pending_choice still deferred
+    assert!(state.pending_choice.is_none());
 }
 
 #[test]

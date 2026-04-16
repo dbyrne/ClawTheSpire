@@ -410,6 +410,25 @@ pub fn execute_choice(state: &mut CombatState, choice_idx: usize, rng: &mut impl
     if should_clear { state.pending_choice = None; }
 }
 
+/// Add N discard choices to the pending queue. Stacks with an existing
+/// `discard_from_hand` choice — Burst replaying PREPARED/ACROBATICS/etc. must
+/// accumulate num_choices rather than overwrite the first card's choice.
+pub fn add_discard_choice(state: &mut CombatState, n: usize, source_card_id: String) {
+    if let Some(pc) = state.pending_choice.as_mut() {
+        if pc.choice_type == "discard_from_hand" {
+            pc.num_choices += n;
+            return;
+        }
+    }
+    state.pending_choice = Some(PendingChoice {
+        choice_type: "discard_from_hand".to_string(),
+        num_choices: n,
+        source_card_id,
+        valid_indices: None,
+        chosen_so_far: vec![],
+    });
+}
+
 // ---------------------------------------------------------------------------
 // Discard from hand (with Sly triggers)
 // ---------------------------------------------------------------------------

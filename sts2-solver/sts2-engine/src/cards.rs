@@ -153,14 +153,10 @@ pub fn execute_card_effect(
         "ACROBATICS" => {
             let draw = if upgraded { 4 } else { 3 };
             draw_cards(state, draw, rng);
-            if !state.defer_draws {
-                state.pending_choice = Some(PendingChoice {
-                    choice_type: "discard_from_hand".to_string(),
-                    num_choices: 1,
-                    source_card_id: card.id.clone(),
-                    valid_indices: None,
-                    chosen_so_far: vec![],
-                });
+            if state.defer_draws {
+                state.pending_post_draw_count += 1;
+            } else {
+                add_discard_choice(state, 1, card.id.clone());
             }
         }
         "DAGGER_THROW" => {
@@ -169,48 +165,31 @@ pub fn execute_card_effect(
                 deal_damage(state, tidx, dmg, 1);
             }
             draw_cards(state, 1, rng);
-            if !state.defer_draws {
-                state.pending_choice = Some(PendingChoice {
-                    choice_type: "discard_from_hand".to_string(),
-                    num_choices: 1,
-                    source_card_id: card.id.clone(),
-                    valid_indices: None,
-                    chosen_so_far: vec![],
-                });
+            if state.defer_draws {
+                state.pending_post_draw_count += 1;
+            } else {
+                add_discard_choice(state, 1, card.id.clone());
             }
         }
         "SURVIVOR" => {
             let block = if upgraded { 11 } else { 8 };
             gain_block(state, block);
-            state.pending_choice = Some(PendingChoice {
-                choice_type: "discard_from_hand".to_string(),
-                num_choices: 1,
-                source_card_id: card.id.clone(),
-                valid_indices: None,
-                chosen_so_far: vec![],
-            });
+            add_discard_choice(state, 1, card.id.clone());
         }
         "PREPARED" => {
             let draw = if upgraded { 2 } else { 1 };
             draw_cards(state, draw, rng);
-            if !state.defer_draws {
-                state.pending_choice = Some(PendingChoice {
-                    choice_type: "discard_from_hand".to_string(),
-                    num_choices: 1,
-                    source_card_id: card.id.clone(),
-                    valid_indices: None,
-                    chosen_so_far: vec![],
-                });
+            if state.defer_draws {
+                state.pending_post_draw_count += 1;
+            } else {
+                add_discard_choice(state, 1, card.id.clone());
             }
         }
         "HIDDEN_DAGGERS" => {
-            state.pending_choice = Some(PendingChoice {
-                choice_type: "discard_from_hand".to_string(),
-                num_choices: 2,
-                source_card_id: format!("HIDDEN_DAGGERS:{}", if upgraded { 4 } else { 3 }),
-                valid_indices: None,
-                chosen_so_far: vec![],
-            });
+            let n = if upgraded { 4 } else { 3 };
+            add_discard_choice(
+                state, 2, format!("HIDDEN_DAGGERS:{}", n),
+            );
         }
 
         // --- Hand manipulation ---
@@ -408,12 +387,12 @@ pub fn execute_card_effect(
             draw_cards(state, 1, rng);
             // If drawn card is a Skill, gain block. Skipped under defer_draws —
             // the chance node re-applies this after sampling the observation.
-            if !state.defer_draws {
-                if let Some(last) = state.player.hand.last() {
-                    if last.card_type == CardType::Skill {
-                        let block = if upgraded { 5 } else { 3 };
-                        gain_block(state, block);
-                    }
+            if state.defer_draws {
+                state.pending_post_draw_count += 1;
+            } else if let Some(last) = state.player.hand.last() {
+                if last.card_type == CardType::Skill {
+                    let block = if upgraded { 5 } else { 3 };
+                    gain_block(state, block);
                 }
             }
         }
@@ -557,30 +536,31 @@ pub fn execute_card_effect(
 /// When `state.defer_draws` is active, cards whose side effects depend on
 /// the newly-drawn hand (pending_choice setup, ESCAPE_PLAN conditional
 /// block) skip that logic during main execution. This function runs that
-/// logic against the sampled observation state. `card` must be the same
-/// card that was played (before being moved to discard/exhaust).
-pub fn apply_post_draw_effect(state: &mut CombatState, card: &Card, _rng: &mut impl rand::Rng) {
+/// logic `count` times against the sampled observation state (count > 1
+/// when Burst replayed the card).
+pub fn apply_post_draw_effect(
+    state: &mut CombatState,
+    card: &Card,
+    count: i32,
+    _rng: &mut impl rand::Rng,
+) {
     let base = card.base_id();
     let upgraded = card.upgraded;
-    match base {
-        "ACROBATICS" | "DAGGER_THROW" | "PREPARED" => {
-            state.pending_choice = Some(PendingChoice {
-                choice_type: "discard_from_hand".to_string(),
-                num_choices: 1,
-                source_card_id: card.id.clone(),
-                valid_indices: None,
-                chosen_so_far: vec![],
-            });
-        }
-        "ESCAPE_PLAN" => {
-            if let Some(last) = state.player.hand.last() {
-                if last.card_type == CardType::Skill {
-                    let block = if upgraded { 5 } else { 3 };
-                    gain_block(state, block);
+    for _ in 0..count {
+        match base {
+            "ACROBATICS" | "DAGGER_THROW" | "PREPARED" => {
+                add_discard_choice(state, 1, card.id.clone());
+            }
+            "ESCAPE_PLAN" => {
+                if let Some(last) = state.player.hand.last() {
+                    if last.card_type == CardType::Skill {
+                        let block = if upgraded { 5 } else { 3 };
+                        gain_block(state, block);
+                    }
                 }
             }
+            _ => {}
         }
-        _ => {}
     }
 }
 

@@ -323,6 +323,10 @@ pub struct CombatState {
     pub defer_draws: bool,
     #[serde(skip, default)]
     pub pending_draws: i32,
+    /// Number of times a card's post-draw logic was skipped under defer_draws.
+    /// Usually 1 per card play; >1 when Burst replays a Skill that draws.
+    #[serde(skip, default)]
+    pub pending_post_draw_count: i32,
 
     // RNG for shuffle/random effects during combat
     #[serde(skip)]
@@ -341,7 +345,7 @@ impl Default for CombatState {
             pending_choice: None,
             act_id: String::new(), boss_id: String::new(),
             map_path: vec![], turn_ended: false,
-            defer_draws: false, pending_draws: 0,
+            defer_draws: false, pending_draws: 0, pending_post_draw_count: 0,
             rng_seed: 0,
         }
     }
