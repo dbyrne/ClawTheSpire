@@ -193,6 +193,7 @@ def train(
     turn_boundary_eval: bool = False,
     dense_value_targets: bool = False,
     gamma: float = 0.99,
+    c_puct: float = 2.5,
 ):
     os.makedirs(output_dir, exist_ok=True)
     onnx_dir = os.path.join(output_dir, "onnx")
@@ -338,6 +339,7 @@ def train(
                 add_noise=True,
                 turn_boundary_eval=turn_boundary_eval,
                 dense_value_targets=dense_value_targets,
+                c_puct=c_puct,
             )
 
             n_steps = rollout["total_steps"]

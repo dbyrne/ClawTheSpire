@@ -77,6 +77,7 @@ fn run_selfplay_combat(
     add_noise: bool,
     turn_boundary_eval: bool,
     dense_value_targets: bool,
+    c_puct: f32,
 ) -> SelfPlayResult {
     let card_db = CardDB::default();
     let mut rng = StdRng::seed_from_u64(seed);
@@ -124,6 +125,7 @@ fn run_selfplay_combat(
     let mut mcts_engine = MCTS::new(&card_db, &adapter);
     mcts_engine.add_noise = add_noise;
     mcts_engine.turn_boundary_eval = turn_boundary_eval;
+    mcts_engine.c_puct = c_puct;
 
     let mut samples: Vec<Sample> = Vec::new();
     let mut final_outcome = "lose";
@@ -322,7 +324,8 @@ fn run_selfplay_combat(
     gen_id = 0,
     add_noise = true,
     turn_boundary_eval = false,
-    dense_value_targets = false
+    dense_value_targets = false,
+    c_puct = 2.5
 ))]
 pub fn betaone_mcts_selfplay(
     py: Python<'_>,
@@ -344,6 +347,7 @@ pub fn betaone_mcts_selfplay(
     add_noise: bool,
     turn_boundary_eval: bool,
     dense_value_targets: bool,
+    c_puct: f32,
 ) -> PyResult<PyObject> {
     let decks: Vec<Vec<Card>> = serde_json::from_str(decks_json)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("decks: {e}")))?;
@@ -412,7 +416,7 @@ pub fn betaone_mcts_selfplay(
                         &monsters, &profiles,
                         inference, &card_vocab,
                         num_sims, temperature, seed, add_noise,
-                        turn_boundary_eval, dense_value_targets,
+                        turn_boundary_eval, dense_value_targets, c_puct,
                     ))
                 })
             })

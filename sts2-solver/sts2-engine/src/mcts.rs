@@ -112,7 +112,7 @@ pub trait Inference {
 // MCTS
 // ---------------------------------------------------------------------------
 
-const C_PUCT: f32 = 2.5;
+const DEFAULT_C_PUCT: f32 = 2.5;
 const MIN_ROOT_VISITS: u32 = 5;
 
 pub struct MCTS<'a> {
@@ -123,11 +123,14 @@ pub struct MCTS<'a> {
     /// using greedy policy before calling V(s) at the next turn boundary.
     /// This gives the value function clean, resolved states to evaluate.
     pub turn_boundary_eval: bool,
+    /// Exploration constant for PUCT. Lower values trust backed-up Q values
+    /// more; higher values trust the policy prior more.
+    pub c_puct: f32,
 }
 
 impl<'a> MCTS<'a> {
     pub fn new(card_db: &'a CardDB, inference: &'a dyn Inference) -> Self {
-        MCTS { card_db, inference, add_noise: false, turn_boundary_eval: false }
+        MCTS { card_db, inference, add_noise: false, turn_boundary_eval: false, c_puct: DEFAULT_C_PUCT }
     }
 
     /// Run MCTS search from the given state. Returns action, policy, and root value.
@@ -273,8 +276,8 @@ impl<'a> MCTS<'a> {
             let parent_visits = node.visit_count;
             let best_child = node.children.iter()
                 .max_by(|&&(_, a), &&(_, b)| {
-                    let score_a = arena.nodes[a].ucb_score(parent_visits, C_PUCT);
-                    let score_b = arena.nodes[b].ucb_score(parent_visits, C_PUCT);
+                    let score_a = arena.nodes[a].ucb_score(parent_visits, self.c_puct);
+                    let score_b = arena.nodes[b].ucb_score(parent_visits, self.c_puct);
                     score_a.partial_cmp(&score_b).unwrap_or(std::cmp::Ordering::Equal)
                 })
                 .map(|&(_, idx)| idx)

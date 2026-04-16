@@ -140,6 +140,7 @@ class ExperimentConfig:
                 "turn_boundary_eval": mcts.get("turn_boundary_eval", False),
                 "dense_value_targets": mcts.get("dense_value_targets", False),
                 "gamma": _float(mcts.get("gamma"), 0.99),
+                "c_puct": _float(mcts.get("c_puct"), 2.5),
             }
         else:  # ppo
             ppo = t.get("ppo", {})

@@ -1,0 +1,48 @@
+name: mcts-dense-value-targets
+method: mcts_selfplay
+description: 'MCTS self-play with turn-boundary leaf eval + dense per-turn value
+  targets. Value head trains on Monte Carlo returns from per-turn rewards instead
+  of broadcast game outcomes, giving ~5x more supervision signal.'
+created: '2026-04-16T00:35:51+00:00'
+parent: null
+parent_checkpoint: null
+architecture:
+  arch_version: 2
+  base_state_dim: 137
+  hidden_dim: 128
+  action_hidden: 64
+  hand_proj_dim: 32
+  card_embed_dim: 16
+  card_stats_dim: 28
+  relic_dim: 26
+  action_dim: 35
+  max_hand: 10
+  max_actions: 30
+  num_cards: 578
+  total_params: 72371
+  state_dim: 427
+  trunk_input: 169
+training:
+  generations: 1500
+  combats_per_gen: 256
+  lr: 0.0003
+  batch_size: 512
+  mcts:
+    num_sims: 400
+    temperature: 1.0
+    replay_capacity: 50000
+    train_epochs: 4
+    value_coef: 1.0
+    turn_boundary_eval: true
+    dense_value_targets: true
+    gamma: 0.99
+data:
+  mode: encounter_set
+  encounter_set: base-es-v1
+curriculum:
+  start_tier: 0
+  skip_to_final: false
+checkpoints:
+  save_every: 50
+  keep_best: true
+  cold_start: true
