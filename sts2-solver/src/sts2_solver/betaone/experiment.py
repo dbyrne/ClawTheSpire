@@ -146,6 +146,7 @@ class ExperimentConfig:
                 "freeze_value_head": mcts.get("freeze_value_head", False),
                 "determinizations": mcts.get("determinizations", 1),
                 "pomcp": mcts.get("pomcp", False),
+                "mcts_bootstrap": mcts.get("mcts_bootstrap", False),
             }
         else:  # ppo
             ppo = t.get("ppo", {})

@@ -192,6 +192,7 @@ def train(
     freeze_value_head: bool = False,
     determinizations: int = 1,
     pomcp: bool = False,
+    mcts_bootstrap: bool = False,
 ):
     os.makedirs(output_dir, exist_ok=True)
     onnx_dir = os.path.join(output_dir, "onnx")
@@ -300,6 +301,7 @@ def train(
         gen_states, gen_act_feat, gen_act_masks = [], [], []
         gen_hand_ids, gen_action_ids, gen_policies = [], [], []
         gen_rewards = []
+        gen_mcts_values = []
         gen_combat_indices = []
         combat_offset = 0
         seed_idx = 0
@@ -353,6 +355,7 @@ def train(
             gen_action_ids.extend(np.array(rollout["action_card_ids"], dtype=np.int64).reshape(-1, MAX_ACTIONS))
             gen_policies.extend(np.array(rollout["policies"], dtype=np.float32).reshape(-1, MAX_ACTIONS))
             gen_combat_indices.extend(ci)
+            gen_mcts_values.extend(np.array(rollout["mcts_values"], dtype=np.float32))
             if dense_value_targets:
                 gen_rewards.extend(np.array(rollout["rewards"], dtype=np.float32))
             all_outcomes.extend(rollout["outcomes"])
@@ -366,7 +369,12 @@ def train(
         # Build value targets
         combat_indices = np.array(gen_combat_indices, dtype=np.int64)
         gen_values = np.zeros(T, dtype=np.float32)
-        if dense_value_targets:
+        if mcts_bootstrap:
+            # MCTS-bootstrapped: use search root values directly as targets.
+            # The search already assigns credit through tree backup — terminal
+            # HP-scaled win/loss is the only reward signal.
+            gen_values = np.array(gen_mcts_values, dtype=np.float32)
+        elif dense_value_targets:
             # Monte Carlo returns: G_t = sum_{k=t}^{T} gamma^{k-t} * r_k
             rewards_arr = np.array(gen_rewards, dtype=np.float32)
             for ci in range(len(all_outcomes)):

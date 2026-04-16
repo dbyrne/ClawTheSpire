@@ -47,6 +47,7 @@ struct Sample {
     policy: [f32; encode::MAX_ACTIONS],  // MCTS visit distribution (zero-padded)
     num_actions: usize,
     reward: f32,  // Per-step reward (0 for card plays, dense for EndTurn + terminal)
+    mcts_value: f32,  // MCTS root value (search-backed average for bootstrap targets)
 }
 
 struct SelfPlayResult {
@@ -214,6 +215,7 @@ fn run_selfplay_combat(
                 policy,
                 num_actions: actions.len().min(encode::MAX_ACTIONS),
                 reward: 0.0,
+                mcts_value: result.root_value as f32,
             });
 
             // Execute chosen action
@@ -457,6 +459,7 @@ fn build_selfplay_py(py: Python<'_>, results: &[Option<SelfPlayResult>]) -> PyRe
     let mut all_policies: Vec<f32> = Vec::new();
     let mut all_num_actions: Vec<i64> = Vec::new();
     let mut all_rewards: Vec<f32> = Vec::new();
+    let mut all_mcts_values: Vec<f32> = Vec::new();
     let mut combat_indices: Vec<i64> = Vec::new();
     let mut outcomes: Vec<String> = Vec::new();
     let mut final_hps: Vec<i32> = Vec::new();
@@ -479,6 +482,7 @@ fn build_selfplay_py(py: Python<'_>, results: &[Option<SelfPlayResult>]) -> PyRe
             all_policies.extend_from_slice(&sample.policy);
             all_num_actions.push(sample.num_actions as i64);
             all_rewards.push(sample.reward);
+            all_mcts_values.push(sample.mcts_value);
             combat_indices.push(combat_idx);
             total_steps += 1;
         }
@@ -493,6 +497,7 @@ fn build_selfplay_py(py: Python<'_>, results: &[Option<SelfPlayResult>]) -> PyRe
     dict.set_item("policies", &all_policies)?;
     dict.set_item("num_actions", &all_num_actions)?;
     dict.set_item("rewards", &all_rewards)?;
+    dict.set_item("mcts_values", &all_mcts_values)?;
     dict.set_item("combat_indices", &combat_indices)?;
     dict.set_item("outcomes", outcomes)?;
     dict.set_item("final_hps", &final_hps)?;
