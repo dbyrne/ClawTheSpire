@@ -783,6 +783,42 @@ fn test_pomcp_handles_escape_plan() {
 }
 
 #[test]
+fn test_pomcp_handles_reflex_sly_discard() {
+    // State mid-resolution: pending_choice = discard_from_hand.
+    // Hand contains REFLEX (Sly). When search picks ChooseCard to discard it,
+    // Sly draws 2 cards — those must route through a POMCP chance node.
+    let mut reflex = Card {
+        id: "REFLEX".into(), name: "Reflex".into(), cost: 1,
+        card_type: CardType::Skill, target: TargetType::Self_,
+        ..Default::default()
+    };
+    reflex.keywords.insert("Sly".into());
+
+    let mut state = state_with_draw_pile(
+        vec![reflex, strike()],
+        varied_pile(),
+        vec![enemy(50)],
+    );
+    state.pending_choice = Some(PendingChoice {
+        choice_type: "discard_from_hand".into(),
+        num_choices: 1,
+        source_card_id: "ACROBATICS".into(),
+        valid_indices: None,
+        chosen_so_far: vec![],
+    });
+
+    let db = card_db();
+    let inf = ConstantInference { value: 0.0 };
+    let mut mcts = MCTS::new(&db, &inf);
+    mcts.pomcp = true;
+
+    let result = mcts.search(&state, 150, 1.0, &mut rng());
+    let sum: f32 = result.policy.iter().sum();
+    assert!((sum - 1.0).abs() < 1e-4);
+    assert!(!result.policy.is_empty());
+}
+
+#[test]
 fn test_pomcp_handles_impatience_with_no_attacks() {
     // IMPATIENCE draws 2 iff no Attack in hand. Hand has only Skills to trigger.
     let skill_b = Card { id: "BLOCK".into(), cost: 1, card_type: CardType::Skill,

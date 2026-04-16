@@ -903,6 +903,54 @@ fn test_apply_post_draw_effect_escape_plan_attack_no_block() {
 }
 
 #[test]
+fn test_defer_draws_queues_reflex_sly_discard() {
+    // REFLEX has Sly → when discarded, draws 2 cards. Under defer_draws,
+    // those draws should queue into pending_draws.
+    let mut reflex = Card {
+        id: "REFLEX".into(), name: "Reflex".into(), cost: 1,
+        card_type: CardType::Skill, target: TargetType::Self_,
+        ..Default::default()
+    };
+    reflex.keywords.insert("Sly".into());
+    let mut state = state_with_pile(vec![reflex], pile(&["A", "B", "C"]));
+    state.defer_draws = true;
+
+    discard_card_from_hand(&mut state, 0, &mut rng());
+
+    assert_eq!(state.pending_draws, 2);
+    assert!(state.player.hand.is_empty());
+    assert_eq!(state.player.discard_pile.len(), 1);
+}
+
+#[test]
+fn test_defer_draws_queues_reflex_discarded_via_choice() {
+    // ACROBATICS sets pending_choice → player picks REFLEX to discard →
+    // Sly triggers → 2 draws queued. The full chain must route through
+    // defer_draws when set.
+    let mut reflex = Card {
+        id: "REFLEX".into(), cost: 1, card_type: CardType::Skill,
+        target: TargetType::Self_, ..Default::default()
+    };
+    reflex.keywords.insert("Sly".into());
+    let mut state = state_with_pile(vec![reflex, attack("X", 1, 4)], pile(&["A", "B"]));
+    state.pending_choice = Some(PendingChoice {
+        choice_type: "discard_from_hand".into(),
+        num_choices: 1,
+        source_card_id: "ACROBATICS".into(),
+        valid_indices: None,
+        chosen_so_far: vec![],
+    });
+    state.defer_draws = true;
+
+    execute_choice(&mut state, 0, &mut rng());
+
+    assert_eq!(state.pending_draws, 2);
+    // REFLEX was discarded, X remains in hand
+    assert_eq!(state.player.hand.len(), 1);
+    assert_eq!(state.player.hand[0].id, "X");
+}
+
+#[test]
 fn test_defer_draws_reentrant_game_piece_power_play() {
     // GAME_PIECE relic draws 1 when a Power card is played. This fires inside
     // play_card (not execute_card_effect), so we go through combat::play_card

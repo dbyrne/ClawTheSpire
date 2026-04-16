@@ -475,7 +475,7 @@ impl<'a> MCTS<'a> {
             if let Some((draw_count, card)) = chance_info {
                 arena.nodes[node_idx].is_chance = true;
                 arena.nodes[node_idx].pending_draws = draw_count;
-                arena.nodes[node_idx].pending_post_draw_card = Some(card);
+                arena.nodes[node_idx].pending_post_draw_card = card;
                 arena.nodes[node_idx].is_expanded = true;
                 // Evaluate pre-draw state for this node's leaf value
                 let state = arena.nodes[node_idx].state.as_ref().unwrap();
@@ -711,14 +711,16 @@ impl<'a> MCTS<'a> {
     /// Apply an action to the state. Returns chance-node info when POMCP is
     /// active and the action queued one or more draws via `state.defer_draws`.
     /// The returned Card carries the post-draw logic (pending_choice /
-    /// conditional block) to re-apply at observation sampling.
+    /// conditional block) to re-apply at observation sampling — or None when
+    /// the deferred draw came from a path with no post-draw logic (Sly
+    /// discard, end-of-turn trigger, etc.).
     fn apply_action(
         &self,
         state: &mut CombatState,
         _enemy_ais: &mut Option<Vec<crate::enemy::EnemyAI>>,
         action: &Action,
         rng: &mut impl Rng,
-    ) -> Option<(i32, Card)> {
+    ) -> Option<(i32, Option<Card>)> {
         match action {
             Action::PlayCard { card_idx, target_idx } => {
                 if !combat::can_play_card(state, *card_idx) {
@@ -739,7 +741,7 @@ impl<'a> MCTS<'a> {
                 state.defer_draws = false;
                 let pending = std::mem::take(&mut state.pending_draws);
                 if pending > 0 {
-                    Some((pending, card))
+                    Some((pending, Some(card)))
                 } else {
                     None
                 }
@@ -753,8 +755,22 @@ impl<'a> MCTS<'a> {
                 None
             }
             Action::ChooseCard { choice_idx } => {
+                if !self.pomcp {
+                    crate::effects::execute_choice(state, *choice_idx, rng);
+                    return None;
+                }
+                // Discarding a Sly card (e.g. REFLEX) draws cards — queue those
+                // via defer_draws so chance-node sampling explores the draws.
+                state.defer_draws = true;
+                state.pending_draws = 0;
                 crate::effects::execute_choice(state, *choice_idx, rng);
-                None
+                state.defer_draws = false;
+                let pending = std::mem::take(&mut state.pending_draws);
+                if pending > 0 {
+                    Some((pending, None))
+                } else {
+                    None
+                }
             }
         }
     }
