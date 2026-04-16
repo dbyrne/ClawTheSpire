@@ -8,7 +8,7 @@ Loop:
     2. Collect rollouts in Rust (parallel combats, GIL-free)
     3. Compute GAE advantages
     4. PPO update (multiple epochs, minibatches)
-    5. Log metrics, adjust curriculum
+    5. Log metrics, checkpoint
 """
 
 from __future__ import annotations
@@ -55,6 +55,7 @@ from .ppo import compute_gae, ppo_update
 # ---------------------------------------------------------------------------
 
 def train(
+    encounter_set_id: str,
     num_generations: int = 500,
     combats_per_gen: int = 256,
     lr: float = 3e-4,
@@ -69,14 +70,6 @@ def train(
     ppo_epochs: int = 4,
     ppo_batch_size: int = 256,
     output_dir: str = "betaone_checkpoints",
-    encounter_pool_path: str | None = None,
-    skip_to_final: bool = False,
-    lock_tier: int | None = None,
-    recorded_encounters: bool = False,
-    mixed: bool = False,
-    recorded_frac: float = 0.5,
-    training_set_id: str | None = None,
-    encounter_set_id: str | None = None,
 ):
     os.makedirs(output_dir, exist_ok=True)
     onnx_dir = os.path.join(output_dir, "onnx")
@@ -85,8 +78,6 @@ def train(
     # Load game data (once)
     monster_json = build_monster_data_json()
     profiles_json = load_solver_json("enemy_profiles.json")
-
-    enc_pool_path = encounter_pool_path or str(SOLVER_PKG / "encounter_pool.json")
 
     # Card vocabulary for learned embeddings
     card_vocab, card_vocab_json = build_card_vocab(output_dir)
@@ -97,35 +88,12 @@ def train(
     optimizer = torch.optim.Adam(network.parameters(), lr=lr)
     print(f"BetaOne network: {network.param_count():,} parameters ({num_cards} card vocab)")
 
-    # Set up training data (shared with selfplay_train.py)
-    td = setup_training_data(
-        output_dir=output_dir,
-        training_set_id=training_set_id,
-        mixed=mixed,
-        recorded_encounters=recorded_encounters,
-        recorded_frac=recorded_frac,
-        skip_to_final=skip_to_final,
-        encounter_set_id=encounter_set_id,
-    )
-    curriculum = td["curriculum"]
-    recorded_encounters = td["recorded_encounters"]
-    mixed = td["mixed"]
-    recorded_frac = td["recorded_frac"]
+    # Load the frozen encounter set
+    td = setup_training_data(encounter_set_id=encounter_set_id)
+    encounter_set = td["encounter_set"]
 
     best_win_rate = 0.0
-    cumulative_wins = 0
-    cumulative_games = 0
     start_gen = 1
-
-    # Per-tier cumulative stats — persisted in a separate file that survives restarts
-    cumulative_path = os.path.join(output_dir, "betaone_cumulative.json")
-    tier_cumulative: dict[str, list[int]] = {}  # "tier_idx" -> [wins, games]
-    if os.path.exists(cumulative_path):
-        try:
-            with open(cumulative_path) as f:
-                tier_cumulative = json.load(f)
-        except (json.JSONDecodeError, ValueError):
-            pass
 
     history_path = os.path.join(output_dir, "betaone_history.jsonl")
     progress_path = os.path.join(output_dir, "betaone_progress.json")
@@ -199,93 +167,9 @@ def train(
         for f in [history_path, progress_path]:
             if os.path.exists(f):
                 os.remove(f)
-        if lock_tier is not None:
-            curriculum.tier = lock_tier
-            curriculum.consecutive_good = 0
-            curriculum.gens_at_tier = 0
-            print(f"Warm restart from gen {start_gen - 1} — locked to T{lock_tier}: {curriculum.config.name}")
-        elif skip_to_final:
-            curriculum.tier = curriculum.max_tier
-            curriculum.consecutive_good = 0
-            curriculum.gens_at_tier = 0
-            print(f"Warm restart from gen {start_gen - 1} — skipping to T{curriculum.tier}: {curriculum.config.name}")
-        else:
-            print(f"Warm restart from gen {start_gen - 1} — validating tiers")
-
-        # Pre-flight: greedy eval through tiers without training
-        onnx_path = export_onnx(network, onnx_dir)
-        while lock_tier is None and not skip_to_final and curriculum.tier < curriculum.max_tier:
-            cfg = curriculum.config
-            n_eval = 128
-            eval_enc = curriculum.sample_encounters(n_eval)
-            eval_decks = [json.loads(curriculum.sample_deck_json()) for _ in range(n_eval)]
-            eval_rollout = sts2_engine.collect_betaone_rollouts(
-                encounters_json=json.dumps(eval_enc),
-                decks_json=json.dumps(eval_decks),
-                player_hp=cfg.player_hp, player_max_hp=70, player_max_energy=3,
-                relics_json="[]", potions_json="[]",
-                monster_data_json=monster_json,
-                enemy_profiles_json=profiles_json,
-                onnx_path=onnx_path,
-                temperature=0.01,
-                seeds=list(range(n_eval)),
-                gen_id=start_gen,
-                card_vocab_json=card_vocab_json,
-            )
-            eval_outcomes = eval_rollout["outcomes"]
-            eval_wr = sum(1 for o in eval_outcomes if o == "win") / max(len(eval_outcomes), 1)
-            passed = eval_wr >= cfg.promote_threshold
-
-            print(f"  T{curriculum.tier} {cfg.name:25s} need {cfg.promote_threshold:.0%}  wr={eval_wr:.1%}  {'PASS' if passed else 'FAIL'}")
-
-            # Log the eval-only result
-            record = {
-                "gen": start_gen - 1,
-                "win_rate": round(eval_wr, 4),
-                "tier_wr": round(eval_wr, 4),
-                "tier": curriculum.tier,
-                "tier_name": cfg.name,
-                "tier_change": "promoted" if passed else "hold",
-                "eval_only": True,
-                "policy_loss": 0, "value_loss": 0, "entropy": 0,
-                "avg_reward": 0, "avg_hp": 0, "steps": 0, "episodes": len(eval_outcomes),
-                "temperature": 0, "gen_time": 0, "timestamp": time.time(),
-                "gens_at_tier": 0,
-            }
-            with open(history_path, "a") as f:
-                f.write(json.dumps(record) + "\n")
-
-            if passed:
-                curriculum.tier += 1
-                curriculum.consecutive_good = 0
-                curriculum.gens_at_tier = 0
-            else:
-                break
-
-        print(f"  Starting training at T{curriculum.tier}: {curriculum.config.name}")
+        print(f"Warm restart from gen {start_gen - 1}")
     else:
         print("Cold start — no checkpoint found")
-
-    # No runtime calibration when using training sets.
-    # Legacy calibration preserved for backward compatibility without training sets.
-    if not td["ts_data"]:
-        if recorded_encounters:
-            from .calibrate import calibrate_all
-            recorded_path = str(Path(output_dir) / "recorded_encounters.jsonl")
-            onnx_path = export_onnx(network, onnx_dir)
-            print("Running initial HP calibration...")
-            curriculum.recorded_encounters, _ = calibrate_all(
-                curriculum.recorded_encounters, monster_json, profiles_json,
-                card_vocab_json, onnx_path,
-                encounters_path=recorded_path,
-                num_sims=50, combats=32,
-            )
-        if mixed:
-            from .packages import calibrate_packages
-            if not recorded_encounters:
-                onnx_path = export_onnx(network, onnx_dir)
-            print("Calibrating archetype packages...")
-            calibrate_packages(monster_json, profiles_json, card_vocab_json, onnx_path)
 
     for gen in range(start_gen, num_generations + 1):
         t0 = time.time()
@@ -300,10 +184,7 @@ def train(
         onnx_path = export_onnx(network, onnx_dir)
 
         # Sample encounters grouped by HP (shared with selfplay_train.py)
-        batches = sample_combat_batches(
-            curriculum, combats_per_gen, mixed, recorded_encounters,
-            recorded_frac, gen, encounter_set=td.get("encounter_set"),
-        )
+        batches = sample_combat_batches(encounter_set, combats_per_gen, gen)
 
         # Collect rollouts — one call per HP level, merge results
         all_states, all_act_feat, all_act_masks = [], [], []
@@ -401,41 +282,23 @@ def train(
         # Stats
         outcomes = rollout["outcomes"]
         n_episodes = len(outcomes)
-        tier_wins = sum(1 for o in outcomes if o == "win")
-        tier_wr = tier_wins / max(n_episodes, 1)
-
-        all_wins = sum(1 for o in outcomes if o == "win")
-        win_rate = all_wins / max(n_episodes, 1)  # blended (for logging)
+        wins = sum(1 for o in outcomes if o == "win")
+        win_rate = wins / max(n_episodes, 1)
         win_hps = [hp for hp, o in zip(rollout["final_hps"], outcomes) if o == "win"]
         avg_hp = np.mean(win_hps) if win_hps else 0.0
         avg_reward = float(rewards.mean())
-        cumulative_wins += all_wins
-        cumulative_games += n_episodes
-
-        # Curriculum update — use tier-only win rate (no review inflation)
-        tier_before = curriculum.tier
-        # Per-tier cumulative (persisted across runs via checkpoint)
-        tk = str(tier_before)
-        prev = tier_cumulative.get(tk, [0, 0])
-        tier_cumulative[tk] = [prev[0] + tier_wins, prev[1] + n_episodes]
-        if lock_tier is not None:
-            tier_change = "hold"
-            curriculum.gens_at_tier += 1
-        else:
-            tier_change = curriculum.update(tier_wr)
 
         elapsed = time.time() - t0
 
         print(
             f"Gen {gen:4d} | "
-            f"win {tier_wr:5.1%} | "
+            f"win {win_rate:5.1%} | "
             f"hp {avg_hp:4.1f} | "
             f"steps {T:5d} | "
             f"r {avg_reward:+.3f} | "
             f"pi {metrics['policy_loss']:.3f} | "
             f"v {metrics['value_loss']:.3f} | "
             f"H {metrics['entropy']:.2f} | "
-            f"T{tier_before}{'UP' if tier_change == 'promoted' else 'DN' if tier_change == 'demoted' else '  '} | "
             f"t={temperature:.2f} | "
             f"{elapsed:.1f}s"
         )
@@ -443,39 +306,25 @@ def train(
         # Log to JSONL + progress snapshot
         record = {
             "gen": gen,
-            "win_rate": round(tier_wr, 4),
-            "tier_wr": round(tier_wr, 4),
-            "regressed": None,
-            "regressed_detail": None,
-            "cumulative_win_rate": round(cumulative_wins / max(cumulative_games, 1), 4),
+            "win_rate": round(win_rate, 4),
             "avg_hp": round(float(avg_hp), 1),
             "avg_reward": round(avg_reward, 4),
             "steps": T,
             "episodes": n_episodes,
-            "tier": tier_before,
-            "tier_name": curriculum.config.name,
-            "gens_at_tier": curriculum.gens_at_tier,
-            "tier_change": tier_change,
+            "encounter_set": encounter_set_id,
             "policy_loss": round(metrics["policy_loss"], 5),
             "value_loss": round(metrics["value_loss"], 5),
             "entropy": round(metrics["entropy"], 4),
             "temperature": round(temperature, 3),
             "gen_time": round(elapsed, 2),
             "timestamp": time.time(),
-            "recorded_encounters": len(curriculum.recorded_encounters) if recorded_encounters else None,
-            "training_set": training_set_id,
         }
         with open(history_path, "a") as f:
             f.write(json.dumps(record) + "\n")
         with open(progress_path, "w") as f:
             record["num_generations"] = num_generations
-            record["cumulative_wins"] = cumulative_wins
-            record["cumulative_games"] = cumulative_games
             record["best_win_rate"] = round(best_win_rate, 4)
-            record["tier_cumulative"] = tier_cumulative
             json.dump(record, f, indent=2)
-        with open(cumulative_path, "w") as f:
-            json.dump(tier_cumulative, f)
 
         # Save checkpoints: always save "latest", keep milestones
         best_win_rate = max(best_win_rate, win_rate)
@@ -484,10 +333,6 @@ def train(
             "model_state_dict": network.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
             "win_rate": win_rate,
-            "tier": curriculum.tier,
-            "tier_name": curriculum.config.name,
-            "gens_at_tier": curriculum.gens_at_tier,
-            "tier_cumulative": tier_cumulative,
         }
         # Always overwrite latest (resume point)
         torch.save(ckpt_data, os.path.join(output_dir, "betaone_latest.pt"))
@@ -504,34 +349,22 @@ def train(
 
 def main():
     parser = argparse.ArgumentParser(description="BetaOne PPO training")
+    parser.add_argument("--encounter-set", required=True,
+                        help="Encounter set id (e.g. lean-decks-v1)")
     parser.add_argument("--generations", type=int, default=500)
     parser.add_argument("--combats", type=int, default=512)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--entropy-coef", type=float, default=0.03)
     parser.add_argument("--output-dir", default="betaone_checkpoints")
-    parser.add_argument("--final-exam", action="store_true",
-                        help="Skip tier progression, start at final exam")
-    parser.add_argument("--tier", type=int, default=None,
-                        help="Lock to a specific tier (no promotion)")
-    parser.add_argument("--recorded-encounters", action="store_true",
-                        help="Train exclusively on recorded death encounters from live games")
-    parser.add_argument("--mixed", action="store_true",
-                        help="Train on mix of recorded encounters and final exam")
-    parser.add_argument("--recorded-frac", type=float, default=0.5,
-                        help="Fraction of combats from recorded encounters in mixed mode")
     args = parser.parse_args()
 
     train(
+        encounter_set_id=args.encounter_set,
         num_generations=args.generations,
         combats_per_gen=args.combats,
         lr=args.lr,
         entropy_coef=args.entropy_coef,
         output_dir=args.output_dir,
-        skip_to_final=args.final_exam,
-        lock_tier=args.tier,
-        recorded_encounters=args.recorded_encounters,
-        mixed=args.mixed,
-        recorded_frac=args.recorded_frac,
     )
 
 

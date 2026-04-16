@@ -173,6 +173,7 @@ def train_batch(
 # ---------------------------------------------------------------------------
 
 def train(
+    encounter_set_id: str,
     num_generations: int = 2000,
     combats_per_gen: int = 256,
     num_sims: int = 150,
@@ -182,14 +183,8 @@ def train(
     batch_size: int = 512,
     temperature: float = 1.0,
     output_dir: str = "betaone_checkpoints",
-    skip_to_final: bool = False,
-    recorded_encounters: bool = False,
-    mixed: bool = False,
-    recorded_frac: float = 0.5,
     replay_capacity: int = 200_000,
     cold_start: bool = False,
-    training_set_id: str | None = None,
-    encounter_set_id: str | None = None,
     turn_boundary_eval: bool = False,
     dense_value_targets: bool = False,
     gamma: float = 0.99,
@@ -205,7 +200,6 @@ def train(
     # Load game data
     monster_json = build_monster_data_json()
     profiles_json = load_solver_json("enemy_profiles.json")
-    enc_pool_path = str(SOLVER_PKG / "encounter_pool.json")
 
     # Card vocabulary
     card_vocab, card_vocab_json = build_card_vocab(output_dir)
@@ -223,20 +217,10 @@ def train(
         optimizer = torch.optim.Adam(network.parameters(), lr=lr)
         print(f"BetaOne self-play: {network.param_count():,} params, {num_cards} card vocab")
 
-    # Set up training data (shared with train.py)
-    td = setup_training_data(
-        output_dir=output_dir,
-        training_set_id=training_set_id,
-        mixed=mixed,
-        recorded_encounters=recorded_encounters,
-        recorded_frac=recorded_frac,
-        skip_to_final=skip_to_final,
-        encounter_set_id=encounter_set_id,
-    )
-    curriculum = td["curriculum"]
-    recorded_encounters = td["recorded_encounters"]
-    mixed = td["mixed"]
-    recorded_frac = td["recorded_frac"]
+    # Load the frozen encounter set
+    td = setup_training_data(encounter_set_id=encounter_set_id)
+    encounter_set = td["encounter_set"]
+    encounter_set_name = td["encounter_set_name"]
 
     best_win_rate = 0.0
     start_gen = 1
@@ -307,10 +291,7 @@ def train(
         onnx_path = export_onnx(network, onnx_dir)
 
         # Sample encounters grouped by HP (shared with train.py)
-        batches = sample_combat_batches(
-            curriculum, combats_per_gen, mixed, recorded_encounters,
-            recorded_frac, gen, encounter_set=td.get("encounter_set"),
-        )
+        batches = sample_combat_batches(encounter_set, combats_per_gen, gen)
         seeds = [gen * 100_000 + i for i in range(combats_per_gen)]
 
         # Self-play: MCTS combats (one call per HP level)
@@ -459,10 +440,6 @@ def train(
 
         elapsed = time.time() - t0
 
-        # Curriculum update (hold when using training set or recorded encounters)
-        tier_before = curriculum.tier
-        tier_change = "hold" if (recorded_encounters or td.get("ts_data")) else curriculum.update(win_rate)
-
         print(
             f"Gen {gen:4d} | "
             f"win {win_rate:5.1%} | "
@@ -471,7 +448,6 @@ def train(
             f"buf {buf_size:6d} | "
             f"pi {avg_ploss:.3f} | "
             f"v {avg_vloss:.3f} | "
-            f"T{tier_before}{'UP' if tier_change == 'promoted' else '  '} | "
             f"sims {num_sims} | "
             f"{elapsed:.1f}s"
         )
@@ -484,10 +460,7 @@ def train(
             "steps": T,
             "buffer_size": buf_size,
             "episodes": n_combats,
-            "tier": tier_before,
-            "tier_name": curriculum.config.name,
-            "tier_change": tier_change,
-            "gens_at_tier": curriculum.gens_at_tier,
+            "encounter_set": encounter_set_id,
             "policy_loss": round(avg_ploss, 5),
             "value_loss": round(avg_vloss, 5),
             "num_sims": num_sims,
@@ -509,7 +482,6 @@ def train(
             "model_state_dict": network.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
             "win_rate": win_rate,
-            "tier": curriculum.tier,
             "num_cards": num_cards,
         }
         torch.save(ckpt_data, os.path.join(output_dir, "betaone_latest.pt"))
@@ -525,18 +497,13 @@ def train(
 
 def main():
     parser = argparse.ArgumentParser(description="BetaOne self-play training")
+    parser.add_argument("--encounter-set", required=True,
+                        help="Encounter set id (e.g. lean-decks-v1)")
     parser.add_argument("--generations", type=int, default=2000)
     parser.add_argument("--combats", type=int, default=256)
     parser.add_argument("--sims", type=int, default=150)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--output-dir", default="betaone_checkpoints")
-    parser.add_argument("--final-exam", action="store_true")
-    parser.add_argument("--recorded-encounters", action="store_true",
-                        help="Train on recorded death encounters from live games")
-    parser.add_argument("--mixed", action="store_true",
-                        help="Train on mix of recorded encounters and archetype packages")
-    parser.add_argument("--recorded-frac", type=float, default=0.5,
-                        help="Fraction of combats from recorded encounters in mixed mode")
     parser.add_argument("--cold-start", action="store_true",
                         help="Ignore existing checkpoint, start from scratch")
     parser.add_argument("--replay-capacity", type=int, default=200_000,
@@ -544,15 +511,12 @@ def main():
     args = parser.parse_args()
 
     train(
+        encounter_set_id=args.encounter_set,
         num_generations=args.generations,
         combats_per_gen=args.combats,
         num_sims=args.sims,
         lr=args.lr,
         output_dir=args.output_dir,
-        skip_to_final=args.final_exam,
-        recorded_encounters=args.recorded_encounters,
-        mixed=args.mixed,
-        recorded_frac=args.recorded_frac,
         cold_start=args.cold_start,
         replay_capacity=args.replay_capacity,
     )

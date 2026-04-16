@@ -52,17 +52,10 @@ class ExperimentConfig:
     # Training hyperparameters
     training: dict = field(default_factory=dict)
 
-    # Data source
+    # Data source — must point at a frozen encounter set.
     data: dict = field(default_factory=lambda: {
-        "encounter_set": None,      # preferred: es-{hash} or friendly name
-        "training_set": None,       # deprecated: ts-{hash}
-        "mode": "mixed",
-        "recorded_frac": 0.5,
-    })
-
-    # Curriculum
-    curriculum: dict = field(default_factory=lambda: {
-        "start_tier": 0, "lock_tier": None, "skip_to_final": False,
+        "mode": "encounter_set",
+        "encounter_set": None,
     })
 
     # Checkpoint policy
@@ -83,8 +76,7 @@ class ExperimentConfig:
             parent_checkpoint=raw.get("parent_checkpoint"),
             architecture=raw.get("architecture", dict(ARCH_META)),
             training=raw.get("training", {}),
-            data=raw.get("data", {"mode": "mixed", "recorded_frac": 0.5}),
-            curriculum=raw.get("curriculum", {}),
+            data=raw.get("data", {"mode": "encounter_set", "encounter_set": None}),
             checkpoints=raw.get("checkpoints", {}),
         )
 
@@ -99,7 +91,6 @@ class ExperimentConfig:
             "architecture": self.architecture,
             "training": self.training,
             "data": self.data,
-            "curriculum": self.curriculum,
             "checkpoints": self.checkpoints,
         }
         with open(path, "w", encoding="utf-8") as f:
@@ -109,7 +100,6 @@ class ExperimentConfig:
         """Convert config to kwargs for selfplay_train.train() or train.train()."""
         t = self.training
         d = self.data
-        c = self.curriculum
         ck = self.checkpoints
 
         def _float(v, default=0.0):
@@ -117,6 +107,14 @@ class ExperimentConfig:
             if v is None:
                 return default
             return float(v)
+
+        encounter_set_id = d.get("encounter_set")
+        if not encounter_set_id:
+            raise ValueError(
+                f"Experiment '{self.name}' has no data.encounter_set. Training "
+                "now runs exclusively against frozen encounter sets — legacy "
+                "modes (mixed/recorded/curriculum) are no longer supported."
+            )
 
         if self.method == "mcts_selfplay":
             mcts = t.get("mcts", {})
@@ -139,13 +137,8 @@ class ExperimentConfig:
                 "batch_size": t.get("batch_size", 512),
                 "temperature": _float(mcts.get("temperature"), 1.0),
                 "replay_capacity": mcts.get("replay_capacity", 200_000),
-                "skip_to_final": c.get("skip_to_final", False),
-                "recorded_encounters": d.get("mode") in ("recorded", "mixed"),
-                "mixed": d.get("mode") == "mixed",
-                "recorded_frac": _float(d.get("recorded_frac"), 0.5),
                 "cold_start": ck.get("cold_start", False),
-                "training_set_id": d.get("training_set"),
-                "encounter_set_id": d.get("encounter_set"),
+                "encounter_set_id": encounter_set_id,
                 "turn_boundary_eval": mcts.get("turn_boundary_eval", False),
                 "dense_value_targets": mcts.get("dense_value_targets", False),
                 "gamma": _float(mcts.get("gamma"), 0.99),
@@ -170,13 +163,7 @@ class ExperimentConfig:
                 "max_grad_norm": _float(ppo.get("max_grad_norm"), 0.5),
                 "ppo_epochs": ppo.get("ppo_epochs", 4),
                 "ppo_batch_size": ppo.get("ppo_batch_size", 256),
-                "skip_to_final": c.get("skip_to_final", False),
-                "lock_tier": c.get("lock_tier"),
-                "recorded_encounters": d.get("mode") in ("recorded", "mixed"),
-                "mixed": d.get("mode") == "mixed",
-                "recorded_frac": _float(d.get("recorded_frac"), 0.5),
-                "training_set_id": d.get("training_set"),
-                "encounter_set_id": d.get("encounter_set"),
+                "encounter_set_id": encounter_set_id,
             }
 
 

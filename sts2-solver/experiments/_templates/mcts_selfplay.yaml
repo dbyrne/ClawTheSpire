@@ -15,12 +15,8 @@ training:
     value_coef: 1.0
 
 data:
-  mode: mixed
-  recorded_frac: 0.5
-
-curriculum:
-  start_tier: 0
-  skip_to_final: false
+  mode: encounter_set
+  encounter_set: lean-decks-v1
 
 checkpoints:
   save_every: 10
