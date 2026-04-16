@@ -31,6 +31,10 @@ struct Node {
     is_chance: bool,                            // awaiting observation sampling
     pending_draws: i32,                         // cards to draw at this chance node
     observation_children: Vec<(String, usize)>, // (obs_key, child_node_idx)
+    /// Card that triggered the deferred draw. Its post-draw logic
+    /// (pending_choice setup, conditional block, etc.) is re-applied after
+    /// observation sampling draws the cards.
+    pending_post_draw_card: Option<Card>,
 }
 
 impl Node {
@@ -51,6 +55,7 @@ impl Node {
             is_chance: false,
             pending_draws: 0,
             observation_children: Vec::new(),
+            pending_post_draw_card: None,
         }
     }
 
@@ -462,14 +467,15 @@ impl<'a> MCTS<'a> {
 
             let mut new_state = parent_state.clone();
             let mut new_ais = parent_ais;
-            let draw_count = self.apply_action(&mut new_state, &mut new_ais, action, rng);
+            let chance_info = self.apply_action(&mut new_state, &mut new_ais, action, rng);
             arena.nodes[node_idx].state = Some(new_state);
             arena.nodes[node_idx].enemy_ais = new_ais;
 
-            // POMCP: if the action created a chance node (draw deferred), mark it
-            if draw_count > 0 {
+            // POMCP: if the action queued deferred draws, mark as chance node
+            if let Some((draw_count, card)) = chance_info {
                 arena.nodes[node_idx].is_chance = true;
                 arena.nodes[node_idx].pending_draws = draw_count;
+                arena.nodes[node_idx].pending_post_draw_card = Some(card);
                 arena.nodes[node_idx].is_expanded = true;
                 // Evaluate pre-draw state for this node's leaf value
                 let state = arena.nodes[node_idx].state.as_ref().unwrap();
@@ -667,7 +673,7 @@ impl<'a> MCTS<'a> {
                     Action::EndTurn => break,
                     Action::PlayCard { card_idx, target_idx } => {
                         if combat::can_play_card(&sim, *card_idx) {
-                            combat::play_card(&mut sim, *card_idx, *target_idx, self.card_db, rng, false);
+                            combat::play_card(&mut sim, *card_idx, *target_idx, self.card_db, rng);
                         }
                     }
                     Action::UsePotion { potion_idx } => {
@@ -702,57 +708,55 @@ impl<'a> MCTS<'a> {
         if v.is_finite() { v } else { 0.0 }
     }
 
-    // --- Apply action to state, returns draw count if POMCP chance node ---
+    /// Apply an action to the state. Returns chance-node info when POMCP is
+    /// active and the action queued one or more draws via `state.defer_draws`.
+    /// The returned Card carries the post-draw logic (pending_choice /
+    /// conditional block) to re-apply at observation sampling.
     fn apply_action(
         &self,
         state: &mut CombatState,
-        enemy_ais: &mut Option<Vec<crate::enemy::EnemyAI>>,
+        _enemy_ais: &mut Option<Vec<crate::enemy::EnemyAI>>,
         action: &Action,
         rng: &mut impl Rng,
-    ) -> i32 {
+    ) -> Option<(i32, Card)> {
         match action {
             Action::PlayCard { card_idx, target_idx } => {
-                if combat::can_play_card(state, *card_idx) {
-                    let draw_count = if self.pomcp {
-                        self.action_draw_count(state, *card_idx)
-                    } else {
-                        0
-                    };
-                    if draw_count > 0 {
-                        // POMCP: execute card WITHOUT draws, create chance node
-                        combat::play_card(state, *card_idx, *target_idx, self.card_db, rng, true);
-                        return draw_count;
-                    }
-                    combat::play_card(state, *card_idx, *target_idx, self.card_db, rng, false);
+                if !combat::can_play_card(state, *card_idx) {
+                    return None;
                 }
-                0
+                if !self.pomcp {
+                    combat::play_card(state, *card_idx, *target_idx, self.card_db, rng);
+                    return None;
+                }
+
+                // POMCP: capture the card (it will be removed from hand by
+                // play_card), defer all draws via the state flag, then harvest
+                // the pending count to build a chance node.
+                let card = state.player.hand[*card_idx].clone();
+                state.defer_draws = true;
+                state.pending_draws = 0;
+                combat::play_card(state, *card_idx, *target_idx, self.card_db, rng);
+                state.defer_draws = false;
+                let pending = std::mem::take(&mut state.pending_draws);
+                if pending > 0 {
+                    Some((pending, card))
+                } else {
+                    None
+                }
             }
             Action::EndTurn => {
                 state.turn_ended = true;
-                0
+                None
             }
             Action::UsePotion { potion_idx } => {
                 combat::use_potion(state, *potion_idx);
-                0
+                None
             }
             Action::ChooseCard { choice_idx } => {
                 crate::effects::execute_choice(state, *choice_idx, rng);
-                0
+                None
             }
         }
-    }
-
-    /// How many cards would this action draw? (for POMCP chance node detection)
-    fn action_draw_count(&self, state: &CombatState, card_idx: usize) -> i32 {
-        if card_idx >= state.player.hand.len() {
-            return 0;
-        }
-        let card = &state.player.hand[card_idx];
-        // Generic path cards have cards_draw set
-        if card.cards_draw > 0 {
-            return card.cards_draw;
-        }
-        0
     }
 
     /// POMCP: sample a draw at a chance node, find or create observation child.
@@ -773,6 +777,12 @@ impl<'a> MCTS<'a> {
         let mut draw_state = arena.nodes[chance_idx].state.as_ref().unwrap().clone();
         let draw_ais = arena.nodes[chance_idx].enemy_ais.clone();
         crate::effects::draw_cards(&mut draw_state, pending, rng);
+
+        // Apply the card's deferred post-draw logic now that the hand reflects
+        // the sampled observation (pending_choice setup, ESCAPE_PLAN block, ...)
+        if let Some(card) = arena.nodes[chance_idx].pending_post_draw_card.clone() {
+            crate::cards::apply_post_draw_effect(&mut draw_state, &card, rng);
+        }
 
         // Build observation key: sorted IDs of newly drawn cards
         let hand_len = draw_state.player.hand.len();

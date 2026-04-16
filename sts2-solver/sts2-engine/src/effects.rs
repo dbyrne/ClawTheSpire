@@ -303,7 +303,16 @@ pub fn apply_power_to_player(state: &mut CombatState, power: &str, amount: i32) 
 // ---------------------------------------------------------------------------
 
 /// Draw cards from draw pile to hand. Shuffles discard into draw if needed.
+///
+/// POMCP: when `state.defer_draws` is true, the draw is queued into
+/// `state.pending_draws` and the hand is not modified. The MCTS orchestrator
+/// creates a chance node which samples the actual draw during observation
+/// sampling, so stochastic draw outcomes are explored across simulations.
 pub fn draw_cards(state: &mut CombatState, count: i32, rng: &mut impl Rng) {
+    if state.defer_draws {
+        state.pending_draws += count;
+        return;
+    }
     state.cards_drawn_this_turn += count;
     // Corrosive Wave: each card drawn applies Poison to ALL enemies
     let cw_amt = state.player.get_power("_corrosive_wave");
@@ -495,7 +504,6 @@ pub fn execute_generic_effect(
     card: &Card,
     target_idx: Option<usize>,
     rng: &mut impl Rng,
-    skip_draw: bool,
 ) {
     // HP loss first
     if card.hp_loss > 0 {
@@ -549,8 +557,9 @@ pub fn execute_generic_effect(
         }
     }
 
-    // Draw (skipped for POMCP chance nodes — draw deferred to observation sampling)
-    if card.cards_draw > 0 && !skip_draw {
+    // Draw. When state.defer_draws is set (POMCP), draw_cards accumulates
+    // into state.pending_draws and the chance node samples the observation.
+    if card.cards_draw > 0 {
         draw_cards(state, card.cards_draw, rng);
     }
 

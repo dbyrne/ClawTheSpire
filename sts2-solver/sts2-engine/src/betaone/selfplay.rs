@@ -256,7 +256,7 @@ fn run_selfplay_combat(
                 Action::PlayCard { card_idx, target_idx } => {
                     if combat::can_play_card(&state, *card_idx) {
                         combat::play_card(
-                            &mut state, *card_idx, *target_idx, &card_db, &mut rng, false,
+                            &mut state, *card_idx, *target_idx, &card_db, &mut rng,
                         );
                     }
                     if let Some(outcome) = combat::is_combat_over(&state) {

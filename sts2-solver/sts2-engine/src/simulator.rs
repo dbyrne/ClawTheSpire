@@ -1124,7 +1124,7 @@ fn run_combat_internal(
                 }
                 Action::PlayCard { card_idx, target_idx } => {
                     if combat::can_play_card(&state, *card_idx) {
-                        combat::play_card(&mut state, *card_idx, *target_idx, card_db, rng, false);
+                        combat::play_card(&mut state, *card_idx, *target_idx, card_db, rng);
                     }
                     cards += 1;
                 }
@@ -1202,7 +1202,7 @@ fn replay_single_turn(
             }
             Action::PlayCard { card_idx, target_idx } => {
                 if combat::can_play_card(&state, *card_idx) {
-                    combat::play_card(&mut state, *card_idx, *target_idx, card_db, rng, false);
+                    combat::play_card(&mut state, *card_idx, *target_idx, card_db, rng);
                 }
                 cards += 1;
             }

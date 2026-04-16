@@ -16,7 +16,6 @@ pub fn execute_card_effect(
     target_idx: Option<usize>,
     card_db: &CardDB,
     rng: &mut impl Rng,
-    skip_draw: bool,
 ) {
     let base = card.base_id();
     let upgraded = card.upgraded;
@@ -154,13 +153,15 @@ pub fn execute_card_effect(
         "ACROBATICS" => {
             let draw = if upgraded { 4 } else { 3 };
             draw_cards(state, draw, rng);
-            state.pending_choice = Some(PendingChoice {
-                choice_type: "discard_from_hand".to_string(),
-                num_choices: 1,
-                source_card_id: card.id.clone(),
-                valid_indices: None,
-                chosen_so_far: vec![],
-            });
+            if !state.defer_draws {
+                state.pending_choice = Some(PendingChoice {
+                    choice_type: "discard_from_hand".to_string(),
+                    num_choices: 1,
+                    source_card_id: card.id.clone(),
+                    valid_indices: None,
+                    chosen_so_far: vec![],
+                });
+            }
         }
         "DAGGER_THROW" => {
             if let Some(tidx) = target_idx {
@@ -168,13 +169,15 @@ pub fn execute_card_effect(
                 deal_damage(state, tidx, dmg, 1);
             }
             draw_cards(state, 1, rng);
-            state.pending_choice = Some(PendingChoice {
-                choice_type: "discard_from_hand".to_string(),
-                num_choices: 1,
-                source_card_id: card.id.clone(),
-                valid_indices: None,
-                chosen_so_far: vec![],
-            });
+            if !state.defer_draws {
+                state.pending_choice = Some(PendingChoice {
+                    choice_type: "discard_from_hand".to_string(),
+                    num_choices: 1,
+                    source_card_id: card.id.clone(),
+                    valid_indices: None,
+                    chosen_so_far: vec![],
+                });
+            }
         }
         "SURVIVOR" => {
             let block = if upgraded { 11 } else { 8 };
@@ -190,13 +193,15 @@ pub fn execute_card_effect(
         "PREPARED" => {
             let draw = if upgraded { 2 } else { 1 };
             draw_cards(state, draw, rng);
-            state.pending_choice = Some(PendingChoice {
-                choice_type: "discard_from_hand".to_string(),
-                num_choices: 1,
-                source_card_id: card.id.clone(),
-                valid_indices: None,
-                chosen_so_far: vec![],
-            });
+            if !state.defer_draws {
+                state.pending_choice = Some(PendingChoice {
+                    choice_type: "discard_from_hand".to_string(),
+                    num_choices: 1,
+                    source_card_id: card.id.clone(),
+                    valid_indices: None,
+                    chosen_so_far: vec![],
+                });
+            }
         }
         "HIDDEN_DAGGERS" => {
             state.pending_choice = Some(PendingChoice {
@@ -401,11 +406,14 @@ pub fn execute_card_effect(
         }
         "ESCAPE_PLAN" => {
             draw_cards(state, 1, rng);
-            // If drawn card is a Skill, gain block
-            if let Some(last) = state.player.hand.last() {
-                if last.card_type == CardType::Skill {
-                    let block = if upgraded { 5 } else { 3 };
-                    gain_block(state, block);
+            // If drawn card is a Skill, gain block. Skipped under defer_draws —
+            // the chance node re-applies this after sampling the observation.
+            if !state.defer_draws {
+                if let Some(last) = state.player.hand.last() {
+                    if last.card_type == CardType::Skill {
+                        let block = if upgraded { 5 } else { 3 };
+                        gain_block(state, block);
+                    }
                 }
             }
         }
@@ -532,15 +540,47 @@ pub fn execute_card_effect(
             if let Some(card) = state.player.draw_pile.pop() {
                 let alive = state.alive_enemy_indices();
                 let target = alive.first().copied();
-                execute_card_effect(state, &card, target, card_db, rng, false);
+                execute_card_effect(state, &card, target, card_db, rng);
                 state.player.discard_pile.push(card);
             }
         }
 
         // --- Fallback: generic effect from card data ---
         _ => {
-            execute_generic_effect(state, card, target_idx, rng, skip_draw);
+            execute_generic_effect(state, card, target_idx, rng);
         }
+    }
+}
+
+/// Re-apply a card's post-draw logic after POMCP observation sampling.
+///
+/// When `state.defer_draws` is active, cards whose side effects depend on
+/// the newly-drawn hand (pending_choice setup, ESCAPE_PLAN conditional
+/// block) skip that logic during main execution. This function runs that
+/// logic against the sampled observation state. `card` must be the same
+/// card that was played (before being moved to discard/exhaust).
+pub fn apply_post_draw_effect(state: &mut CombatState, card: &Card, _rng: &mut impl rand::Rng) {
+    let base = card.base_id();
+    let upgraded = card.upgraded;
+    match base {
+        "ACROBATICS" | "DAGGER_THROW" | "PREPARED" => {
+            state.pending_choice = Some(PendingChoice {
+                choice_type: "discard_from_hand".to_string(),
+                num_choices: 1,
+                source_card_id: card.id.clone(),
+                valid_indices: None,
+                chosen_so_far: vec![],
+            });
+        }
+        "ESCAPE_PLAN" => {
+            if let Some(last) = state.player.hand.last() {
+                if last.card_type == CardType::Skill {
+                    let block = if upgraded { 5 } else { 3 };
+                    gain_block(state, block);
+                }
+            }
+        }
+        _ => {}
     }
 }
 

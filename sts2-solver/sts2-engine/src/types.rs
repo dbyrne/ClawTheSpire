@@ -316,6 +316,14 @@ pub struct CombatState {
     #[serde(skip, default)]
     pub turn_ended: bool,
 
+    /// POMCP: when true, `draw_cards` accumulates into `pending_draws` instead
+    /// of drawing. Post-draw logic in hardcoded card effects is also skipped
+    /// and re-applied at chance-node observation sampling.
+    #[serde(skip, default)]
+    pub defer_draws: bool,
+    #[serde(skip, default)]
+    pub pending_draws: i32,
+
     // RNG for shuffle/random effects during combat
     #[serde(skip)]
     pub rng_seed: u64,
@@ -332,7 +340,9 @@ impl Default for CombatState {
             relics: HashSet::new(), floor: 0, gold: 0,
             pending_choice: None,
             act_id: String::new(), boss_id: String::new(),
-            map_path: vec![], turn_ended: false, rng_seed: 0,
+            map_path: vec![], turn_ended: false,
+            defer_draws: false, pending_draws: 0,
+            rng_seed: 0,
         }
     }
 }

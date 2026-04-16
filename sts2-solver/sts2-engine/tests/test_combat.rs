@@ -361,7 +361,7 @@ fn test_ringing_limits_one_card() {
 fn test_strike_deals_damage() {
     let mut state = state_with(vec![strike()], vec![enemy(30)]);
     let db = card_db();
-    combat::play_card(&mut state, 0, Some(0), &db, &mut rng(), false);
+    combat::play_card(&mut state, 0, Some(0), &db, &mut rng());
     assert_eq!(state.enemies[0].hp, 24); // 30 - 6
     assert_eq!(state.player.energy, 2);
     assert!(state.player.hand.is_empty());
@@ -371,7 +371,7 @@ fn test_strike_deals_damage() {
 fn test_defend_adds_block() {
     let mut state = state_with(vec![defend()], vec![enemy(30)]);
     let db = card_db();
-    combat::play_card(&mut state, 0, None, &db, &mut rng(), false);
+    combat::play_card(&mut state, 0, None, &db, &mut rng());
     assert_eq!(state.player.block, 5);
     assert_eq!(state.player.energy, 2);
 }
@@ -380,7 +380,7 @@ fn test_defend_adds_block() {
 fn test_neutralize_applies_weak() {
     let mut state = state_with(vec![neutralize()], vec![enemy(30)]);
     let db = card_db();
-    combat::play_card(&mut state, 0, Some(0), &db, &mut rng(), false);
+    combat::play_card(&mut state, 0, Some(0), &db, &mut rng());
     assert_eq!(state.enemies[0].hp, 27); // 30 - 3
     assert_eq!(state.enemies[0].get_power("Weak"), 1);
     assert_eq!(state.player.energy, 3); // cost 0
@@ -391,10 +391,10 @@ fn test_cards_played_counter_increments() {
     let mut state = state_with(vec![strike(), defend()], vec![enemy(30)]);
     let db = card_db();
     assert_eq!(state.cards_played_this_turn, 0);
-    combat::play_card(&mut state, 0, Some(0), &db, &mut rng(), false);
+    combat::play_card(&mut state, 0, Some(0), &db, &mut rng());
     assert_eq!(state.cards_played_this_turn, 1);
     assert_eq!(state.attacks_played_this_turn, 1);
-    combat::play_card(&mut state, 0, None, &db, &mut rng(), false);
+    combat::play_card(&mut state, 0, None, &db, &mut rng());
     assert_eq!(state.cards_played_this_turn, 2);
     assert_eq!(state.attacks_played_this_turn, 1); // Defend is Skill, not Attack
 }
@@ -403,7 +403,7 @@ fn test_cards_played_counter_increments() {
 fn test_killing_blow() {
     let mut state = state_with(vec![strike()], vec![enemy(5)]);
     let db = card_db();
-    combat::play_card(&mut state, 0, Some(0), &db, &mut rng(), false);
+    combat::play_card(&mut state, 0, Some(0), &db, &mut rng());
     assert!(state.enemies[0].hp <= 0);
     assert!(!state.enemies[0].is_alive());
     assert_eq!(combat::is_combat_over(&state), Some("win"));
@@ -413,7 +413,7 @@ fn test_killing_blow() {
 fn test_card_goes_to_discard() {
     let mut state = state_with(vec![strike()], vec![enemy(30)]);
     let db = card_db();
-    combat::play_card(&mut state, 0, Some(0), &db, &mut rng(), false);
+    combat::play_card(&mut state, 0, Some(0), &db, &mut rng());
     assert_eq!(state.player.discard_pile.len(), 1);
     assert_eq!(state.player.discard_pile[0].id, "STRIKE_SILENT");
 }
@@ -740,7 +740,7 @@ fn test_full_turn_play_defend_then_end() {
     let db = card_db();
 
     // Play Defend
-    combat::play_card(&mut state, 0, None, &db, &mut rng(), false);
+    combat::play_card(&mut state, 0, None, &db, &mut rng());
     assert_eq!(state.player.block, 5);
 
     // End turn
@@ -773,7 +773,7 @@ fn test_defend_saves_5_hp_compared_to_no_play() {
     // Path A: play Defend then end turn
     let mut state_a = state_with(vec![defend()], vec![enemy(30)]);
     state_a.player.hp = 50;
-    combat::play_card(&mut state_a, 0, None, &db, &mut rng(), false);
+    combat::play_card(&mut state_a, 0, None, &db, &mut rng());
     combat::end_turn(&mut state_a, &db, &mut rng());
     combat::resolve_enemy_intents(&mut state_a);
 
@@ -820,7 +820,7 @@ fn test_kunai_gives_dexterity_after_3_attacks() {
     let db = card_db();
     assert_eq!(state.player.get_power("Dexterity"), 0);
     for i in (0..3).rev() {
-        combat::play_card(&mut state, i, Some(0), &db, &mut rng(), false);
+        combat::play_card(&mut state, i, Some(0), &db, &mut rng());
     }
     assert_eq!(state.player.get_power("Dexterity"), 1);
 }
@@ -875,7 +875,7 @@ fn test_defend_before_attack_intent_saves_hp() {
     // Simulate "played Defend, then resolve rest of turn"
     let mut defended = state_with(vec![defend()], vec![enemy(30)]);
     defended.player.hp = 50;
-    combat::play_card(&mut defended, 0, None, &db, &mut rng(), false);
+    combat::play_card(&mut defended, 0, None, &db, &mut rng());
     // Now resolve as if turn ended
     combat::end_turn(&mut defended, &db, &mut rng());
     combat::resolve_enemy_intents(&mut defended);
@@ -902,7 +902,7 @@ fn test_strike_before_end_turn_kills_faster() {
 
     // Play Strike → enemy dies → combat over (win)
     let mut struck = state_with(vec![strike()], vec![enemy(5)]);
-    combat::play_card(&mut struck, 0, Some(0), &db, &mut rng(), false);
+    combat::play_card(&mut struck, 0, Some(0), &db, &mut rng());
     assert_eq!(combat::is_combat_over(&struck), Some("win"));
 
     // EndTurn → enemy attacks → we take damage
@@ -922,7 +922,7 @@ fn test_strike_before_end_turn_kills_faster() {
 fn test_survivor_creates_pending_choice() {
     let mut state = state_with(vec![survivor(), defend()], vec![enemy(30)]);
     let db = card_db();
-    combat::play_card(&mut state, 0, None, &db, &mut rng(), false);
+    combat::play_card(&mut state, 0, None, &db, &mut rng());
     assert_eq!(state.player.block, 8);
     assert!(state.pending_choice.is_some(), "Survivor should create discard choice");
 }
@@ -932,7 +932,7 @@ fn test_pending_choice_cleared_after_resolution() {
     // After playing Survivor and resolving the choice, pending_choice should be None
     let mut state = state_with(vec![survivor(), defend()], vec![enemy(30)]);
     let db = card_db();
-    combat::play_card(&mut state, 0, None, &db, &mut rng(), false);
+    combat::play_card(&mut state, 0, None, &db, &mut rng());
     assert!(state.pending_choice.is_some());
     crate::effects::execute_choice(&mut state, 0, &mut rng());
     assert!(state.pending_choice.is_none());
@@ -950,7 +950,7 @@ fn test_survivor_blocks_more_than_defend_after_resolution() {
     // Path A: play Survivor, resolve choice, end turn
     let mut surv_state = state_with(vec![survivor(), defend()], vec![e.clone()]);
     surv_state.player.hp = 50;
-    combat::play_card(&mut surv_state, 0, None, &db, &mut rng(), false);
+    combat::play_card(&mut surv_state, 0, None, &db, &mut rng());
     // Resolve the discard choice (discard the Defend)
     crate::effects::execute_choice(&mut surv_state, 0, &mut rng());
     combat::end_turn(&mut surv_state, &db, &mut rng());
@@ -959,7 +959,7 @@ fn test_survivor_blocks_more_than_defend_after_resolution() {
     // Path B: play Defend, end turn
     let mut def_state = state_with(vec![defend(), survivor()], vec![e.clone()]);
     def_state.player.hp = 50;
-    combat::play_card(&mut def_state, 0, None, &db, &mut rng(), false);
+    combat::play_card(&mut def_state, 0, None, &db, &mut rng());
     combat::end_turn(&mut def_state, &db, &mut rng());
     combat::resolve_enemy_intents(&mut def_state);
 
@@ -977,7 +977,7 @@ fn test_end_turn_with_pending_choice_does_not_crash() {
     // this tests the defensive case.)
     let mut state = state_with(vec![survivor(), defend()], vec![enemy(30)]);
     let db = card_db();
-    combat::play_card(&mut state, 0, None, &db, &mut rng(), false);
+    combat::play_card(&mut state, 0, None, &db, &mut rng());
     assert!(state.pending_choice.is_some());
     // end_turn with unresolved choice — should not panic
     combat::end_turn(&mut state, &db, &mut rng());

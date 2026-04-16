@@ -722,3 +722,82 @@ fn test_pomcp_without_draw_card_matches_baseline_shape() {
         assert!((a - b).abs() < 1e-5, "pomcp={a} baseline={b}");
     }
 }
+
+fn named_card(id: &str, card_type: CardType, cost: i32) -> Card {
+    Card {
+        id: id.into(), name: id.into(), cost, card_type,
+        target: TargetType::Self_, ..Default::default()
+    }
+}
+
+fn varied_pile() -> Vec<Card> {
+    vec![
+        Card { id: "P1".into(), cost: 1, card_type: CardType::Attack,
+               target: TargetType::AnyEnemy, damage: Some(4), ..Default::default() },
+        Card { id: "P2".into(), cost: 1, card_type: CardType::Skill,
+               target: TargetType::Self_, block: Some(3), ..Default::default() },
+        Card { id: "P3".into(), cost: 1, card_type: CardType::Attack,
+               target: TargetType::AnyEnemy, damage: Some(5), ..Default::default() },
+        Card { id: "P4".into(), cost: 1, card_type: CardType::Skill,
+               target: TargetType::Self_, block: Some(4), ..Default::default() },
+    ]
+}
+
+/// Run POMCP search on a state containing the named card, with a varied
+/// draw pile, and confirm search completes with a well-formed policy.
+fn assert_pomcp_survives_card(card: Card) {
+    let state = state_with_draw_pile(
+        vec![card, strike(), defend()],
+        varied_pile(),
+        vec![enemy(50)],
+    );
+    let db = card_db();
+    let inf = ConstantInference { value: 0.0 };
+    let mut mcts = MCTS::new(&db, &inf);
+    mcts.pomcp = true;
+
+    let result = mcts.search(&state, 150, 1.0, &mut rng());
+    let sum: f32 = result.policy.iter().sum();
+    assert!((sum - 1.0).abs() < 1e-4, "policy sum = {sum}");
+    assert!(!result.policy.is_empty());
+}
+
+#[test]
+fn test_pomcp_handles_calculated_gamble() {
+    assert_pomcp_survives_card(named_card("CALCULATED_GAMBLE", CardType::Skill, 0));
+}
+
+#[test]
+fn test_pomcp_handles_acrobatics() {
+    assert_pomcp_survives_card(named_card("ACROBATICS", CardType::Skill, 1));
+}
+
+#[test]
+fn test_pomcp_handles_prepared() {
+    assert_pomcp_survives_card(named_card("PREPARED", CardType::Skill, 0));
+}
+
+#[test]
+fn test_pomcp_handles_escape_plan() {
+    assert_pomcp_survives_card(named_card("ESCAPE_PLAN", CardType::Skill, 0));
+}
+
+#[test]
+fn test_pomcp_handles_impatience_with_no_attacks() {
+    // IMPATIENCE draws 2 iff no Attack in hand. Hand has only Skills to trigger.
+    let skill_b = Card { id: "BLOCK".into(), cost: 1, card_type: CardType::Skill,
+                         target: TargetType::Self_, block: Some(5), ..Default::default() };
+    let state = state_with_draw_pile(
+        vec![named_card("IMPATIENCE", CardType::Skill, 0), skill_b],
+        varied_pile(),
+        vec![enemy(50)],
+    );
+    let db = card_db();
+    let inf = ConstantInference { value: 0.0 };
+    let mut mcts = MCTS::new(&db, &inf);
+    mcts.pomcp = true;
+
+    let result = mcts.search(&state, 150, 1.0, &mut rng());
+    let sum: f32 = result.policy.iter().sum();
+    assert!((sum - 1.0).abs() < 1e-4);
+}
