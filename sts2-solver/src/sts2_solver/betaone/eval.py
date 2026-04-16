@@ -1743,6 +1743,80 @@ def build_value_comparisons() -> list[ValueComparison]:
         worse=_vstate({**base_player, "energy": 0}, base_enemy, base_hand),
     ))
 
+    # === HAND QUALITY ===
+    # Strong attack vs basic — same hand except one card swapped
+    comps.append(ValueComparison(
+        name="blade_dance_vs_strike",
+        category="hand",
+        description="Hand with Blade Dance (12 dmg) better than Strike (6 dmg)",
+        better=_vstate(base_player, base_enemy, [blade_dance(), strike(), defend(), defend()]),
+        worse=_vstate(base_player, base_enemy, [strike(), strike(), defend(), defend()]),
+    ))
+    comps.append(ValueComparison(
+        name="skewer_vs_strike",
+        category="hand",
+        description="Hand with Skewer (scales with energy) better than Strike",
+        better=_vstate(base_player, base_enemy, [skewer(), strike(), defend(), defend()]),
+        worse=_vstate(base_player, base_enemy, [strike(), strike(), defend(), defend()]),
+    ))
+    comps.append(ValueComparison(
+        name="predator_vs_strike",
+        category="hand",
+        description="Hand with Predator (15 dmg) better than Strike (6 dmg)",
+        better=_vstate(base_player, base_enemy, [predator(), strike(), defend(), defend()]),
+        worse=_vstate(base_player, base_enemy, [strike(), strike(), defend(), defend()]),
+    ))
+
+    # Draw/cycle cards — the critical test
+    comps.append(ValueComparison(
+        name="backflip_vs_defend",
+        category="hand",
+        description="Hand with Backflip (block + draw 2) better than Defend (block only)",
+        better=_vstate(base_player, base_enemy, [backflip(), strike(), strike(), defend()]),
+        worse=_vstate(base_player, base_enemy, [defend(), strike(), strike(), defend()]),
+    ))
+    comps.append(ValueComparison(
+        name="adrenaline_in_hand",
+        category="hand",
+        description="Hand with Adrenaline (0-cost, draw 2, +1 energy) better than Strike",
+        better=_vstate(base_player, base_enemy, [adrenaline(), strike(), defend(), defend()]),
+        worse=_vstate(base_player, base_enemy, [strike(), strike(), defend(), defend()]),
+    ))
+    comps.append(ValueComparison(
+        name="prepared_vs_strike",
+        category="hand",
+        description="Hand with Prepared (0-cost draw 2 discard 1) better than Strike",
+        better=_vstate(base_player, base_enemy, [prepared(), strike(), defend(), defend()]),
+        worse=_vstate(base_player, base_enemy, [strike(), strike(), defend(), defend()]),
+    ))
+
+    # Combo available — does V see the interaction?
+    comps.append(ValueComparison(
+        name="burst_plus_blade_dance",
+        category="hand",
+        description="Hand with Burst + Blade Dance (combo: 6 shivs) better than 2 Strikes",
+        better=_vstate(base_player, base_enemy, [burst(), blade_dance(), defend(), defend()]),
+        worse=_vstate(base_player, base_enemy, [strike(), strike(), defend(), defend()]),
+    ))
+
+    # More cards in hand = more options
+    comps.append(ValueComparison(
+        name="larger_hand",
+        category="hand",
+        description="5 cards in hand better than 3 cards (more options)",
+        better=_vstate(base_player, base_enemy, [strike(), strike(), defend(), defend(), neutralize()]),
+        worse=_vstate(base_player, base_enemy, [strike(), defend(), defend()]),
+    ))
+
+    # Defensive quality
+    comps.append(ValueComparison(
+        name="wraith_form_in_hand",
+        category="hand",
+        description="Hand with Wraith Form (Intangible 2) better than Defend vs high damage",
+        better=_vstate(base_player, [enemy(40, 50, damage=20)], [wraith_form(), strike(), defend(), defend()]),
+        worse=_vstate(base_player, [enemy(40, 50, damage=20)], [defend(), strike(), defend(), defend()]),
+    ))
+
     return comps
 
 
