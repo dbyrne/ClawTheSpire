@@ -52,6 +52,7 @@ MCTS_DEFAULTS = {
     "pw_k": 1.0,
     "q_target_mix": 0.0,
     "q_target_temp": 0.5,
+    "eval_every": 0,
 }
 
 
@@ -163,6 +164,7 @@ class ExperimentConfig:
                 "pw_k": _float(mcts.get("pw_k"), 1.0),
                 "q_target_mix": _float(mcts.get("q_target_mix"), 0.0),
                 "q_target_temp": _float(mcts.get("q_target_temp"), 0.5),
+                "eval_every": mcts.get("eval_every", 0),
             }
         else:  # ppo
             ppo = t.get("ppo", {})

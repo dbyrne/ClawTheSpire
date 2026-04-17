@@ -247,6 +247,7 @@ def train(
     pw_k: float = 1.0,
     q_target_mix: float = 0.0,
     q_target_temp: float = 0.5,
+    eval_every: int = 0,
 ):
     os.makedirs(output_dir, exist_ok=True)
     onnx_dir = os.path.join(output_dir, "onnx")
@@ -554,9 +555,51 @@ def train(
             "win_rate": win_rate,
             "num_cards": num_cards,
         }
-        torch.save(ckpt_data, os.path.join(output_dir, "betaone_latest.pt"))
+        latest_path = os.path.join(output_dir, "betaone_latest.pt")
+        torch.save(ckpt_data, latest_path)
         if gen % 10 == 0 or win_rate >= best_win_rate:
             torch.save(ckpt_data, os.path.join(output_dir, f"betaone_gen{gen}.pt"))
+
+        # Periodic eval curve: append eval.jsonl / value_eval.jsonl so the TUI
+        # and downstream plots can track decision-quality progress across
+        # training, not just win rate. WR is compressed near the top of the
+        # skill curve; eval pass rate moves earlier and at higher resolution.
+        if eval_every > 0 and gen % eval_every == 0:
+            try:
+                from .eval import run_eval, run_value_eval
+                from .suite import compute_eval_suite, suite_id as _suite_id
+                bench_dir = os.path.join(output_dir, "benchmarks")
+                os.makedirs(bench_dir, exist_ok=True)
+                _sid = _suite_id(compute_eval_suite())
+                pol = run_eval(latest_path)
+                val = run_value_eval(latest_path)
+                # Mirror Experiment.save_eval / save_value_eval entry shape.
+                pol_entry = {
+                    "suite": _sid, "timestamp": time.time(), "gen": gen,
+                    "passed": pol["passed"], "total": pol["total"],
+                    "score": round(pol["passed"] / max(pol["total"], 1), 4),
+                    "end_turn_avg": pol.get("end_turn_avg"),
+                    "end_turn_high": pol.get("end_turn_high", 0),
+                    "by_category": {
+                        cat: {"passed": sum(1 for r in rs if r["passed"]), "total": len(rs)}
+                        for cat, rs in pol.get("by_category", {}).items()
+                    },
+                }
+                val_entry = {
+                    "suite": _sid, "timestamp": time.time(), "gen": gen,
+                    "passed": val["passed"], "total": val["total"],
+                    "score": round(val["passed"] / max(val["total"], 1), 4),
+                    "by_category": val.get("by_category", {}),
+                }
+                with open(os.path.join(bench_dir, "eval.jsonl"), "a", encoding="utf-8") as f:
+                    f.write(json.dumps(pol_entry) + "\n")
+                with open(os.path.join(bench_dir, "value_eval.jsonl"), "a", encoding="utf-8") as f:
+                    f.write(json.dumps(val_entry) + "\n")
+                print(f"       eval: {pol['passed']}/{pol['total']} "
+                      f"({pol_entry['score']:.0%}) | value: {val['passed']}/{val['total']} "
+                      f"({val_entry['score']:.0%})")
+            except Exception as e:
+                print(f"       [eval_every] skipped gen {gen}: {e}")
 
     print(f"\nTraining complete. Best win rate: {best_win_rate:.1%}")
 

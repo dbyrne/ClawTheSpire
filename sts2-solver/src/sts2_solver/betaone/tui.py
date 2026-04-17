@@ -108,6 +108,8 @@ def _collect_experiments() -> list[dict]:
         progress = _load_json(d / "betaone_progress.json")
         history = _load_jsonl_all(d / "betaone_history.jsonl", tail=60)
         eval_result = _load_jsonl_last(d / "benchmarks" / "eval.jsonl")
+        eval_history = _load_jsonl_all(d / "benchmarks" / "eval.jsonl", tail=60)
+        value_eval_history = _load_jsonl_all(d / "benchmarks" / "value_eval.jsonl", tail=60)
         benchmarks = _load_jsonl_all(d / "benchmarks" / "results.jsonl", tail=10)
 
         experiments.append({
@@ -121,6 +123,8 @@ def _collect_experiments() -> list[dict]:
             "progress": progress,
             "history": history,
             "eval": eval_result,
+            "eval_history": eval_history,
+            "value_eval_history": value_eval_history,
             "benchmarks": benchmarks,
             "dir": d,
         })
@@ -453,6 +457,29 @@ def build_dashboard(experiments: list[dict]) -> Group:
             fmt_delta=lambda d: f"{d:.3f}",
             higher_is_better=False,
         ))
+
+        # Eval pass-rate trajectory — only when eval_every is set and has
+        # accumulated enough points. WR is compressed near the top of the
+        # skill curve; eval scores move earlier and at higher resolution so
+        # the trajectory tells us whether the model is still learning.
+        eh = exp.get("eval_history") or []
+        if len(eh) >= 3:
+            scores = [r.get("score", 0.0) for r in eh]
+            parts.append(_candle_line(
+                "ev", scores, 0.0, 1.0,
+                fmt_val=lambda v: f"{v:.1%}",
+                fmt_delta=lambda d: f"{d*100:.1f}%",
+                higher_is_better=True,
+            ))
+        vh = exp.get("value_eval_history") or []
+        if len(vh) >= 3:
+            scores = [r.get("score", 0.0) for r in vh]
+            parts.append(_candle_line(
+                "vev", scores, 0.0, 1.0,
+                fmt_val=lambda v: f"{v:.1%}",
+                fmt_delta=lambda d: f"{d*100:.1f}%",
+                higher_is_better=True,
+            ))
 
     # === Footer ===
     footer = Text(f"  showing last {len(experiments)} experiments (max {MAX_EXPERIMENTS}) | {len(all_sets)} encounter sets | refresh 2s | Ctrl+C to exit", style="dim")
