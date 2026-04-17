@@ -551,6 +551,7 @@ def train(
         # Checkpoints
         ckpt_data = {
             "gen": gen,
+            "arch_meta": network.arch_meta(),
             "model_state_dict": network.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
             "win_rate": win_rate,

@@ -149,6 +149,13 @@ class BetaOneNetwork(nn.Module):
             "BetaOneNetwork._build_value_head to support it."
         )
 
+    def arch_meta(self) -> dict:
+        """Return arch_meta reflecting this instance's actual configuration.
+        Callers embed this in checkpoints so loaders can reconstruct the
+        matching architecture — module-level ARCH_META is a *default* not a
+        *fact* about any given network (e.g. value_head_layers varies)."""
+        return {**ARCH_META, "value_head_layers": self.value_head_layers}
+
     def forward(
         self,
         state: torch.Tensor,
@@ -258,7 +265,7 @@ def save_checkpoint(
 ) -> None:
     """Save a checkpoint with embedded architecture metadata."""
     data = {
-        "arch_meta": ARCH_META,
+        "arch_meta": network.arch_meta(),
         "model_state_dict": network.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
         "gen": gen,
