@@ -146,9 +146,6 @@ pub struct MCTS<'a> {
     /// Default MCTS scale: (1.0, 0.3, -1.0). PPO scale: (2.0, 0.5, -2.0).
     /// Must match the value head's training scale for consistent tree backup.
     pub terminal_scale: (f32, f32, f32),
-    /// Number of determinizations for draw pile. When > 1, runs K independent
-    /// searches with pre-shuffled draw piles and averages visit counts.
-    pub determinizations: usize,
     /// Enable POMCP: chance nodes for stochastic draw effects.
     /// Each simulation samples a fresh draw at chance nodes, properly evaluating
     /// expected value of draw/cycle cards across multiple possible draws.
@@ -170,7 +167,7 @@ impl<'a> MCTS<'a> {
         MCTS {
             card_db, inference, add_noise: false, turn_boundary_eval: false,
             c_puct: DEFAULT_C_PUCT, terminal_scale: (1.0, 0.3, -1.0),
-            determinizations: 1, pomcp: false, noise_frac: 0.25, pw_k: 1.0,
+            pomcp: false, noise_frac: 0.25, pw_k: 1.0,
         }
     }
 
@@ -194,20 +191,6 @@ impl<'a> MCTS<'a> {
         temperature: f32,
         rng: &mut impl Rng,
     ) -> SearchResult {
-        // PIMC (determinizations > 1) pre-shuffles the draw pile per tree,
-        // making every chance-node draw deterministic inside that tree and
-        // defeating POMCP's resampling. They are mutually exclusive strategies
-        // for handling stochastic draws; picking one at a time is intentional.
-        assert!(
-            !(self.pomcp && self.determinizations > 1),
-            "pomcp and determinizations>1 are mutually exclusive stochastic-draw strategies"
-        );
-
-        let d = self.determinizations.max(1);
-        if d > 1 {
-            return self.search_determinized(state, enemy_ais, num_simulations, temperature, rng, d);
-        }
-
         self.search_single(state, enemy_ais, num_simulations, temperature, rng)
     }
 
@@ -269,116 +252,6 @@ impl<'a> MCTS<'a> {
         }
 
         self.extract_result(&arena, root_idx, temperature, rng)
-    }
-
-    /// Determinized MCTS: run K independent searches with pre-shuffled draw
-    /// piles, average visit counts. Properly evaluates stochastic draw effects.
-    fn search_determinized(
-        &self,
-        state: &CombatState,
-        enemy_ais: Option<&[crate::enemy::EnemyAI]>,
-        num_simulations: usize,
-        temperature: f32,
-        rng: &mut impl Rng,
-        num_determinizations: usize,
-    ) -> SearchResult {
-        let sims_per = num_simulations / num_determinizations;
-        if sims_per == 0 {
-            return self.search_single(state, enemy_ais, num_simulations, temperature, rng);
-        }
-
-        // First determinization: get the action list and accumulate visits
-        let mut det_state = state.clone();
-        crate::effects::shuffle_vec_pub(&mut det_state.player.draw_pile, rng);
-        let first = self.search_single(&det_state, enemy_ais, sims_per, temperature, rng);
-        let actions = first.policy.len();
-        if actions == 0 {
-            return first;
-        }
-
-        let mut total_visits = vec![0.0f64; actions];
-        let mut total_values = vec![0.0f64; actions];
-        let mut total_root_value = first.root_value;
-
-        for (i, &v) in first.child_visits.iter().enumerate() {
-            total_visits[i] += v as f64;
-        }
-        for (i, &v) in first.child_values.iter().enumerate() {
-            total_values[i] += v as f64;
-        }
-
-        // Remaining determinizations
-        for _ in 1..num_determinizations {
-            let mut det_state = state.clone();
-            crate::effects::shuffle_vec_pub(&mut det_state.player.draw_pile, rng);
-            let result = self.search_single(&det_state, enemy_ais, sims_per, temperature, rng);
-            total_root_value += result.root_value;
-
-            for (i, &v) in result.child_visits.iter().enumerate().take(actions) {
-                total_visits[i] += v as f64;
-            }
-            for (i, &v) in result.child_values.iter().enumerate().take(actions) {
-                total_values[i] += v as f64;
-            }
-        }
-
-        // Average values
-        let d = num_determinizations as f64;
-        let avg_root = total_root_value / d;
-        let avg_values: Vec<f32> = total_values.iter().map(|v| (*v / d) as f32).collect();
-        let avg_visits: Vec<u32> = total_visits.iter().map(|v| (*v / d) as u32).collect();
-
-        // Extract policy from averaged visits
-        let visits_f32: Vec<f32> = total_visits.iter().map(|&v| v as f32).collect();
-        let total: f32 = visits_f32.iter().sum();
-
-        let (action_idx, policy) = if temperature < 0.01 || total == 0.0 {
-            let best = visits_f32.iter().enumerate()
-                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
-                .map(|(i, _)| i)
-                .unwrap_or(0);
-            let mut p = vec![0.0; actions];
-            p[best] = 1.0;
-            (best, p)
-        } else {
-            let scaled: Vec<f64> = total_visits.iter()
-                .map(|&v| v.powf(1.0 / temperature as f64))
-                .collect();
-            let sum: f64 = scaled.iter().sum();
-            let policy: Vec<f32> = scaled.iter().map(|&v| (v / sum) as f32).collect();
-
-            let r: f64 = rng.random::<f64>();
-            let mut cumulative = 0.0;
-            let mut chosen = policy.len() - 1;
-            for (i, &p) in policy.iter().enumerate() {
-                cumulative += p as f64;
-                if r <= cumulative {
-                    chosen = i;
-                    break;
-                }
-            }
-            (chosen, policy)
-        };
-
-        SearchResult {
-            action: first.policy.get(action_idx)
-                .map(|_| {
-                    // Reconstruct action from first search result
-                    // The actions are the same across determinizations (same hand/energy)
-                    let det_state2 = state.clone();
-                    let actions_list = enumerate_actions(&det_state2);
-                    if action_idx < actions_list.len() {
-                        actions_list[action_idx].clone()
-                    } else {
-                        Action::EndTurn
-                    }
-                })
-                .unwrap_or(Action::EndTurn),
-            policy,
-            root_value: avg_root,
-            child_values: avg_values,
-            child_visits: avg_visits,
-        }
     }
 
     /// Extract SearchResult from a completed search tree.

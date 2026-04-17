@@ -819,20 +819,6 @@ fn test_pomcp_handles_reflex_sly_discard() {
 }
 
 #[test]
-#[should_panic(expected = "mutually exclusive")]
-fn test_pomcp_plus_determinizations_panics() {
-    // PIMC pre-shuffles the pile per tree → POMCP's resampling collapses.
-    // The combination is a misconfiguration and should fail fast.
-    let state = state_with(vec![strike()], vec![enemy(30)]);
-    let db = card_db();
-    let inf = ConstantInference { value: 0.0 };
-    let mut mcts = MCTS::new(&db, &inf);
-    mcts.pomcp = true;
-    mcts.determinizations = 4;
-    let _ = mcts.search(&state, 100, 1.0, &mut rng());
-}
-
-#[test]
 fn test_pomcp_handles_impatience_with_no_attacks() {
     // IMPATIENCE draws 2 iff no Attack in hand. Hand has only Skills to trigger.
     let skill_b = Card { id: "BLOCK".into(), cost: 1, card_type: CardType::Skill,
