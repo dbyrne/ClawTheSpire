@@ -1,0 +1,50 @@
+name: mcts-bootstrap-pomcp1000
+method: mcts_selfplay
+description: 'Warm-start from mcts-bootstrap-noise50 (gen 30, value head primed by
+  noise=0.5 exploration) with num_sims bumped to 1000. Higher sim count sharpens Q
+  estimates over the now-explored draw actions; goal is to flip draw scenarios past
+  Strike. Capped at 500 gens; ~240s/gen ~33hr full run.'
+created: '2026-04-17T01:15:07+00:00'
+parent: mcts-bootstrap-noise50
+parent_checkpoint: latest
+architecture:
+  arch_version: 2
+  base_state_dim: 137
+  hidden_dim: 128
+  action_hidden: 64
+  hand_proj_dim: 32
+  card_embed_dim: 16
+  card_stats_dim: 28
+  relic_dim: 26
+  action_dim: 35
+  max_hand: 10
+  max_actions: 30
+  num_cards: 578
+  total_params: 72371
+  state_dim: 427
+  trunk_input: 169
+training:
+  generations: 500
+  combats_per_gen: 256
+  lr: 0.0003
+  batch_size: 512
+  mcts:
+    num_sims: 1000
+    temperature: 1.0
+    replay_capacity: 50000
+    train_epochs: 4
+    value_coef: 1.0
+    turn_boundary_eval: true
+    dense_value_targets: true
+    gamma: 0.99
+    c_puct: 1.5
+    pomcp: true
+    mcts_bootstrap: true
+    noise_frac: 0.5
+data:
+  mode: encounter_set
+  encounter_set: lean-decks-v1
+checkpoints:
+  save_every: 50
+  keep_best: true
+  cold_start: false

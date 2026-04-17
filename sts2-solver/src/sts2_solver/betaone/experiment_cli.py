@@ -23,11 +23,13 @@ from .paths import EXPERIMENTS_DIR, TEMPLATES_DIR
 
 
 def _format_method(config) -> str:
-    """Format method string with sim count for MCTS."""
+    """Format method string with sim count for MCTS/POMCP."""
     if config.method == "ppo":
         return "PPO"
-    sims = config.training.get("mcts", {}).get("num_sims", "?")
-    return f"MCTS-{sims}"
+    mcts = config.training.get("mcts", {})
+    sims = mcts.get("num_sims", "?")
+    prefix = "POMCP" if mcts.get("pomcp", False) else "MCTS"
+    return f"{prefix}-{sims}"
 
 
 def _parse_overrides(override_strs: list[str] | None) -> dict:

@@ -311,8 +311,10 @@ class Experiment:
             if config.method == "ppo":
                 method_str = "PPO"
             else:
-                sims = config.training.get("mcts", {}).get("num_sims", "?")
-                method_str = f"MCTS-{sims}"
+                mcts = config.training.get("mcts", {})
+                sims = mcts.get("num_sims", "?")
+                prefix = "POMCP" if mcts.get("pomcp", False) else "MCTS"
+                method_str = f"{prefix}-{sims}"
             results.append({
                 "name": config.name,
                 "method": method_str,

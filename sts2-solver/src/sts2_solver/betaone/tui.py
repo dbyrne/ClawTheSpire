@@ -190,8 +190,10 @@ def build_dashboard(experiments: list[dict]) -> Group:
         if exp["method"] == "ppo":
             method = "PPO"
         else:
-            sims = exp.get("training", {}).get("mcts", {}).get("num_sims", "?")
-            method = f"MCTS-{sims}"
+            mcts = exp.get("training", {}).get("mcts", {})
+            sims = mcts.get("num_sims", "?")
+            prefix = "POMCP" if mcts.get("pomcp", False) else "MCTS"
+            method = f"{prefix}-{sims}"
 
         # Replay buffer (MCTS only)
         if exp["method"] != "ppo" and p:
