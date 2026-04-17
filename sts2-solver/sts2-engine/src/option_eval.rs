@@ -131,6 +131,12 @@ pub struct RustOptionSample {
     /// DeckBuildingState it needs to feed DeckNet without re-simulating.
     /// Empty string for the legacy OptionEvaluator flow.
     pub raw_state_json: String,
+    /// Per-combat MCTS policy stats for the run, serialized as JSON.
+    /// Format: list of {"floor": int, "card_stats": {card_id: [sum, count]}}
+    /// for each combat in the run. Same JSON attached to every sample in
+    /// the run; Python filters by sample.floor to get forward-looking stats.
+    /// Populated only by the DeckNet+BetaOne flow; empty string otherwise.
+    pub card_policy_stats_json: String,
 }
 
 // ---------------------------------------------------------------------------

@@ -263,24 +263,18 @@ pub fn run_act1(
     option_epsilon: f32,
 ) -> FullRunResult {
     run_act1_impl(
-        game_data, combat_inference, option_eval, None,
+        game_data, Some(combat_inference), option_eval, None,
         mcts_sims, temperature, seed, combat_replays, option_epsilon,
     )
 }
 
 /// BetaOne variant: same full-run loop, but combat dispatches to BetaOne's
 /// MCTS engine (via run_betaone_combat_core) instead of the legacy
-/// OnnxInference path. Used by play_all_games_decknet. The combat_inference
-/// parameter is still required because some internals (e.g. map choice
-/// evaluator) use the Inference trait, but it can be the same BetaOne
-/// checkpoint wrapped behind a dummy adapter if preferred. For now we pass
-/// a shared OnnxInference that may fail silently for non-combat ops — the
-/// DecisionEvaluator already handles all option-scoring, so combat_inference
-/// is only actually consulted when the legacy combat path runs, which it
-/// won't.
+/// OnnxInference path. Used by play_all_games_decknet. No legacy
+/// combat_inference is needed — the DecisionEvaluator handles option-scoring
+/// and BetaOne handles combat.
 pub fn run_act1_betaone(
     game_data: &GameData,
-    combat_inference: &OnnxInference,
     option_eval: &dyn DecisionEvaluator,
     betaone_inference: &crate::betaone::inference::BetaOneInference,
     card_vocab: &crate::betaone::encode::CardVocab,
@@ -291,7 +285,7 @@ pub fn run_act1_betaone(
     option_epsilon: f32,
 ) -> FullRunResult {
     run_act1_impl(
-        game_data, combat_inference, option_eval,
+        game_data, None, option_eval,
         Some((betaone_inference, card_vocab)),
         mcts_sims, temperature, seed, combat_replays, option_epsilon,
     )
@@ -299,7 +293,7 @@ pub fn run_act1_betaone(
 
 fn run_act1_impl(
     game_data: &GameData,
-    combat_inference: &OnnxInference,
+    combat_inference: Option<&OnnxInference>,
     option_eval: &dyn DecisionEvaluator,
     betaone: Option<(&crate::betaone::inference::BetaOneInference, &crate::betaone::encode::CardVocab)>,
     mcts_sims: usize,
@@ -340,6 +334,10 @@ fn run_act1_impl(
     };
 
     let mut seen_encounters: HashSet<String> = HashSet::new();
+    // Per-combat MCTS policy stats tagged by floor. Populated only on the
+    // BetaOne flow; serialized and attached to every option_sample at the
+    // end of the run so Python can compute per-decision bootstrap targets.
+    let mut per_combat_policy_stats: Vec<(i32, HashMap<String, (f32, u32)>)> = Vec::new();
     let mut event_list: Vec<String> = game_data.event_profiles.keys()
         .filter(|k| *k != "NEOW")
         .cloned().collect();
@@ -426,24 +424,33 @@ fn run_act1_impl(
                         mcts_sims, temperature, &mut rng,
                     )
                 } else {
+                    let inf = combat_inference.expect(
+                        "non-betaone run_act1 requires combat_inference",
+                    );
                     run_combat_internal(
                         &deck, hp, max_hp, max_energy, &enemy_ids,
                         &relics, &potions, floor_num, gold, &act_id, &boss_id,
-                        &remaining_path, game_data, combat_inference,
+                        &remaining_path, game_data, inf,
                         mcts_sims, temperature, &mut rng,
                     )
                 };
 
                 // Per-turn replays: replay each turn individually with different
                 // card draws, evaluate end-of-turn state with value head (TD learning).
+                // BetaOne path returns empty turn_snapshots, so this is a no-op
+                // there; combat_inference is only consulted on the legacy path.
                 if combat_replays > 1 {
                     for snapshot in &combat_result.turn_snapshots {
+                        let inf = combat_inference.expect(
+                            "replay_single_turn requires combat_inference; \
+                             turn_snapshots should be empty on the betaone path",
+                        );
                         for _k in 1..combat_replays {
                             use rand::SeedableRng;
                             let replay_seed = rng.random::<u64>();
                             let mut replay_rng = rand::rngs::StdRng::seed_from_u64(replay_seed);
                             let turn_replay = replay_single_turn(
-                                snapshot, game_data, combat_inference,
+                                snapshot, game_data, inf,
                                 mcts_sims, temperature,
                                 &mut replay_rng, floor_num,
                             );
@@ -454,6 +461,13 @@ fn run_act1_impl(
 
                 result.combats_fought += 1;
                 let hp_before = hp;
+                // Snapshot MCTS per-card policy stats for this combat before
+                // combat_result is consumed. Empty on the legacy (non-betaone) path.
+                if !combat_result.card_policy_stats.is_empty() {
+                    per_combat_policy_stats.push(
+                        (floor_num, combat_result.card_policy_stats.clone()),
+                    );
+                }
                 result.combat_samples_by_floor.push(FloorSamples {
                     floor: floor_num,
                     samples: combat_result.samples,
@@ -467,6 +481,7 @@ fn run_act1_impl(
                     result.outcome = "lose".into();
                     result.final_hp = 0;
                     result.deck_size = deck.len() as i32;
+                    inject_policy_stats(&mut result, &per_combat_policy_stats);
                     return result;
                 }
 
@@ -521,6 +536,7 @@ fn run_act1_impl(
                     result.final_hp = hp;
                     result.max_hp = max_hp;
                     result.deck_size = deck.len() as i32;
+                    inject_policy_stats(&mut result, &per_combat_policy_stats);
                     return result;
                 }
             }
@@ -643,7 +659,40 @@ fn run_act1_impl(
     result.final_hp = hp;
     result.max_hp = max_hp;
     result.deck_size = deck.len() as i32;
+    inject_policy_stats(&mut result, &per_combat_policy_stats);
     result
+}
+
+/// Attach per-combat MCTS policy stats (serialized as JSON) to every
+/// option_sample in the run. Called from all return paths so no matter how
+/// a run ends (early loss, boss win, or floor-17 falloff), DeckNet training
+/// gets the bootstrap signal. Empty-stats case leaves samples untouched
+/// (legacy flows and runs with no combats).
+fn inject_policy_stats(
+    result: &mut FullRunResult,
+    per_combat: &[(i32, HashMap<String, (f32, u32)>)],
+) {
+    if per_combat.is_empty() {
+        return;
+    }
+    let per_combat_json: Vec<serde_json::Value> = per_combat.iter()
+        .map(|(floor, stats)| {
+            let stats_map: serde_json::Map<String, serde_json::Value> = stats.iter()
+                .map(|(cid, (sum, count))| {
+                    (cid.clone(), serde_json::json!([sum, count]))
+                })
+                .collect();
+            serde_json::json!({
+                "floor": floor,
+                "card_stats": stats_map,
+            })
+        })
+        .collect();
+    let stats_json = serde_json::to_string(&per_combat_json)
+        .unwrap_or_else(|_| "[]".to_string());
+    for sample in result.option_samples.iter_mut() {
+        sample.card_policy_stats_json = stats_json.clone();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -702,6 +751,7 @@ fn pick_card_reward_network(
                 option_card_stats: opt_stats, option_path_ids: vec![],
                 option_path_mask: vec![], chosen_idx, was_greedy,
                 value: 0.0, floor, raw_state_json,
+                card_policy_stats_json: String::new(),
             };
             if chosen_idx < offered.len() {
                 (Some(offered[chosen_idx].clone()), Some(sample))
@@ -789,6 +839,7 @@ fn rest_or_smith_network(
                 option_card_stats: opt_stats, option_path_ids: vec![],
                 option_path_mask: vec![], chosen_idx, was_greedy,
                 value: 0.0, floor, raw_state_json: String::new(),
+                card_policy_stats_json: String::new(),
             };
             if chosen_idx == 0 {
                 ("rest".to_string(), None, Some(sample))
@@ -834,6 +885,7 @@ fn decide_event_network(
                 option_card_stats: opt_stats, option_path_ids: vec![],
                 option_path_mask: vec![], chosen_idx, was_greedy,
                 value: 0.0, floor, raw_state_json: String::new(),
+                card_policy_stats_json: String::new(),
             };
             (chosen_idx, Some(sample))
         }
@@ -873,6 +925,7 @@ fn pick_map_path_network(
                 option_card_stats: opt_stats, option_path_ids: vec![],
                 option_path_mask: vec![], chosen_idx, was_greedy,
                 value: 0.0, floor, raw_state_json: String::new(),
+                card_policy_stats_json: String::new(),
             };
             (chosen_idx, Some(sample))
         }
@@ -963,6 +1016,7 @@ fn shop_decisions_network(
                     option_card_stats: opt_stats.clone(), option_path_ids: vec![],
                     option_path_mask: vec![], chosen_idx, was_greedy,
                     value: 0.0, floor, raw_state_json: String::new(),
+                    card_policy_stats_json: String::new(),
                 });
 
                 match &opt_actions[chosen_idx] {
@@ -1140,6 +1194,9 @@ struct CombatResult {
     initial_value: f32,
     potions_after: Vec<Potion>,
     turn_snapshots: Vec<TurnSnapshot>,
+    /// Per-combat MCTS policy aggregation from BetaOne.
+    /// Only populated by run_combat_internal_betaone; empty for legacy path.
+    card_policy_stats: HashMap<String, (f32, u32)>,
 }
 
 /// Run one combat via BetaOne + MCTS. Used by play_all_games_decknet so
@@ -1174,6 +1231,7 @@ fn run_combat_internal_betaone(
         initial_value: 0.0,
         potions_after: outcome.potions,
         turn_snapshots: vec![],
+        card_policy_stats: outcome.card_policy_stats,
     }
 }
 
@@ -1197,6 +1255,7 @@ fn run_combat_internal(
             samples: vec![], outcome: "win".into(),
             hp_after: hp, initial_value: 0.0, potions_after: potions.to_vec(),
             turn_snapshots: vec![],
+            card_policy_stats: HashMap::new(),
         };
     }
 
@@ -1280,7 +1339,11 @@ fn run_combat_internal(
     let outcome_str = outcome.unwrap_or("lose").to_string();
     let hp_after = if outcome_str == "win" { state.player.hp.max(0) } else { 0 };
     let potions_after = state.player.potions.iter().filter(|p| !p.is_empty()).cloned().collect();
-    CombatResult { samples, outcome: outcome_str, hp_after, initial_value, potions_after, turn_snapshots }
+    CombatResult {
+        samples, outcome: outcome_str, hp_after, initial_value,
+        potions_after, turn_snapshots,
+        card_policy_stats: HashMap::new(),  // legacy path doesn't use BetaOne
+    }
 }
 
 /// Replay a single turn from a snapshot with different RNG (different card draw).

@@ -619,7 +619,7 @@ pub fn play_all_games(
 #[pyfunction]
 #[pyo3(signature = (
     num_games,
-    onnx_full_path, onnx_value_path, onnx_combat_path, onnx_decknet_path,
+    onnx_combat_path, onnx_decknet_path,
     vocab_json, monster_data_json, enemy_profiles_json,
     encounter_pool_json, event_profiles_json,
     card_pool_json, card_db_json,
@@ -631,8 +631,6 @@ pub fn play_all_games(
 pub fn play_all_games_decknet(
     py: Python<'_>,
     #[allow(unused)] num_games: usize,
-    onnx_full_path: &str,
-    onnx_value_path: &str,
     onnx_combat_path: &str,
     onnx_decknet_path: &str,
     vocab_json: &str,
@@ -689,8 +687,6 @@ pub fn play_all_games_decknet(
         shop_pool: serde_json::from_str(shop_pool_json).unwrap_or_default(),
     });
 
-    let onnx_full = onnx_full_path.to_string();
-    let onnx_value = onnx_value_path.to_string();
     let onnx_combat = onnx_combat_path.to_string();
     let onnx_decknet = onnx_decknet_path.to_string();
 
@@ -698,22 +694,9 @@ pub fn play_all_games_decknet(
         use rayon::prelude::*;
 
         seeds.into_par_iter().map(|seed| {
-            // Legacy combat inference is still built (non-combat full-run code
-            // that uses the Inference trait can still consult it), but the
-            // actual combat section is routed through BetaOne below — this
-            // ONNX is no longer in the hot path.
-            let combat_inference = match crate::inference::OnnxInference::new(
-                &onnx_full, &onnx_value, &onnx_combat, vocabs.clone()
-            ) {
-                Ok(inf) => inf,
-                Err(e) => {
-                    eprintln!("ONNX combat (legacy) error: {e}");
-                    return None;
-                }
-            };
-            // BetaOne combat net — what the DeckNet flow actually uses for
-            // combat. onnx_combat_path is reused as the BetaOne checkpoint
-            // path (Python passes the same file for both).
+            // BetaOne combat net — the only inference path the DeckNet flow
+            // actually uses for combat. No legacy OnnxInference needed:
+            // run_act1_betaone bypasses that path entirely.
             let betaone_inference = match crate::betaone::inference::BetaOneInference::new(
                 &onnx_combat,
             ) {
@@ -738,7 +721,7 @@ pub fn play_all_games_decknet(
             };
 
             Some(crate::simulator::run_act1_betaone(
-                &game_data, &combat_inference, &decknet_evaluator,
+                &game_data, &decknet_evaluator,
                 &betaone_inference, &card_vocab,
                 mcts_sims, temperature, seed, combat_replays, option_epsilon,
             ))
@@ -783,6 +766,7 @@ pub fn play_all_games_decknet(
             s.set_item("value", sample.value)?;
             s.set_item("floor", sample.floor)?;
             s.set_item("raw_state_json", &sample.raw_state_json)?;
+            s.set_item("card_policy_stats_json", &sample.card_policy_stats_json)?;
             let py_stats = PyList::empty(py);
             for stats in &sample.option_card_stats {
                 py_stats.append(stats.as_slice())?;

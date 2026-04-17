@@ -50,7 +50,7 @@ pub const PLAYER_DIM: usize = 5;
 pub const RELIC_DIM: usize = 26;
 pub const RUN_META_DIM: usize = 3 + 1 + 1;          // act one-hot(3) + floor_norm + boss_known
 pub const MAP_DIM: usize = MAX_MAP_AHEAD * (NUM_ROOM_TYPES + 1);
-pub const GLOBAL_DIM: usize = PLAYER_DIM + RELIC_DIM + RUN_META_DIM + MAP_DIM;  // 126
+pub const GLOBAL_DIM: usize = PLAYER_DIM + RELIC_DIM + RUN_META_DIM + MAP_DIM;  // 146
 
 /// Canonical relic id order. Must match RELIC_IDS in Python decknet/encoder.py.
 pub const RELIC_IDS: [&str; RELIC_DIM] = [

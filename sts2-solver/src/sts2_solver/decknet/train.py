@@ -54,18 +54,19 @@ ACT_FLOORS = 18  # rough floors-per-act; used to normalize floor_reached
 def run_outcome_value(floor_reached: int, won_final_boss: bool) -> float:
     """Map a full-run outcome to a scalar in [-1, 1].
 
-    Monotonic in progression: die on act 1 floor 3 < survive act 1 <
-    reach act 2 boss < beat the Heart.
+    Monotonic in progression: die on floor 3 < die on floor 15 < win.
+    A beat-the-run maps to +1.0. Reaching the last floor but losing
+    maps to ~+0.5. Dying on floor 1 maps to ~-0.9.
 
-    A beat-the-run (boss-3 win) maps to +1.0. Reaching the last floor
-    but losing maps to +0.6 (survived a long way). Dying on floor 1
-    maps to ~-0.9.
+    Normalizer is ACT_FLOORS because Phase 0 runs Act 1 only. The
+    previous 3*ACT_FLOORS denominator compressed all loser targets into
+    [-0.97, -0.50] (spread 0.47) which gave the net too little signal
+    between early and late deaths. With ACT_FLOORS, spread is 1.42 across
+    the same range of outcomes.
     """
     if won_final_boss:
         return 1.0
-    # Total potential floors ≈ 3 acts × ACT_FLOORS
-    total = 3 * ACT_FLOORS
-    frac = max(0.0, min(1.0, floor_reached / total))
+    frac = max(0.0, min(1.0, floor_reached / ACT_FLOORS))
     # Map [0, 1] → [-1, +0.6]. Losing deep is much better than losing early,
     # but still punished relative to winning.
     return frac * 1.6 - 1.0
@@ -131,21 +132,110 @@ class ReplayBuffer:
 # Sample extraction: Rust output → TrainingSamples
 # ---------------------------------------------------------------------------
 
+# Phase 0 target modes:
+#   "run_outcome"     — legacy broadcast credit (run_outcome_value)
+#   "policy_bootstrap"— per-decision target from BetaOne MCTS policy weights
+TARGET_MODE_OUTCOME = "run_outcome"
+TARGET_MODE_BOOTSTRAP = "policy_bootstrap"
+
+# Minimum MCTS searches where a card was in hand before we trust the signal.
+# Cards drawn fewer times get no target (sample dropped).
+MIN_OCCURRENCES = 3
+
+# Max floor, used to normalize late-game weight. Phase 0 runs Act 1 (≤17).
+MAX_FLOOR = 17
+
+
+def _late_weight(floor: int, sample_floor: int) -> float:
+    """Linear ramp from the drafting floor to the end of the act.
+
+    A combat immediately after drafting carries near-zero weight (deck
+    context hasn't matured); late-run combats carry full weight. Combo
+    pieces drafted early get credited by their late-game value, not
+    their tepid early contribution.
+    """
+    remaining = max(1, MAX_FLOOR - sample_floor)
+    progress = max(0, floor - sample_floor)
+    return min(1.0, progress / remaining)
+
+
+def _bootstrap_target_for_card(
+    card_id: str, sample_floor: int,
+    combat_stats: list[dict],
+) -> float | None:
+    """Forward-looking, late-weighted mean of MCTS policy weight on card_id.
+
+    Considers only combats at floor > sample_floor (forward-looking) where
+    the card was actually in hand. Within that window, later combats weigh
+    more (late-weighting). Returns None if there's no signal — the sample
+    should be dropped rather than fall back to broadcast credit.
+    """
+    sum_w = 0.0
+    sum_wp = 0.0
+    total_occ = 0
+    for combat in combat_stats:
+        floor = combat.get("floor", 0)
+        if floor <= sample_floor:
+            continue
+        stats = combat.get("card_stats", {}).get(card_id)
+        if not stats:
+            continue
+        s, c = stats[0], stats[1]
+        if c <= 0:
+            continue
+        combat_mean = s / c
+        weight = _late_weight(floor, sample_floor)
+        if weight <= 0:
+            continue
+        sum_w += weight * c
+        sum_wp += weight * s  # equivalently weight*c*combat_mean
+        total_occ += c
+    if sum_w == 0.0 or total_occ < MIN_OCCURRENCES:
+        return None
+    return sum_wp / sum_w  # weighted mean policy ∈ [0, 1]
+
+
+def _bootstrap_target_for_skip(
+    deck: list[CardRef], sample_floor: int, combat_stats: list[dict],
+) -> float | None:
+    """Skip target: median per-card forward-looking late-weighted policy
+    mean across cards currently in the deck. A skip is "at least as good
+    as the median existing card" — if the deck is strong, skip is easy to
+    justify; if weak, a marginal add is worth taking."""
+    per_card = []
+    for card_ref in deck:
+        v = _bootstrap_target_for_card(card_ref.id, sample_floor, combat_stats)
+        if v is not None:
+            per_card.append(v)
+    if not per_card:
+        return None
+    return float(np.median(per_card))
+
+
 def extract_samples(
     run_result: dict, card_vocab_inv: dict[int, str],
+    target_mode: str = TARGET_MODE_BOOTSTRAP,
 ) -> list[TrainingSample]:
     """Extract (state_after_mod, value_target) tuples from one Rust run result.
 
     Rust emits option_samples with:
       - raw_state_json: DeckBuildingState snapshot before decision
       - option_types, option_cards, chosen_idx: which option was picked
-    We build the post-modification state (add the chosen card if any)
-    and assign run_outcome_value as the target.
+      - card_policy_stats_json: per-combat MCTS policy aggregates (shared
+        across all samples in the run; filtered per-sample by floor)
+
+    For TARGET_MODE_BOOTSTRAP, target is BetaOne's revealed preference on
+    the chosen card across combats AFTER the decision, weighted toward the
+    late run where deck context is mature. Samples with no signal (card
+    never drawn, insufficient occurrences) are dropped — they'd otherwise
+    fall back to broadcast credit which is exactly what we're replacing.
+
+    For TARGET_MODE_OUTCOME, legacy broadcast of run_outcome_value.
     """
     floor_reached = run_result.get("floor_reached", 0)
     outcome = run_result.get("outcome", "")
     won = outcome == "win"
-    target = run_outcome_value(floor_reached, won)
+    run_outcome = run_outcome_value(floor_reached, won)
 
     samples: list[TrainingSample] = []
     for os_sample in run_result.get("option_samples", []):
@@ -168,16 +258,46 @@ def extract_samples(
         chosen_type = option_types[chosen_idx]
         OPTION_CARD_REWARD = 12
         OPTION_CARD_SKIP = 13
+
+        chosen_card_id: str | None = None
         if chosen_type == OPTION_CARD_REWARD:
             vocab_id = option_cards[chosen_idx]
-            card_id = card_vocab_inv.get(vocab_id)
-            if card_id is None or card_id in ("<PAD>", "<UNK>"):
+            chosen_card_id = card_vocab_inv.get(vocab_id)
+            if chosen_card_id is None or chosen_card_id in ("<PAD>", "<UNK>"):
                 continue
-            mod = DeckModification(kind=ModKind.ADD, card=CardRef(id=card_id, upgraded=False))
+            mod = DeckModification(
+                kind=ModKind.ADD,
+                card=CardRef(id=chosen_card_id, upgraded=False),
+            )
         elif chosen_type == OPTION_CARD_SKIP:
             mod = DeckModification(kind=ModKind.IDENTITY)
         else:
             continue  # Phase 0 scope — skip non-card decisions
+
+        # Compute the target
+        target: float | None = None
+        if target_mode == TARGET_MODE_BOOTSTRAP:
+            stats_json = os_sample.get("card_policy_stats_json", "")
+            combat_stats = json.loads(stats_json) if stats_json else []
+            sample_floor = int(os_sample.get("floor", 0))
+            if chosen_type == OPTION_CARD_REWARD:
+                raw = _bootstrap_target_for_card(
+                    chosen_card_id, sample_floor, combat_stats,
+                )
+            else:
+                raw = _bootstrap_target_for_skip(
+                    state_before.deck, sample_floor, combat_stats,
+                )
+            if raw is not None:
+                # Map [0, 1] policy weight → [-1, +1] V target
+                target = 2.0 * raw - 1.0
+        elif target_mode == TARGET_MODE_OUTCOME:
+            target = run_outcome
+        else:
+            raise ValueError(f"Unknown target_mode: {target_mode!r}")
+
+        if target is None:
+            continue  # no signal — drop the sample rather than fall back
 
         state_after = apply_mod(state_before, mod)
         samples.append(TrainingSample(state_after_mod=state_after, value_target=target))
@@ -332,6 +452,7 @@ def train(
     batch_size: int = 256,
     train_steps_per_gen: int = 50,
     option_epsilon: float = 0.15,
+    target_mode: str = TARGET_MODE_BOOTSTRAP,
     replay_capacity: int = 50_000,
 ):
     """Train DeckNet via full-run self-play."""
@@ -368,9 +489,15 @@ def train(
     betaone_onnx = os.path.join(betaone_dir, "onnx", "betaone.onnx")
     if not os.path.exists(betaone_onnx):
         # Export on the fly if missing
-        from ..betaone.network import BetaOneNetwork, export_onnx as betaone_export
+        from ..betaone.network import (
+            BetaOneNetwork, export_onnx as betaone_export,
+            network_kwargs_from_meta,
+        )
         bo_ckpt = torch.load(betaone_checkpoint, weights_only=False)
-        bo_net = BetaOneNetwork(num_cards=len(card_vocab))
+        bo_net = BetaOneNetwork(
+            num_cards=len(card_vocab),
+            **network_kwargs_from_meta(bo_ckpt.get("arch_meta")),
+        )
         bo_net.load_state_dict(bo_ckpt["model_state_dict"])
         betaone_onnx = betaone_export(bo_net, os.path.join(betaone_dir, "onnx"))
 
@@ -388,8 +515,6 @@ def train(
         seeds = [gen * 100_000 + i for i in range(runs_per_gen)]
         results = sts2_engine.play_all_games_decknet(
             num_games=runs_per_gen,
-            onnx_full_path=betaone_onnx,
-            onnx_value_path=betaone_onnx,
             onnx_combat_path=betaone_onnx,
             onnx_decknet_path=decknet_onnx,
             vocab_json=full_vocabs_json,
@@ -404,12 +529,18 @@ def train(
         # --- Extract training samples ---
         n_wins = 0
         n_samples_added = 0
+        n_samples_dropped = 0  # target_mode=bootstrap drops cards with no signal
         floors = []
         for run in results:
             floors.append(run.get("floor_reached", 0))
             if run.get("outcome") == "win":
                 n_wins += 1
-            for sample in extract_samples(run, card_vocab_inv):
+            # For bootstrap mode, extract_samples may drop samples with no
+            # signal. Compare to the raw sample count for visibility.
+            raw_count = len(run.get("option_samples", []))
+            extracted = extract_samples(run, card_vocab_inv, target_mode=target_mode)
+            n_samples_dropped += max(0, raw_count - len(extracted))
+            for sample in extracted:
                 replay.add(sample)
                 n_samples_added += 1
 
@@ -442,15 +573,19 @@ def train(
             "win_rate": round(win_rate, 4),
             "avg_floor": round(avg_floor, 2),
             "samples_added": n_samples_added,
+            "samples_dropped": n_samples_dropped,
+            "steps": n_samples_added,  # canonical key for the TUI's window formula
             "buffer_size": len(replay),
             "loss": round(avg_loss, 5),
             "trained": trained,
             "gen_time": round(elapsed, 2),
+            "target_mode": target_mode,
             "timestamp": time.time(),
         }
         status_tag = "" if trained else " [warmup]"
+        drop_tag = f" dropped {n_samples_dropped}" if n_samples_dropped else ""
         print(f"Gen {gen:3d} | wins {n_wins:3d}/{len(results):3d} ({win_rate:.1%}) "
-              f"| avg_floor {avg_floor:.1f} | samples {n_samples_added:4d} "
+              f"| avg_floor {avg_floor:.1f} | samples {n_samples_added:4d}{drop_tag} "
               f"| buf {len(replay):5d} | loss {avg_loss:.4f}{status_tag} | {elapsed:.1f}s")
         with open(history_path, "a") as f:
             f.write(json.dumps(record) + "\n")

@@ -39,6 +39,15 @@ pub struct BetaOneCombatOutcome {
     pub final_hp: i32,     // player hp at end (0 if lost)
     pub potions: Vec<Potion>,
     pub decisions: usize,
+    /// Per-card aggregate MCTS policy weight across this combat.
+    /// Keyed by base card_id (upgrades collapsed to base). Values are
+    /// (sum_of_policy_weight, occurrences) where an "occurrence" is one
+    /// MCTS root search in which that card_id appeared in hand (counted
+    /// once per search even if duplicate copies or multiple targets).
+    /// Used by DeckNet training to bootstrap per-decision targets from
+    /// BetaOne's revealed preferences instead of broadcasting the run
+    /// outcome.
+    pub card_policy_stats: HashMap<String, (f32, u32)>,
 }
 
 /// Run one combat using BetaOne + MCTS, starting from a fresh CombatState
@@ -74,6 +83,7 @@ pub fn run_betaone_combat_core(
     if enemies.is_empty() {
         return BetaOneCombatOutcome {
             outcome: "win".into(), final_hp: player_hp, potions, decisions: 0,
+            card_policy_stats: HashMap::new(),
         };
     }
 
@@ -102,6 +112,7 @@ pub fn run_betaone_combat_core(
     let mcts_engine = MCTS::new(&card_db, &adapter);
     let mut decisions = 0usize;
     let mut final_outcome = "lose";
+    let mut card_policy_stats: HashMap<String, (f32, u32)> = HashMap::new();
 
     'outer: for _turn in 1..=30 {
         combat::start_turn(&mut state, rng);
@@ -132,6 +143,25 @@ pub fn run_betaone_combat_core(
                 &state, Some(&enemy_ais), num_sims, temperature, rng,
             );
             decisions += 1;
+
+            // Aggregate per-card MCTS policy weight for this search.
+            // Multiple (card, target) actions for the same card collapse
+            // into one card_id entry; occurrences counted once per card
+            // per search.
+            let mut in_hand_this_search: HashSet<String> = HashSet::new();
+            for (i, act) in actions.iter().enumerate() {
+                if let Action::PlayCard { card_idx, .. } = act {
+                    if let Some(card) = state.player.hand.get(*card_idx) {
+                        let cid = card.base_id().to_string();
+                        let p = result.policy.get(i).copied().unwrap_or(0.0);
+                        card_policy_stats.entry(cid.clone()).or_insert((0.0, 0)).0 += p;
+                        in_hand_this_search.insert(cid);
+                    }
+                }
+            }
+            for cid in in_hand_this_search {
+                card_policy_stats.entry(cid).or_insert((0.0, 0)).1 += 1;
+            }
 
             match &result.action {
                 Action::EndTurn => {
@@ -174,11 +204,19 @@ pub fn run_betaone_combat_core(
     }
 
     let final_hp = if final_outcome == "win" { state.player.hp.max(0) } else { 0 };
+    // Filter out consumed-potion slots (use_potion leaves Potion::default()
+    // in place). Legacy run_combat_internal does the same; without it the
+    // outer loop's `potions.len() < POTION_SLOTS` check in simulator.rs
+    // blocks future drops once any slot is used.
+    let potions: Vec<Potion> = state.player.potions.into_iter()
+        .filter(|p| !p.is_empty())
+        .collect();
     BetaOneCombatOutcome {
         outcome: final_outcome.to_string(),
         final_hp,
-        potions: state.player.potions,
+        potions,
         decisions,
+        card_policy_stats,
     }
 }
 
@@ -256,130 +294,17 @@ pub fn betaone_mcts_fight_combat(
             }
 
             let inference = &cache.as_ref().unwrap().inference;
-            let adapter = BetaOneMCTSAdapter::new(inference, &card_vocab);
-            let card_db = CardDB::default();
             let mut rng = StdRng::seed_from_u64(seed);
 
-            // Spawn enemies
-            let mut enemies = Vec::new();
-            let mut enemy_ais = Vec::new();
-            for mid in &enemy_ids {
-                enemies.push(enemy::spawn_enemy(mid, &monsters, &mut rng));
-                enemy_ais.push(enemy::create_enemy_ai(mid, &profiles));
-            }
+            let outcome = run_betaone_combat_core(
+                deck, player_hp, player_max_hp, player_max_energy,
+                &enemy_ids, relic_set, potions,
+                &monsters, &profiles,
+                &card_vocab, inference,
+                num_sims, temperature, &mut rng,
+            );
 
-            if enemies.is_empty() {
-                return Ok(("win".to_string(), player_hp, 0));
-            }
-
-            // Build combat state
-            let mut draw_pile = deck;
-            crate::effects::shuffle_vec_pub(&mut draw_pile, &mut rng);
-
-            let player = PlayerState {
-                hp: player_hp,
-                max_hp: player_max_hp,
-                energy: player_max_energy,
-                max_energy: player_max_energy,
-                draw_pile,
-                potions,
-                ..Default::default()
-            };
-
-            let mut state = CombatState {
-                player,
-                enemies,
-                relics: relic_set,
-                ..Default::default()
-            };
-
-            combat::start_combat(&mut state);
-
-            let mcts_engine = MCTS::new(&card_db, &adapter);
-            let mut decisions = 0;
-            let mut final_outcome = "lose";
-
-            'outer: for _turn in 1..=30 {
-                combat::start_turn(&mut state, &mut rng);
-                enemy::set_enemy_intents(&mut state, &mut enemy_ais, &mut rng);
-
-                let mut plays_this_turn = 0;
-
-                while plays_this_turn < 15 {
-                    if let Some(outcome) = combat::is_combat_over(&state) {
-                        final_outcome = outcome;
-                        break 'outer;
-                    }
-
-                    let actions = enumerate_actions(&state);
-                    if actions.is_empty() {
-                        // No playable cards/potions — auto end turn
-                        combat::end_turn(&mut state, &card_db, &mut rng);
-                        enemy::sync_enemy_ais(&state, &mut enemy_ais, &profiles);
-                        combat::resolve_enemy_intents(&mut state);
-                        combat::tick_enemy_powers(&mut state);
-                        enemy::sync_enemy_ais(&state, &mut enemy_ais, &profiles);
-
-                        if let Some(outcome) = combat::is_combat_over(&state) {
-                            final_outcome = outcome;
-                            break 'outer;
-                        }
-                        break; // Next turn
-                    }
-
-                    // MCTS search
-                    let result = mcts_engine.search_with_ais(
-                        &state,
-                        Some(&enemy_ais),
-                        num_sims,
-                        temperature,
-                        &mut rng,
-                    );
-                    decisions += 1;
-
-                    match &result.action {
-                        Action::EndTurn => {
-                            combat::end_turn(&mut state, &card_db, &mut rng);
-                            enemy::sync_enemy_ais(&state, &mut enemy_ais, &profiles);
-                            combat::resolve_enemy_intents(&mut state);
-                            combat::tick_enemy_powers(&mut state);
-                            enemy::sync_enemy_ais(&state, &mut enemy_ais, &profiles);
-
-                            if let Some(outcome) = combat::is_combat_over(&state) {
-                                final_outcome = outcome;
-                                break 'outer;
-                            }
-                            break; // Next turn
-                        }
-                        Action::PlayCard { card_idx, target_idx } => {
-                            if combat::can_play_card(&state, *card_idx) {
-                                combat::play_card(
-                                    &mut state, *card_idx, *target_idx, &card_db, &mut rng,
-                                );
-                            }
-                            if let Some(outcome) = combat::is_combat_over(&state) {
-                                final_outcome = outcome;
-                                break 'outer;
-                            }
-                            plays_this_turn += 1;
-                        }
-                        Action::UsePotion { potion_idx } => {
-                            combat::use_potion(&mut state, *potion_idx);
-                            if let Some(outcome) = combat::is_combat_over(&state) {
-                                final_outcome = outcome;
-                                break 'outer;
-                            }
-                            plays_this_turn += 1;
-                        }
-                        Action::ChooseCard { choice_idx } => {
-                            crate::effects::execute_choice(&mut state, *choice_idx, &mut rng);
-                        }
-                    }
-                }
-            }
-
-            let final_hp = if final_outcome == "win" { state.player.hp.max(0) } else { 0 };
-            Ok((final_outcome.to_string(), final_hp, decisions))
+            Ok((outcome.outcome, outcome.final_hp, outcome.decisions))
         })
     });
 

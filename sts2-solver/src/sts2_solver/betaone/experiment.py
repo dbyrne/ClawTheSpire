@@ -158,6 +158,9 @@ class ExperimentConfig:
                 "option_epsilon": _float(dn.get("option_epsilon"), 0.15),
                 "replay_capacity": dn.get("replay_capacity", 50_000),
                 "betaone_checkpoint": dn.get("betaone_checkpoint", ""),
+                # Target mode: "policy_bootstrap" (MCTS revealed preference,
+                # default) or "run_outcome" (legacy broadcast credit).
+                "target_mode": dn.get("target_mode", "policy_bootstrap"),
             }
 
         # --- BetaOne: encounter-set-gated ---
@@ -168,6 +171,9 @@ class ExperimentConfig:
                 "now runs exclusively against frozen encounter sets — legacy "
                 "modes (mixed/recorded/curriculum) are no longer supported."
             )
+
+        arch = self.architecture or {}
+        value_head_layers = int(arch.get("value_head_layers", 1))
 
         if self.method == "mcts_selfplay":
             mcts = t.get("mcts", {})
@@ -194,6 +200,7 @@ class ExperimentConfig:
                 "q_target_mix": _float(mcts.get("q_target_mix"), 0.0),
                 "q_target_temp": _float(mcts.get("q_target_temp"), 0.5),
                 "eval_every": mcts.get("eval_every", 0),
+                "value_head_layers": value_head_layers,
             }
         else:  # ppo
             ppo = t.get("ppo", {})
@@ -212,6 +219,7 @@ class ExperimentConfig:
                 "ppo_epochs": ppo.get("ppo_epochs", 4),
                 "ppo_batch_size": ppo.get("ppo_batch_size", 256),
                 "encounter_set_id": encounter_set_id,
+                "value_head_layers": value_head_layers,
             }
 
 
@@ -263,10 +271,6 @@ class Experiment:
         if config is None:
             raise ValueError("Must provide config or template")
 
-        # Apply overrides
-        if overrides:
-            _apply_overrides(config, overrides)
-
         # Set creation timestamp
         config.created = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -295,11 +299,27 @@ class Experiment:
                 num_cards = len(_json.loads(vocab_path.read_text(encoding="utf-8")))
             else:
                 num_cards = config.architecture.get("num_cards", 120)
-            stats = network_stats(num_cards)
-            config.architecture["num_cards"] = stats["num_cards"]
-            config.architecture["total_params"] = stats["total_params"]
-            config.architecture["state_dim"] = stats["state_dim"]
-            config.architecture["trunk_input"] = stats["trunk_input"]
+            config.architecture["num_cards"] = num_cards
+
+        # Apply overrides AFTER the architecture reset so architecture.*
+        # overrides (e.g., value_head_layers) survive. This also means any
+        # training/data/checkpoint overrides land on the parent-inherited
+        # values as expected.
+        if overrides:
+            _apply_overrides(config, overrides)
+
+        # Recompute params/stats from the FINAL architecture (overrides may
+        # have changed value_head_layers, which affects total_params).
+        if config.network_type != "decknet":
+            arch = config.architecture
+            value_head_layers = int(arch.get("value_head_layers", 1))
+            stats = network_stats(
+                num_cards=int(arch.get("num_cards", 120)),
+                value_head_layers=value_head_layers,
+            )
+            arch["total_params"] = stats["total_params"]
+            arch["state_dim"] = stats["state_dim"]
+            arch["trunk_input"] = stats["trunk_input"]
 
         # Create directory structure
         exp.dir.mkdir(parents=True, exist_ok=True)
