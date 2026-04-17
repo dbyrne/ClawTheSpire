@@ -1,0 +1,30 @@
+name: decknet-normfix
+method: decknet_selfplay
+description: DeckNet with run_outcome_value normalizer fix (ACT_FLOORS=18 vs 54)
+created: '2026-04-17T17:59:51+00:00'
+parent: null
+parent_checkpoint: null
+network_type: decknet
+architecture:
+  network: decknet
+  num_cards: 578
+  total_params: 66881
+training:
+  generations: 30
+  runs_per_gen: 200
+  lr: 0.0003
+  batch_size: 256
+  decknet:
+    mcts_sims: 200
+    temperature: 1.0
+    combat_replays: 1
+    train_steps_per_gen: 100
+    option_epsilon: 0.15
+    replay_capacity: 100000
+    betaone_checkpoint: experiments/mcts-bootstrap-qtarget/betaone_latest.pt
+data:
+  mode: full_run
+checkpoints:
+  save_every: 5
+  keep_best: false
+  cold_start: false
