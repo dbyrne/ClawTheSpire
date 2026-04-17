@@ -156,6 +156,7 @@ def build_dashboard(experiments: list[dict]) -> Group:
     overview.add_column("ET Avg", justify="right", max_width=7)
     overview.add_column("Buffer", justify="right", max_width=10)
     overview.add_column("C", justify="right", max_width=4)
+    overview.add_column("Noise", justify="right", max_width=5)
     overview.add_column("Encounter Set", max_width=18)
 
     for exp in experiments:
@@ -203,14 +204,16 @@ def build_dashboard(experiments: list[dict]) -> Group:
         else:
             buf_str = "-"
 
-        # C_PUCT (MCTS only)
+        # C_PUCT and Dirichlet noise frac (MCTS only)
         mcts_cfg = exp.get("training", {}).get("mcts", {})
         cpuct_str = f"{mcts_cfg['c_puct']}" if "c_puct" in mcts_cfg else "-"
+        noise_str = f"{mcts_cfg['noise_frac']}" if "noise_frac" in mcts_cfg else "-"
 
         color = exp_color_map.get(exp["name"], "white")
         name_text = Text(exp["name"], style=color)
         overview.add_row(name_text, method, params_str, status,
-                         gen_str, wr, best, eval_str, et_str, buf_str, cpuct_str, ts_str)
+                         gen_str, wr, best, eval_str, et_str, buf_str,
+                         cpuct_str, noise_str, ts_str)
 
     parts.append(overview)
 
