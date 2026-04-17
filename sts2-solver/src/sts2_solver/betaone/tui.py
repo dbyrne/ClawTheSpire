@@ -85,21 +85,23 @@ def _status_text(age: float) -> Text:
         return Text("stopped", style="dim")
 
 
+MAX_EXPERIMENTS = 15
+
+
 def _collect_experiments() -> list[dict]:
-    """Gather data for all experiments."""
+    """Gather data for the most recent MAX_EXPERIMENTS experiments by mtime."""
     if not EXPERIMENTS_DIR.exists():
         return []
 
-    experiments = []
-    for d in sorted(EXPERIMENTS_DIR.iterdir(), key=lambda p: p.stat().st_mtime):
-        if d.name.startswith("_") or not d.is_dir():
-            continue
-        config_path = d / "config.yaml"
-        if not config_path.exists():
-            continue
+    dirs = [
+        d for d in sorted(EXPERIMENTS_DIR.iterdir(), key=lambda p: p.stat().st_mtime)
+        if not d.name.startswith("_") and d.is_dir() and (d / "config.yaml").exists()
+    ][-MAX_EXPERIMENTS:]
 
+    experiments = []
+    for d in dirs:
         import yaml
-        with open(config_path, encoding="utf-8") as f:
+        with open(d / "config.yaml", encoding="utf-8") as f:
             config = yaml.safe_load(f)
 
         progress = _load_json(d / "betaone_progress.json")
@@ -444,7 +446,7 @@ def build_dashboard(experiments: list[dict]) -> Group:
         ))
 
     # === Footer ===
-    footer = Text(f"  {len(experiments)} experiments | {len(all_sets)} encounter sets | refresh 2s | Ctrl+C to exit", style="dim")
+    footer = Text(f"  showing last {len(experiments)} experiments (max {MAX_EXPERIMENTS}) | {len(all_sets)} encounter sets | refresh 2s | Ctrl+C to exit", style="dim")
     parts.append(footer)
 
     return Group(*parts)
