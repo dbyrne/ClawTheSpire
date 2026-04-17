@@ -222,29 +222,84 @@ def load_card_vocab() -> tuple[dict[str, int], dict[int, str]]:
     return vocab, inv
 
 
+def build_full_vocabs_json() -> str:
+    """Build the full Vocabs structure the Rust simulator requires.
+
+    Rust's Vocabs struct has seven HashMap<String, i64> fields (cards,
+    powers, relics, intent_types, acts, bosses, room_types). The DeckNet
+    evaluator only reads cards — but the full-run simulator beyond it
+    (events, map, enemy intents) needs all seven populated.
+
+    We reuse legacy alphazero's builder since the vocab set is stable.
+    """
+    from ..data_loader import load_cards
+    from ..alphazero.encoding import build_vocabs_from_card_db
+    card_db = load_cards()
+    vocabs = build_vocabs_from_card_db(card_db)
+    data = {
+        "cards": dict(vocabs.cards.token_to_idx),
+        "powers": dict(vocabs.powers.token_to_idx),
+        "relics": dict(vocabs.relics.token_to_idx),
+        "intent_types": dict(vocabs.intent_types.token_to_idx),
+        "acts": dict(vocabs.acts.token_to_idx),
+        "bosses": dict(vocabs.bosses.token_to_idx),
+        "room_types": dict(vocabs.room_types.token_to_idx),
+    }
+    return json.dumps(data)
+
+
 def load_run_assets() -> dict:
-    """Load the JSON bundles needed to drive the Rust full-run simulator."""
-    monster_json = build_monster_data_json()
-    profiles_json = load_solver_json("enemy_profiles.json")
-    event_profiles = load_solver_json("event_profiles.json")
-    encounter_pool = load_solver_json("encounter_pool.json")
-    # Card DB: the full catalog of cards with stats
-    from ..betaone.deck_gen import _load_card_pool
-    card_db = list(_load_card_pool().values())
-    card_db_json = json.dumps(card_db)
-    # Card pool (for random rewards): subset of card_db that can appear as rewards
-    card_pool_json = card_db_json  # Phase 0 uses the whole pool; legacy has rarities too
-    map_pool = load_solver_json("map_pool.json")
-    shop_pool = load_solver_json("shop_pool.json")
+    """Load the JSON bundles needed to drive the Rust full-run simulator.
+
+    Uses legacy alphazero's data loaders because the Rust simulator expects
+    specific object shapes (EncounterData as a keyed dict, not a list; card
+    pool with rarity tags; etc.) — legacy self_play.py already produces
+    exactly the right format, so we mirror its call sites.
+    """
+    from ..simulator import (
+        _ensure_data_loaded, _MONSTERS_BY_ID,
+        _load_enemy_profiles, _ENCOUNTERS_BY_ID,
+        _load_event_profiles, _build_card_pool,
+    )
+    from ..alphazero.full_run import _card_to_dict
+    from ..data_loader import CardDB, load_cards
+
+    _ensure_data_loaded()
+
+    monsters = {mid: {"name": m.get("name", mid),
+                      "min_hp": m.get("min_hp") or 20,
+                      "max_hp": m.get("max_hp") or m.get("min_hp") or 20}
+                for mid, m in _MONSTERS_BY_ID.items()}
+    encounters = {eid: {"id": eid, "monsters": enc.get("monsters", []),
+                        "room_type": enc.get("room_type", "Normal"),
+                        "is_weak": enc.get("is_weak", False)}
+                  for eid, enc in _ENCOUNTERS_BY_ID.items()}
+
+    card_db = load_cards()
+    pools = _build_card_pool(card_db, "silent")
+    pool_data = []
+    for rarity, cards in pools.items():
+        for card in cards:
+            d = _card_to_dict(card)
+            d["rarity"] = rarity
+            pool_data.append(d)
+    all_cards = [_card_to_dict(c) for c in card_db.all_cards()]
+
+    from ..betaone.paths import SOLVER_PKG
+    map_pool_file = SOLVER_PKG / "map_pool.json"
+    shop_pool_file = SOLVER_PKG / "shop_pool.json"
+    map_pool_json = map_pool_file.read_text(encoding="utf-8") if map_pool_file.exists() else "[]"
+    shop_pool_json = shop_pool_file.read_text(encoding="utf-8") if shop_pool_file.exists() else "[]"
+
     return {
-        "monster_data_json": monster_json,
-        "enemy_profiles_json": profiles_json,
-        "encounter_pool_json": encounter_pool,
-        "event_profiles_json": event_profiles,
-        "card_pool_json": card_pool_json,
-        "card_db_json": card_db_json,
-        "map_pool_json": map_pool,
-        "shop_pool_json": shop_pool,
+        "monster_data_json": json.dumps(monsters),
+        "enemy_profiles_json": json.dumps(_load_enemy_profiles()),
+        "encounter_pool_json": json.dumps(encounters),
+        "event_profiles_json": json.dumps(_load_event_profiles()),
+        "card_pool_json": json.dumps(pool_data),
+        "card_db_json": json.dumps(all_cards),
+        "map_pool_json": map_pool_json,
+        "shop_pool_json": shop_pool_json,
     }
 
 
@@ -267,6 +322,15 @@ def train(
     onnx_dir = os.path.join(output_dir, "onnx")
     os.makedirs(onnx_dir, exist_ok=True)
 
+    # Resolve BetaOne checkpoint path. Configs may store it relative to the
+    # sts2-solver repo dir (e.g., "experiments/foo/betaone_latest.pt"); resolve
+    # against SOLVER_ROOT if not absolute and not found as-is.
+    if not os.path.isabs(betaone_checkpoint) and not os.path.exists(betaone_checkpoint):
+        from ..betaone.paths import SOLVER_ROOT
+        resolved = str(SOLVER_ROOT / betaone_checkpoint)
+        if os.path.exists(resolved):
+            betaone_checkpoint = resolved
+
     # Load vocab + network
     card_vocab, card_vocab_inv = load_card_vocab()
     net = DeckNet(num_cards=len(card_vocab))
@@ -279,7 +343,8 @@ def train(
 
     # Load simulator assets (these don't change across gens)
     assets = load_run_assets()
-    card_vocab_json = json.dumps(card_vocab)
+    # Rust's Vocabs needs all seven sub-maps, not just cards — build once
+    full_vocabs_json = build_full_vocabs_json()
 
     # BetaOne combat ONNXes — needed by the simulator to actually fight combats
     betaone_dir = os.path.dirname(betaone_checkpoint)
@@ -310,7 +375,7 @@ def train(
             onnx_value_path=betaone_onnx,
             onnx_combat_path=betaone_onnx,
             onnx_decknet_path=decknet_onnx,
-            vocab_json=card_vocab_json,
+            vocab_json=full_vocabs_json,
             mcts_sims=mcts_sims,
             temperature=temperature,
             seeds=seeds,

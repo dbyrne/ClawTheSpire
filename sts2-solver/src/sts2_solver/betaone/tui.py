@@ -147,105 +147,176 @@ def _exp_color(idx: int) -> str:
     return EXP_COLORS[idx % len(EXP_COLORS)]
 
 
+def _combat_net_ref(exp: dict) -> str:
+    """Pull the BetaOne checkpoint a DeckNet experiment inherits from.
+
+    Renders the basename minus extension so rows stay readable; e.g.
+    "experiments/mcts-bootstrap-pwfix1000/betaone_latest.pt" becomes
+    "mcts-bootstrap-pwfix1000".
+    """
+    dn = exp.get("training", {}).get("decknet", {})
+    ckpt = dn.get("betaone_checkpoint", "")
+    if not ckpt:
+        return "-"
+    # Expect paths like ".../experiments/<exp-name>/betaone_latest.pt"
+    parts = Path(ckpt).parts
+    try:
+        idx = parts.index("experiments")
+        if idx + 1 < len(parts):
+            return parts[idx + 1]
+    except ValueError:
+        pass
+    return Path(ckpt).stem
+
+
 def build_dashboard(experiments: list[dict]) -> Group:
-    """Build the full dashboard layout."""
+    """Build the full dashboard layout.
+
+    BetaOne and DeckNet experiments render in separate tables because
+    their metrics don't cleanly overlap (combat WR vs run WR, combat
+    eval vs deck eval, etc.). Mixing them in one table required
+    too many blank columns and made the view hard to scan.
+    """
     parts = []
 
-    # Assign colors to experiments
+    # Assign colors to experiments (global, so same color across tables)
     exp_color_map = {exp["name"]: _exp_color(i) for i, exp in enumerate(experiments)}
 
-    # === Experiment overview table ===
-    overview = Table(title="Experiments", expand=True, show_lines=False)
-    overview.add_column("Name", max_width=28)
-    overview.add_column("Method", max_width=10)
-    overview.add_column("Params", justify="right", max_width=8)
-    overview.add_column("Status", max_width=10)
-    overview.add_column("Gen", justify="right", max_width=7)
-    overview.add_column("Train WR", justify="right", max_width=8)
-    overview.add_column("Best", justify="right", max_width=7)
-    overview.add_column("Eval", justify="right", max_width=7)
-    overview.add_column("ET Avg", justify="right", max_width=7)
-    overview.add_column("Buffer", justify="right", max_width=10)
-    overview.add_column("C", justify="right", max_width=4)
-    overview.add_column("Noise", justify="right", max_width=5)
-    overview.add_column("Encounter Set", max_width=18)
+    # Partition by network type
+    betaone_exps = [e for e in experiments if e.get("network_type", "betaone") != "decknet"]
+    decknet_exps = [e for e in experiments if e.get("network_type") == "decknet"]
 
-    for exp in experiments:
-        p = exp["progress"]
-        ev = exp["eval"]
-        arch = exp["arch"]
+    # === BetaOne experiments table ===
+    if betaone_exps:
+        overview = Table(title="BetaOne — Combat Experiments", expand=True, show_lines=False)
+        overview.add_column("Name", max_width=28)
+        overview.add_column("Method", max_width=10)
+        overview.add_column("Params", justify="right", max_width=8)
+        overview.add_column("Status", max_width=10)
+        overview.add_column("Gen", justify="right", max_width=7)
+        overview.add_column("Train WR", justify="right", max_width=8)
+        overview.add_column("Best", justify="right", max_width=7)
+        overview.add_column("Eval", justify="right", max_width=7)
+        overview.add_column("ET Avg", justify="right", max_width=7)
+        overview.add_column("Buffer", justify="right", max_width=10)
+        overview.add_column("C", justify="right", max_width=4)
+        overview.add_column("Noise", justify="right", max_width=5)
+        overview.add_column("Encounter Set", max_width=18)
 
-        if p:
-            age = time.time() - p.get("timestamp", 0)
-            status = _status_text(age)
-            gen = str(p.get("gen", 0))
-            total = p.get("num_generations", "?")
-            gen_str = f"{gen}/{total}" if total != "?" else gen
-            wr = f"{p.get('win_rate', 0):.1%}"
-            best = f"{p.get('best_win_rate', 0):.1%}"
-        else:
-            status = Text("new", style="dim")
-            gen_str = "-"
-            wr = "-"
-            best = "-"
+        for exp in betaone_exps:
+            p = exp["progress"]
+            ev = exp["eval"]
+            arch = exp["arch"]
 
-        params = arch.get("total_params")
-        params_str = f"{params//1000}K" if isinstance(params, int) else "-"
+            if p:
+                age = time.time() - p.get("timestamp", 0)
+                status = _status_text(age)
+                gen = str(p.get("gen", 0))
+                total = p.get("num_generations", "?")
+                gen_str = f"{gen}/{total}" if total != "?" else gen
+                wr = f"{p.get('win_rate', 0):.1%}"
+                best = f"{p.get('best_win_rate', 0):.1%}"
+            else:
+                status = Text("new", style="dim")
+                gen_str = "-"
+                wr = "-"
+                best = "-"
 
-        eval_str = f"{ev['score']:.0%}" if ev and "score" in ev else "-"
-        et_str = f"{ev['end_turn_avg']:.0%}" if ev and ev.get("end_turn_avg") else "-"
+            params = arch.get("total_params")
+            params_str = f"{params//1000}K" if isinstance(params, int) else "-"
 
-        ts = exp["data"].get("encounter_set") or exp["data"].get("training_set", "")
-        ts_str = _resolve_ts_name(ts) if ts else "-"
+            eval_str = f"{ev['score']:.0%}" if ev and "score" in ev else "-"
+            et_str = f"{ev['end_turn_avg']:.0%}" if ev and ev.get("end_turn_avg") else "-"
 
-        net_type = exp.get("network_type", "betaone")
-        if net_type == "decknet":
+            ts = exp["data"].get("encounter_set") or exp["data"].get("training_set", "")
+            ts_str = _resolve_ts_name(ts) if ts else "-"
+
+            if exp["method"] == "ppo":
+                method = "PPO"
+                buf_str = "-"
+                cpuct_str = "-"
+                noise_str = "-"
+            else:
+                mcts = exp.get("training", {}).get("mcts", {})
+                sims = mcts.get("num_sims", "?")
+                prefix = "POMCP" if mcts.get("pomcp", False) else "MCTS"
+                method = f"{prefix}-{sims}"
+                # Replay buffer
+                if p:
+                    buf_size = p.get("buffer_size", 0)
+                    buf_cap = mcts.get("replay_capacity", 0)
+                    buf_str = f"{buf_size//1000}K/{buf_cap//1000}K" if buf_cap else (
+                        f"{buf_size//1000}K" if buf_size else "-"
+                    )
+                else:
+                    buf_str = "-"
+                cpuct_str = f"{mcts.get('c_puct', MCTS_DEFAULTS['c_puct'])}"
+                noise_str = f"{mcts.get('noise_frac', MCTS_DEFAULTS['noise_frac'])}"
+
+            color = exp_color_map.get(exp["name"], "white")
+            name_text = Text(exp["name"], style=color)
+            overview.add_row(name_text, method, params_str, status,
+                             gen_str, wr, best, eval_str, et_str, buf_str,
+                             cpuct_str, noise_str, ts_str)
+
+        parts.append(overview)
+
+    # === DeckNet experiments table ===
+    if decknet_exps:
+        dn_table = Table(title="DeckNet — Deck-Building Experiments", expand=True, show_lines=False)
+        dn_table.add_column("Name", max_width=28)
+        dn_table.add_column("Method", max_width=12)
+        dn_table.add_column("Params", justify="right", max_width=8)
+        dn_table.add_column("Status", max_width=10)
+        dn_table.add_column("Gen", justify="right", max_width=7)
+        dn_table.add_column("Run WR", justify="right", max_width=8)
+        dn_table.add_column("Avg Floor", justify="right", max_width=9)
+        dn_table.add_column("Eval", justify="right", max_width=7)
+        dn_table.add_column("Buffer", justify="right", max_width=10)
+        dn_table.add_column("Combat Net", max_width=22)
+
+        for exp in decknet_exps:
+            p = exp["progress"]
+            ev = exp["eval"]
+            arch = exp["arch"]
+
+            if p:
+                age = time.time() - p.get("timestamp", 0)
+                status = _status_text(age)
+                gen = str(p.get("gen", 0))
+                total = p.get("num_generations", "?")
+                gen_str = f"{gen}/{total}" if total != "?" else gen
+                run_wr = f"{p.get('win_rate', 0):.1%}"
+                avg_floor = f"{p.get('avg_floor', 0):.1f}"
+                buf_size = p.get("buffer_size", 0)
+                buf_cap = exp.get("training", {}).get("decknet", {}).get("replay_capacity", 0)
+                buf_str = f"{buf_size//1000}K/{buf_cap//1000}K" if buf_cap else (
+                    f"{buf_size//1000}K" if buf_size else "-"
+                )
+            else:
+                status = Text("new", style="dim")
+                gen_str = "-"
+                run_wr = "-"
+                avg_floor = "-"
+                buf_str = "-"
+
+            params = arch.get("total_params")
+            params_str = f"{params//1000}K" if isinstance(params, int) else "-"
+
             dn = exp.get("training", {}).get("decknet", {})
             sims = dn.get("mcts_sims", "?")
             method = f"DeckNet-{sims}"
-        elif exp["method"] == "ppo":
-            method = "PPO"
-        else:
-            mcts = exp.get("training", {}).get("mcts", {})
-            sims = mcts.get("num_sims", "?")
-            prefix = "POMCP" if mcts.get("pomcp", False) else "MCTS"
-            method = f"{prefix}-{sims}"
 
-        # Replay buffer: BetaOne MCTS tracks per-step buffer; DeckNet tracks
-        # per-decision buffer. PPO has no buffer. Show best effort per type.
-        if net_type == "decknet" and p:
-            buf_size = p.get("buffer_size", 0)
-            buf_cap = exp.get("training", {}).get("decknet", {}).get("replay_capacity", 0)
-            buf_str = f"{buf_size//1000}K/{buf_cap//1000}K" if buf_cap else (
-                f"{buf_size//1000}K" if buf_size else "-"
-            )
-        elif net_type == "betaone" and exp["method"] != "ppo" and p:
-            buf_size = p.get("buffer_size", 0)
-            buf_cap = exp.get("training", {}).get("mcts", {}).get("replay_capacity", 0)
-            if buf_cap:
-                buf_str = f"{buf_size//1000}K/{buf_cap//1000}K"
-            else:
-                buf_str = f"{buf_size//1000}K" if buf_size else "-"
-        else:
-            buf_str = "-"
+            eval_str = f"{ev['score']:.0%}" if ev and "score" in ev else "-"
+            combat_net = _combat_net_ref(exp)
 
-        # C_PUCT / noise columns are BetaOne-MCTS-specific knobs. Blank for
-        # DeckNet and PPO.
-        if net_type == "betaone" and exp["method"] != "ppo":
-            mcts_cfg = exp.get("training", {}).get("mcts", {})
-            cpuct_str = f"{mcts_cfg.get('c_puct', MCTS_DEFAULTS['c_puct'])}"
-            noise_str = f"{mcts_cfg.get('noise_frac', MCTS_DEFAULTS['noise_frac'])}"
-        else:
-            cpuct_str = "-"
-            noise_str = "-"
+            color = exp_color_map.get(exp["name"], "white")
+            name_text = Text(exp["name"], style=color)
+            dn_table.add_row(name_text, method, params_str, status,
+                             gen_str, run_wr, avg_floor, eval_str, buf_str,
+                             combat_net)
 
-        color = exp_color_map.get(exp["name"], "white")
-        name_text = Text(exp["name"], style=color)
-        overview.add_row(name_text, method, params_str, status,
-                         gen_str, wr, best, eval_str, et_str, buf_str,
-                         cpuct_str, noise_str, ts_str)
-
-    parts.append(overview)
+        parts.append(dn_table)
 
     # === Benchmark results table (sorted by suite, then best WR) ===
     bench_rows = []
