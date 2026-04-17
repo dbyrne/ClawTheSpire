@@ -413,24 +413,26 @@ def train(
                 replay.add(sample)
                 n_samples_added += 1
 
-        if len(replay) < batch_size:
-            print(f"Gen {gen}: only {len(replay)} samples buffered, skipping train")
-            continue
-
-        # --- Train ---
-        net.train()
+        # --- Train (only if the replay buffer has enough to draw a batch) ---
+        trained = len(replay) >= batch_size
         total_loss = 0.0
-        for _ in range(train_steps_per_gen):
-            batch = replay.sample(batch_size)
-            if not batch:
-                break
-            states = [s.state_after_mod for s in batch]
-            targets = [s.value_target for s in batch]
-            total_loss += train_batch(net, optimizer, states, targets, card_vocab)
-        avg_loss = total_loss / max(train_steps_per_gen, 1)
+        n_train_steps = 0
+        if trained:
+            net.train()
+            for _ in range(train_steps_per_gen):
+                batch = replay.sample(batch_size)
+                if not batch:
+                    break
+                states = [s.state_after_mod for s in batch]
+                targets = [s.value_target for s in batch]
+                total_loss += train_batch(net, optimizer, states, targets, card_vocab)
+                n_train_steps += 1
+        avg_loss = (total_loss / n_train_steps) if n_train_steps else 0.0
         elapsed = time.time() - t0
 
-        # --- Log ---
+        # --- Log every gen, whether or not a training step ran. Without this
+        # the TUI sees no progress file and shows the experiment as "new"
+        # during the warm-up phase where samples are still accumulating.
         avg_floor = float(np.mean(floors)) if floors else 0.0
         win_rate = n_wins / max(len(results), 1)
         record = {
@@ -442,12 +444,14 @@ def train(
             "samples_added": n_samples_added,
             "buffer_size": len(replay),
             "loss": round(avg_loss, 5),
+            "trained": trained,
             "gen_time": round(elapsed, 2),
             "timestamp": time.time(),
         }
+        status_tag = "" if trained else " [warmup]"
         print(f"Gen {gen:3d} | wins {n_wins:3d}/{len(results):3d} ({win_rate:.1%}) "
               f"| avg_floor {avg_floor:.1f} | samples {n_samples_added:4d} "
-              f"| buf {len(replay):5d} | loss {avg_loss:.4f} | {elapsed:.1f}s")
+              f"| buf {len(replay):5d} | loss {avg_loss:.4f}{status_tag} | {elapsed:.1f}s")
         with open(history_path, "a") as f:
             f.write(json.dumps(record) + "\n")
         with open(progress_path, "w") as f:
