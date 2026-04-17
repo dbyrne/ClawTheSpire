@@ -81,7 +81,6 @@ fn run_selfplay_combat(
     turn_boundary_eval: bool,
     dense_value_targets: bool,
     c_puct: f32,
-    terminal_scale: (f32, f32, f32),
     pomcp: bool,
     noise_frac: f32,
     pw_k: f32,
@@ -133,7 +132,6 @@ fn run_selfplay_combat(
     mcts_engine.add_noise = add_noise;
     mcts_engine.turn_boundary_eval = turn_boundary_eval;
     mcts_engine.c_puct = c_puct;
-    mcts_engine.terminal_scale = terminal_scale;
     mcts_engine.pomcp = pomcp;
     mcts_engine.noise_frac = noise_frac;
     mcts_engine.pw_k = pw_k;
@@ -172,7 +170,7 @@ fn run_selfplay_combat(
                         &state, hp_before, &enemy_hp, energy_at_end, max_energy,
                     );
                     if let Some(outcome) = combat::is_combat_over(&state) {
-                        reward += mcts::terminal_value_scaled(outcome, &state, terminal_scale);
+                        reward += mcts::terminal_value(outcome, &state);
                         final_outcome = outcome;
                         if let Some(last) = samples.last_mut() {
                             last.reward += reward;
@@ -253,7 +251,7 @@ fn run_selfplay_combat(
                             &state, hp_before, &enemy_hp, energy_at_end, max_energy,
                         );
                         if let Some(outcome) = combat::is_combat_over(&state) {
-                            reward += mcts::terminal_value_scaled(outcome, &state, terminal_scale);
+                            reward += mcts::terminal_value(outcome, &state);
                             final_outcome = outcome;
                             if let Some(last) = samples.last_mut() {
                                 last.reward = reward;
@@ -278,7 +276,7 @@ fn run_selfplay_combat(
                     if let Some(outcome) = combat::is_combat_over(&state) {
                         if dense_value_targets {
                             if let Some(last) = samples.last_mut() {
-                                last.reward = mcts::terminal_value_scaled(outcome, &state, terminal_scale);
+                                last.reward = mcts::terminal_value(outcome, &state);
                             }
                         }
                         final_outcome = outcome;
@@ -291,7 +289,7 @@ fn run_selfplay_combat(
                     if let Some(outcome) = combat::is_combat_over(&state) {
                         if dense_value_targets {
                             if let Some(last) = samples.last_mut() {
-                                last.reward = mcts::terminal_value_scaled(outcome, &state, terminal_scale);
+                                last.reward = mcts::terminal_value(outcome, &state);
                             }
                         }
                         final_outcome = outcome;
@@ -310,7 +308,7 @@ fn run_selfplay_combat(
     if dense_value_targets && final_outcome == "lose" {
         if let Some(last) = samples.last_mut() {
             if last.reward == 0.0 {
-                last.reward = mcts::terminal_value_scaled("lose", &state, terminal_scale);
+                last.reward = mcts::terminal_value("lose", &state);
             }
         }
     }
@@ -348,9 +346,6 @@ fn run_selfplay_combat(
     turn_boundary_eval = false,
     dense_value_targets = false,
     c_puct = 2.5,
-    terminal_win_base = 1.0,
-    terminal_win_hp_coef = 0.3,
-    terminal_lose = -1.0,
     pomcp = false,
     noise_frac = 0.25,
     pw_k = 1.0
@@ -376,9 +371,6 @@ pub fn betaone_mcts_selfplay(
     turn_boundary_eval: bool,
     dense_value_targets: bool,
     c_puct: f32,
-    terminal_win_base: f32,
-    terminal_win_hp_coef: f32,
-    terminal_lose: f32,
     pomcp: bool,
     noise_frac: f32,
     pw_k: f32,
@@ -451,7 +443,6 @@ pub fn betaone_mcts_selfplay(
                         inference, &card_vocab,
                         num_sims, temperature, seed, add_noise,
                         turn_boundary_eval, dense_value_targets, c_puct,
-                        (terminal_win_base, terminal_win_hp_coef, terminal_lose),
                         pomcp,
                         noise_frac,
                         pw_k,
