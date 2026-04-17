@@ -90,18 +90,35 @@ def generate_from_packages(
     decks_per: int = 3,
     combats: int = 64,
     rng: stdlib_random.Random | None = None,
+    package_names: list[str] | None = None,
 ) -> list[dict]:
     """Generate encounters from archetype packages with frozen decks.
 
     For each package × enemy × deck variant: generate a random deck,
     calibrate HP, freeze as an encounter.
+
+    Args:
+        package_names: if given, only generate from packages whose .name is in
+            this list. Raises if any requested name isn't a known package.
     """
     if rng is None:
         rng = stdlib_random.Random(42)
 
+    if package_names:
+        known = {p.name for p in PACKAGES}
+        unknown = set(package_names) - known
+        if unknown:
+            raise ValueError(
+                f"Unknown package names: {sorted(unknown)}. "
+                f"Available: {sorted(known)}"
+            )
+        selected = [p for p in PACKAGES if p.name in package_names]
+    else:
+        selected = PACKAGES
+
     encounters = []
 
-    for pkg in PACKAGES:
+    for pkg in selected:
         print(f"Package: {pkg.name}")
         for enemy_ids in pkg.encounters:
             # Generate multiple deck variants

@@ -98,6 +98,44 @@ PACKAGES: list[Package] = [
         encounters=ALL_HARD,
         core_cards=["SKEWER", "DAGGER_THROW"],
     ),
+    # --- Draw-dependent synergy packages ---
+    # These three decks are built around win conditions that only work if the
+    # player actively cycles through the deck. Strike-heavy play will stall out
+    # because the core cards either don't get drawn, don't get set up, or are
+    # played too few times per turn to matter.
+    Package(
+        name="synergy_grand_finale",
+        archetypes=["damage", "draw_cycle"],
+        encounters=ALL_HARD,
+        deck_min_size=18,
+        deck_max_size=22,
+        deck_min_removals=5,
+        deck_max_removals=8,  # thin deck so Grand Finale fires on cycle 1
+        core_cards=["GRAND_FINALE", "ACROBATICS", "CALCULATED_GAMBLE",
+                    "BURST", "PREPARED"],
+    ),
+    Package(
+        name="synergy_infinite_shiv",
+        archetypes=["shiv", "draw_cycle"],
+        encounters=ALL_HARD,
+        deck_min_size=18,
+        deck_max_size=22,
+        deck_min_removals=3,
+        deck_max_removals=5,
+        core_cards=["INFINITE_BLADES", "BLADE_DANCE", "STORM_OF_STEEL",
+                    "ACCURACY", "ACROBATICS"],
+    ),
+    Package(
+        name="synergy_finisher",
+        archetypes=["damage", "draw_cycle"],
+        encounters=ALL_HARD,
+        deck_min_size=18,
+        deck_max_size=22,
+        deck_min_removals=3,
+        deck_max_removals=5,
+        core_cards=["FINISHER", "BLADE_DANCE", "DAGGER_THROW",
+                    "PREPARED", "ACROBATICS"],
+    ),
 ]
 
 

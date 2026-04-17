@@ -500,11 +500,17 @@ def cmd_generate(args):
             ))
 
     if include_packages:
-        print(f"\nGenerating package encounters ({args.decks_per} decks/encounter)...")
+        package_names = None
+        if args.packages:
+            package_names = [p.strip() for p in args.packages.split(",") if p.strip()]
+            print(f"\nGenerating package encounters from {package_names} ({args.decks_per} decks/encounter)...")
+        else:
+            print(f"\nGenerating package encounters ({args.decks_per} decks/encounter)...")
         encounters.extend(generate_from_packages(
             monster_json, profiles_json, card_vocab_json, onnx_path,
             decks_per=args.decks_per,
             combats=args.combats,
+            package_names=package_names,
         ))
 
     es_id = save_encounter_set(
@@ -672,6 +678,9 @@ def main():
                     help="Random deck variants per package encounter (default: 3)")
     p.add_argument("--combats", type=int, default=64,
                     help="Combats per HP level in calibration (default: 64)")
+    p.add_argument("--packages", default=None,
+                    help="Comma-separated package names to restrict generation to "
+                         "(e.g. synergy_grand_finale,synergy_finisher). Default: all.")
     p.set_defaults(func=cmd_generate)
 
     # encounter-sets
