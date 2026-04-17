@@ -194,6 +194,7 @@ def train(
     pomcp: bool = False,
     mcts_bootstrap: bool = False,
     noise_frac: float = 0.25,
+    pw_k: float = 1.0,
 ):
     os.makedirs(output_dir, exist_ok=True)
     onnx_dir = os.path.join(output_dir, "onnx")
@@ -340,6 +341,7 @@ def train(
                 determinizations=determinizations,
                 pomcp=pomcp,
                 noise_frac=noise_frac,
+                pw_k=pw_k,
             )
 
             n_steps = rollout["total_steps"]

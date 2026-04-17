@@ -148,6 +148,7 @@ class ExperimentConfig:
                 "pomcp": mcts.get("pomcp", False),
                 "mcts_bootstrap": mcts.get("mcts_bootstrap", False),
                 "noise_frac": _float(mcts.get("noise_frac"), 0.25),
+                "pw_k": _float(mcts.get("pw_k"), 1.0),
             }
         else:  # ppo
             ppo = t.get("ppo", {})

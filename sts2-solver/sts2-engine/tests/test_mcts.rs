@@ -9,7 +9,7 @@ use rand::SeedableRng;
 
 use sts2_engine::actions::enumerate_actions;
 use sts2_engine::inference::softmax;
-use sts2_engine::mcts::{Inference, MCTS};
+use sts2_engine::mcts::{Inference, MCTS, sample_weighted};
 use sts2_engine::types::*;
 
 // ===========================================================================
@@ -850,4 +850,51 @@ fn test_pomcp_handles_impatience_with_no_attacks() {
     let result = mcts.search(&state, 150, 1.0, &mut rng());
     let sum: f32 = result.policy.iter().sum();
     assert!((sum - 1.0).abs() < 1e-4);
+}
+
+// ===========================================================================
+// sample_weighted: visit-count fallback for POMCP chance-node widening
+// ===========================================================================
+
+#[test]
+fn test_sample_weighted_matches_distribution() {
+    // Counts encode a 70/20/10 split. Empirical samples should track within
+    // ~3pp at N=10000 (3-sigma for binomial with p=0.7 is ~1.4pp).
+    let weights: [u32; 3] = [700, 200, 100];
+    let mut r = rng();
+    let mut hits = [0u32; 3];
+    let n = 10_000;
+    for _ in 0..n {
+        let i = sample_weighted(&weights, &mut r);
+        hits[i] += 1;
+    }
+    let p: Vec<f64> = hits.iter().map(|&h| h as f64 / n as f64).collect();
+    assert!((p[0] - 0.70).abs() < 0.03, "p[0]={}", p[0]);
+    assert!((p[1] - 0.20).abs() < 0.03, "p[1]={}", p[1]);
+    assert!((p[2] - 0.10).abs() < 0.03, "p[2]={}", p[2]);
+}
+
+#[test]
+fn test_sample_weighted_zero_weights_fallback_uniform() {
+    // All-zero weights must not divide-by-zero; should fall back to uniform.
+    let weights: [u32; 4] = [0, 0, 0, 0];
+    let mut r = rng();
+    let mut hits = [0u32; 4];
+    let n = 4_000;
+    for _ in 0..n {
+        hits[sample_weighted(&weights, &mut r)] += 1;
+    }
+    for &h in &hits {
+        let p = h as f64 / n as f64;
+        assert!((p - 0.25).abs() < 0.05, "uniform fallback skewed: p={}", p);
+    }
+}
+
+#[test]
+fn test_sample_weighted_single_nonzero_always_picks_it() {
+    let weights: [u32; 5] = [0, 0, 100, 0, 0];
+    let mut r = rng();
+    for _ in 0..200 {
+        assert_eq!(sample_weighted(&weights, &mut r), 2);
+    }
 }

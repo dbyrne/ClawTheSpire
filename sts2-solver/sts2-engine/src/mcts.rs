@@ -157,6 +157,12 @@ pub struct MCTS<'a> {
     /// Higher values force more exploration away from a sharp prior — the lever
     /// for breaking echo-chamber priors that pin visit counts to themselves.
     pub noise_frac: f32,
+    /// Progressive widening multiplier for POMCP chance nodes:
+    /// max_children = ceil(pw_k * sqrt(visits + 1)). Default 1.0 matches
+    /// historical behavior (~20 children at 400 sims). Higher values widen
+    /// faster, letting more rare draws into the tree at the cost of fewer
+    /// visits per child.
+    pub pw_k: f32,
 }
 
 impl<'a> MCTS<'a> {
@@ -164,7 +170,7 @@ impl<'a> MCTS<'a> {
         MCTS {
             card_db, inference, add_noise: false, turn_boundary_eval: false,
             c_puct: DEFAULT_C_PUCT, terminal_scale: (1.0, 0.3, -1.0),
-            determinizations: 1, pomcp: false, noise_frac: 0.25,
+            determinizations: 1, pomcp: false, noise_frac: 0.25, pw_k: 1.0,
         }
     }
 
@@ -803,10 +809,11 @@ impl<'a> MCTS<'a> {
     ) -> (f32, usize) {
         let pending = arena.nodes[chance_idx].pending_draws;
 
-        // Progressive widening: limit observation children to sqrt(visits+1)
+        // Progressive widening: limit observation children. With pw_k=1 this
+        // matches historical sqrt(visits+1); higher pw_k widens faster.
         let num_obs = arena.nodes[chance_idx].observation_children.len();
         let visits = arena.nodes[chance_idx].visit_count;
-        let max_children = ((visits as f64 + 1.0).sqrt()).ceil() as usize;
+        let max_children = ((self.pw_k as f64) * (visits as f64 + 1.0).sqrt()).ceil() as usize;
 
         // Clone state and draw cards with fresh RNG. Snapshot the hand length
         // before the draw so the observation key reflects only the actually-
@@ -867,8 +874,15 @@ impl<'a> MCTS<'a> {
             let v = self.expand(arena, child_idx, rng);
             (v, child_idx)
         } else {
-            // Over widening limit: reuse existing child (prefer matching key)
-            let pick = rng.random_range(0..num_obs);
+            // Over widening limit: route to an existing child sampled by visit
+            // count. Visit counts encode the empirical observation probability
+            // — uniform sampling here would erase that, biasing rare-but-tracked
+            // observations to be revisited as often as common ones.
+            let visit_counts: Vec<u32> = arena.nodes[chance_idx].observation_children
+                .iter()
+                .map(|(_, idx)| arena.nodes[*idx].visit_count)
+                .collect();
+            let pick = sample_weighted(&visit_counts, rng);
             let child_idx = arena.nodes[chance_idx].observation_children[pick].1;
             if arena.nodes[child_idx].is_expanded {
                 let leaf = self.select(arena, child_idx);
@@ -908,6 +922,29 @@ pub fn terminal_value_scaled(outcome: &str, state: &CombatState, scale: (f32, f3
 /// Used by dense value targets in selfplay.rs.
 pub fn terminal_value(outcome: &str, state: &CombatState) -> f32 {
     terminal_value_scaled(outcome, state, (1.0, 0.3, -1.0))
+}
+
+// ---------------------------------------------------------------------------
+// Weighted sampling
+// ---------------------------------------------------------------------------
+
+/// Pick an index in [0, weights.len()) with probability proportional to weight.
+/// Falls back to uniform if all weights are zero (e.g., a brand-new chance node
+/// that hasn't received any backups yet — possible in pathological orderings).
+pub fn sample_weighted(weights: &[u32], rng: &mut impl Rng) -> usize {
+    let total: u64 = weights.iter().map(|&w| w as u64).sum();
+    if total == 0 {
+        return rng.random_range(0..weights.len());
+    }
+    let mut r = rng.random_range(0..total);
+    for (i, &w) in weights.iter().enumerate() {
+        let w64 = w as u64;
+        if r < w64 {
+            return i;
+        }
+        r -= w64;
+    }
+    weights.len() - 1
 }
 
 // ---------------------------------------------------------------------------
