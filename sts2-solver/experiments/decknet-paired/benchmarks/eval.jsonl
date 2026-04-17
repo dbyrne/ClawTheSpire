@@ -1,0 +1,6 @@
+{"suite": "decknet-phase0", "timestamp": 1776454870.8232949, "gen": 5, "passed": 5, "total": 15, "score": 0.3333, "end_turn_avg": null, "end_turn_high": 0, "by_category": {}}
+{"suite": "decknet-phase0", "timestamp": 1776454872.0546982, "gen": 10, "passed": 8, "total": 15, "score": 0.5333, "end_turn_avg": null, "end_turn_high": 0, "by_category": {}}
+{"suite": "decknet-phase0", "timestamp": 1776454873.3106432, "gen": 15, "passed": 9, "total": 15, "score": 0.6, "end_turn_avg": null, "end_turn_high": 0, "by_category": {}}
+{"suite": "decknet-phase0", "timestamp": 1776454874.5673347, "gen": 20, "passed": 9, "total": 15, "score": 0.6, "end_turn_avg": null, "end_turn_high": 0, "by_category": {}}
+{"suite": "decknet-phase0", "timestamp": 1776454875.8410363, "gen": 25, "passed": 8, "total": 15, "score": 0.5333, "end_turn_avg": null, "end_turn_high": 0, "by_category": {}}
+{"suite": "decknet-phase0", "timestamp": 1776454877.1052673, "gen": 30, "passed": 7, "total": 15, "score": 0.4667, "end_turn_avg": null, "end_turn_high": 0, "by_category": {}}

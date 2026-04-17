@@ -1,0 +1,17 @@
+{
+  "gen": 30,
+  "runs": 200,
+  "wins": 19,
+  "win_rate": 0.095,
+  "avg_floor": 10.21,
+  "samples_added": 1494,
+  "samples_dropped": 0,
+  "steps": 1494,
+  "buffer_size": 45517,
+  "loss": 0.02903,
+  "trained": true,
+  "gen_time": 28.17,
+  "target_mode": "policy_bootstrap",
+  "timestamp": 1776454858.87369,
+  "num_generations": 30
+}

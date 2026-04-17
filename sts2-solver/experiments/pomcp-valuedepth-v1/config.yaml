@@ -52,4 +52,4 @@ data:
 checkpoints:
   save_every: 50
   keep_best: true
-  cold_start: true
+  cold_start: false
