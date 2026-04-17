@@ -270,10 +270,27 @@ def load_run_assets() -> dict:
                       "min_hp": m.get("min_hp") or 20,
                       "max_hp": m.get("max_hp") or m.get("min_hp") or 20}
                 for mid, m in _MONSTERS_BY_ID.items()}
-    encounters = {eid: {"id": eid, "monsters": enc.get("monsters", []),
-                        "room_type": enc.get("room_type", "Normal"),
-                        "is_weak": enc.get("is_weak", False)}
-                  for eid, enc in _ENCOUNTERS_BY_ID.items()}
+    known_monster_ids = set(monsters.keys())
+
+    # Filter encounters whose monsters aren't all in the monster database —
+    # otherwise the Rust spawn_enemy path panics at run time. Safer to drop
+    # a few entries than to abort the whole training run.
+    encounters = {}
+    dropped = 0
+    for eid, enc in _ENCOUNTERS_BY_ID.items():
+        enc_monsters = enc.get("monsters", [])
+        missing = [m.get("id") for m in enc_monsters if m.get("id") not in known_monster_ids]
+        if missing:
+            dropped += 1
+            continue
+        encounters[eid] = {
+            "id": eid,
+            "monsters": enc_monsters,
+            "room_type": enc.get("room_type", "Normal"),
+            "is_weak": enc.get("is_weak", False),
+        }
+    if dropped:
+        print(f"  Dropped {dropped} encounters with unknown monsters (kept {len(encounters)}).")
 
     card_db = load_cards()
     pools = _build_card_pool(card_db, "silent")

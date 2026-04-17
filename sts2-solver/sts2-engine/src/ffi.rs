@@ -698,15 +698,35 @@ pub fn play_all_games_decknet(
         use rayon::prelude::*;
 
         seeds.into_par_iter().map(|seed| {
+            // Legacy combat inference is still built (non-combat full-run code
+            // that uses the Inference trait can still consult it), but the
+            // actual combat section is routed through BetaOne below — this
+            // ONNX is no longer in the hot path.
             let combat_inference = match crate::inference::OnnxInference::new(
                 &onnx_full, &onnx_value, &onnx_combat, vocabs.clone()
             ) {
                 Ok(inf) => inf,
                 Err(e) => {
-                    eprintln!("ONNX combat error: {e}");
+                    eprintln!("ONNX combat (legacy) error: {e}");
                     return None;
                 }
             };
+            // BetaOne combat net — what the DeckNet flow actually uses for
+            // combat. onnx_combat_path is reused as the BetaOne checkpoint
+            // path (Python passes the same file for both).
+            let betaone_inference = match crate::betaone::inference::BetaOneInference::new(
+                &onnx_combat,
+            ) {
+                Ok(inf) => inf,
+                Err(e) => {
+                    eprintln!("BetaOne combat error: {e}");
+                    return None;
+                }
+            };
+            // Card vocab for BetaOne adapter — just the cards sub-map from
+            // the full Vocabs we already parsed.
+            let card_vocab: crate::betaone::encode::CardVocab =
+                vocabs.cards.clone();
             let decknet_evaluator = match crate::decknet::DeckNetEvaluator::new(
                 &onnx_decknet, vocabs.clone()
             ) {
@@ -717,8 +737,9 @@ pub fn play_all_games_decknet(
                 }
             };
 
-            Some(crate::simulator::run_act1(
+            Some(crate::simulator::run_act1_betaone(
                 &game_data, &combat_inference, &decknet_evaluator,
+                &betaone_inference, &card_vocab,
                 mcts_sims, temperature, seed, combat_replays, option_epsilon,
             ))
         }).collect::<Vec<_>>()

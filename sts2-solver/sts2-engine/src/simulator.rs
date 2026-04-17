@@ -262,6 +262,52 @@ pub fn run_act1(
     combat_replays: usize,
     option_epsilon: f32,
 ) -> FullRunResult {
+    run_act1_impl(
+        game_data, combat_inference, option_eval, None,
+        mcts_sims, temperature, seed, combat_replays, option_epsilon,
+    )
+}
+
+/// BetaOne variant: same full-run loop, but combat dispatches to BetaOne's
+/// MCTS engine (via run_betaone_combat_core) instead of the legacy
+/// OnnxInference path. Used by play_all_games_decknet. The combat_inference
+/// parameter is still required because some internals (e.g. map choice
+/// evaluator) use the Inference trait, but it can be the same BetaOne
+/// checkpoint wrapped behind a dummy adapter if preferred. For now we pass
+/// a shared OnnxInference that may fail silently for non-combat ops — the
+/// DecisionEvaluator already handles all option-scoring, so combat_inference
+/// is only actually consulted when the legacy combat path runs, which it
+/// won't.
+pub fn run_act1_betaone(
+    game_data: &GameData,
+    combat_inference: &OnnxInference,
+    option_eval: &dyn DecisionEvaluator,
+    betaone_inference: &crate::betaone::inference::BetaOneInference,
+    card_vocab: &crate::betaone::encode::CardVocab,
+    mcts_sims: usize,
+    temperature: f32,
+    seed: u64,
+    combat_replays: usize,
+    option_epsilon: f32,
+) -> FullRunResult {
+    run_act1_impl(
+        game_data, combat_inference, option_eval,
+        Some((betaone_inference, card_vocab)),
+        mcts_sims, temperature, seed, combat_replays, option_epsilon,
+    )
+}
+
+fn run_act1_impl(
+    game_data: &GameData,
+    combat_inference: &OnnxInference,
+    option_eval: &dyn DecisionEvaluator,
+    betaone: Option<(&crate::betaone::inference::BetaOneInference, &crate::betaone::encode::CardVocab)>,
+    mcts_sims: usize,
+    temperature: f32,
+    seed: u64,
+    combat_replays: usize,
+    option_epsilon: f32,
+) -> FullRunResult {
     use rand::SeedableRng;
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
 
@@ -372,12 +418,21 @@ pub fn run_act1(
                 if enemy_ids.is_empty() { continue; }
                 seen_encounters.insert(enc_id.clone());
 
-                let combat_result = run_combat_internal(
-                    &deck, hp, max_hp, max_energy, &enemy_ids,
-                    &relics, &potions, floor_num, gold, &act_id, &boss_id,
-                    &remaining_path, game_data, combat_inference,
-                    mcts_sims, temperature, &mut rng,
-                );
+                let combat_result = if let Some((bo_inf, cv)) = betaone {
+                    run_combat_internal_betaone(
+                        &deck, hp, max_hp, max_energy, &enemy_ids,
+                        &relics, &potions, game_data,
+                        bo_inf, cv,
+                        mcts_sims, temperature, &mut rng,
+                    )
+                } else {
+                    run_combat_internal(
+                        &deck, hp, max_hp, max_energy, &enemy_ids,
+                        &relics, &potions, floor_num, gold, &act_id, &boss_id,
+                        &remaining_path, game_data, combat_inference,
+                        mcts_sims, temperature, &mut rng,
+                    )
+                };
 
                 // Per-turn replays: replay each turn individually with different
                 // card draws, evaluate end-of-turn state with value head (TD learning).
@@ -1085,6 +1140,41 @@ struct CombatResult {
     initial_value: f32,
     potions_after: Vec<Potion>,
     turn_snapshots: Vec<TurnSnapshot>,
+}
+
+/// Run one combat via BetaOne + MCTS. Used by play_all_games_decknet so
+/// DeckNet experiments run with the same combat engine used in BetaOne
+/// benchmarks — no legacy ONNX schema in the critical path.
+///
+/// Returns a minimal CombatResult: DeckNet training doesn't need combat
+/// samples or turn_snapshots, so those are empty. hp_after / outcome /
+/// potions_after are the fields the full-run loop actually reads.
+fn run_combat_internal_betaone(
+    deck: &[Card], hp: i32, max_hp: i32, max_energy: i32,
+    enemy_ids: &[String], relics: &HashSet<String>, potions: &[Potion],
+    game_data: &GameData,
+    betaone_inference: &crate::betaone::inference::BetaOneInference,
+    card_vocab: &crate::betaone::encode::CardVocab,
+    mcts_sims: usize, temperature: f32,
+    rng: &mut rand::rngs::StdRng,
+) -> CombatResult {
+    use crate::betaone::mcts_ffi::run_betaone_combat_core;
+    let outcome = run_betaone_combat_core(
+        deck.to_vec(),
+        hp, max_hp, max_energy,
+        enemy_ids, relics.clone(), potions.to_vec(),
+        &game_data.monsters, &game_data.profiles,
+        card_vocab, betaone_inference,
+        mcts_sims, temperature, rng,
+    );
+    CombatResult {
+        samples: vec![],
+        outcome: outcome.outcome,
+        hp_after: outcome.final_hp,
+        initial_value: 0.0,
+        potions_after: outcome.potions,
+        turn_snapshots: vec![],
+    }
 }
 
 fn run_combat_internal(

@@ -31,6 +31,158 @@ thread_local! {
 }
 
 // ---------------------------------------------------------------------------
+// Shared combat loop (used by the FFI entry + simulator.rs full-run path)
+// ---------------------------------------------------------------------------
+
+pub struct BetaOneCombatOutcome {
+    pub outcome: String,   // "win" or "lose"
+    pub final_hp: i32,     // player hp at end (0 if lost)
+    pub potions: Vec<Potion>,
+    pub decisions: usize,
+}
+
+/// Run one combat using BetaOne + MCTS, starting from a fresh CombatState
+/// built from the supplied deck/enemies/relics/potions. Used by both the
+/// PyO3 single-combat entry point and by the full-run simulator's
+/// combat section (simulator.rs) so DeckNet-driven runs share BetaOne's
+/// combat engine instead of the legacy OnnxInference path.
+pub fn run_betaone_combat_core(
+    deck: Vec<Card>,
+    player_hp: i32,
+    player_max_hp: i32,
+    player_max_energy: i32,
+    enemy_ids: &[String],
+    relics: HashSet<String>,
+    potions: Vec<Potion>,
+    monsters: &HashMap<String, enemy::MonsterData>,
+    profiles: &HashMap<String, enemy::EnemyProfile>,
+    card_vocab: &CardVocab,
+    inference: &BetaOneInference,
+    num_sims: usize,
+    temperature: f32,
+    rng: &mut StdRng,
+) -> BetaOneCombatOutcome {
+    let adapter = BetaOneMCTSAdapter::new(inference, card_vocab);
+    let card_db = CardDB::default();
+
+    let mut enemies = Vec::new();
+    let mut enemy_ais = Vec::new();
+    for mid in enemy_ids {
+        enemies.push(enemy::spawn_enemy(mid, monsters, rng));
+        enemy_ais.push(enemy::create_enemy_ai(mid, profiles));
+    }
+    if enemies.is_empty() {
+        return BetaOneCombatOutcome {
+            outcome: "win".into(), final_hp: player_hp, potions, decisions: 0,
+        };
+    }
+
+    let mut draw_pile = deck;
+    crate::effects::shuffle_vec_pub(&mut draw_pile, rng);
+
+    let player = PlayerState {
+        hp: player_hp,
+        max_hp: player_max_hp,
+        energy: player_max_energy,
+        max_energy: player_max_energy,
+        draw_pile,
+        potions,
+        ..Default::default()
+    };
+
+    let mut state = CombatState {
+        player,
+        enemies,
+        relics,
+        ..Default::default()
+    };
+
+    combat::start_combat(&mut state);
+
+    let mcts_engine = MCTS::new(&card_db, &adapter);
+    let mut decisions = 0usize;
+    let mut final_outcome = "lose";
+
+    'outer: for _turn in 1..=30 {
+        combat::start_turn(&mut state, rng);
+        enemy::set_enemy_intents(&mut state, &mut enemy_ais, rng);
+
+        let mut plays_this_turn = 0;
+        while plays_this_turn < 15 {
+            if let Some(outcome) = combat::is_combat_over(&state) {
+                final_outcome = outcome;
+                break 'outer;
+            }
+
+            let actions = enumerate_actions(&state);
+            if actions.is_empty() {
+                combat::end_turn(&mut state, &card_db, rng);
+                enemy::sync_enemy_ais(&state, &mut enemy_ais, profiles);
+                combat::resolve_enemy_intents(&mut state);
+                combat::tick_enemy_powers(&mut state);
+                enemy::sync_enemy_ais(&state, &mut enemy_ais, profiles);
+                if let Some(outcome) = combat::is_combat_over(&state) {
+                    final_outcome = outcome;
+                    break 'outer;
+                }
+                break;
+            }
+
+            let result = mcts_engine.search_with_ais(
+                &state, Some(&enemy_ais), num_sims, temperature, rng,
+            );
+            decisions += 1;
+
+            match &result.action {
+                Action::EndTurn => {
+                    combat::end_turn(&mut state, &card_db, rng);
+                    enemy::sync_enemy_ais(&state, &mut enemy_ais, profiles);
+                    combat::resolve_enemy_intents(&mut state);
+                    combat::tick_enemy_powers(&mut state);
+                    enemy::sync_enemy_ais(&state, &mut enemy_ais, profiles);
+                    if let Some(outcome) = combat::is_combat_over(&state) {
+                        final_outcome = outcome;
+                        break 'outer;
+                    }
+                    break;
+                }
+                Action::PlayCard { card_idx, target_idx } => {
+                    if combat::can_play_card(&state, *card_idx) {
+                        combat::play_card(
+                            &mut state, *card_idx, *target_idx, &card_db, rng,
+                        );
+                    }
+                    if let Some(outcome) = combat::is_combat_over(&state) {
+                        final_outcome = outcome;
+                        break 'outer;
+                    }
+                    plays_this_turn += 1;
+                }
+                Action::UsePotion { potion_idx } => {
+                    combat::use_potion(&mut state, *potion_idx);
+                    if let Some(outcome) = combat::is_combat_over(&state) {
+                        final_outcome = outcome;
+                        break 'outer;
+                    }
+                    plays_this_turn += 1;
+                }
+                Action::ChooseCard { choice_idx } => {
+                    crate::effects::execute_choice(&mut state, *choice_idx, rng);
+                }
+            }
+        }
+    }
+
+    let final_hp = if final_outcome == "win" { state.player.hp.max(0) } else { 0 };
+    BetaOneCombatOutcome {
+        outcome: final_outcome.to_string(),
+        final_hp,
+        potions: state.player.potions,
+        decisions,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Fight a full combat using MCTS at every decision
 // ---------------------------------------------------------------------------
 
