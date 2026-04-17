@@ -1,0 +1,32 @@
+name: decknet-rootval
+method: decknet_selfplay
+description: "DeckNet regression on MCTS root_value \u2014 deck quality signal without\
+  \ policy-weight confound"
+created: '2026-04-17T20:34:08+00:00'
+parent: null
+parent_checkpoint: null
+network_type: decknet
+architecture:
+  network: decknet
+  num_cards: 578
+  total_params: 66881
+training:
+  generations: 30
+  runs_per_gen: 200
+  lr: 0.0003
+  batch_size: 256
+  decknet:
+    mcts_sims: 200
+    temperature: 1.0
+    combat_replays: 1
+    train_steps_per_gen: 100
+    option_epsilon: 0.15
+    replay_capacity: 100000
+    betaone_checkpoint: experiments/mcts-bootstrap-qtarget/betaone_latest.pt
+    target_mode: root_value
+data:
+  mode: full_run
+checkpoints:
+  save_every: 5
+  keep_best: false
+  cold_start: false

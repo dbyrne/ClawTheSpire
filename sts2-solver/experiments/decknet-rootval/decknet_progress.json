@@ -1,0 +1,17 @@
+{
+  "gen": 22,
+  "runs": 200,
+  "wins": 23,
+  "win_rate": 0.115,
+  "avg_floor": 10.44,
+  "samples_added": 923,
+  "samples_dropped": 0,
+  "steps": 923,
+  "buffer_size": 19242,
+  "loss": 0.21198,
+  "trained": true,
+  "gen_time": 27.23,
+  "target_mode": "root_value",
+  "timestamp": 1776458673.476033,
+  "num_generations": 30
+}

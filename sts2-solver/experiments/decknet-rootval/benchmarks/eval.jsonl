@@ -1,0 +1,2 @@
+{"suite": "decknet-phase0", "timestamp": 1776458553.2663074, "gen": 10, "passed": 6, "total": 15, "score": 0.4, "end_turn_avg": null, "end_turn_high": 0, "by_category": {}}
+{"suite": "decknet-phase0", "timestamp": 1776458557.8564842, "gen": 15, "passed": 5, "total": 15, "score": 0.3333, "end_turn_avg": null, "end_turn_high": 0, "by_category": {}}
