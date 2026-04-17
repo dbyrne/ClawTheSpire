@@ -82,6 +82,7 @@ fn run_selfplay_combat(
     terminal_scale: (f32, f32, f32),
     determinizations: usize,
     pomcp: bool,
+    noise_frac: f32,
 ) -> SelfPlayResult {
     let card_db = CardDB::default();
     let mut rng = StdRng::seed_from_u64(seed);
@@ -133,6 +134,7 @@ fn run_selfplay_combat(
     mcts_engine.terminal_scale = terminal_scale;
     mcts_engine.determinizations = determinizations;
     mcts_engine.pomcp = pomcp;
+    mcts_engine.noise_frac = noise_frac;
 
     let mut samples: Vec<Sample> = Vec::new();
     let mut final_outcome = "lose";
@@ -338,7 +340,8 @@ fn run_selfplay_combat(
     terminal_win_hp_coef = 0.3,
     terminal_lose = -1.0,
     determinizations = 1,
-    pomcp = false
+    pomcp = false,
+    noise_frac = 0.25
 ))]
 pub fn betaone_mcts_selfplay(
     py: Python<'_>,
@@ -366,6 +369,7 @@ pub fn betaone_mcts_selfplay(
     terminal_lose: f32,
     determinizations: usize,
     pomcp: bool,
+    noise_frac: f32,
 ) -> PyResult<PyObject> {
     let decks: Vec<Vec<Card>> = serde_json::from_str(decks_json)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("decks: {e}")))?;
@@ -438,6 +442,7 @@ pub fn betaone_mcts_selfplay(
                         (terminal_win_base, terminal_win_hp_coef, terminal_lose),
                         determinizations,
                         pomcp,
+                        noise_frac,
                     ))
                 })
             })

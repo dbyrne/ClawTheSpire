@@ -153,6 +153,10 @@ pub struct MCTS<'a> {
     /// Each simulation samples a fresh draw at chance nodes, properly evaluating
     /// expected value of draw/cycle cards across multiple possible draws.
     pub pomcp: bool,
+    /// Fraction of root prior replaced by Dirichlet noise (AlphaZero default 0.25).
+    /// Higher values force more exploration away from a sharp prior — the lever
+    /// for breaking echo-chamber priors that pin visit counts to themselves.
+    pub noise_frac: f32,
 }
 
 impl<'a> MCTS<'a> {
@@ -160,7 +164,7 @@ impl<'a> MCTS<'a> {
         MCTS {
             card_db, inference, add_noise: false, turn_boundary_eval: false,
             c_puct: DEFAULT_C_PUCT, terminal_scale: (1.0, 0.3, -1.0),
-            determinizations: 1, pomcp: false,
+            determinizations: 1, pomcp: false, noise_frac: 0.25,
         }
     }
 
@@ -231,7 +235,7 @@ impl<'a> MCTS<'a> {
         // Add Dirichlet noise to root priors
         if self.add_noise {
             let alpha = 0.3;
-            let noise_frac: f32 = 0.25;
+            let noise_frac: f32 = self.noise_frac;
             let child_indices: Vec<usize> = arena.nodes[root_idx].children.iter()
                 .map(|&(_, child_idx)| child_idx).collect();
             let noise = dirichlet(alpha, child_indices.len(), rng);
