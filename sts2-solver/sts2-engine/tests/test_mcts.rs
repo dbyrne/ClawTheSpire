@@ -231,6 +231,46 @@ fn test_search_batched_batch1_equals_sequential() {
 }
 
 #[test]
+fn test_search_batched_tbe_basic() {
+    // Turn-boundary eval path: playout + value_only + priors all interleave.
+    let state = state_with(vec![strike(), strike(), defend(), defend()], vec![enemy(40)]);
+    let db = card_db();
+    let inf = BiasedInference { bias_idx: 0, bias_logit: 2.0, value: 0.2 };
+    let mut mcts = MCTS::new(&db, &inf);
+    mcts.add_noise = false;
+    mcts.turn_boundary_eval = true;
+
+    let result = mcts.search_batched(&state, None, 200, 8, 1.0, &mut rng());
+
+    let total: u32 = result.child_visits.iter().sum();
+    assert_eq!(total as usize, 200, "TBE batched should sum to num_sims");
+    // Top action should be the biased one
+    let top_idx = result.child_visits.iter().enumerate()
+        .max_by_key(|&(_, v)| *v).map(|(i, _)| i).unwrap();
+    assert_eq!(top_idx, 0, "biased action should dominate under TBE batched");
+}
+
+#[test]
+fn test_search_batched_tbe_batch1_visits_sum() {
+    // With TBE and batch_size=1, visit counts won't be IDENTICAL to sequential
+    // (RNG consumption ordering differs between the two state machines) but
+    // the total must sum to num_simulations and the tree must be well-formed.
+    let state = state_with(vec![strike(), strike(), defend()], vec![enemy(30)]);
+    let db = card_db();
+    let inf = BiasedInference { bias_idx: 1, bias_logit: 3.0, value: 0.5 };
+    let mut mcts = MCTS::new(&db, &inf);
+    mcts.add_noise = false;
+    mcts.turn_boundary_eval = true;
+
+    let bat = mcts.search_batched(&state, None, 100, 1, 1.0, &mut rng());
+    let total: u32 = bat.child_visits.iter().sum();
+    assert_eq!(total as usize, 100);
+    // Policy should sum to 1
+    let pol_sum: f32 = bat.policy.iter().sum();
+    assert!((pol_sum - 1.0).abs() < 1e-3);
+}
+
+#[test]
 fn test_search_batched_virtual_loss_spreads_visits() {
     // With a neutral prior, batched search should spread visits across
     // children at least as much as sequential (virtual loss promotes diversity).

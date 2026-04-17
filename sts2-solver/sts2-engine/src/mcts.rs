@@ -145,6 +145,51 @@ enum LeafOutcome {
     },
 }
 
+/// State machine phase for a leaf in flight during batched search.
+/// Each round of `search_batched` advances every leaf by (at most) one
+/// NN call. Phases that don't need NN work resolve synchronously first.
+enum LeafPhase {
+    /// Fresh selection. No processing yet. First tick handles
+    /// chance/terminal/lazy-state-init and routes to the right phase.
+    PendingInit,
+    /// Turn-boundary playout in progress. `sim` is a clone of the leaf's
+    /// state that the playout is mutating with greedy actions. Each NN
+    /// round requests (sim, enumerate_actions(sim)) and picks the argmax.
+    Playout {
+        sim: CombatState,
+        ais: Option<Vec<crate::enemy::EnemyAI>>,
+        step: usize,
+    },
+    /// Playout finished (EndTurn, max steps, combat over, or empty
+    /// actions). Needs synchronous end-of-turn resolution on `sim`.
+    NeedsPostPlayoutResolve {
+        sim: CombatState,
+        ais: Option<Vec<crate::enemy::EnemyAI>>,
+    },
+    /// Post-resolution sim ready; need batched value_only on it.
+    NeedsValue { sim: CombatState },
+    /// Got leaf_value; handle synchronous node-state resolution
+    /// (if the node's state had turn_ended) + action enumeration +
+    /// forced-EoT, then decide priors path.
+    NeedsNodeResolve { leaf_value: f32 },
+    /// Got actions; need the children-priors NN call.
+    NeedsPriors { actions: Vec<Action>, leaf_value: f32 },
+    /// Ready to backup. value is the MCTS-backup value for this leaf.
+    Done { value: f32 },
+}
+
+struct InFlightLeaf {
+    arena_idx: usize,
+    phase: LeafPhase,
+    /// Playout step-0 logits, if captured. Reused for priors when the
+    /// node state hasn't been mutated since playout ran.
+    first_step_logits: Option<Vec<f32>>,
+    /// The node to back up into. Usually == arena_idx, but chance nodes
+    /// set this to the sampled observation child that sample_chance_child
+    /// dove into.
+    backup_idx: usize,
+}
+
 // ---------------------------------------------------------------------------
 // Inference trait (filled by ONNX or mock)
 // ---------------------------------------------------------------------------
@@ -313,16 +358,20 @@ impl<'a> MCTS<'a> {
         self.extract_result(&arena, root_idx, temperature, rng)
     }
 
-    /// Batched MCTS search with virtual loss. Same output shape as
-    /// `search`/`search_with_ais`, but collects up to `batch_size` leaves
-    /// per iteration and runs their priors NN calls as one batched forward
-    /// pass. Virtual losses on ancestors push K parallel selects onto
-    /// different branches so the batch is actually useful.
+    /// Batched MCTS search with virtual loss and interleaved turn-boundary
+    /// playouts. Same output shape as `search`/`search_with_ais`.
     ///
-    /// Note: the turn-boundary playout inside each leaf is still sequential
-    /// (the next state depends on the previous greedy action). Batching
-    /// there requires interleaved playouts — future work. For now the
-    /// speedup comes from batching only the children-priors call.
+    /// Maintains up to `batch_size` in-flight leaves as a state machine.
+    /// Each round: advance non-NN transitions synchronously, then batch
+    /// every NN call (playout step, value_only, priors) across the in-flight
+    /// set. Completed leaves are removed and their virtual loss is undone
+    /// before the real backup.
+    ///
+    /// Trade-off: the visit distribution differs from sequential MCTS
+    /// because virtual loss changes which path gets selected while K leaves
+    /// are in flight. See Leela / AlphaZero virtual-loss literature —
+    /// asymptotically unbiased, finite-sim noise usually invisible at
+    /// batch_size ≤ ~32 for sims ≥ ~400.
     pub fn search_batched(
         &self,
         state: &CombatState,
@@ -365,78 +414,538 @@ impl<'a> MCTS<'a> {
             }
         }
 
+        let mut in_flight: Vec<InFlightLeaf> = Vec::with_capacity(batch_size);
         let mut sims_done: usize = 0;
-        while sims_done < num_simulations {
-            let remaining = num_simulations - sims_done;
-            let k = batch_size.min(remaining);
 
-            // Track per-selection info so we can back up + remove VL correctly
-            // after batched priors finish.
-            //   (vl_leaf, backup_from, value)
-            let mut ready: Vec<(usize, usize, f32)> = Vec::with_capacity(k);
-            //   (vl_leaf, actions) — these need a batched priors NN call
-            let mut pending: Vec<(usize, Vec<Action>, f32)> = Vec::with_capacity(k);
-
-            for _ in 0..k {
+        loop {
+            // Fill pool with fresh selections until we hit batch_size or
+            // the total-sim budget. MIN_ROOT_VISITS in the selector ensures
+            // early selects spread across children before virtual loss
+            // alone would do it.
+            while in_flight.len() < batch_size
+                && sims_done + in_flight.len() < num_simulations
+            {
                 let vl_leaf = self.select(&arena, root_idx);
                 self.add_virtual_loss(&mut arena, vl_leaf);
+                in_flight.push(InFlightLeaf {
+                    arena_idx: vl_leaf,
+                    phase: LeafPhase::PendingInit,
+                    first_step_logits: None,
+                    backup_idx: vl_leaf,
+                });
+            }
 
-                if arena.nodes[vl_leaf].is_terminal {
-                    let v = arena.nodes[vl_leaf].terminal_value;
-                    ready.push((vl_leaf, vl_leaf, v));
-                    continue;
-                }
-                if arena.nodes[vl_leaf].is_chance {
-                    // Chance node handling is recursive and may allocate;
-                    // don't attempt to batch. Backup immediately.
-                    let (value, backup_from) = self.sample_chance_child(&mut arena, vl_leaf, rng);
-                    ready.push((vl_leaf, backup_from, value));
-                    continue;
-                }
-                match self.prepare_for_priors(&mut arena, vl_leaf, rng) {
-                    LeafOutcome::Done(v) => {
-                        ready.push((vl_leaf, vl_leaf, v));
-                    }
-                    LeafOutcome::NeedPriors { value, actions, cached_logits } => {
-                        if let Some(logits) = cached_logits {
-                            // Playout already evaluated priors — skip batched call
-                            self.finalize_with_priors(&mut arena, vl_leaf, actions, &logits);
-                            ready.push((vl_leaf, vl_leaf, value));
-                        } else {
-                            pending.push((vl_leaf, actions, value));
-                        }
+            if in_flight.is_empty() {
+                break;
+            }
+
+            // Phase 1: advance every leaf through non-NN transitions until
+            // each one is either Done or waiting for an NN call. Run in a
+            // fixed-point loop because phases can chain (e.g.
+            // NeedsPostPlayoutResolve → NeedsValue → NeedsNodeResolve via
+            // immediate transitions if state is terminal).
+            let mut made_progress = true;
+            while made_progress {
+                made_progress = false;
+                for i in 0..in_flight.len() {
+                    if self.advance_non_nn(&mut arena, &mut in_flight[i], rng) {
+                        made_progress = true;
                     }
                 }
             }
 
-            if !pending.is_empty() {
-                let states: Vec<&CombatState> = pending.iter()
-                    .map(|(idx, _, _)| arena.nodes[*idx].state.as_ref().unwrap())
-                    .collect();
-                let actions_refs: Vec<&[Action]> = pending.iter()
-                    .map(|(_, a, _)| a.as_slice())
-                    .collect();
-                let results = self.inference.evaluate_batch(&states, &actions_refs);
+            // Phase 2: batch NN calls across all in-flight leaves awaiting one.
+            self.batched_nn_round(&mut arena, &mut in_flight, rng);
 
-                for ((vl_leaf, actions, value), (logits, _)) in
-                    pending.into_iter().zip(results.into_iter())
-                {
-                    self.finalize_with_priors(&mut arena, vl_leaf, actions, &logits);
-                    ready.push((vl_leaf, vl_leaf, value));
+            // Phase 3: harvest Done leaves. Iterate in reverse so swap_remove
+            // stays cheap and doesn't disturb remaining indices.
+            let mut i = in_flight.len();
+            while i > 0 {
+                i -= 1;
+                if matches!(in_flight[i].phase, LeafPhase::Done { .. }) {
+                    let leaf = in_flight.swap_remove(i);
+                    let value = if let LeafPhase::Done { value } = leaf.phase {
+                        value
+                    } else {
+                        unreachable!()
+                    };
+                    self.remove_virtual_loss(&mut arena, leaf.arena_idx);
+                    self.backup(&mut arena, leaf.backup_idx, value);
+                    sims_done += 1;
                 }
             }
 
-            // Remove virtual losses + real backups. Order matters: remove
-            // VL first so backup's visit_count += 1 lines up with the final
-            // state a sequential search would have produced.
-            for (vl_leaf, backup_from, value) in ready {
-                self.remove_virtual_loss(&mut arena, vl_leaf);
-                self.backup(&mut arena, backup_from, value);
-                sims_done += 1;
+            if sims_done >= num_simulations && in_flight.is_empty() {
+                break;
             }
         }
 
         self.extract_result(&arena, root_idx, temperature, rng)
+    }
+
+    /// Advance one leaf through non-NN phases. Returns true if the phase
+    /// changed, so the caller can loop until fixed point.
+    ///
+    /// NN-needing phases (Playout, NeedsValue, NeedsPriors) fall through
+    /// without mutation — the batched NN round handles them.
+    fn advance_non_nn(
+        &self,
+        arena: &mut Arena,
+        leaf: &mut InFlightLeaf,
+        rng: &mut impl Rng,
+    ) -> bool {
+        match std::mem::replace(&mut leaf.phase, LeafPhase::PendingInit) {
+            LeafPhase::PendingInit => {
+                leaf.phase = self.init_leaf(arena, leaf.arena_idx, rng, &mut leaf.backup_idx);
+                true
+            }
+            LeafPhase::NeedsPostPlayoutResolve { mut sim, mut ais } => {
+                // End-of-turn resolution on the playout sim (no NN).
+                sim.turn_ended = false;
+                combat::end_turn(&mut sim, self.card_db, rng);
+                combat::resolve_enemy_intents(&mut sim);
+                combat::tick_enemy_powers(&mut sim);
+                if let Some(outcome) = is_combat_over(&sim) {
+                    let tv = terminal_value_scaled(outcome, &sim, self.terminal_scale);
+                    leaf.phase = LeafPhase::NeedsNodeResolve { leaf_value: tv };
+                } else {
+                    combat::start_turn(&mut sim, rng);
+                    if let Some(ref mut ai_vec) = ais {
+                        crate::enemy::sync_enemy_ais(
+                            &sim,
+                            ai_vec,
+                            &std::collections::HashMap::new(),
+                        );
+                        crate::enemy::set_enemy_intents(&mut sim, ai_vec, rng);
+                    }
+                    leaf.phase = LeafPhase::NeedsValue { sim };
+                }
+                true
+            }
+            LeafPhase::NeedsNodeResolve { leaf_value } => {
+                leaf.phase = self.resolve_node_state(
+                    arena,
+                    leaf.arena_idx,
+                    leaf_value,
+                    leaf.first_step_logits.take(),
+                    rng,
+                );
+                true
+            }
+            other @ (LeafPhase::Playout { .. }
+            | LeafPhase::NeedsValue { .. }
+            | LeafPhase::NeedsPriors { .. }
+            | LeafPhase::Done { .. }) => {
+                leaf.phase = other;
+                false
+            }
+        }
+    }
+
+    /// One-shot processing of a freshly-selected leaf, before any NN work.
+    /// Mirrors the chance/terminal/state-materialization logic at the top
+    /// of `prepare_for_priors`, then branches into the correct next phase.
+    fn init_leaf(
+        &self,
+        arena: &mut Arena,
+        node_idx: usize,
+        rng: &mut impl Rng,
+        backup_idx: &mut usize,
+    ) -> LeafPhase {
+        // Lazy state computation for non-root nodes.
+        if arena.nodes[node_idx].state.is_none() {
+            let parent_idx = arena.nodes[node_idx].parent.unwrap();
+            let action_idx = arena.nodes[node_idx].parent_action_idx;
+            let parent_state = arena.nodes[parent_idx].state.as_ref().unwrap();
+            let parent_ais = arena.nodes[parent_idx].enemy_ais.clone();
+            let action = &arena.nodes[parent_idx].legal_actions[action_idx];
+
+            let mut new_state = parent_state.clone();
+            let mut new_ais = parent_ais;
+            let chance_info = self.apply_action(&mut new_state, &mut new_ais, action, rng);
+            arena.nodes[node_idx].state = Some(new_state);
+            arena.nodes[node_idx].enemy_ais = new_ais;
+
+            if let Some((draw_count, card, post_count)) = chance_info {
+                arena.nodes[node_idx].is_chance = true;
+                arena.nodes[node_idx].pending_draws = draw_count;
+                arena.nodes[node_idx].pending_post_draw_card = card;
+                arena.nodes[node_idx].pending_post_draw_count = post_count;
+                arena.nodes[node_idx].is_expanded = true;
+                let state = arena.nodes[node_idx].state.as_ref().unwrap();
+                let v = self.estimate_leaf_value(state);
+                return LeafPhase::Done { value: v };
+            }
+        }
+
+        // Terminal check (pre-resolution).
+        {
+            let state = arena.nodes[node_idx].state.as_ref().unwrap();
+            if let Some(outcome) = is_combat_over(state) {
+                let v = terminal_value_scaled(outcome, state, self.terminal_scale);
+                arena.nodes[node_idx].is_terminal = true;
+                arena.nodes[node_idx].is_expanded = true;
+                arena.nodes[node_idx].terminal_value = v;
+                return LeafPhase::Done { value: v };
+            }
+        }
+
+        // If the node was already a chance node from a prior select pass,
+        // dispatch it to sample_chance_child immediately — chance-child
+        // recursion isn't shaped for batching, and chance nodes are rare
+        // enough that sequential handling keeps the code simple.
+        if arena.nodes[node_idx].is_chance {
+            let (value, bk) = self.sample_chance_child(arena, node_idx, rng);
+            *backup_idx = bk;
+            return LeafPhase::Done { value };
+        }
+
+        // Route into the leaf-value path.
+        if self.turn_boundary_eval {
+            let state = arena.nodes[node_idx].state.as_ref().unwrap();
+            let ais = arena.nodes[node_idx].enemy_ais.clone();
+            if state.turn_ended {
+                // Skip the playout loop entirely; go straight to post-
+                // playout resolution like estimate_leaf_value_turn_boundary
+                // does when it sees turn_ended.
+                LeafPhase::NeedsPostPlayoutResolve {
+                    sim: state.clone(),
+                    ais,
+                }
+            } else {
+                LeafPhase::Playout {
+                    sim: state.clone(),
+                    ais,
+                    step: 0,
+                }
+            }
+        } else {
+            // Non-TBE path: leaf value is value_only(pre-resolution state).
+            let state = arena.nodes[node_idx].state.as_ref().unwrap();
+            LeafPhase::NeedsValue {
+                sim: state.clone(),
+            }
+        }
+    }
+
+    /// Handle the node-level state resolution that mirrors
+    /// `prepare_for_priors`' middle section: optional EoT resolution if
+    /// the node's own state was turn_ended, action enumeration, forced-EoT
+    /// if empty, and the cached-logits priors shortcut.
+    fn resolve_node_state(
+        &self,
+        arena: &mut Arena,
+        node_idx: usize,
+        leaf_value: f32,
+        first_step_logits: Option<Vec<f32>>,
+        rng: &mut impl Rng,
+    ) -> LeafPhase {
+        // Read turn_ended from the materialized node state. Nothing else
+        // has mutated it since init_leaf materialized it (the batched NN
+        // rounds operate on clones or on other nodes).
+        let turn_ended = arena.nodes[node_idx].state.as_ref().unwrap().turn_ended;
+
+        // If the node's state had turn_ended, resolve it and advance to
+        // next turn so children branch from a clean start-of-turn state.
+        if turn_ended {
+            let mut resolved = arena.nodes[node_idx].state.take().unwrap();
+            let mut ais = arena.nodes[node_idx].enemy_ais.take();
+            resolved.turn_ended = false;
+            combat::end_turn(&mut resolved, self.card_db, rng);
+            combat::resolve_enemy_intents(&mut resolved);
+            combat::tick_enemy_powers(&mut resolved);
+
+            if let Some(outcome) = is_combat_over(&resolved) {
+                let tv = terminal_value_scaled(outcome, &resolved, self.terminal_scale);
+                arena.nodes[node_idx].state = Some(resolved);
+                arena.nodes[node_idx].enemy_ais = ais;
+                arena.nodes[node_idx].is_terminal = true;
+                arena.nodes[node_idx].is_expanded = true;
+                arena.nodes[node_idx].terminal_value = tv;
+                return LeafPhase::Done { value: tv };
+            }
+
+            combat::start_turn(&mut resolved, rng);
+            if let Some(ref mut ai_vec) = ais {
+                crate::enemy::sync_enemy_ais(
+                    &resolved,
+                    ai_vec,
+                    &std::collections::HashMap::new(),
+                );
+                crate::enemy::set_enemy_intents(&mut resolved, ai_vec, rng);
+            }
+            arena.nodes[node_idx].state = Some(resolved);
+            arena.nodes[node_idx].enemy_ais = ais;
+        }
+
+        let mut actions = {
+            let state = arena.nodes[node_idx].state.as_ref().unwrap();
+            enumerate_actions(state)
+        };
+        let mut forced_eot_happened = false;
+        if actions.is_empty() {
+            forced_eot_happened = true;
+            let mut resolved = arena.nodes[node_idx].state.take().unwrap();
+            let mut ais = arena.nodes[node_idx].enemy_ais.take();
+            combat::end_turn(&mut resolved, self.card_db, rng);
+            combat::resolve_enemy_intents(&mut resolved);
+            combat::tick_enemy_powers(&mut resolved);
+
+            if let Some(outcome) = is_combat_over(&resolved) {
+                let tv = terminal_value_scaled(outcome, &resolved, self.terminal_scale);
+                arena.nodes[node_idx].state = Some(resolved);
+                arena.nodes[node_idx].enemy_ais = ais;
+                arena.nodes[node_idx].is_terminal = true;
+                arena.nodes[node_idx].is_expanded = true;
+                arena.nodes[node_idx].terminal_value = tv;
+                return LeafPhase::Done { value: tv };
+            }
+
+            combat::start_turn(&mut resolved, rng);
+            if let Some(ref mut ai_vec) = ais {
+                crate::enemy::sync_enemy_ais(
+                    &resolved,
+                    ai_vec,
+                    &std::collections::HashMap::new(),
+                );
+                crate::enemy::set_enemy_intents(&mut resolved, ai_vec, rng);
+            }
+            arena.nodes[node_idx].state = Some(resolved);
+            arena.nodes[node_idx].enemy_ais = ais;
+
+            actions = {
+                let state = arena.nodes[node_idx].state.as_ref().unwrap();
+                enumerate_actions(state)
+            };
+            if actions.is_empty() {
+                arena.nodes[node_idx].is_expanded = true;
+                arena.nodes[node_idx].is_terminal = true;
+                arena.nodes[node_idx].terminal_value = 0.0;
+                return LeafPhase::Done { value: 0.0 };
+            }
+        }
+
+        // Same cache-validity condition as prepare_for_priors.
+        let usable_cached = match &first_step_logits {
+            Some(l) if !turn_ended
+                && !forced_eot_happened
+                && l.len() == actions.len() =>
+            {
+                true
+            }
+            _ => false,
+        };
+        if usable_cached {
+            let logits = first_step_logits.unwrap();
+            self.finalize_with_priors(arena, node_idx, actions, &logits);
+            LeafPhase::Done { value: leaf_value }
+        } else {
+            LeafPhase::NeedsPriors {
+                actions,
+                leaf_value,
+            }
+        }
+    }
+
+    /// Execute one NN round: gather all in-flight leaves awaiting NN work,
+    /// batch them, advance each leaf by its corresponding result.
+    fn batched_nn_round(
+        &self,
+        arena: &mut Arena,
+        in_flight: &mut [InFlightLeaf],
+        rng: &mut impl Rng,
+    ) {
+        // Collect per-phase inputs. We clone states here; CombatState clone
+        // is ~2us so for K=32 this is ~64us — negligible vs NN cost.
+        struct PlayoutEntry {
+            idx: usize,
+            state: CombatState,
+            actions: Vec<Action>,
+        }
+        struct ValueEntry {
+            idx: usize,
+            state: CombatState,
+        }
+        struct PriorsEntry {
+            idx: usize,
+            state: CombatState,
+            actions: Vec<Action>,
+        }
+
+        let mut playout_entries: Vec<PlayoutEntry> = Vec::new();
+        let mut value_entries: Vec<ValueEntry> = Vec::new();
+        let mut priors_entries: Vec<PriorsEntry> = Vec::new();
+
+        for (i, leaf) in in_flight.iter_mut().enumerate() {
+            match &leaf.phase {
+                LeafPhase::Playout { sim, step, .. } => {
+                    // Playout safety rails before enqueuing NN: terminal,
+                    // max steps, or empty actions all short-circuit to
+                    // PostPlayoutResolve without consuming an NN slot.
+                    if is_combat_over(sim).is_some() || *step >= 15 {
+                        // Move to PostPlayoutResolve. Need to pull sim/ais
+                        // out via mem::replace.
+                        let old = std::mem::replace(&mut leaf.phase, LeafPhase::PendingInit);
+                        if let LeafPhase::Playout { sim, ais, .. } = old {
+                            leaf.phase = LeafPhase::NeedsPostPlayoutResolve { sim, ais };
+                        }
+                        continue;
+                    }
+                    let actions = enumerate_actions(sim);
+                    if actions.is_empty() {
+                        let old = std::mem::replace(&mut leaf.phase, LeafPhase::PendingInit);
+                        if let LeafPhase::Playout { sim, ais, .. } = old {
+                            leaf.phase = LeafPhase::NeedsPostPlayoutResolve { sim, ais };
+                        }
+                        continue;
+                    }
+                    playout_entries.push(PlayoutEntry {
+                        idx: i,
+                        state: sim.clone(),
+                        actions,
+                    });
+                }
+                LeafPhase::NeedsValue { sim } => {
+                    value_entries.push(ValueEntry {
+                        idx: i,
+                        state: sim.clone(),
+                    });
+                }
+                LeafPhase::NeedsPriors { actions, .. } => {
+                    let state = arena.nodes[leaf.arena_idx]
+                        .state
+                        .as_ref()
+                        .unwrap()
+                        .clone();
+                    priors_entries.push(PriorsEntry {
+                        idx: i,
+                        state,
+                        actions: actions.clone(),
+                    });
+                }
+                _ => {}
+            }
+        }
+
+        // Dispatch playout batch.
+        if !playout_entries.is_empty() {
+            let states: Vec<&CombatState> =
+                playout_entries.iter().map(|e| &e.state).collect();
+            let actions_refs: Vec<&[Action]> =
+                playout_entries.iter().map(|e| e.actions.as_slice()).collect();
+            let results = self
+                .inference
+                .evaluate_batch(&states, &actions_refs);
+
+            for (e, (logits, _)) in playout_entries.into_iter().zip(results.into_iter()) {
+                let leaf = &mut in_flight[e.idx];
+                // Capture first-step logits for the priors cache shortcut.
+                if let LeafPhase::Playout { step: 0, .. } = &leaf.phase {
+                    leaf.first_step_logits = Some(logits.clone());
+                }
+                let chosen = logits
+                    .iter()
+                    .enumerate()
+                    .max_by(|(_, a), (_, b)| {
+                        a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .map(|(i, _)| i)
+                    .unwrap_or(0);
+                let action = e.actions[chosen].clone();
+
+                // Apply action to the leaf's sim and advance step, handling
+                // early termination conditions the same way the sequential
+                // playout does.
+                let old = std::mem::replace(&mut leaf.phase, LeafPhase::PendingInit);
+                if let LeafPhase::Playout { mut sim, ais, step } = old {
+                    match &action {
+                        Action::EndTurn => {
+                            leaf.phase =
+                                LeafPhase::NeedsPostPlayoutResolve { sim, ais };
+                        }
+                        Action::PlayCard { card_idx, target_idx } => {
+                            if combat::can_play_card(&sim, *card_idx) {
+                                combat::play_card(
+                                    &mut sim,
+                                    *card_idx,
+                                    *target_idx,
+                                    self.card_db,
+                                    rng,
+                                );
+                            }
+                            if is_combat_over(&sim).is_some() || step + 1 >= 15 {
+                                leaf.phase =
+                                    LeafPhase::NeedsPostPlayoutResolve { sim, ais };
+                            } else {
+                                leaf.phase = LeafPhase::Playout {
+                                    sim,
+                                    ais,
+                                    step: step + 1,
+                                };
+                            }
+                        }
+                        Action::UsePotion { potion_idx } => {
+                            combat::use_potion(&mut sim, *potion_idx);
+                            if is_combat_over(&sim).is_some() || step + 1 >= 15 {
+                                leaf.phase =
+                                    LeafPhase::NeedsPostPlayoutResolve { sim, ais };
+                            } else {
+                                leaf.phase = LeafPhase::Playout {
+                                    sim,
+                                    ais,
+                                    step: step + 1,
+                                };
+                            }
+                        }
+                        Action::ChooseCard { choice_idx } => {
+                            crate::effects::execute_choice(&mut sim, *choice_idx, rng);
+                            if is_combat_over(&sim).is_some() || step + 1 >= 15 {
+                                leaf.phase =
+                                    LeafPhase::NeedsPostPlayoutResolve { sim, ais };
+                            } else {
+                                leaf.phase = LeafPhase::Playout {
+                                    sim,
+                                    ais,
+                                    step: step + 1,
+                                };
+                            }
+                        }
+                    }
+                } else {
+                    unreachable!("leaf phase changed under us");
+                }
+            }
+        }
+
+        // Dispatch value_only batch.
+        if !value_entries.is_empty() {
+            let states: Vec<&CombatState> = value_entries.iter().map(|e| &e.state).collect();
+            let values = self.inference.value_only_batch(&states);
+            for (e, v) in value_entries.into_iter().zip(values.into_iter()) {
+                let leaf = &mut in_flight[e.idx];
+                let v = if v.is_finite() { v } else { 0.0 };
+                leaf.phase = LeafPhase::NeedsNodeResolve { leaf_value: v };
+            }
+        }
+
+        // Dispatch priors batch.
+        if !priors_entries.is_empty() {
+            let states: Vec<&CombatState> =
+                priors_entries.iter().map(|e| &e.state).collect();
+            let actions_refs: Vec<&[Action]> =
+                priors_entries.iter().map(|e| e.actions.as_slice()).collect();
+            let results = self.inference.evaluate_batch(&states, &actions_refs);
+            for (e, (logits, _)) in priors_entries.into_iter().zip(results.into_iter()) {
+                let leaf = &mut in_flight[e.idx];
+                let old = std::mem::replace(&mut leaf.phase, LeafPhase::PendingInit);
+                if let LeafPhase::NeedsPriors { actions, leaf_value } = old {
+                    self.finalize_with_priors(arena, leaf.arena_idx, actions, &logits);
+                    leaf.phase = LeafPhase::Done { value: leaf_value };
+                } else {
+                    unreachable!();
+                }
+            }
+        }
     }
 
     /// Walk from `leaf_idx` to root, incrementing virtual_visits at each
