@@ -1486,6 +1486,107 @@ def build_scenarios() -> list[Scenario]:
         bad_actions=[1],        # Defend is strictly wasteful with Intangible up
     ))
 
+    # ===== POWER-CONDITIONAL DECISIONS =====
+    # The previous eval expansion revealed the model picks roughly the same
+    # action regardless of player-power state (e.g. ignored Burst, ignored
+    # Intangible). These scenarios specifically test "same hand+enemy, but
+    # a player power is active — does the action choice change?"
+
+    scenarios.append(Scenario(
+        name="double_damage_biggest_attack",
+        category="powers",
+        description="Double Damage power up — next Attack plays 2x. Prefer the biggest attack.",
+        player={"hp": 50, "max_hp": 70, "energy": 1, "block": 0,
+                "powers": {"Double Damage": 1}},
+        enemies=[enemy(40, 50, damage=8)],
+        hand=[strike(), dagger_throw()],
+        actions=[
+            ActionSpec("play_card", dagger_throw(), target_idx=0,
+                       label="Dagger Throw (9 dmg x2 = 18, uses Double Damage efficiently)"),
+            ActionSpec("play_card", strike(), target_idx=0,
+                       label="Strike (6 dmg x2 = 12, wastes the bigger slot)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # Double Damage amplifies the bigger base damage more
+        bad_actions=[2],
+    ))
+
+    scenarios.append(Scenario(
+        name="afterimage_dont_end_turn",
+        category="powers",
+        description="Afterimage 3 (block per card played). Cheap card gives block even if useless.",
+        player={"hp": 40, "max_hp": 70, "energy": 2, "block": 0,
+                "powers": {"Afterimage": 3}},
+        enemies=[enemy(30, 50, damage=9)],
+        hand=[adrenaline(), defend()],
+        actions=[
+            ActionSpec("play_card", adrenaline(),
+                       label="Adrenaline (0-cost, +3 block via Afterimage, +draw, +energy)"),
+            ActionSpec("play_card", defend(), label="Defend (5+3 = 8 block)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0, 1],    # either card play generates Afterimage block; end_turn does not
+        bad_actions=[2],        # ending turn with energy loses the Afterimage proc
+    ))
+
+    scenarios.append(Scenario(
+        name="weak_player_defers_attack",
+        category="powers",
+        description="Player has Weak (attacks do 25% less). Setting up / blocking is more efficient than attacking.",
+        player={"hp": 30, "max_hp": 70, "energy": 2, "block": 0,
+                "powers": {"Weak": 3}},
+        enemies=[enemy(50, 60, damage=10)],
+        hand=[strike(), footwork(), defend()],
+        actions=[
+            ActionSpec("play_card", footwork(),
+                       label="Footwork (Dex+, scales all future block — better with Weak active)"),
+            ActionSpec("play_card", strike(), target_idx=0,
+                       label="Strike (6 dmg x 0.75 = 4.5 — diminished by Weak)"),
+            ActionSpec("play_card", defend(), label="Defend (5 block)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        # Under Weak, Strike barely damages; Footwork compounds block long-term.
+        # Defend is OK but Footwork's permanent Dex is better value at 2 energy.
+        best_actions=[0],
+        bad_actions=[3],
+    ))
+
+    scenarios.append(Scenario(
+        name="noxious_fumes_skip_redundant_poison",
+        category="powers",
+        description="Noxious Fumes 2 power auto-stacks poison each turn. Don't waste energy on Deadly Poison.",
+        player={"hp": 50, "max_hp": 70, "energy": 1, "block": 0,
+                "powers": {"Noxious Fumes": 2}},
+        enemies=[enemy(30, 50, damage=9)],
+        hand=[deadly_poison(), dagger_throw()],
+        actions=[
+            ActionSpec("play_card", dagger_throw(), target_idx=0,
+                       label="Dagger Throw (9 dmg — Fumes handles poison stacking for free)"),
+            ActionSpec("play_card", deadly_poison(), target_idx=0,
+                       label="Deadly Poison (+5 poison, redundant with Fumes + no immediate impact)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # Fumes stacks poison automatically; spend energy on damage
+    ))
+
+    scenarios.append(Scenario(
+        name="accuracy_blade_dance_over_strike",
+        category="powers",
+        description="Accuracy 3 gives +3 damage per Shiv. Blade Dance (3 shivs) benefits massively.",
+        player={"hp": 50, "max_hp": 70, "energy": 1, "block": 0,
+                "powers": {"Accuracy": 3}},
+        enemies=[enemy(30, 50, damage=8)],
+        hand=[blade_dance(), strike()],
+        actions=[
+            ActionSpec("play_card", blade_dance(),
+                       label="Blade Dance (3 shivs at (2+3)=5 each = 15 dmg via Accuracy)"),
+            ActionSpec("play_card", strike(), target_idx=0,
+                       label="Strike (6 dmg, no Accuracy benefit — Strike isn't a Shiv)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # Accuracy triples Shiv value; ignoring it wastes the power
+    ))
+
     # ===== RELIC-AWARE DECISIONS =====
 
     # Orichalcum: if you have 0 block at end of turn, get +6 block.
