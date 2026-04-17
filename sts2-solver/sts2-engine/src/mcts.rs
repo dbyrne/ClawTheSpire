@@ -397,13 +397,15 @@ impl<'a> MCTS<'a> {
         // turn_boundary_eval: play out rest of turn with greedy policy,
         //   resolve end-of-turn, evaluate V(next_turn_start).
         // default: evaluate V(state) directly (pre-resolution).
-        let value = if self.turn_boundary_eval {
+        // The optional cached_logits come from the playout's first step
+        // (same state as priors-eval below) so we can skip one forward pass.
+        let (value, cached_logits): (f32, Option<Vec<f32>>) = if self.turn_boundary_eval {
             let state = arena.nodes[node_idx].state.as_ref().unwrap();
             let ais = arena.nodes[node_idx].enemy_ais.clone();
             self.estimate_leaf_value_turn_boundary(state, &ais, rng)
         } else {
             let state = arena.nodes[node_idx].state.as_ref().unwrap();
-            self.estimate_leaf_value(state)
+            (self.estimate_leaf_value(state), None)
         };
 
         // For EndTurn nodes: resolve end-of-turn effects NOW so children
@@ -486,9 +488,21 @@ impl<'a> MCTS<'a> {
             }
         }
 
-        // Neural network policy priors
+        // Neural network policy priors.
+        // Reuse the turn-boundary playout's first-step logits when they
+        // match: this only holds when the playout actually ran step 0
+        // (state wasn't turn_ended and had legal actions), the node state
+        // hasn't been mutated since (turn_ended was false at entry and no
+        // forced-EoT re-enumeration fired), and the action count matches.
+        // Saves one forward pass per leaf expansion in the common case.
         let state = arena.nodes[node_idx].state.as_ref().unwrap();
-        let (logits, _policy_value) = self.inference.evaluate(state, &actions);
+        let logits = match cached_logits {
+            Some(l) if !turn_ended && l.len() == actions.len() => l,
+            _ => {
+                let (fresh, _) = self.inference.evaluate(state, &actions);
+                fresh
+            }
+        };
         let priors = if !actions.is_empty() { softmax(&logits) } else { vec![] };
 
         // Create child nodes (lazy — state=None)
@@ -533,23 +547,30 @@ impl<'a> MCTS<'a> {
     ///
     /// This gives the value function a clean turn-boundary state where all
     /// within-turn effects (damage, block, poison ticks, draw) are resolved.
+    ///
+    /// Returns `(leaf_value, first_step_logits)`. `first_step_logits` is
+    /// `Some` when the playout's first iteration evaluated the entry state
+    /// (i.e. turn wasn't already ended and there were legal actions). The
+    /// caller uses this to skip a redundant `evaluate()` call when computing
+    /// children priors on the same state.
     fn estimate_leaf_value_turn_boundary(
         &self,
         state: &CombatState,
         enemy_ais: &Option<Vec<crate::enemy::EnemyAI>>,
         rng: &mut impl Rng,
-    ) -> f32 {
+    ) -> (f32, Option<Vec<f32>>) {
         if let Some(outcome) = is_combat_over(state) {
-            return terminal_value_scaled(outcome, state, self.terminal_scale);
+            return (terminal_value_scaled(outcome, state, self.terminal_scale), None);
         }
 
         // If turn already ended (EndTurn node), skip the playout — we just
         // need to resolve and evaluate at the next turn start.
         let mut sim = state.clone();
+        let mut first_step_logits: Option<Vec<f32>> = None;
 
         if !sim.turn_ended {
             // Play out remaining card plays using greedy policy
-            for _ in 0..15 {
+            for step in 0..15 {
                 if is_combat_over(&sim).is_some() {
                     break;
                 }
@@ -561,6 +582,15 @@ impl<'a> MCTS<'a> {
 
                 // Get greedy action from policy network
                 let (logits, _) = self.inference.evaluate(&sim, &actions);
+
+                // On step 0, sim is still bit-identical to the entry state
+                // (no mutation yet). These logits are reusable as the entry
+                // state's policy priors — captured here so expand() can skip
+                // a redundant evaluate() call on the same state.
+                if step == 0 {
+                    first_step_logits = Some(logits.clone());
+                }
+
                 let chosen = logits.iter().enumerate()
                     .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
                     .map(|(i, _)| i)
@@ -590,7 +620,10 @@ impl<'a> MCTS<'a> {
         combat::tick_enemy_powers(&mut sim);
 
         if let Some(outcome) = is_combat_over(&sim) {
-            return terminal_value_scaled(outcome, &sim, self.terminal_scale);
+            return (
+                terminal_value_scaled(outcome, &sim, self.terminal_scale),
+                first_step_logits,
+            );
         }
 
         // Start next turn and set enemy intents so the state is complete
@@ -602,7 +635,8 @@ impl<'a> MCTS<'a> {
         }
 
         let v = self.inference.value_only(&sim);
-        if v.is_finite() { v } else { 0.0 }
+        let v = if v.is_finite() { v } else { 0.0 };
+        (v, first_step_logits)
     }
 
     /// Apply an action to the state. Returns chance-node info when POMCP is
