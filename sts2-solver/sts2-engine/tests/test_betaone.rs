@@ -59,8 +59,18 @@ fn test_state_dim_matches_constant() {
 }
 
 #[test]
-fn test_state_dim_is_player_plus_enemies_plus_context() {
-    assert_eq!(STATE_DIM, PLAYER_DIM + ENEMY_SLOTS * ENEMY_FEATURES + CONTEXT_DIM);
+fn test_state_dim_components_sum() {
+    // STATE_DIM = base (player + enemies + context + relics) + hand-card stats
+    // + hand mask. The test guards the invariant so future dim changes either
+    // update the formula here or trip the assertion.
+    let expected =
+        PLAYER_DIM
+        + ENEMY_SLOTS * ENEMY_FEATURES
+        + CONTEXT_DIM
+        + RELIC_DIM
+        + MAX_HAND * CARD_STATS_DIM
+        + MAX_HAND;
+    assert_eq!(STATE_DIM, expected);
 }
 
 // ===========================================================================

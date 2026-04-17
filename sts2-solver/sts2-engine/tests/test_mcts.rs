@@ -199,7 +199,9 @@ fn test_softmax_single_element() {
 
 #[test]
 fn test_search_terminal_win() {
-    // All enemies dead → is_combat_over("win") → early return
+    // All enemies dead → is_combat_over("win") → early return.
+    // Terminal value is HP-scaled: 1.0 + 0.3 * hp_frac. Player is at full HP
+    // (70/70 per state_with) so expect 1.3.
     let mut state = state_with(vec![strike()], vec![enemy(30)]);
     state.enemies[0].hp = 0;
 
@@ -210,8 +212,8 @@ fn test_search_terminal_win() {
 
     assert!(matches!(result.action, Action::EndTurn));
     assert!(
-        (result.root_value - 1.0).abs() < 1e-6,
-        "Terminal win root_value should be 1.0, got {}",
+        (result.root_value - 1.3).abs() < 1e-4,
+        "Terminal win root_value should be 1.3 (1.0 + 0.3 * full_hp), got {}",
         result.root_value
     );
 }
