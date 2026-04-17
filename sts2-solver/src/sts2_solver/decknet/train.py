@@ -73,19 +73,32 @@ def run_outcome_value(floor_reached: int, won_final_boss: bool) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Training sample
+# Training units
 # ---------------------------------------------------------------------------
 
 @dataclass
 class TrainingSample:
-    """One deck-building decision's training tuple.
-
-    `state_after_mod` is the state that would exist after the model's
-    chosen action was applied. This is what V should predict the value
-    of — the run outcome is the target.
-    """
+    """Legacy regression tuple. Used by TARGET_MODE_OUTCOME."""
     state_after_mod: DeckBuildingState
-    value_target: float                # the run outcome, broadcast
+    value_target: float
+
+
+@dataclass
+class TrainingPair:
+    """One deck-building decision as a pairwise comparison.
+
+    Every ADD-chosen decision yields a pair: the chosen post-mod state
+    (deck+X) vs the counterfactual do-nothing state (deck unchanged),
+    each annotated with its bootstrap policy-weight target. Training
+    uses a pairwise margin loss that cares only about the DIRECTION of
+    target_chosen - target_skip, never the absolute magnitudes. This
+    principled decoupling from absolute scale kills the deck-size
+    shortcut that absolute-regression variants kept learning.
+    """
+    state_chosen: DeckBuildingState   # deck+X after ADD
+    state_skip: DeckBuildingState     # deck unchanged
+    target_chosen: float              # bootstrap target for chosen state
+    target_skip: float                # bootstrap target for skip state
 
 
 # ---------------------------------------------------------------------------
@@ -93,34 +106,43 @@ class TrainingSample:
 # ---------------------------------------------------------------------------
 
 class ReplayBuffer:
-    """FIFO with win-reservoir oversampling.
+    """FIFO replay buffer holding regression samples OR pairwise comparisons.
 
-    Pattern scavenged from legacy alphazero/self_play.py — keeps a
-    dedicated reservoir of "winning" samples (value > threshold) so the
-    network always sees positive examples even when wins are rare.
+    Mode is set at construction time. The caller picks based on target_mode;
+    the loss function picks based on what the buffer holds. No win
+    reservoir for pair mode — the pair targets are signed, so under/over
+    representation of positive outcomes is handled at the pair level
+    (margin cares about direction, not magnitude).
     """
 
-    def __init__(self, capacity: int = 50_000, win_reservoir: int = 5_000,
-                 win_threshold: float = 0.5):
+    def __init__(self, capacity: int = 50_000, pair_mode: bool = False):
         self.capacity = capacity
-        self.win_threshold = win_threshold
-        self.main: deque[TrainingSample] = deque(maxlen=capacity)
-        self.wins: deque[TrainingSample] = deque(maxlen=win_reservoir)
+        self.pair_mode = pair_mode
+        self.main: deque = deque(maxlen=capacity)
+        # Win reservoir only used for regression mode (sparse wins).
+        self.wins: deque = deque(maxlen=5_000)
+        self.win_threshold = 0.5
 
-    def add(self, sample: TrainingSample) -> None:
-        self.main.append(sample)
-        if sample.value_target >= self.win_threshold:
-            self.wins.append(sample)
+    def add(self, item) -> None:
+        self.main.append(item)
+        if not self.pair_mode and item.value_target >= self.win_threshold:
+            self.wins.append(item)
 
     def __len__(self) -> int:
         return len(self.main)
 
-    def sample(self, batch_size: int, win_mix: float = 0.10) -> list[TrainingSample]:
+    def sample(self, batch_size: int, win_mix: float = 0.10) -> list:
         if len(self.main) == 0:
             return []
+        if self.pair_mode:
+            n = min(batch_size, len(self.main))
+            idx = np.random.choice(len(self.main), size=n, replace=False)
+            return [self.main[i] for i in idx]
         n_wins = min(int(batch_size * win_mix), len(self.wins))
         n_main = batch_size - n_wins
-        main_idx = np.random.choice(len(self.main), size=min(n_main, len(self.main)), replace=False)
+        main_idx = np.random.choice(
+            len(self.main), size=min(n_main, len(self.main)), replace=False,
+        )
         batch = [self.main[i] for i in main_idx]
         if n_wins > 0 and len(self.wins) > 0:
             win_idx = np.random.choice(len(self.wins), size=n_wins, replace=False)
@@ -212,26 +234,96 @@ def _bootstrap_target_for_skip(
     return float(np.median(per_card))
 
 
-def extract_samples(
+def extract_pairs(
     run_result: dict, card_vocab_inv: dict[int, str],
-    target_mode: str = TARGET_MODE_BOOTSTRAP,
-) -> list[TrainingSample]:
-    """Extract (state_after_mod, value_target) tuples from one Rust run result.
+) -> list[TrainingPair]:
+    """Extract pairwise comparisons from ADD-chosen decisions.
 
     Rust emits option_samples with:
       - raw_state_json: DeckBuildingState snapshot before decision
       - option_types, option_cards, chosen_idx: which option was picked
-      - card_policy_stats_json: per-combat MCTS policy aggregates (shared
-        across all samples in the run; filtered per-sample by floor)
+      - card_policy_stats_json: per-combat MCTS policy aggregates
 
-    For TARGET_MODE_BOOTSTRAP, target is BetaOne's revealed preference on
-    the chosen card across combats AFTER the decision, weighted toward the
-    late run where deck context is mature. Samples with no signal (card
-    never drawn, insufficient occurrences) are dropped — they'd otherwise
-    fall back to broadcast credit which is exactly what we're replacing.
-
-    For TARGET_MODE_OUTCOME, legacy broadcast of run_outcome_value.
+    Each ADD-chosen decision yields one TrainingPair: (deck+X, deck)
+    with policy-weight targets for each side. The pair is usable only
+    when both targets can be computed (card X was drawn at least
+    MIN_OCCURRENCES times forward, and the deck has at least one other
+    card with enough signal for the skip baseline). Decisions where
+    the model chose SKIP produce no pair — we have no counterfactual
+    data about what adding would have given us.
     """
+    pairs: list[TrainingPair] = []
+    for os_sample in run_result.get("option_samples", []):
+        raw_json = os_sample.get("raw_state_json", "")
+        if not raw_json:
+            continue
+        try:
+            state_dict = json.loads(raw_json)
+            state_before = state_from_dict(state_dict)
+        except Exception:
+            continue
+
+        chosen_idx = os_sample["chosen_idx"]
+        option_types = os_sample["option_types"]
+        option_cards = os_sample["option_cards"]
+        if chosen_idx >= len(option_types):
+            continue
+
+        # Only ADD-chosen decisions can form pairs (we have no bootstrap
+        # signal for counterfactual ADDs on SKIP-chosen decisions).
+        OPTION_CARD_REWARD = 12
+        chosen_type = option_types[chosen_idx]
+        if chosen_type != OPTION_CARD_REWARD:
+            continue
+
+        vocab_id = option_cards[chosen_idx]
+        chosen_card_id = card_vocab_inv.get(vocab_id)
+        if chosen_card_id is None or chosen_card_id in ("<PAD>", "<UNK>"):
+            continue
+
+        stats_json = os_sample.get("card_policy_stats_json", "")
+        combat_stats = json.loads(stats_json) if stats_json else []
+        sample_floor = int(os_sample.get("floor", 0))
+
+        raw_chosen = _bootstrap_target_for_card(
+            chosen_card_id, sample_floor, combat_stats,
+        )
+        raw_skip = _bootstrap_target_for_skip(
+            state_before.deck, sample_floor, combat_stats,
+        )
+        if raw_chosen is None or raw_skip is None:
+            continue
+
+        # Map [0, 1] policy mean → [-1, +1] V target (margin loss cares
+        # only about sign of (t_chosen - t_skip), but keeping the same
+        # scale as V outputs keeps the margin parameter interpretable).
+        target_chosen = 2.0 * raw_chosen - 1.0
+        target_skip = 2.0 * raw_skip - 1.0
+
+        state_chosen = apply_mod(
+            state_before,
+            DeckModification(
+                kind=ModKind.ADD,
+                card=CardRef(id=chosen_card_id, upgraded=False),
+            ),
+        )
+        state_skip = apply_mod(
+            state_before, DeckModification(kind=ModKind.IDENTITY),
+        )
+        pairs.append(TrainingPair(
+            state_chosen=state_chosen, state_skip=state_skip,
+            target_chosen=target_chosen, target_skip=target_skip,
+        ))
+
+    return pairs
+
+
+def extract_samples(
+    run_result: dict, card_vocab_inv: dict[int, str],
+) -> list[TrainingSample]:
+    """Legacy TARGET_MODE_OUTCOME extractor: one sample per decision with
+    run_outcome broadcast as the target. Kept for diagnostic comparisons
+    against the bootstrap path."""
     floor_reached = run_result.get("floor_reached", 0)
     outcome = run_result.get("outcome", "")
     won = outcome == "win"
@@ -254,12 +346,9 @@ def extract_samples(
         if chosen_idx >= len(option_types):
             continue
 
-        # Build the DeckModification that was chosen
-        chosen_type = option_types[chosen_idx]
         OPTION_CARD_REWARD = 12
         OPTION_CARD_SKIP = 13
-
-        chosen_card_id: str | None = None
+        chosen_type = option_types[chosen_idx]
         if chosen_type == OPTION_CARD_REWARD:
             vocab_id = option_cards[chosen_idx]
             chosen_card_id = card_vocab_inv.get(vocab_id)
@@ -272,35 +361,12 @@ def extract_samples(
         elif chosen_type == OPTION_CARD_SKIP:
             mod = DeckModification(kind=ModKind.IDENTITY)
         else:
-            continue  # Phase 0 scope — skip non-card decisions
-
-        # Compute the target
-        target: float | None = None
-        if target_mode == TARGET_MODE_BOOTSTRAP:
-            stats_json = os_sample.get("card_policy_stats_json", "")
-            combat_stats = json.loads(stats_json) if stats_json else []
-            sample_floor = int(os_sample.get("floor", 0))
-            if chosen_type == OPTION_CARD_REWARD:
-                raw = _bootstrap_target_for_card(
-                    chosen_card_id, sample_floor, combat_stats,
-                )
-            else:
-                raw = _bootstrap_target_for_skip(
-                    state_before.deck, sample_floor, combat_stats,
-                )
-            if raw is not None:
-                # Map [0, 1] policy weight → [-1, +1] V target
-                target = 2.0 * raw - 1.0
-        elif target_mode == TARGET_MODE_OUTCOME:
-            target = run_outcome
-        else:
-            raise ValueError(f"Unknown target_mode: {target_mode!r}")
-
-        if target is None:
-            continue  # no signal — drop the sample rather than fall back
+            continue
 
         state_after = apply_mod(state_before, mod)
-        samples.append(TrainingSample(state_after_mod=state_after, value_target=target))
+        samples.append(TrainingSample(
+            state_after_mod=state_after, value_target=run_outcome,
+        ))
 
     return samples
 
@@ -309,12 +375,66 @@ def extract_samples(
 # Training step
 # ---------------------------------------------------------------------------
 
+# Pairwise margin — gradient stops once V_chosen - V_skip exceeds this in the
+# target-preferred direction. Tuned against the scale of V outputs ∈ [-1,+1].
+PAIRWISE_MARGIN = 0.1
+
+
+def train_pair_batch(
+    net: DeckNet, optimizer: torch.optim.Optimizer,
+    pairs: list[TrainingPair], card_vocab: dict[str, int],
+    margin: float = PAIRWISE_MARGIN,
+) -> float:
+    """One pairwise-margin gradient step. Returns mean loss.
+
+    For each pair, the loss pushes V(chosen) and V(skip) apart in the
+    direction of sign(target_chosen - target_skip):
+
+        L = max(0, margin - sign(Δt) · (V_chosen - V_skip))
+
+    Only the ordering of targets matters — absolute scale falls out. The
+    model cannot latch onto a "bigger deck = higher V" shortcut because
+    within each pair the two states differ by exactly one card and the
+    target ordering is data-driven (not size-driven).
+    """
+    # Encode chosen and skip states together so encoding cost amortizes
+    all_states = [p.state_chosen for p in pairs] + [p.state_skip for p in pairs]
+    batch = encode_batch(all_states, card_vocab)
+
+    v_all = net(
+        batch["card_ids"], batch["card_stats"],
+        batch["deck_mask"], batch["global_state"],
+    )
+    n = len(pairs)
+    v_chosen = v_all[:n]
+    v_skip = v_all[n:]
+
+    t_chosen = torch.tensor([p.target_chosen for p in pairs], dtype=torch.float32)
+    t_skip = torch.tensor([p.target_skip for p in pairs], dtype=torch.float32)
+    delta_t = t_chosen - t_skip
+    # Drop ties (|Δt| < 1e-6) to avoid meaningless pushes
+    mask = delta_t.abs() > 1e-6
+    if not mask.any():
+        return 0.0
+    sign = torch.sign(delta_t[mask])
+    diff = (v_chosen - v_skip)[mask]
+    loss = F.relu(margin - sign * diff).mean()
+
+    optimizer.zero_grad()
+    loss.backward()
+    nn.utils.clip_grad_norm_(
+        [p for p in net.parameters() if p.requires_grad], 1.0,
+    )
+    optimizer.step()
+    return loss.item()
+
+
 def train_batch(
     net: DeckNet, optimizer: torch.optim.Optimizer,
     states: list[DeckBuildingState], targets: list[float],
     card_vocab: dict[str, int],
 ) -> float:
-    """One gradient step on a batch. Returns MSE loss."""
+    """Legacy regression step (TARGET_MODE_OUTCOME)."""
     batch = encode_batch(states, card_vocab)
     target_tensor = torch.tensor(targets, dtype=torch.float32)
 
@@ -501,7 +621,8 @@ def train(
         bo_net.load_state_dict(bo_ckpt["model_state_dict"])
         betaone_onnx = betaone_export(bo_net, os.path.join(betaone_dir, "onnx"))
 
-    replay = ReplayBuffer(capacity=replay_capacity)
+    pair_mode = (target_mode == TARGET_MODE_BOOTSTRAP)
+    replay = ReplayBuffer(capacity=replay_capacity, pair_mode=pair_mode)
     history_path = os.path.join(output_dir, "decknet_history.jsonl")
     progress_path = os.path.join(output_dir, "decknet_progress.json")
 
@@ -526,25 +647,26 @@ def train(
             **assets,
         )
 
-        # --- Extract training samples ---
+        # --- Extract training units (pairs or samples) ---
         n_wins = 0
-        n_samples_added = 0
-        n_samples_dropped = 0  # target_mode=bootstrap drops cards with no signal
+        n_units_added = 0
+        n_units_dropped = 0
         floors = []
         for run in results:
             floors.append(run.get("floor_reached", 0))
             if run.get("outcome") == "win":
                 n_wins += 1
-            # For bootstrap mode, extract_samples may drop samples with no
-            # signal. Compare to the raw sample count for visibility.
             raw_count = len(run.get("option_samples", []))
-            extracted = extract_samples(run, card_vocab_inv, target_mode=target_mode)
-            n_samples_dropped += max(0, raw_count - len(extracted))
-            for sample in extracted:
-                replay.add(sample)
-                n_samples_added += 1
+            if pair_mode:
+                extracted = extract_pairs(run, card_vocab_inv)
+            else:
+                extracted = extract_samples(run, card_vocab_inv)
+            n_units_dropped += max(0, raw_count - len(extracted))
+            for unit in extracted:
+                replay.add(unit)
+                n_units_added += 1
 
-        # --- Train (only if the replay buffer has enough to draw a batch) ---
+        # --- Train ---
         trained = len(replay) >= batch_size
         total_loss = 0.0
         n_train_steps = 0
@@ -554,9 +676,14 @@ def train(
                 batch = replay.sample(batch_size)
                 if not batch:
                     break
-                states = [s.state_after_mod for s in batch]
-                targets = [s.value_target for s in batch]
-                total_loss += train_batch(net, optimizer, states, targets, card_vocab)
+                if pair_mode:
+                    total_loss += train_pair_batch(net, optimizer, batch, card_vocab)
+                else:
+                    states = [s.state_after_mod for s in batch]
+                    targets = [s.value_target for s in batch]
+                    total_loss += train_batch(
+                        net, optimizer, states, targets, card_vocab,
+                    )
                 n_train_steps += 1
         avg_loss = (total_loss / n_train_steps) if n_train_steps else 0.0
         elapsed = time.time() - t0
@@ -566,15 +693,16 @@ def train(
         # during the warm-up phase where samples are still accumulating.
         avg_floor = float(np.mean(floors)) if floors else 0.0
         win_rate = n_wins / max(len(results), 1)
+        unit_label = "pairs" if pair_mode else "samples"
         record = {
             "gen": gen,
             "runs": len(results),
             "wins": n_wins,
             "win_rate": round(win_rate, 4),
             "avg_floor": round(avg_floor, 2),
-            "samples_added": n_samples_added,
-            "samples_dropped": n_samples_dropped,
-            "steps": n_samples_added,  # canonical key for the TUI's window formula
+            "samples_added": n_units_added,
+            "samples_dropped": n_units_dropped,
+            "steps": n_units_added,  # canonical key for the TUI's window formula
             "buffer_size": len(replay),
             "loss": round(avg_loss, 5),
             "trained": trained,
@@ -583,9 +711,9 @@ def train(
             "timestamp": time.time(),
         }
         status_tag = "" if trained else " [warmup]"
-        drop_tag = f" dropped {n_samples_dropped}" if n_samples_dropped else ""
+        drop_tag = f" dropped {n_units_dropped}" if n_units_dropped else ""
         print(f"Gen {gen:3d} | wins {n_wins:3d}/{len(results):3d} ({win_rate:.1%}) "
-              f"| avg_floor {avg_floor:.1f} | samples {n_samples_added:4d}{drop_tag} "
+              f"| avg_floor {avg_floor:.1f} | {unit_label} {n_units_added:4d}{drop_tag} "
               f"| buf {len(replay):5d} | loss {avg_loss:.4f}{status_tag} | {elapsed:.1f}s")
         with open(history_path, "a") as f:
             f.write(json.dumps(record) + "\n")
