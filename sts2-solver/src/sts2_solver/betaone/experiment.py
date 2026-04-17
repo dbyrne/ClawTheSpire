@@ -32,6 +32,31 @@ from .network import ARCH_META, network_stats
 from .paths import EXPERIMENTS_DIR, BENCHMARK_DIR, TEMPLATES_DIR
 
 
+# MCTS knobs that behave as training hyperparameters. Kept here so TUI and any
+# other consumer can show the *effective* value for an experiment even when the
+# config omits a key (i.e. the code default is in effect). Update in this one
+# place when a default changes; to_train_kwargs below inlines the same values.
+MCTS_DEFAULTS = {
+    "num_sims": 400,
+    "temperature": 1.0,
+    "train_epochs": 4,
+    "value_coef": 1.0,
+    "replay_capacity": 200_000,
+    "turn_boundary_eval": False,
+    "dense_value_targets": False,
+    "gamma": 0.99,
+    "c_puct": 2.5,
+    "freeze_value_head": False,
+    "determinizations": 1,
+    "pomcp": False,
+    "mcts_bootstrap": False,
+    "noise_frac": 0.25,
+    "pw_k": 1.0,
+    "q_target_mix": 0.0,
+    "q_target_temp": 0.5,
+}
+
+
 # ---------------------------------------------------------------------------
 # Config dataclass
 # ---------------------------------------------------------------------------

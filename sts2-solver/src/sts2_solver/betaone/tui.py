@@ -19,6 +19,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from .experiment import MCTS_DEFAULTS
 from .paths import EXPERIMENTS_DIR
 
 
@@ -208,10 +209,16 @@ def build_dashboard(experiments: list[dict]) -> Group:
         else:
             buf_str = "-"
 
-        # C_PUCT and Dirichlet noise frac (MCTS only)
-        mcts_cfg = exp.get("training", {}).get("mcts", {})
-        cpuct_str = f"{mcts_cfg['c_puct']}" if "c_puct" in mcts_cfg else "-"
-        noise_str = f"{mcts_cfg['noise_frac']}" if "noise_frac" in mcts_cfg else "-"
+        # C_PUCT and Dirichlet noise frac (MCTS only). Fall back to code defaults
+        # so experiments that don't set the key still show the effective value —
+        # defaults live in MCTS_DEFAULTS so they can't drift across consumers.
+        mcts_cfg = exp.get("training", {}).get("mcts", {}) if exp["method"] != "ppo" else {}
+        if exp["method"] == "ppo":
+            cpuct_str = "-"
+            noise_str = "-"
+        else:
+            cpuct_str = f"{mcts_cfg.get('c_puct', MCTS_DEFAULTS['c_puct'])}"
+            noise_str = f"{mcts_cfg.get('noise_frac', MCTS_DEFAULTS['noise_frac'])}"
 
         color = exp_color_map.get(exp["name"], "white")
         name_text = Text(exp["name"], style=color)
