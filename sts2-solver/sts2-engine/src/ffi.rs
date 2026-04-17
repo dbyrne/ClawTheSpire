@@ -606,6 +606,177 @@ pub fn play_all_games(
     Ok(py_results.into())
 }
 
+// ---------------------------------------------------------------------------
+// DeckNet full-run self-play (Phase 0)
+// ---------------------------------------------------------------------------
+//
+// Like play_all_games, but uses DeckNetEvaluator in place of OptionEvaluator.
+// Phase 0 scope: card-reward decisions (including skip) route through the
+// DeckNet V-over-candidates path. All other decision types (rest/smith,
+// shop, map path, events) get uniform random scoring inside the evaluator
+// so the run still progresses — just not with informed non-card decisions.
+
+#[pyfunction]
+#[pyo3(signature = (
+    num_games,
+    onnx_full_path, onnx_value_path, onnx_combat_path, onnx_decknet_path,
+    vocab_json, monster_data_json, enemy_profiles_json,
+    encounter_pool_json, event_profiles_json,
+    card_pool_json, card_db_json,
+    map_pool_json, shop_pool_json,
+    mcts_sims, temperature, seeds,
+    combat_replays = 1,
+    option_epsilon = 0.15
+))]
+pub fn play_all_games_decknet(
+    py: Python<'_>,
+    #[allow(unused)] num_games: usize,
+    onnx_full_path: &str,
+    onnx_value_path: &str,
+    onnx_combat_path: &str,
+    onnx_decknet_path: &str,
+    vocab_json: &str,
+    monster_data_json: &str,
+    enemy_profiles_json: &str,
+    encounter_pool_json: &str,
+    event_profiles_json: &str,
+    card_pool_json: &str,
+    card_db_json: &str,
+    map_pool_json: &str,
+    shop_pool_json: &str,
+    mcts_sims: usize,
+    temperature: f32,
+    seeds: Vec<u64>,
+    combat_replays: usize,
+    option_epsilon: f32,
+) -> PyResult<PyObject> {
+    let vocabs: Vocabs = serde_json::from_str(vocab_json)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("vocabs: {e}")))?;
+    let monsters: HashMap<String, crate::enemy::MonsterData> = serde_json::from_str(monster_data_json)
+        .unwrap_or_default();
+    let profiles: HashMap<String, crate::enemy::EnemyProfile> = serde_json::from_str(enemy_profiles_json)
+        .unwrap_or_default();
+    let encounters: HashMap<String, crate::simulator::EncounterData> = serde_json::from_str(encounter_pool_json)
+        .unwrap_or_default();
+
+    #[derive(serde::Deserialize)]
+    struct PoolCard {
+        #[serde(flatten)]
+        card: Card,
+        #[serde(default)]
+        rarity: String,
+    }
+    let pool_cards: Vec<PoolCard> = serde_json::from_str(card_pool_json).unwrap_or_default();
+    let card_pool: Vec<Card> = pool_cards.iter().map(|pc| pc.card.clone()).collect();
+    let card_pool_rarities: Vec<String> = pool_cards.iter().map(|pc| pc.rarity.clone()).collect();
+
+    let card_db_vec: Vec<Card> = serde_json::from_str(card_db_json).unwrap_or_default();
+    let mut card_db = CardDB::default();
+    for card in card_db_vec {
+        card_db.insert(card);
+    }
+
+    let game_data = std::sync::Arc::new(crate::simulator::GameData {
+        card_db,
+        monsters,
+        profiles,
+        encounters,
+        event_profiles: serde_json::from_str(event_profiles_json).unwrap_or_default(),
+        vocabs: vocabs.clone(),
+        card_pool,
+        card_pool_rarities,
+        map_pool: serde_json::from_str(map_pool_json).unwrap_or_default(),
+        shop_pool: serde_json::from_str(shop_pool_json).unwrap_or_default(),
+    });
+
+    let onnx_full = onnx_full_path.to_string();
+    let onnx_value = onnx_value_path.to_string();
+    let onnx_combat = onnx_combat_path.to_string();
+    let onnx_decknet = onnx_decknet_path.to_string();
+
+    let results = py.allow_threads(move || {
+        use rayon::prelude::*;
+
+        seeds.into_par_iter().map(|seed| {
+            let combat_inference = match crate::inference::OnnxInference::new(
+                &onnx_full, &onnx_value, &onnx_combat, vocabs.clone()
+            ) {
+                Ok(inf) => inf,
+                Err(e) => {
+                    eprintln!("ONNX combat error: {e}");
+                    return None;
+                }
+            };
+            let decknet_evaluator = match crate::decknet::DeckNetEvaluator::new(
+                &onnx_decknet, vocabs.clone()
+            ) {
+                Ok(eval) => eval,
+                Err(e) => {
+                    eprintln!("ONNX decknet error: {e}");
+                    return None;
+                }
+            };
+
+            Some(crate::simulator::run_act1(
+                &game_data, &combat_inference, &decknet_evaluator,
+                mcts_sims, temperature, seed, combat_replays, option_epsilon,
+            ))
+        }).collect::<Vec<_>>()
+    });
+
+    // Build Python result list — same schema as play_all_games so downstream
+    // training code can treat both paths identically.
+    let py_results = PyList::empty(py);
+    for result_opt in &results {
+        let result = match result_opt {
+            Some(r) => r,
+            None => continue,
+        };
+
+        let d = PyDict::new(py);
+        d.set_item("outcome", &result.outcome)?;
+        d.set_item("floor_reached", result.floor_reached)?;
+        d.set_item("final_hp", result.final_hp)?;
+        d.set_item("max_hp", result.max_hp)?;
+        d.set_item("combats_won", result.combats_won)?;
+        d.set_item("combats_fought", result.combats_fought)?;
+        d.set_item("deck_size", result.deck_size)?;
+
+        // Option samples are where DeckNet training tuples live. Filter down
+        // to just card-reward decisions since those are the only ones trained
+        // in Phase 0 — non-card decisions went through random scoring and
+        // don't produce meaningful supervision.
+        let py_opt_samples = PyList::empty(py);
+        for sample in &result.option_samples {
+            let is_card =
+                sample.option_types.iter().all(|&t|
+                    t == crate::option_eval::OPTION_CARD_REWARD
+                        || t == crate::option_eval::OPTION_CARD_SKIP
+                );
+            if !is_card { continue; }
+            let s = PyDict::new(py);
+            s.set_item("option_types", &sample.option_types)?;
+            s.set_item("option_cards", &sample.option_cards)?;
+            s.set_item("chosen_idx", sample.chosen_idx)?;
+            s.set_item("was_greedy", sample.was_greedy)?;
+            s.set_item("value", sample.value)?;
+            s.set_item("floor", sample.floor)?;
+            s.set_item("raw_state_json", &sample.raw_state_json)?;
+            let py_stats = PyList::empty(py);
+            for stats in &sample.option_card_stats {
+                py_stats.append(stats.as_slice())?;
+            }
+            s.set_item("option_card_stats", py_stats)?;
+            py_opt_samples.append(s)?;
+        }
+        d.set_item("option_samples", py_opt_samples)?;
+
+        py_results.append(d)?;
+    }
+
+    Ok(py_results.into())
+}
+
 /// Deterministic step: apply one action to a state, return the new state as JSON.
 /// Used for parity testing against the Python combat engine.
 #[pyfunction]

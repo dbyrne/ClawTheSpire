@@ -255,7 +255,7 @@ pub struct GameData {
 pub fn run_act1(
     game_data: &GameData,
     combat_inference: &OnnxInference,
-    option_eval: &OptionEvaluator,
+    option_eval: &dyn DecisionEvaluator,
     mcts_sims: usize,
     temperature: f32,
     seed: u64,
@@ -612,7 +612,7 @@ fn pick_card_reward_network(
     hp: i32, max_hp: i32, floor: i32, gold: i32,
     relics: &HashSet<String>, act_id: &str, boss_id: &str,
     remaining_path: &[String], game_data: &GameData,
-    option_eval: &OptionEvaluator, option_epsilon: f32,
+    option_eval: &dyn DecisionEvaluator, option_epsilon: f32,
     rng: &mut impl Rng,
 ) -> (Option<Card>, Option<RustOptionSample>) {
     if offered.is_empty() { return (None, None); }
@@ -637,11 +637,16 @@ fn pick_card_reward_network(
         Ok(result) => {
             let (chosen_idx, was_greedy) = epsilon_pick(result.best_idx, num_options, option_epsilon, rng);
             let enc = encode::encode_state(&state, &game_data.vocabs);
+            // Snapshot raw state for DeckNet training (Python reconstructs
+            // DeckBuildingState from this without re-simulating the run).
+            let raw_state_json = serialize_decknet_state(
+                deck, hp, max_hp, floor, gold, relics, act_id, boss_id, remaining_path,
+            );
             let sample = RustOptionSample {
                 state: enc, option_types: opt_types, option_cards: opt_cards,
                 option_card_stats: opt_stats, option_path_ids: vec![],
                 option_path_mask: vec![], chosen_idx, was_greedy,
-                value: 0.0, floor,
+                value: 0.0, floor, raw_state_json,
             };
             if chosen_idx < offered.len() {
                 (Some(offered[chosen_idx].clone()), Some(sample))
@@ -653,12 +658,52 @@ fn pick_card_reward_network(
     }
 }
 
+/// Build a JSON snapshot matching decknet/state.py DeckBuildingState schema.
+fn serialize_decknet_state(
+    deck: &[Card], hp: i32, max_hp: i32, floor: i32, gold: i32,
+    relics: &HashSet<String>, act_id: &str, boss_id: &str,
+    remaining_path: &[String],
+) -> String {
+    let deck_arr: Vec<serde_json::Value> = deck.iter().map(|c| {
+        serde_json::json!({
+            "id": c.base_id(),
+            "upgraded": c.upgraded,
+        })
+    }).collect();
+    let map_ahead: Vec<serde_json::Value> = remaining_path.iter().enumerate()
+        .take(10)
+        .map(|(i, room)| serde_json::json!({
+            "room_type": room.as_str(),
+            "floors_ahead": i,
+        }))
+        .collect();
+    let act_num = if let Ok(n) = act_id.parse::<i32>() { n }
+        else { match act_id {
+            "ACT_1" | "the_spire_act_1" => 1,
+            "ACT_2" | "the_spire_act_2" => 2,
+            "ACT_3" | "the_spire_act_3" => 3,
+            _ => 1,
+        }};
+    let snapshot = serde_json::json!({
+        "deck": deck_arr,
+        "player": {
+            "hp": hp, "max_hp": max_hp, "gold": gold, "potions": 0,
+        },
+        "relics": relics.iter().collect::<Vec<&String>>(),
+        "act": act_num,
+        "floor": floor,
+        "map_ahead": map_ahead,
+        "boss_id": boss_id,
+    });
+    serde_json::to_string(&snapshot).unwrap_or_else(|_| "{}".to_string())
+}
+
 /// Rest/smith: network decides. Returns (action, optional card index for smith, sample).
 fn rest_or_smith_network(
     deck: &[Card], hp: i32, max_hp: i32, floor: i32, gold: i32,
     relics: &HashSet<String>, act_id: &str, boss_id: &str,
     remaining_path: &[String], game_data: &GameData,
-    option_eval: &OptionEvaluator, option_epsilon: f32,
+    option_eval: &dyn DecisionEvaluator, option_epsilon: f32,
     rng: &mut impl Rng,
 ) -> (String, Option<usize>, Option<RustOptionSample>) {
     let state = make_dummy_state(deck, hp, max_hp, floor, gold, relics, act_id, boss_id, remaining_path);
@@ -688,7 +733,7 @@ fn rest_or_smith_network(
                 state: enc, option_types: opt_types, option_cards: opt_cards,
                 option_card_stats: opt_stats, option_path_ids: vec![],
                 option_path_mask: vec![], chosen_idx, was_greedy,
-                value: 0.0, floor,
+                value: 0.0, floor, raw_state_json: String::new(),
             };
             if chosen_idx == 0 {
                 ("rest".to_string(), None, Some(sample))
@@ -708,7 +753,7 @@ fn decide_event_network(
     hp: i32, max_hp: i32, floor: i32, gold: i32,
     relics: &HashSet<String>, act_id: &str, boss_id: &str,
     remaining_path: &[String], game_data: &GameData,
-    option_eval: &OptionEvaluator, option_epsilon: f32,
+    option_eval: &dyn DecisionEvaluator, option_epsilon: f32,
     rng: &mut impl Rng,
 ) -> (usize, Option<RustOptionSample>) {
     let state = make_dummy_state(deck, hp, max_hp, floor, gold, relics, act_id, boss_id, remaining_path);
@@ -733,7 +778,7 @@ fn decide_event_network(
                 state: enc, option_types: opt_types, option_cards: opt_cards,
                 option_card_stats: opt_stats, option_path_ids: vec![],
                 option_path_mask: vec![], chosen_idx, was_greedy,
-                value: 0.0, floor,
+                value: 0.0, floor, raw_state_json: String::new(),
             };
             (chosen_idx, Some(sample))
         }
@@ -747,7 +792,7 @@ fn pick_map_path_network(
     hp: i32, max_hp: i32, floor: i32, gold: i32,
     relics: &HashSet<String>, act_id: &str, boss_id: &str,
     remaining_path: &[String], game_data: &GameData,
-    option_eval: &OptionEvaluator, option_epsilon: f32,
+    option_eval: &dyn DecisionEvaluator, option_epsilon: f32,
     rng: &mut impl Rng,
 ) -> (usize, Option<RustOptionSample>) {
     if choices.len() <= 1 { return (0, None); }
@@ -772,7 +817,7 @@ fn pick_map_path_network(
                 state: enc, option_types: opt_types, option_cards: opt_cards,
                 option_card_stats: opt_stats, option_path_ids: vec![],
                 option_path_mask: vec![], chosen_idx, was_greedy,
-                value: 0.0, floor,
+                value: 0.0, floor, raw_state_json: String::new(),
             };
             (chosen_idx, Some(sample))
         }
@@ -786,7 +831,7 @@ fn shop_decisions_network(
     hp: i32, max_hp: i32, floor: i32,
     relics: &HashSet<String>, act_id: &str, boss_id: &str,
     remaining_path: &[String], game_data: &GameData,
-    option_eval: &OptionEvaluator, option_epsilon: f32,
+    option_eval: &dyn DecisionEvaluator, option_epsilon: f32,
     rng: &mut impl Rng,
 ) -> Vec<RustOptionSample> {
     let mut samples = Vec::new();
@@ -862,7 +907,7 @@ fn shop_decisions_network(
                     state: enc, option_types: opt_types.clone(), option_cards: opt_cards.clone(),
                     option_card_stats: opt_stats.clone(), option_path_ids: vec![],
                     option_path_mask: vec![], chosen_idx, was_greedy,
-                    value: 0.0, floor,
+                    value: 0.0, floor, raw_state_json: String::new(),
                 });
 
                 match &opt_actions[chosen_idx] {

@@ -73,6 +73,44 @@ pub struct OptionResult {
 }
 
 // ---------------------------------------------------------------------------
+// DecisionEvaluator trait — lets the simulator accept either the legacy
+// OptionEvaluator (full option ONNX scoring every decision type) or the new
+// DeckNetEvaluator (V-over-deck scoring for card rewards, random fallback
+// for everything else in Phase 0). Both types share the same evaluate()
+// signature so simulator call sites only need to change type to &dyn
+// DecisionEvaluator.
+// ---------------------------------------------------------------------------
+
+pub trait DecisionEvaluator {
+    fn evaluate(
+        &self,
+        state: &CombatState,
+        option_types: &[i64],
+        option_cards: &[i64],
+        option_card_stats: &[Vec<f32>],
+        option_path_ids: Option<&[Vec<i64>]>,
+        option_path_mask: Option<&[Vec<bool>]>,
+    ) -> Result<OptionResult, String>;
+}
+
+impl DecisionEvaluator for OptionEvaluator {
+    fn evaluate(
+        &self,
+        state: &CombatState,
+        option_types: &[i64],
+        option_cards: &[i64],
+        option_card_stats: &[Vec<f32>],
+        option_path_ids: Option<&[Vec<i64>]>,
+        option_path_mask: Option<&[Vec<bool>]>,
+    ) -> Result<OptionResult, String> {
+        OptionEvaluator::evaluate(
+            self, state, option_types, option_cards,
+            option_card_stats, option_path_ids, option_path_mask,
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Option training sample (collected for Python training)
 // ---------------------------------------------------------------------------
 
@@ -87,6 +125,12 @@ pub struct RustOptionSample {
     pub was_greedy: bool,                   // True if argmax, false if epsilon-explored
     pub value: f32,                         // Filled post-run
     pub floor: i32,
+    /// Raw run-state snapshot JSON, populated only by the DeckNet flow at
+    /// card-reward decisions. Carries the base deck, HP, gold, relics, act,
+    /// floor, and upcoming map so Python training can rebuild the exact
+    /// DeckBuildingState it needs to feed DeckNet without re-simulating.
+    /// Empty string for the legacy OptionEvaluator flow.
+    pub raw_state_json: String,
 }
 
 // ---------------------------------------------------------------------------
