@@ -53,6 +53,11 @@ MCTS_DEFAULTS = {
     "q_target_mix": 0.0,
     "q_target_temp": 0.5,
     "eval_every": 0,
+    # Virtual-loss batched MCTS search. 1 = sequential (no virtual loss).
+    # >1 = collect K leaves per round, batch NN calls. K=32 empirically gives
+    # ~2x speedup at num_sims=1000 on the current model. Quality cost is
+    # minor finite-sim visit-distribution noise; asymptotically unbiased.
+    "batch_size_mcts": 1,
 }
 
 
@@ -201,6 +206,7 @@ class ExperimentConfig:
                 "q_target_temp": _float(mcts.get("q_target_temp"), 0.5),
                 "eval_every": mcts.get("eval_every", 0),
                 "value_head_layers": value_head_layers,
+                "batch_size_mcts": mcts.get("batch_size_mcts", 1),
             }
         else:  # ppo
             ppo = t.get("ppo", {})

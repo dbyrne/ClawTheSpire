@@ -59,6 +59,7 @@ def _eval_batch(
     pomcp: bool = False,
     turn_boundary_eval: bool = False,
     pw_k: float = 1.0,
+    batch_size_mcts: int = 1,
 ) -> int:
     """Run a batch of combats at a single HP level. Returns win count."""
     if use_mcts:
@@ -78,6 +79,7 @@ def _eval_batch(
             pomcp=pomcp,
             turn_boundary_eval=turn_boundary_eval,
             pw_k=pw_k,
+            batch_size=batch_size_mcts,
         )
     else:
         r = sts2_engine.collect_betaone_rollouts(
@@ -106,6 +108,7 @@ def benchmark_checkpoint(
     pomcp: bool = False,
     turn_boundary_eval: bool = False,
     pw_k: float = 1.0,
+    batch_size_mcts: int = 1,
 ) -> list[dict]:
     """Benchmark a checkpoint against an encounter set.
 
@@ -173,6 +176,7 @@ def benchmark_checkpoint(
                 batch_enc, batch_dks, hp, batch_seeds, use_mcts, num_sims,
                 c_puct=c_puct, pomcp=pomcp,
                 turn_boundary_eval=turn_boundary_eval, pw_k=pw_k,
+                batch_size_mcts=batch_size_mcts,
             )
             wins += batch_wins
             n_games += len(batch_enc)

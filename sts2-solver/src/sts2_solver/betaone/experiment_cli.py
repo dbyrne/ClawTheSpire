@@ -156,6 +156,7 @@ def cmd_benchmark(args):
     pomcp = bool(mcts_cfg.get("pomcp", False))
     turn_boundary_eval = bool(mcts_cfg.get("turn_boundary_eval", False))
     pw_k = float(mcts_cfg.get("pw_k", 1.0))
+    batch_size_mcts = int(mcts_cfg.get("batch_size_mcts", 1))
     if args.pw_k is not None:
         pw_k = args.pw_k
 
@@ -164,7 +165,8 @@ def cmd_benchmark(args):
     print(f"  Mode: {args.mode}, repeats: {args.repeats}, sims: {args.sims}")
     if args.mode in ("mcts", "both"):
         print(f"  MCTS config: c_puct={c_puct}, pomcp={pomcp}, "
-              f"turn_boundary_eval={turn_boundary_eval}, pw_k={pw_k}")
+              f"turn_boundary_eval={turn_boundary_eval}, pw_k={pw_k}, "
+              f"batch_size_mcts={batch_size_mcts}")
 
     results = benchmark_checkpoint(
         ckpt_path,
@@ -176,6 +178,7 @@ def cmd_benchmark(args):
         pomcp=pomcp,
         turn_boundary_eval=turn_boundary_eval,
         pw_k=pw_k,
+        batch_size_mcts=batch_size_mcts,
     )
 
     for result in results:

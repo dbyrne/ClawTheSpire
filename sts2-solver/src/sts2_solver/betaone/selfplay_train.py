@@ -249,6 +249,7 @@ def train(
     q_target_temp: float = 0.5,
     eval_every: int = 0,
     value_head_layers: int = 1,
+    batch_size_mcts: int = 1,
 ):
     os.makedirs(output_dir, exist_ok=True)
     onnx_dir = os.path.join(output_dir, "onnx")
@@ -414,6 +415,7 @@ def train(
                 pomcp=pomcp,
                 noise_frac=noise_frac,
                 pw_k=pw_k,
+                batch_size=batch_size_mcts,
             )
 
             n_steps = rollout["total_steps"]

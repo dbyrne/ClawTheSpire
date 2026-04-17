@@ -84,6 +84,7 @@ fn run_selfplay_combat(
     pomcp: bool,
     noise_frac: f32,
     pw_k: f32,
+    batch_size: usize,
 ) -> SelfPlayResult {
     let card_db = CardDB::default();
     let mut rng = StdRng::seed_from_u64(seed);
@@ -193,14 +194,27 @@ fn run_selfplay_combat(
             let hand_ids = encode::encode_hand_card_ids(&state, card_vocab);
             let action_ids = encode::encode_action_card_ids(&actions, &state, card_vocab);
 
-            // MCTS search
-            let result = mcts_engine.search_with_ais(
-                &state,
-                Some(&enemy_ais),
-                num_sims,
-                temperature,
-                &mut rng,
-            );
+            // MCTS search — batched when batch_size > 1, else sequential.
+            // Batched path uses virtual loss to collect K leaves per round
+            // and runs their NN calls as one ONNX forward pass.
+            let result = if batch_size > 1 {
+                mcts_engine.search_batched(
+                    &state,
+                    Some(&enemy_ais),
+                    num_sims,
+                    batch_size,
+                    temperature,
+                    &mut rng,
+                )
+            } else {
+                mcts_engine.search_with_ais(
+                    &state,
+                    Some(&enemy_ais),
+                    num_sims,
+                    temperature,
+                    &mut rng,
+                )
+            };
 
             // Store sample: state + MCTS policy + raw visits + Q values
             let mut policy = [0.0f32; encode::MAX_ACTIONS];
@@ -348,7 +362,8 @@ fn run_selfplay_combat(
     c_puct = 2.5,
     pomcp = false,
     noise_frac = 0.25,
-    pw_k = 1.0
+    pw_k = 1.0,
+    batch_size = 1
 ))]
 pub fn betaone_mcts_selfplay(
     py: Python<'_>,
@@ -374,6 +389,7 @@ pub fn betaone_mcts_selfplay(
     pomcp: bool,
     noise_frac: f32,
     pw_k: f32,
+    batch_size: usize,
 ) -> PyResult<PyObject> {
     let decks: Vec<Vec<Card>> = serde_json::from_str(decks_json)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("decks: {e}")))?;
@@ -446,6 +462,7 @@ pub fn betaone_mcts_selfplay(
                         pomcp,
                         noise_frac,
                         pw_k,
+                        batch_size,
                     ))
                 })
             })
