@@ -310,6 +310,15 @@ def wraith_form():   return lookup_card("WRAITH_FORM")
 def cloak_and_dagger(): return lookup_card("CLOAK_AND_DAGGER")
 def prepared():      return lookup_card("PREPARED")
 def omnislice():     return lookup_card("OMNISLICE")
+def calculated_gamble(): return lookup_card("CALCULATED_GAMBLE")
+def grand_finale():  return lookup_card("GRAND_FINALE")
+def finisher():      return lookup_card("FINISHER")
+def storm_of_steel(): return lookup_card("STORM_OF_STEEL")
+def infinite_blades(): return lookup_card("INFINITE_BLADES")
+def expose():        return lookup_card("EXPOSE")
+def well_laid_plans(): return lookup_card("WELL_LAID_PLANS")
+def hidden_daggers(): return lookup_card("HIDDEN_DAGGERS")
+def bullet_time():   return lookup_card("BULLET_TIME")
 
 
 # ---------------------------------------------------------------------------
@@ -987,6 +996,77 @@ def build_scenarios() -> list[Scenario]:
         bad_actions=[3],
     ))
 
+    scenarios.append(Scenario(
+        name="burst_wasted_if_no_skill",
+        category="combo",
+        description="Burst is active but hand only has Attack + non-Skills — end turn wastes Burst; play Skill",
+        player={"hp": 50, "max_hp": 70, "energy": 2, "block": 0,
+                "powers": {"Burst": 1}},
+        enemies=[enemy(40, 50, damage=10)],
+        hand=[acrobatics(), dagger_throw()],
+        actions=[
+            ActionSpec("play_card", acrobatics(), label="Acrobatics (Skill — Burst doubles draw)"),
+            ActionSpec("play_card", dagger_throw(), target_idx=0, label="Dagger Throw (Attack; doesn't consume Burst)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        # Either card play is fine — energy lets us play both this turn, and
+        # Burst only consumes on Skill regardless of ordering. Bad action is
+        # ending turn without firing Burst at all.
+        best_actions=[0, 1],
+        bad_actions=[2],
+    ))
+
+    scenarios.append(Scenario(
+        name="finisher_after_attacks",
+        category="combo",
+        description="Finisher scales with attacks this turn — play cheap attacks first, Finisher last",
+        player={"hp": 50, "max_hp": 70, "energy": 3, "block": 0},
+        enemies=[enemy(40, 50, damage=10)],
+        hand=[finisher(), strike(), dagger_throw()],
+        actions=[
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike (6 dmg, counts for Finisher scaling)"),
+            ActionSpec("play_card", dagger_throw(), target_idx=0, label="Dagger Throw (9 dmg, also scales Finisher)"),
+            ActionSpec("play_card", finisher(), target_idx=0, label="Finisher FIRST (scales only to what's played BEFORE it)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0, 1],    # either attack first is fine; Finisher LAST maximizes its scaling
+        bad_actions=[2, 3],     # Finisher first → scales by 0 attacks → minimum damage; ending turn wastes energy
+    ))
+
+    scenarios.append(Scenario(
+        name="infinite_blades_power_early",
+        category="combo",
+        description="Turn 1 — Infinite Blades (power, shiv per turn) is an engine; play early to compound",
+        player={"hp": 70, "max_hp": 70, "energy": 3, "block": 0},
+        enemies=[enemy(60, 70, damage=10)],
+        hand=[infinite_blades(), strike(), defend(), defend()],
+        actions=[
+            ActionSpec("play_card", infinite_blades(), label="Infinite Blades (Power — shiv every turn)"),
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike (6 dmg, one-shot)"),
+            ActionSpec("play_card", defend(), label="Defend"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # power scales over combat — early play compounds
+        turn=1,
+    ))
+
+    scenarios.append(Scenario(
+        name="well_laid_plans_early",
+        category="combo",
+        description="Turn 1 — Well-Laid Plans (retain N cards each turn) preserves good hands across turns",
+        player={"hp": 70, "max_hp": 70, "energy": 3, "block": 0},
+        enemies=[enemy(60, 70, damage=10)],
+        hand=[well_laid_plans(), strike(), strike(), defend()],
+        actions=[
+            ActionSpec("play_card", well_laid_plans(), label="Well-Laid Plans (Power — retain cards)"),
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike (6 dmg)"),
+            ActionSpec("play_card", defend(), label="Defend"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # power preserves setup across turns — compound value
+        turn=1,
+    ))
+
     # ===== SURVIVAL PRIORITY =====
 
     scenarios.append(Scenario(
@@ -1232,6 +1312,178 @@ def build_scenarios() -> list[Scenario]:
         ],
         best_actions=[0],       # power on turn 1 = card selection engine for rest of combat
         turn=1,
+    ))
+
+    # --- Negative case: draw/cycle is the WRONG play when it trades lethal ---
+    # Counterpart to "always play draw." Acrobatics and Strike both cost 1,
+    # so they're mutually exclusive at 1 energy; Acrobatics draws but doesn't
+    # kill, Strike lethals. Model must value the kill over the cycle.
+
+    scenarios.append(Scenario(
+        name="dont_acrobatics_at_lethal",
+        category="draw_cycle",
+        description="Enemy at 5 HP, 1 energy — Strike lethals. Acrobatics costs same 1 energy and can't kill.",
+        player={"hp": 20, "max_hp": 70, "energy": 1, "block": 0},
+        enemies=[enemy(5, 50, damage=12)],
+        hand=[acrobatics(), strike()],
+        actions=[
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike (6 dmg, lethal)"),
+            ActionSpec("play_card", acrobatics(), label="Acrobatics (draw 3 — but misses lethal, eats 12)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # kill removes the 12-damage source entirely
+        bad_actions=[1, 2],     # Acrobatics consumes the 1 energy; enemy survives and hits for 12
+    ))
+
+    # --- Positive cases: extend draw-card coverage ---
+
+    scenarios.append(Scenario(
+        name="acrobatics_dig_with_burst",
+        category="draw",
+        description="Burst is active, only Skill in hand is Acrobatics — must play a Skill before turn end",
+        player={"hp": 50, "max_hp": 70, "energy": 1, "block": 0,
+                "powers": {"Burst": 1}},
+        enemies=[enemy(40, 50, damage=10)],
+        hand=[acrobatics(), strike(), strike()],
+        actions=[
+            ActionSpec("play_card", acrobatics(), label="Acrobatics (Skill — Burst doubles draw 3 → 6)"),
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike (Attack — doesn't consume Burst, but uses last energy)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        # At 1 energy, player can only play ONE card this turn. Acrobatics
+        # (Skill) triggers Burst → doubled → massive card advantage. Strike
+        # uses the same energy and Burst expires unused at turn end.
+        best_actions=[0],
+        bad_actions=[1, 2],
+    ))
+
+    scenarios.append(Scenario(
+        name="adrenaline_before_strike",
+        category="draw",
+        description="Low energy with Adrenaline + multiple damage cards — play Adrenaline first to unlock both",
+        player={"hp": 50, "max_hp": 70, "energy": 1, "block": 0},
+        enemies=[enemy(40, 50, damage=10)],
+        hand=[adrenaline(), strike(), dagger_throw()],
+        actions=[
+            ActionSpec("play_card", adrenaline(), label="Adrenaline (0-cost, +1 energy, +2 draw)"),
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike (locks in 1 energy)"),
+            ActionSpec("play_card", dagger_throw(), target_idx=0, label="Dagger Throw (locks in 1 energy)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # Adrenaline first → play both damage cards next; Strike/Throw first → only one
+        bad_actions=[3],
+    ))
+
+    scenarios.append(Scenario(
+        name="calculated_gamble_dead_hand",
+        category="draw_cycle",
+        description="Hand is unplayable (all 1-cost at 0 energy except Gamble) — cycle to find something usable",
+        player={"hp": 50, "max_hp": 70, "energy": 1, "block": 0},
+        enemies=[enemy(40, 50, damage=15)],
+        hand=[calculated_gamble(), strike(), defend()],
+        actions=[
+            ActionSpec("play_card", calculated_gamble(),
+                       label="Calculated Gamble (discard hand, draw same #, exhaust)"),
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike (6 dmg, 1 energy)"),
+            ActionSpec("play_card", defend(), label="Defend (5 block vs 15 dmg)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        # Strike is 6 dmg (barely helps), Defend is 5 block vs 15 (dies to 10 net dmg).
+        # Gamble costs 0, gets fresh cards — best chance to find real answers.
+        best_actions=[0],
+        bad_actions=[3],
+    ))
+
+    # ===== DISCARD SYNERGY =====
+    # Silent has a cluster of cards that trigger on discard: Tactician (gives
+    # energy), Reflex (draws 2). Cards that cause discards (Prepared,
+    # Calculated Gamble, Acrobatics, Tools of the Trade) pair with them.
+
+    scenarios.append(Scenario(
+        name="gamble_with_tactician_in_hand",
+        category="discard",
+        description="Tactician in hand (grants energy on discard). Calculated Gamble discards it → free energy.",
+        player={"hp": 50, "max_hp": 70, "energy": 1, "block": 0},
+        enemies=[enemy(40, 50, damage=12)],
+        hand=[calculated_gamble(), tactician(), strike()],
+        actions=[
+            ActionSpec("play_card", calculated_gamble(),
+                       label="Calculated Gamble (discards Tactician → triggers Sly energy)"),
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike (6 dmg, no Sly trigger)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # Gamble triggers Tactician's Sly (+1 energy) AND cycles hand
+    ))
+
+    scenarios.append(Scenario(
+        name="prepared_discards_slimed",
+        category="discard",
+        description="Slimed in hand (1-cost status, does nothing). Prepared can discard it and cycle.",
+        player={"hp": 50, "max_hp": 70, "energy": 1, "block": 0},
+        enemies=[enemy(40, 50, damage=10)],
+        hand=[prepared(), slimed(), strike()],
+        actions=[
+            ActionSpec("play_card", prepared(), label="Prepared (discard Slimed, draw 2 fresh cards)"),
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike (6 dmg, Slimed stuck in hand)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # Prepared is 0-cost; discarding Slimed removes a dead card
+    ))
+
+    # ===== POISON JUDGMENT =====
+    # Positive poison tests already cover "apply when appropriate."
+    # These tests check negative / nuance judgment.
+
+    scenarios.append(Scenario(
+        name="dont_overstack_dying_poison",
+        category="poison",
+        description="Enemy at 4 HP with 5 poison — will die to poison tick next turn. Don't add more.",
+        player={"hp": 50, "max_hp": 70, "energy": 1, "block": 0},
+        enemies=[enemy(4, 50, damage=12,
+                       powers={"Poison": 5})],
+        hand=[deadly_poison(), defend()],
+        actions=[
+            ActionSpec("play_card", deadly_poison(), target_idx=0, label="Deadly Poison (+5 poison, overkill)"),
+            ActionSpec("play_card", defend(), label="Defend (5 block vs 12 — saves HP)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[1],       # 5 poison kills 4 HP enemy; focus on surviving the 12-damage hit
+        bad_actions=[0, 2],     # more poison is waste; end turn takes 12 unblocked
+    ))
+
+    # ===== SURVIVAL / TEMPO JUDGMENT =====
+
+    scenarios.append(Scenario(
+        name="skip_block_when_safe",
+        category="survival",
+        description="Full HP, enemy doing 4 damage — attack instead of defending a non-threatening hit",
+        player={"hp": 70, "max_hp": 70, "energy": 1, "block": 0},
+        enemies=[enemy(30, 50, damage=4)],
+        hand=[strike(), defend()],
+        actions=[
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike (6 dmg — makes progress)"),
+            ActionSpec("play_card", defend(), label="Defend (block 5 vs 4 — 1 wasted block)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # Strike makes progress; 4 damage into 70 HP is nothing
+        bad_actions=[2],
+    ))
+
+    scenarios.append(Scenario(
+        name="intangible_skip_block",
+        category="survival",
+        description="Intangible active (all damage → 1) — don't waste energy on block",
+        player={"hp": 50, "max_hp": 70, "energy": 1, "block": 0,
+                "powers": {"Intangible": 1}},
+        enemies=[enemy(40, 50, damage=20)],
+        hand=[strike(), defend()],
+        actions=[
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike (Intangible absorbs the hit)"),
+            ActionSpec("play_card", defend(), label="Defend (Intangible makes block pointless)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # 20 damage → 1 with Intangible; block is wasted energy
+        bad_actions=[1],        # Defend is strictly wasteful with Intangible up
     ))
 
     # ===== RELIC-AWARE DECISIONS =====
