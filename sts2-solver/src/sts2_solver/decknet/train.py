@@ -157,8 +157,14 @@ class ReplayBuffer:
 # Phase 0 target modes:
 #   "run_outcome"     — legacy broadcast credit (run_outcome_value)
 #   "policy_bootstrap"— per-decision target from BetaOne MCTS policy weights
+#                       (flawed: policy weight is relative-to-hand, confounds
+#                       with deck competition, biases toward early drafts)
+#   "root_value"      — per-decision target from BetaOne MCTS turn-1 root_value
+#                       of subsequent combats. Deck-quality signal; no
+#                       policy-weight confound. Regression, not pairwise.
 TARGET_MODE_OUTCOME = "run_outcome"
 TARGET_MODE_BOOTSTRAP = "policy_bootstrap"
+TARGET_MODE_ROOT_VALUE = "root_value"
 
 # Minimum MCTS searches where a card was in hand before we trust the signal.
 # Cards drawn fewer times get no target (sample dropped).
@@ -215,6 +221,39 @@ def _bootstrap_target_for_card(
     if sum_w == 0.0 or total_occ < MIN_OCCURRENCES:
         return None
     return sum_wp / sum_w  # weighted mean policy ∈ [0, 1]
+
+
+def _rootval_target(sample_floor: int, combat_stats: list[dict]) -> float | None:
+    """Forward-looking, late-weighted mean of BetaOne's turn-1 root_value
+    across combats at floor > sample_floor.
+
+    Root_value is BetaOne's estimate of "how winnable is this combat at its
+    start with this deck" — a pure deck-quality signal. Unlike policy
+    weight, it doesn't depend on which other cards are competing in the
+    hand, so the target isn't confounded by deck composition.
+    """
+    sum_w = 0.0
+    sum_wv = 0.0
+    n = 0
+    for combat in combat_stats:
+        floor = combat.get("floor", 0)
+        if floor <= sample_floor:
+            continue
+        rv = combat.get("root_value")
+        if rv is None:
+            continue
+        weight = _late_weight(floor, sample_floor)
+        if weight <= 0:
+            continue
+        # BetaOne's V can exceed [-1, 1] due to value-head calibration;
+        # DeckNet's V is tanh-bounded. Clamp so the target is reachable.
+        rv_clamped = max(-1.0, min(1.0, float(rv)))
+        sum_w += weight
+        sum_wv += weight * rv_clamped
+        n += 1
+    if n == 0 or sum_w == 0.0:
+        return None
+    return sum_wv / sum_w
 
 
 def _bootstrap_target_for_skip(
@@ -316,6 +355,64 @@ def extract_pairs(
         ))
 
     return pairs
+
+
+def extract_rootval_samples(
+    run_result: dict, card_vocab_inv: dict[int, str],
+) -> list[TrainingSample]:
+    """Extract regression samples using MCTS root_value as the target.
+
+    One sample per decision (ADD or SKIP, whichever was chosen). Target is
+    the forward-looking, late-weighted mean of BetaOne's turn-1 root_value
+    over subsequent combats. Samples where no subsequent combats happened
+    are dropped.
+    """
+    samples: list[TrainingSample] = []
+    for os_sample in run_result.get("option_samples", []):
+        raw_json = os_sample.get("raw_state_json", "")
+        if not raw_json:
+            continue
+        try:
+            state_dict = json.loads(raw_json)
+            state_before = state_from_dict(state_dict)
+        except Exception:
+            continue
+
+        chosen_idx = os_sample["chosen_idx"]
+        option_types = os_sample["option_types"]
+        option_cards = os_sample["option_cards"]
+        if chosen_idx >= len(option_types):
+            continue
+
+        OPTION_CARD_REWARD = 12
+        OPTION_CARD_SKIP = 13
+        chosen_type = option_types[chosen_idx]
+        if chosen_type == OPTION_CARD_REWARD:
+            vocab_id = option_cards[chosen_idx]
+            chosen_card_id = card_vocab_inv.get(vocab_id)
+            if chosen_card_id is None or chosen_card_id in ("<PAD>", "<UNK>"):
+                continue
+            mod = DeckModification(
+                kind=ModKind.ADD,
+                card=CardRef(id=chosen_card_id, upgraded=False),
+            )
+        elif chosen_type == OPTION_CARD_SKIP:
+            mod = DeckModification(kind=ModKind.IDENTITY)
+        else:
+            continue
+
+        stats_json = os_sample.get("card_policy_stats_json", "")
+        combat_stats = json.loads(stats_json) if stats_json else []
+        sample_floor = int(os_sample.get("floor", 0))
+        target = _rootval_target(sample_floor, combat_stats)
+        if target is None:
+            continue  # no subsequent combats, no signal
+
+        state_after = apply_mod(state_before, mod)
+        samples.append(TrainingSample(
+            state_after_mod=state_after, value_target=float(target),
+        ))
+    return samples
 
 
 def extract_samples(
@@ -622,6 +719,10 @@ def train(
         betaone_onnx = betaone_export(bo_net, os.path.join(betaone_dir, "onnx"))
 
     pair_mode = (target_mode == TARGET_MODE_BOOTSTRAP)
+    if target_mode not in (
+        TARGET_MODE_OUTCOME, TARGET_MODE_BOOTSTRAP, TARGET_MODE_ROOT_VALUE,
+    ):
+        raise ValueError(f"Unknown target_mode: {target_mode!r}")
     replay = ReplayBuffer(capacity=replay_capacity, pair_mode=pair_mode)
     history_path = os.path.join(output_dir, "decknet_history.jsonl")
     progress_path = os.path.join(output_dir, "decknet_progress.json")
@@ -659,6 +760,8 @@ def train(
             raw_count = len(run.get("option_samples", []))
             if pair_mode:
                 extracted = extract_pairs(run, card_vocab_inv)
+            elif target_mode == TARGET_MODE_ROOT_VALUE:
+                extracted = extract_rootval_samples(run, card_vocab_inv)
             else:
                 extracted = extract_samples(run, card_vocab_inv)
             n_units_dropped += max(0, raw_count - len(extracted))

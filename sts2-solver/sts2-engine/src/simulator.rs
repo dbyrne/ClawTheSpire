@@ -334,10 +334,11 @@ fn run_act1_impl(
     };
 
     let mut seen_encounters: HashSet<String> = HashSet::new();
-    // Per-combat MCTS policy stats tagged by floor. Populated only on the
-    // BetaOne flow; serialized and attached to every option_sample at the
-    // end of the run so Python can compute per-decision bootstrap targets.
-    let mut per_combat_policy_stats: Vec<(i32, HashMap<String, (f32, u32)>)> = Vec::new();
+    // Per-combat MCTS stats tagged by floor. Populated only on the BetaOne
+    // flow; serialized and attached to every option_sample at the end of
+    // the run so Python can compute per-decision bootstrap targets (both
+    // policy-weight and root-value variants).
+    let mut per_combat_policy_stats: Vec<(i32, HashMap<String, (f32, u32)>, f32)> = Vec::new();
     let mut event_list: Vec<String> = game_data.event_profiles.keys()
         .filter(|k| *k != "NEOW")
         .cloned().collect();
@@ -464,9 +465,11 @@ fn run_act1_impl(
                 // Snapshot MCTS per-card policy stats for this combat before
                 // combat_result is consumed. Empty on the legacy (non-betaone) path.
                 if !combat_result.card_policy_stats.is_empty() {
-                    per_combat_policy_stats.push(
-                        (floor_num, combat_result.card_policy_stats.clone()),
-                    );
+                    per_combat_policy_stats.push((
+                        floor_num,
+                        combat_result.card_policy_stats.clone(),
+                        combat_result.first_root_value,
+                    ));
                 }
                 result.combat_samples_by_floor.push(FloorSamples {
                     floor: floor_num,
@@ -663,20 +666,21 @@ fn run_act1_impl(
     result
 }
 
-/// Attach per-combat MCTS policy stats (serialized as JSON) to every
-/// option_sample in the run. Called from all return paths so no matter how
-/// a run ends (early loss, boss win, or floor-17 falloff), DeckNet training
-/// gets the bootstrap signal. Empty-stats case leaves samples untouched
-/// (legacy flows and runs with no combats).
+/// Attach per-combat MCTS stats (serialized as JSON) to every option_sample
+/// in the run. Each combat contributes card-policy aggregates AND the turn-1
+/// root_value (deck-quality signal). Called from all return paths so no
+/// matter how a run ends (early loss, boss win, or floor-17 falloff),
+/// DeckNet training gets the bootstrap signals it needs. Empty-stats case
+/// leaves samples untouched (legacy flows and runs with no combats).
 fn inject_policy_stats(
     result: &mut FullRunResult,
-    per_combat: &[(i32, HashMap<String, (f32, u32)>)],
+    per_combat: &[(i32, HashMap<String, (f32, u32)>, f32)],
 ) {
     if per_combat.is_empty() {
         return;
     }
     let per_combat_json: Vec<serde_json::Value> = per_combat.iter()
-        .map(|(floor, stats)| {
+        .map(|(floor, stats, root_value)| {
             let stats_map: serde_json::Map<String, serde_json::Value> = stats.iter()
                 .map(|(cid, (sum, count))| {
                     (cid.clone(), serde_json::json!([sum, count]))
@@ -685,6 +689,7 @@ fn inject_policy_stats(
             serde_json::json!({
                 "floor": floor,
                 "card_stats": stats_map,
+                "root_value": root_value,
             })
         })
         .collect();
@@ -1197,6 +1202,9 @@ struct CombatResult {
     /// Per-combat MCTS policy aggregation from BetaOne.
     /// Only populated by run_combat_internal_betaone; empty for legacy path.
     card_policy_stats: HashMap<String, (f32, u32)>,
+    /// BetaOne's turn-1 root value for this combat (deck quality signal).
+    /// Only populated by run_combat_internal_betaone; 0.0 otherwise.
+    first_root_value: f32,
 }
 
 /// Run one combat via BetaOne + MCTS. Used by play_all_games_decknet so
@@ -1232,6 +1240,7 @@ fn run_combat_internal_betaone(
         potions_after: outcome.potions,
         turn_snapshots: vec![],
         card_policy_stats: outcome.card_policy_stats,
+        first_root_value: outcome.first_root_value,
     }
 }
 
@@ -1256,6 +1265,7 @@ fn run_combat_internal(
             hp_after: hp, initial_value: 0.0, potions_after: potions.to_vec(),
             turn_snapshots: vec![],
             card_policy_stats: HashMap::new(),
+            first_root_value: 0.0,
         };
     }
 
@@ -1343,6 +1353,7 @@ fn run_combat_internal(
         samples, outcome: outcome_str, hp_after, initial_value,
         potions_after, turn_snapshots,
         card_policy_stats: HashMap::new(),  // legacy path doesn't use BetaOne
+        first_root_value: 0.0,
     }
 }
 

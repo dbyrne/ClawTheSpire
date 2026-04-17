@@ -48,6 +48,13 @@ pub struct BetaOneCombatOutcome {
     /// BetaOne's revealed preferences instead of broadcasting the run
     /// outcome.
     pub card_policy_stats: HashMap<String, (f32, u32)>,
+    /// Root value from the VERY FIRST MCTS search of this combat — i.e.
+    /// BetaOne's estimate of "how winnable does this combat look with
+    /// this deck, at turn 1 with a fresh hand". Deck-quality signal
+    /// that (unlike policy weight) isn't confounded by card-vs-card
+    /// competition within the hand. Used by DeckNet's root_value target
+    /// mode. 0.0 if no search was run (shouldn't happen in normal flow).
+    pub first_root_value: f32,
 }
 
 /// Run one combat using BetaOne + MCTS, starting from a fresh CombatState
@@ -84,6 +91,7 @@ pub fn run_betaone_combat_core(
         return BetaOneCombatOutcome {
             outcome: "win".into(), final_hp: player_hp, potions, decisions: 0,
             card_policy_stats: HashMap::new(),
+            first_root_value: 0.0,
         };
     }
 
@@ -113,6 +121,8 @@ pub fn run_betaone_combat_core(
     let mut decisions = 0usize;
     let mut final_outcome = "lose";
     let mut card_policy_stats: HashMap<String, (f32, u32)> = HashMap::new();
+    let mut first_root_value: f32 = 0.0;
+    let mut captured_first_root = false;
 
     'outer: for _turn in 1..=30 {
         combat::start_turn(&mut state, rng);
@@ -143,6 +153,13 @@ pub fn run_betaone_combat_core(
                 &state, Some(&enemy_ais), num_sims, temperature, rng,
             );
             decisions += 1;
+
+            // Capture the very first search's root_value — BetaOne's combat
+            // start estimate for this deck. Deck-quality signal for DeckNet.
+            if !captured_first_root {
+                first_root_value = result.root_value as f32;
+                captured_first_root = true;
+            }
 
             // Aggregate per-card MCTS policy weight for this search.
             // Multiple (card, target) actions for the same card collapse
@@ -217,6 +234,7 @@ pub fn run_betaone_combat_core(
         potions,
         decisions,
         card_policy_stats,
+        first_root_value,
     }
 }
 
