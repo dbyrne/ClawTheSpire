@@ -481,13 +481,16 @@ class Experiment:
                        checkpoint: str = "latest") -> None:
         """Save a benchmark result, aggregating with existing results.
 
-        If a result with the same (suite, mode, mcts_sims, pw_k) key exists,
-        wins and games are summed and WR/CI recomputed from the totals.
-        This lets you accumulate results across runs for tighter CIs.
+        If a result with the same inference-config key exists, wins and games
+        are summed and WR/CI recomputed from the totals. This lets you
+        accumulate results across runs for tighter CIs.
 
-        pw_k is part of the key so runs with different progressive-widening
-        settings never merge. Legacy rows without pw_k are treated as 1.0
-        (all pre-existing benchmarks used the default).
+        Dedup key: (suite, mode, mcts_sims, pw_k, c_puct, pomcp,
+        turn_boundary_eval). Every MCTS inference knob that changes search
+        semantics is part of the key so runs with different settings never
+        silently merge. Legacy rows missing these fields get None in the key
+        position, which makes them distinct from any new row that populates
+        the field — safer than guessing an historical default wrong.
         """
         import math
 
@@ -496,15 +499,43 @@ class Experiment:
 
         def _pw_key(val):
             # Normalize for key: policy mode has no pw_k (None); mcts mode
-            # defaults to 1.0 when missing (legacy rows).
+            # defaults to 1.0 when missing (legacy rows pre-dating pw_k).
             if val is None:
                 return None
             return round(float(val), 4)
 
+        def _float_key(val):
+            if val is None:
+                return None
+            return round(float(val), 4)
+
+        def _build_key(row_or_result, is_mcts: bool) -> tuple:
+            pw = row_or_result.get("pw_k")
+            if is_mcts and pw is None:
+                pw = 1.0  # legacy rows: pw_k was 1.0 before the knob existed
+            return (
+                row_or_result.get("suite", suite_id),  # suite uses arg on new rows
+                row_or_result.get("mode"),
+                row_or_result.get("mcts_sims", 0),
+                _pw_key(pw),
+                _float_key(row_or_result.get("c_puct")),
+                row_or_result.get("pomcp"),
+                row_or_result.get("turn_boundary_eval"),
+            )
+
+        is_mcts = result["mode"] == "mcts"
         new_pw_k = result.get("pw_k")
-        if result["mode"] == "mcts" and new_pw_k is None:
+        if is_mcts and new_pw_k is None:
             new_pw_k = 1.0
-        key = (suite_id, result["mode"], result.get("mcts_sims", 0), _pw_key(new_pw_k))
+        key = (
+            suite_id,
+            result["mode"],
+            result.get("mcts_sims", 0),
+            _pw_key(new_pw_k),
+            _float_key(result.get("c_puct")),
+            result.get("pomcp"),
+            result.get("turn_boundary_eval"),
+        )
         new_wins = result.get("wins", 0)
         new_games = result.get("games", 0)
 
@@ -517,11 +548,8 @@ class Experiment:
                     if not line.strip():
                         continue
                     row = json.loads(line)
-                    row_pw_k = row.get("pw_k")
-                    if row.get("mode") == "mcts" and row_pw_k is None:
-                        row_pw_k = 1.0
-                    row_key = (row.get("suite"), row.get("mode"),
-                               row.get("mcts_sims", 0), _pw_key(row_pw_k))
+                    row_is_mcts = row.get("mode") == "mcts"
+                    row_key = _build_key(row, row_is_mcts)
                     if row_key == key:
                         # Aggregate: sum wins and games
                         if row.get("pw_k") is None and new_pw_k is not None:
@@ -549,6 +577,9 @@ class Experiment:
                 "mode": result["mode"],
                 "mcts_sims": result.get("mcts_sims", 0),
                 "pw_k": new_pw_k,
+                "c_puct": result.get("c_puct"),
+                "pomcp": result.get("pomcp"),
+                "turn_boundary_eval": result.get("turn_boundary_eval"),
                 "timestamp": time.time(),
                 "checkpoint": checkpoint,
                 "gen": result.get("gen"),

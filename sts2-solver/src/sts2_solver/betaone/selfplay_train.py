@@ -254,6 +254,15 @@ def train(
     onnx_dir = os.path.join(output_dir, "onnx")
     os.makedirs(onnx_dir, exist_ok=True)
 
+    # mcts_bootstrap supersedes dense_value_targets — the Rust-side reward
+    # computation is dead work when bootstrap is on. Strip the flag here so
+    # the Rust self-play loop skips the per-turn reward plumbing entirely.
+    # Configs that set both don't fail; they just get a one-line notice.
+    if mcts_bootstrap and dense_value_targets:
+        print("Note: mcts_bootstrap=True overrides dense_value_targets — "
+              "disabling dense reward compute.")
+        dense_value_targets = False
+
     # Load game data
     monster_json = build_monster_data_json()
     profiles_json = load_solver_json("enemy_profiles.json")
@@ -296,8 +305,24 @@ def train(
                 # Dimension-aware warm-start
                 old_state = ckpt["model_state_dict"]
                 new_state = network.state_dict()
-                loaded, skipped = 0, 0
+
+                # Reset value_head entirely when layer count changes.
+                # The slice-copy below would otherwise wedge the old readout
+                # matrix [1, H] into a new hidden-layer position [H', H] at
+                # slice [:1, :H], turning a read-out into a semantically
+                # broken first row of a hidden→hidden transform. Random init
+                # is strictly better than that — layers that don't exist in
+                # the old head stay at init, and the readout layer starts
+                # fresh rather than from a displaced weight.
+                old_vh_keys = {k for k in old_state if k.startswith("value_head.")}
+                new_vh_keys = {k for k in new_state if k.startswith("value_head.")}
+                reset_value_head = old_vh_keys != new_vh_keys
+
+                loaded, skipped, reset = 0, 0, 0
                 for key in new_state:
+                    if reset_value_head and key.startswith("value_head."):
+                        reset += 1
+                        continue
                     if key not in old_state:
                         skipped += 1
                         continue
@@ -315,7 +340,10 @@ def train(
                     else:
                         skipped += 1
                 network.load_state_dict(new_state)
-                print(f"Warm-start: {loaded} loaded, {skipped} new/skipped")
+                msg = f"Warm-start: {loaded} loaded, {skipped} new/skipped"
+                if reset_value_head:
+                    msg += f", {reset} value_head reset (layer count changed)"
+                print(msg)
                 for f in [history_path, progress_path]:
                     if os.path.exists(f):
                         os.remove(f)

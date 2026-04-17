@@ -202,6 +202,9 @@ def benchmark_checkpoint(
             "ci95_hi": round(ci_hi, 4),
             "mcts_sims": num_sims if use_mcts else 0,
             "pw_k": pw_k if use_mcts else None,
+            "c_puct": c_puct if use_mcts else None,
+            "pomcp": pomcp if use_mcts else None,
+            "turn_boundary_eval": turn_boundary_eval if use_mcts else None,
             "elapsed": round(elapsed, 1),
         })
 
