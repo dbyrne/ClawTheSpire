@@ -826,13 +826,16 @@ impl<'a> MCTS<'a> {
 
         // Build observation key from cards actually drawn. Capture before the
         // post-draw effect runs so the key isn't perturbed by hand-mutating
-        // side effects if any are added later.
+        // side effects if any are added later. Include the upgraded flag so
+        // Strike and Strike+ aren't collapsed into the same observation —
+        // latent today (no upgraded cards in current encounter sets) but
+        // would silently bias chance-node evaluation otherwise.
         let mut drawn_ids: Vec<String> = draw_state.player.hand[hand_before..]
             .iter()
-            .map(|c| c.id.clone())
+            .map(|c| if c.upgraded { format!("{}+", c.id) } else { c.id.clone() })
             .collect();
         drawn_ids.sort();
-        let obs_key = drawn_ids.join("+");
+        let obs_key = drawn_ids.join("|");
 
         // Apply the card's deferred post-draw logic now that the hand reflects
         // the sampled observation (pending_choice setup, ESCAPE_PLAN block, ...)
