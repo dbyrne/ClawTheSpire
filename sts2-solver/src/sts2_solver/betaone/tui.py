@@ -257,10 +257,12 @@ def build_dashboard(experiments: list[dict]) -> Group:
         bench_table.add_column("95% CI", justify="right", max_width=16)
         bench_table.add_column("N", justify="right", max_width=6)
 
-        # Deduplicate: keep most recent per (experiment, suite, mode)
+        # Deduplicate: keep most recent per (experiment, suite, mode, sims).
+        # Include sims so sweeps (mcts-250, mcts-500, mcts-1000) don't collapse
+        # onto each other — results.jsonl keys the same way on save.
         seen = {}
         for row in reversed(bench_rows):
-            key = (row["name"], row["suite"], row["mode"])
+            key = (row["name"], row["suite"], row["mode"], row["sims"])
             if key not in seen:
                 seen[key] = row
 
