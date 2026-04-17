@@ -527,6 +527,7 @@ class Experiment:
                 _float_key(row_or_result.get("c_puct")),
                 row_or_result.get("pomcp"),
                 row_or_result.get("turn_boundary_eval"),
+                row_or_result.get("batch_size_mcts"),
             )
 
         is_mcts = result["mode"] == "mcts"
@@ -541,6 +542,7 @@ class Experiment:
             _float_key(result.get("c_puct")),
             result.get("pomcp"),
             result.get("turn_boundary_eval"),
+            result.get("batch_size_mcts"),
         )
         new_wins = result.get("wins", 0)
         new_games = result.get("games", 0)
@@ -586,6 +588,7 @@ class Experiment:
                 "c_puct": result.get("c_puct"),
                 "pomcp": result.get("pomcp"),
                 "turn_boundary_eval": result.get("turn_boundary_eval"),
+                "batch_size_mcts": result.get("batch_size_mcts"),
                 "timestamp": time.time(),
                 "checkpoint": checkpoint,
                 "gen": result.get("gen"),

@@ -172,12 +172,25 @@ def _combat_net_ref(exp: dict) -> str:
 def build_dashboard(experiments: list[dict]) -> Group:
     """Build the full dashboard layout.
 
+    Two-column top: training state (exps + encounter sets) on the left,
+    benchmarks pane on the right at fixed width. Sparklines/candlesticks
+    and the footer span the full width below. Keeps benchmarks visible
+    without scrolling past the training state.
+
     BetaOne and DeckNet experiments render in separate tables because
     their metrics don't cleanly overlap (combat WR vs run WR, combat
     eval vs deck eval, etc.). Mixing them in one table required
     too many blank columns and made the view hard to scan.
     """
-    parts = []
+    # Left column accumulates training-state tables + candlesticks. Right
+    # column is the benchmarks pane. Footer stays full-width below.
+    left_parts: list = []
+    right_parts: list = []
+    full_parts: list = []
+    # Back-compat alias — the per-experiment candlestick block below
+    # appends to `parts`; we redirect it to left_parts so candlesticks
+    # render in the left column alongside the exps tables.
+    parts = left_parts
 
     # Assign colors to experiments (global, so same color across tables)
     exp_color_map = {exp["name"]: _exp_color(i) for i, exp in enumerate(experiments)}
@@ -201,6 +214,7 @@ def build_dashboard(experiments: list[dict]) -> Group:
         overview.add_column("Buffer", justify="right", max_width=10)
         overview.add_column("C", justify="right", max_width=4)
         overview.add_column("Noise", justify="right", max_width=5)
+        overview.add_column("K", justify="right", max_width=4)
         overview.add_column("Encounter Set", max_width=18)
 
         for exp in betaone_exps:
@@ -236,6 +250,7 @@ def build_dashboard(experiments: list[dict]) -> Group:
                 buf_str = "-"
                 cpuct_str = "-"
                 noise_str = "-"
+                batch_str = "-"
             else:
                 mcts = exp.get("training", {}).get("mcts", {})
                 sims = mcts.get("num_sims", "?")
@@ -252,14 +267,18 @@ def build_dashboard(experiments: list[dict]) -> Group:
                     buf_str = "-"
                 cpuct_str = f"{mcts.get('c_puct', MCTS_DEFAULTS['c_puct'])}"
                 noise_str = f"{mcts.get('noise_frac', MCTS_DEFAULTS['noise_frac'])}"
+                # Batched MCTS K (1 = sequential). Shown so batched vs
+                # sequential experiments are visually distinguishable.
+                bsz = mcts.get("batch_size_mcts", 1)
+                batch_str = str(bsz) if bsz and bsz > 1 else "1"
 
             color = exp_color_map.get(exp["name"], "white")
             name_text = Text(exp["name"], style=color)
             overview.add_row(name_text, method, params_str, status,
                              gen_str, wr, best, eval_str, et_str, buf_str,
-                             cpuct_str, noise_str, ts_str)
+                             cpuct_str, noise_str, batch_str, ts_str)
 
-        parts.append(overview)
+        left_parts.append(overview)
 
     # === DeckNet experiments table ===
     if decknet_exps:
@@ -316,7 +335,7 @@ def build_dashboard(experiments: list[dict]) -> Group:
                              gen_str, run_wr, avg_floor, eval_str, buf_str,
                              combat_net)
 
-        parts.append(dn_table)
+        left_parts.append(dn_table)
 
     # === Benchmark results table (sorted by suite, then best WR) ===
     bench_rows = []
@@ -332,6 +351,7 @@ def build_dashboard(experiments: list[dict]) -> Group:
                 "suite": suite_short,
                 "mode": b.get("mode", "?"),
                 "sims": b.get("mcts_sims", 0),
+                "batch": b.get("batch_size_mcts") or 1,
                 "wr": b.get("win_rate", 0),
                 "ci_lo": b.get("ci95_lo", 0),
                 "ci_hi": b.get("ci95_hi", 0),
@@ -341,18 +361,18 @@ def build_dashboard(experiments: list[dict]) -> Group:
     if bench_rows:
         bench_table = Table(title="Benchmarks (best first per encounter set)", expand=True, show_lines=False)
         bench_table.add_column("Encounter Set", max_width=16)
-        bench_table.add_column("Mode", max_width=10)
+        bench_table.add_column("Mode", max_width=14)
         bench_table.add_column("Experiment", max_width=26)
         bench_table.add_column("WR", justify="right", max_width=7)
         bench_table.add_column("95% CI", justify="right", max_width=16)
         bench_table.add_column("N", justify="right", max_width=6)
 
-        # Deduplicate: keep most recent per (experiment, suite, mode, sims).
-        # Include sims so sweeps (mcts-250, mcts-500, mcts-1000) don't collapse
-        # onto each other — results.jsonl keys the same way on save.
+        # Deduplicate: keep most recent per (experiment, suite, mode, sims, batch).
+        # Include sims + batch so sweeps don't collapse onto each other —
+        # results.jsonl keys the same way on save.
         seen = {}
         for row in reversed(bench_rows):
-            key = (row["name"], row["suite"], row["mode"], row["sims"])
+            key = (row["name"], row["suite"], row["mode"], row["sims"], row["batch"])
             if key not in seen:
                 seen[key] = row
 
@@ -363,6 +383,8 @@ def build_dashboard(experiments: list[dict]) -> Group:
         prev_suite = None
         for row in sorted_rows:
             mode_str = f"{row['mode']}" + (f"-{row['sims']}" if row['sims'] > 0 else "")
+            if row["batch"] and row["batch"] > 1:
+                mode_str += f"/K{row['batch']}"
             ci = f"[{row['ci_lo']:.1%}, {row['ci_hi']:.1%}]"
             # Visual separator between suites
             suite_display = row["suite"] if row["suite"] != prev_suite else ""
@@ -372,7 +394,7 @@ def build_dashboard(experiments: list[dict]) -> Group:
                 suite_display, mode_str, Text(row["name"], style=color),
                 f"{row['wr']:.1%}", ci, str(row["n"]),
             )
-        parts.append(bench_table)
+        right_parts.append(bench_table)
 
     # === Encounter sets section ===
     from .encounter_set import list_encounter_sets
@@ -414,7 +436,7 @@ def build_dashboard(experiments: list[dict]) -> Group:
                 cal.get("checkpoint", "?"),
                 ts.get("training_set_id", "?")[:16],
             )
-        parts.append(es_table)
+        left_parts.append(es_table)
 
     # === Active training candlesticks ===
     for exp in experiments:
@@ -474,7 +496,7 @@ def build_dashboard(experiments: list[dict]) -> Group:
 
         # Render one candlestick line per metric
         def _candle_line(label, vals, scale_lo, scale_hi, fmt_val, fmt_delta,
-                         higher_is_better=True, bar_width=80):
+                         higher_is_better=True, bar_width=70):
             lo, hi, mean = _window(vals)
             line = Text()
             line.append(f"    {label:>3s} ", style="dim")
@@ -569,9 +591,21 @@ def build_dashboard(experiments: list[dict]) -> Group:
 
     # === Footer ===
     footer = Text(f"  showing last {len(experiments)} experiments (max {MAX_EXPERIMENTS}) | {len(all_sets)} encounter sets | refresh 2s | Ctrl+C to exit", style="dim")
-    parts.append(footer)
+    full_parts.append(footer)
 
-    return Group(*parts)
+    # Two-column top: training state on the left, benchmarks pane on the
+    # right. Both columns scale with terminal width (3:2 ratio) so wider
+    # terminals give benchmarks more room. Footer stays full-width below.
+    if left_parts or right_parts:
+        top = Table.grid(expand=True, padding=(0, 1))
+        top.add_column(ratio=3)
+        top.add_column(ratio=2)
+        top.add_row(
+            Group(*left_parts) if left_parts else Text(""),
+            Group(*right_parts) if right_parts else Text(""),
+        )
+        return Group(top, *full_parts)
+    return Group(*full_parts)
 
 
 def main():

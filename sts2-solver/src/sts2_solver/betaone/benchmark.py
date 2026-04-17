@@ -209,6 +209,7 @@ def benchmark_checkpoint(
             "c_puct": c_puct if use_mcts else None,
             "pomcp": pomcp if use_mcts else None,
             "turn_boundary_eval": turn_boundary_eval if use_mcts else None,
+            "batch_size_mcts": batch_size_mcts if use_mcts else None,
             "elapsed": round(elapsed, 1),
         })
 

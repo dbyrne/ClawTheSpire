@@ -1,0 +1,52 @@
+name: pomcp-batched-k32-v1
+method: mcts_selfplay
+description: '''K=32 virtual-loss batched fork of valuedepth-v1 latest (gen 30 weights).
+  Tests whether batching disrupts training quality over 100 gens vs sequential valuedepth
+  trajectory. eval_every=10.'''
+created: '2026-04-17T23:12:10+00:00'
+parent: pomcp-valuedepth-v1
+parent_checkpoint: latest
+network_type: betaone
+architecture:
+  arch_version: 2
+  base_state_dim: 137
+  hidden_dim: 128
+  action_hidden: 64
+  hand_proj_dim: 32
+  card_embed_dim: 16
+  card_stats_dim: 28
+  relic_dim: 26
+  action_dim: 35
+  max_hand: 10
+  max_actions: 30
+  value_head_layers: 3
+  num_cards: 578
+  total_params: 138291
+  state_dim: 427
+  trunk_input: 169
+training:
+  generations: 100
+  combats_per_gen: 256
+  lr: 0.0003
+  batch_size: 512
+  mcts:
+    num_sims: 1000
+    temperature: 1.0
+    replay_capacity: 50000
+    train_epochs: 4
+    value_coef: 1.0
+    turn_boundary_eval: true
+    dense_value_targets: true
+    gamma: 0.99
+    c_puct: 1.5
+    pomcp: true
+    mcts_bootstrap: true
+    eval_every: 10
+    batch_size_mcts: 32
+data:
+  mode: encounter_set
+  encounter_set: lean-decks-v1
+checkpoints:
+  save_every: 50
+  keep_best: true
+  cold_start: false
