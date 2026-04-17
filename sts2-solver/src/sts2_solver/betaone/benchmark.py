@@ -47,6 +47,10 @@ def _eval_batch(
     monster_json: str, profiles_json: str,
     encounters: list, decks: list, player_hp: int,
     seeds: list[int], use_mcts: bool, num_sims: int,
+    c_puct: float = 2.5,
+    pomcp: bool = False,
+    turn_boundary_eval: bool = False,
+    pw_k: float = 1.0,
 ) -> int:
     """Run a batch of combats at a single HP level. Returns win count."""
     if use_mcts:
@@ -62,6 +66,10 @@ def _eval_batch(
             num_sims=num_sims, temperature=0.0,
             seeds=seeds,
             add_noise=False,
+            c_puct=c_puct,
+            pomcp=pomcp,
+            turn_boundary_eval=turn_boundary_eval,
+            pw_k=pw_k,
         )
     else:
         r = sts2_engine.collect_betaone_rollouts(
@@ -86,6 +94,10 @@ def benchmark_checkpoint(
     mode: str = "both",
     repeats: int = 1,
     num_sims: int = 400,
+    c_puct: float = 2.5,
+    pomcp: bool = False,
+    turn_boundary_eval: bool = False,
+    pw_k: float = 1.0,
 ) -> list[dict]:
     """Benchmark a checkpoint against an encounter set.
 
@@ -95,6 +107,10 @@ def benchmark_checkpoint(
         mode: "policy", "mcts", or "both".
         repeats: Times to repeat each encounter (for statistical power).
         num_sims: MCTS simulations per decision.
+        c_puct, pomcp, turn_boundary_eval, pw_k: MCTS inference config.
+            Should match the model's training config — defaulting to stock
+            MCTS settings here would silently change inference semantics
+            from what the model was optimized for.
 
     Returns:
         List of result dicts, one per mode.
@@ -147,6 +163,8 @@ def benchmark_checkpoint(
             batch_wins = _eval_batch(
                 onnx_path, card_vocab_json, monster_json, profiles_json,
                 batch_enc, batch_dks, hp, batch_seeds, use_mcts, num_sims,
+                c_puct=c_puct, pomcp=pomcp,
+                turn_boundary_eval=turn_boundary_eval, pw_k=pw_k,
             )
             wins += batch_wins
             n_games += len(batch_enc)

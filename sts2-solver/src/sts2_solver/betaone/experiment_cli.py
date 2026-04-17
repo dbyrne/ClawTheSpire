@@ -132,9 +132,22 @@ def cmd_benchmark(args):
     encounters = load_encounter_set(es_name)
     _, sid = get_encounter_set_suite(es_name)
 
+    # Pull MCTS inference config from the experiment's training config so the
+    # model is benchmarked under the same search settings it was optimized for.
+    # Defaulting to stock MCTS here would silently mismatch (c_puct=2.5,
+    # pomcp=False, turn_boundary_eval=False) and corrupt every benchmark.
+    mcts_cfg = exp.config.training.get("mcts", {}) if exp.config.method == "mcts_selfplay" else {}
+    c_puct = float(mcts_cfg.get("c_puct", 2.5))
+    pomcp = bool(mcts_cfg.get("pomcp", False))
+    turn_boundary_eval = bool(mcts_cfg.get("turn_boundary_eval", False))
+    pw_k = float(mcts_cfg.get("pw_k", 1.0))
+
     print(f"Benchmarking: {exp.config.name}")
     print(f"  Encounter set: {es_name} ({len(encounters)} encounters)")
-    print(f"  Mode: {args.mode}, repeats: {args.repeats}")
+    print(f"  Mode: {args.mode}, repeats: {args.repeats}, sims: {args.sims}")
+    if args.mode in ("mcts", "both"):
+        print(f"  MCTS config: c_puct={c_puct}, pomcp={pomcp}, "
+              f"turn_boundary_eval={turn_boundary_eval}, pw_k={pw_k}")
 
     results = benchmark_checkpoint(
         ckpt_path,
@@ -142,6 +155,10 @@ def cmd_benchmark(args):
         mode=args.mode,
         repeats=args.repeats,
         num_sims=args.sims,
+        c_puct=c_puct,
+        pomcp=pomcp,
+        turn_boundary_eval=turn_boundary_eval,
+        pw_k=pw_k,
     )
 
     for result in results:
