@@ -129,6 +129,58 @@ class ReplayBuffer:
 
 
 # ---------------------------------------------------------------------------
+# Q-target mixing
+# ---------------------------------------------------------------------------
+
+def compute_mixed_policy_target(
+    visits: np.ndarray,
+    q_values: np.ndarray,
+    mask: np.ndarray,
+    mix: float,
+    temp: float,
+) -> np.ndarray:
+    """Mix visit distribution with softmax(Q/temp) to make the policy target
+    reflect Q values more, not just visit counts.
+
+    target = (1 - mix) * visits_norm + mix * softmax(Q/temp over visited only)
+
+    Args:
+        visits: (T, MAX_ACTIONS) raw visit counts (zero-padded).
+        q_values: (T, MAX_ACTIONS) Q values per action (zero-padded).
+        mask: (T, MAX_ACTIONS) bool, True for valid actions.
+        mix: weight on Q-softmax part (0 = pure visits, 1 = pure Q).
+        temp: softmax temperature for Q.
+
+    Returns:
+        (T, MAX_ACTIONS) float32 policy target.
+
+    Important: the softmax only includes *visited* children. Unvisited actions
+    have Q=0 (init) which would dominate softmax if included; we mask them out
+    so unvisited actions get only the (zero) visit-norm contribution.
+    """
+    visits_f = visits.astype(np.float32)
+    visit_sums = visits_f.sum(axis=1, keepdims=True)
+    visit_sums = np.where(visit_sums > 0, visit_sums, 1.0)
+    visits_norm = visits_f / visit_sums
+
+    if mix <= 0:
+        return visits_norm.astype(np.float32)
+
+    visited = (visits > 0) & mask
+    # Build logits: -inf for un-included actions (excludes from softmax)
+    safe_logits = np.where(visited, q_values / max(temp, 1e-6), -np.inf)
+    # Per-row max for numerical stability; rows with zero visited fall back to 0
+    max_logits = np.max(safe_logits, axis=1, keepdims=True)
+    max_logits = np.where(np.isfinite(max_logits), max_logits, 0.0)
+    exp_logits = np.exp(safe_logits - max_logits)
+    exp_sums = exp_logits.sum(axis=1, keepdims=True)
+    safe_sums = np.where(exp_sums > 0, exp_sums, 1.0)
+    softmax_q = np.where(exp_sums > 0, exp_logits / safe_sums, 0.0)
+
+    return ((1.0 - mix) * visits_norm + mix * softmax_q).astype(np.float32)
+
+
+# ---------------------------------------------------------------------------
 # Training step
 # ---------------------------------------------------------------------------
 
@@ -195,6 +247,8 @@ def train(
     mcts_bootstrap: bool = False,
     noise_frac: float = 0.25,
     pw_k: float = 1.0,
+    q_target_mix: float = 0.0,
+    q_target_temp: float = 0.5,
 ):
     os.makedirs(output_dir, exist_ok=True)
     onnx_dir = os.path.join(output_dir, "onnx")
@@ -302,6 +356,7 @@ def train(
         all_final_hps = []
         gen_states, gen_act_feat, gen_act_masks = [], [], []
         gen_hand_ids, gen_action_ids, gen_policies = [], [], []
+        gen_visits, gen_q_values = [], []
         gen_rewards = []
         gen_mcts_values = []
         gen_combat_indices = []
@@ -358,6 +413,9 @@ def train(
             gen_hand_ids.extend(np.array(rollout["hand_card_ids"], dtype=np.int64).reshape(-1, MAX_HAND))
             gen_action_ids.extend(np.array(rollout["action_card_ids"], dtype=np.int64).reshape(-1, MAX_ACTIONS))
             gen_policies.extend(np.array(rollout["policies"], dtype=np.float32).reshape(-1, MAX_ACTIONS))
+            if q_target_mix > 0:
+                gen_visits.extend(np.array(rollout["child_visits"], dtype=np.int64).reshape(-1, MAX_ACTIONS))
+                gen_q_values.extend(np.array(rollout["child_q_values"], dtype=np.float32).reshape(-1, MAX_ACTIONS))
             gen_combat_indices.extend(ci)
             gen_mcts_values.extend(np.array(rollout["mcts_values"], dtype=np.float32))
             if dense_value_targets:
@@ -398,6 +456,19 @@ def train(
                     gen_values[mask] = 1.0 + 0.3 * hp_frac
                 else:
                     gen_values[mask] = -1.0
+
+        # Mix Q-based softmax into the policy target. Default mix=0 keeps the
+        # standard AlphaZero visit-distribution target. mix>0 attacks the echo
+        # chamber where visits inherit a sharp prior even when Q values say
+        # actions are competitive.
+        if q_target_mix > 0:
+            visits_arr = np.array(gen_visits, dtype=np.int64)
+            q_arr = np.array(gen_q_values, dtype=np.float32)
+            mask_arr = np.array(gen_act_masks, dtype=bool)
+            mixed = compute_mixed_policy_target(
+                visits_arr, q_arr, mask_arr, q_target_mix, q_target_temp
+            )
+            gen_policies = list(mixed)
 
         # Add to replay buffer
         replay.add_generation(

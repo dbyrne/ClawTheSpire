@@ -45,6 +45,8 @@ struct Sample {
     action_features: [f32; encode::MAX_ACTIONS * encode::ACTION_DIM],
     action_mask: [bool; encode::MAX_ACTIONS],
     policy: [f32; encode::MAX_ACTIONS],  // MCTS visit distribution (zero-padded)
+    visits: [u32; encode::MAX_ACTIONS],  // Raw visit counts per action
+    q_values: [f32; encode::MAX_ACTIONS],  // Q value per child action (mean backed-up value)
     num_actions: usize,
     reward: f32,  // Per-step reward (0 for card plays, dense for EndTurn + terminal)
     mcts_value: f32,  // MCTS root value (search-backed average for bootstrap targets)
@@ -204,10 +206,18 @@ fn run_selfplay_combat(
                 &mut rng,
             );
 
-            // Store sample: state + MCTS policy
+            // Store sample: state + MCTS policy + raw visits + Q values
             let mut policy = [0.0f32; encode::MAX_ACTIONS];
             for (i, &p) in result.policy.iter().enumerate().take(encode::MAX_ACTIONS) {
                 policy[i] = p;
+            }
+            let mut visits = [0u32; encode::MAX_ACTIONS];
+            for (i, &v) in result.child_visits.iter().enumerate().take(encode::MAX_ACTIONS) {
+                visits[i] = v;
+            }
+            let mut q_values = [0.0f32; encode::MAX_ACTIONS];
+            for (i, &q) in result.child_values.iter().enumerate().take(encode::MAX_ACTIONS) {
+                q_values[i] = q;
             }
 
             samples.push(Sample {
@@ -217,6 +227,8 @@ fn run_selfplay_combat(
                 action_features: act_feat,
                 action_mask: act_mask,
                 policy,
+                visits,
+                q_values,
                 num_actions: actions.len().min(encode::MAX_ACTIONS),
                 reward: 0.0,
                 mcts_value: result.root_value as f32,
@@ -467,6 +479,8 @@ fn build_selfplay_py(py: Python<'_>, results: &[Option<SelfPlayResult>]) -> PyRe
     let mut all_act_feat: Vec<f32> = Vec::new();
     let mut all_act_masks: Vec<bool> = Vec::new();
     let mut all_policies: Vec<f32> = Vec::new();
+    let mut all_visits: Vec<i64> = Vec::new();
+    let mut all_q_values: Vec<f32> = Vec::new();
     let mut all_num_actions: Vec<i64> = Vec::new();
     let mut all_rewards: Vec<f32> = Vec::new();
     let mut all_mcts_values: Vec<f32> = Vec::new();
@@ -490,6 +504,8 @@ fn build_selfplay_py(py: Python<'_>, results: &[Option<SelfPlayResult>]) -> PyRe
             all_act_feat.extend_from_slice(&sample.action_features);
             all_act_masks.extend_from_slice(&sample.action_mask);
             all_policies.extend_from_slice(&sample.policy);
+            all_visits.extend(sample.visits.iter().map(|&v| v as i64));
+            all_q_values.extend_from_slice(&sample.q_values);
             all_num_actions.push(sample.num_actions as i64);
             all_rewards.push(sample.reward);
             all_mcts_values.push(sample.mcts_value);
@@ -505,6 +521,8 @@ fn build_selfplay_py(py: Python<'_>, results: &[Option<SelfPlayResult>]) -> PyRe
     dict.set_item("action_features", &all_act_feat)?;
     dict.set_item("action_masks", PyList::new(py, all_act_masks.iter().map(|&b| b))?)?;
     dict.set_item("policies", &all_policies)?;
+    dict.set_item("child_visits", &all_visits)?;
+    dict.set_item("child_q_values", &all_q_values)?;
     dict.set_item("num_actions", &all_num_actions)?;
     dict.set_item("rewards", &all_rewards)?;
     dict.set_item("mcts_values", &all_mcts_values)?;

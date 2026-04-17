@@ -149,6 +149,8 @@ class ExperimentConfig:
                 "mcts_bootstrap": mcts.get("mcts_bootstrap", False),
                 "noise_frac": _float(mcts.get("noise_frac"), 0.25),
                 "pw_k": _float(mcts.get("pw_k"), 1.0),
+                "q_target_mix": _float(mcts.get("q_target_mix"), 0.0),
+                "q_target_temp": _float(mcts.get("q_target_temp"), 0.5),
             }
         else:  # ppo
             ppo = t.get("ppo", {})
