@@ -149,6 +149,107 @@ fn entropy(policy: &[f32]) -> f32 {
 // Softmax
 // ===================================================================
 
+// ===================================================================
+// Virtual-loss batched search
+// ===================================================================
+
+#[test]
+fn test_search_batched_visits_match_sims() {
+    let state = state_with(vec![strike(), strike(), defend()], vec![enemy(30)]);
+    let db = card_db();
+    let inf = ConstantInference { value: 0.0 };
+    let mcts = MCTS::new(&db, &inf);
+
+    let result = mcts.search_batched(&state, None, 200, 8, 1.0, &mut rng());
+    let total_visits: u32 = result.child_visits.iter().sum();
+    // All 200 sims should have backed up through the root's children.
+    // Root itself has 200 + 1 (from initial expand) = 201 visits, but
+    // children sum to 200 (the post-root sim traversals).
+    assert_eq!(
+        total_visits as usize, 200,
+        "child visits should sum to num_sims, got {} != 200",
+        total_visits,
+    );
+}
+
+#[test]
+fn test_search_batched_matches_sequential_shape() {
+    // With a fixed-value constant inference and identical seeds, batched and
+    // sequential search won't produce identical visit counts (batch ordering
+    // differs) but should produce the same action set and policy length.
+    let state = state_with(vec![strike(), strike(), defend()], vec![enemy(40)]);
+    let db = card_db();
+    let inf = ConstantInference { value: 0.0 };
+    let mcts = MCTS::new(&db, &inf);
+
+    let seq = mcts.search(&state, 100, 1.0, &mut rng());
+    let bat = mcts.search_batched(&state, None, 100, 4, 1.0, &mut rng());
+
+    assert_eq!(
+        seq.policy.len(),
+        bat.policy.len(),
+        "batched policy should have same shape as sequential"
+    );
+    // Both should sum to ~1 at non-zero temperature
+    let bat_sum: f32 = bat.policy.iter().sum();
+    assert!((bat_sum - 1.0).abs() < 1e-3, "batched policy doesn't sum to 1: {}", bat_sum);
+}
+
+#[test]
+fn test_search_batched_biased_prior_dominates() {
+    // With a strongly biased prior, batched search should still converge
+    // to the biased action as the majority visit.
+    let state = state_with(vec![strike(), strike(), defend()], vec![enemy(30)]);
+    let db = card_db();
+    let inf = BiasedInference { bias_idx: 0, bias_logit: 5.0, value: 0.0 };
+    let mut mcts = MCTS::new(&db, &inf);
+    mcts.add_noise = false;
+
+    let result = mcts.search_batched(&state, None, 300, 16, 0.0, &mut rng());
+    // Biased action (idx 0) should dominate
+    let top_idx = result.child_visits.iter().enumerate()
+        .max_by_key(|&(_, v)| *v).map(|(i, _)| i).unwrap();
+    assert_eq!(top_idx, 0, "biased action should win, got child_visits={:?}", result.child_visits);
+}
+
+#[test]
+fn test_search_batched_batch1_equals_sequential() {
+    // With batch_size=1, there is no virtual loss interaction and selection
+    // order matches sequential. Visit counts should be identical.
+    let state = state_with(vec![strike(), strike(), defend()], vec![enemy(30)]);
+    let db = card_db();
+    let inf = BiasedInference { bias_idx: 1, bias_logit: 3.0, value: 0.5 };
+    let mut mcts = MCTS::new(&db, &inf);
+    mcts.add_noise = false;
+
+    let seq = mcts.search(&state, 150, 1.0, &mut rng());
+    let bat = mcts.search_batched(&state, None, 150, 1, 1.0, &mut rng());
+
+    assert_eq!(seq.child_visits, bat.child_visits,
+        "batch_size=1 should match sequential: seq={:?} bat={:?}",
+        seq.child_visits, bat.child_visits);
+}
+
+#[test]
+fn test_search_batched_virtual_loss_spreads_visits() {
+    // With a neutral prior, batched search should spread visits across
+    // children at least as much as sequential (virtual loss promotes diversity).
+    let state = state_with(vec![strike(), strike(), strike(), defend()], vec![enemy(40)]);
+    let db = card_db();
+    let inf = ConstantInference { value: 0.0 };
+    let mut mcts = MCTS::new(&db, &inf);
+    mcts.add_noise = false;
+
+    let result = mcts.search_batched(&state, None, 200, 16, 1.0, &mut rng());
+    // At least 2 children should have meaningful visits (spread, not all on one)
+    let nontrivial = result.child_visits.iter().filter(|&&v| v >= 5).count();
+    assert!(
+        nontrivial >= 2,
+        "batched search with virtual loss should spread visits: got {:?}",
+        result.child_visits
+    );
+}
+
 #[test]
 fn test_softmax_preserves_order() {
     let result = softmax(&[1.0, 2.0, 3.0]);

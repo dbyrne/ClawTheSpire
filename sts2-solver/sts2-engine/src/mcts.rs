@@ -27,6 +27,12 @@ struct Node {
     is_expanded: bool,
     is_terminal: bool,
     terminal_value: f32,
+    /// Virtual-loss counter for batched MCTS. When >0, selection treats the
+    /// node as if it had received `virtual_visits` visits with pessimistic
+    /// value, which pushes subsequent selects off this path and lets K
+    /// parallel selects collect K distinct leaves. Reset to 0 after the
+    /// real value backs up. Always 0 in sequential search.
+    virtual_visits: u32,
     // POMCP chance node fields
     is_chance: bool,                            // awaiting observation sampling
     pending_draws: i32,                         // cards to draw at this chance node
@@ -55,6 +61,7 @@ impl Node {
             is_expanded: false,
             is_terminal: false,
             terminal_value: 0.0,
+            virtual_visits: 0,
             is_chance: false,
             pending_draws: 0,
             observation_children: Vec::new(),
@@ -67,10 +74,30 @@ impl Node {
         if self.visit_count == 0 { 0.0 } else { self.value_sum / self.visit_count as f64 }
     }
 
+    /// Effective value during selection, incorporating virtual loss.
+    /// Each virtual visit counts as a -1 backup (pessimistic), pushing
+    /// subsequent parallel selects off this path. With virtual_visits = 0
+    /// this matches `value()` exactly (sequential search is unchanged).
+    fn value_with_virtual_loss(&self) -> f64 {
+        let total = self.visit_count + self.virtual_visits;
+        if total == 0 {
+            0.0
+        } else {
+            // Virtual losses contribute -1.0 each to value_sum conceptually.
+            (self.value_sum - self.virtual_visits as f64) / total as f64
+        }
+    }
+
     fn ucb_score(&self, parent_visits: u32, c_puct: f32) -> f32 {
-        let exploitation = self.value() as f32;
+        // Selection uses virtual-loss-adjusted quantities so K parallel
+        // selects spread across different children. Both visit_count and
+        // virtual_visits are included in the denominator so a child in
+        // flight looks "more visited" to competing selects.
+        let effective_visits = self.visit_count + self.virtual_visits;
+        let effective_parent = parent_visits; // parent already accumulated virtual visits via add_virtual_loss path walk
+        let exploitation = self.value_with_virtual_loss() as f32;
         let exploration = c_puct * self.prior
-            * (parent_visits as f32).sqrt() / (1.0 + self.visit_count as f32);
+            * (effective_parent as f32).sqrt() / (1.0 + effective_visits as f32);
         exploitation + exploration
     }
 }
@@ -107,6 +134,17 @@ pub struct SearchResult {
     pub child_visits: Vec<u32>,  // Per-action visit counts
 }
 
+/// Outcome of `prepare_for_priors`: either the leaf is fully done (terminal,
+/// chance node handled, etc.) or it needs a priors NN call to finish.
+enum LeafOutcome {
+    Done(f32),
+    NeedPriors {
+        value: f32,
+        actions: Vec<Action>,
+        cached_logits: Option<Vec<f32>>,
+    },
+}
+
 // ---------------------------------------------------------------------------
 // Inference trait (filled by ONNX or mock)
 // ---------------------------------------------------------------------------
@@ -122,6 +160,27 @@ pub trait Inference {
 
     /// Encode state → run-level value (value head, for turn-replay bootstrapping).
     fn run_value(&self, state: &CombatState) -> f32;
+
+    /// Batched policy+value evaluation. Default implementation iterates
+    /// `evaluate` — implementors override for ONNX batched inference when
+    /// the performance win is material. Returns one (logits, value) per
+    /// input, preserving order. Each logits Vec is truncated to that
+    /// input's legal-action count.
+    fn evaluate_batch(
+        &self,
+        states: &[&CombatState],
+        actions: &[&[Action]],
+    ) -> Vec<(Vec<f32>, f32)> {
+        assert_eq!(states.len(), actions.len(), "batch states/actions length mismatch");
+        states.iter().zip(actions.iter())
+            .map(|(s, a)| self.evaluate(s, a))
+            .collect()
+    }
+
+    /// Batched value-only evaluation. Default iterates `value_only`.
+    fn value_only_batch(&self, states: &[&CombatState]) -> Vec<f32> {
+        states.iter().map(|s| self.value_only(s)).collect()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -254,6 +313,158 @@ impl<'a> MCTS<'a> {
         self.extract_result(&arena, root_idx, temperature, rng)
     }
 
+    /// Batched MCTS search with virtual loss. Same output shape as
+    /// `search`/`search_with_ais`, but collects up to `batch_size` leaves
+    /// per iteration and runs their priors NN calls as one batched forward
+    /// pass. Virtual losses on ancestors push K parallel selects onto
+    /// different branches so the batch is actually useful.
+    ///
+    /// Note: the turn-boundary playout inside each leaf is still sequential
+    /// (the next state depends on the previous greedy action). Batching
+    /// there requires interleaved playouts — future work. For now the
+    /// speedup comes from batching only the children-priors call.
+    pub fn search_batched(
+        &self,
+        state: &CombatState,
+        enemy_ais: Option<&[crate::enemy::EnemyAI]>,
+        num_simulations: usize,
+        batch_size: usize,
+        temperature: f32,
+        rng: &mut impl Rng,
+    ) -> SearchResult {
+        assert!(batch_size >= 1, "batch_size must be >= 1");
+        let mut arena = Arena::with_capacity(num_simulations * 2 + batch_size);
+
+        // Root: use serial expand (one NN call isn't worth batching)
+        let mut root = Node::new(Some(state.clone()), None, 0);
+        root.enemy_ais = enemy_ais.map(|ais| ais.to_vec());
+        let root_idx = arena.alloc(root);
+        let root_value = self.expand(&mut arena, root_idx, rng);
+
+        if arena.nodes[root_idx].is_terminal || arena.nodes[root_idx].legal_actions.is_empty() {
+            return SearchResult {
+                action: Action::EndTurn,
+                policy: vec![1.0],
+                root_value: root_value as f64,
+                child_values: vec![],
+                child_visits: vec![],
+            };
+        }
+
+        // Dirichlet noise on root priors (same as search_single)
+        if self.add_noise {
+            let alpha = 0.3;
+            let noise_frac: f32 = self.noise_frac;
+            let child_indices: Vec<usize> = arena.nodes[root_idx].children.iter()
+                .map(|&(_, child_idx)| child_idx).collect();
+            let noise = dirichlet(alpha, child_indices.len(), rng);
+            for (i, child_idx) in child_indices.into_iter().enumerate() {
+                let old_prior = arena.nodes[child_idx].prior;
+                arena.nodes[child_idx].prior =
+                    (1.0 - noise_frac) * old_prior + noise_frac * noise[i] as f32;
+            }
+        }
+
+        let mut sims_done: usize = 0;
+        while sims_done < num_simulations {
+            let remaining = num_simulations - sims_done;
+            let k = batch_size.min(remaining);
+
+            // Track per-selection info so we can back up + remove VL correctly
+            // after batched priors finish.
+            //   (vl_leaf, backup_from, value)
+            let mut ready: Vec<(usize, usize, f32)> = Vec::with_capacity(k);
+            //   (vl_leaf, actions) — these need a batched priors NN call
+            let mut pending: Vec<(usize, Vec<Action>, f32)> = Vec::with_capacity(k);
+
+            for _ in 0..k {
+                let vl_leaf = self.select(&arena, root_idx);
+                self.add_virtual_loss(&mut arena, vl_leaf);
+
+                if arena.nodes[vl_leaf].is_terminal {
+                    let v = arena.nodes[vl_leaf].terminal_value;
+                    ready.push((vl_leaf, vl_leaf, v));
+                    continue;
+                }
+                if arena.nodes[vl_leaf].is_chance {
+                    // Chance node handling is recursive and may allocate;
+                    // don't attempt to batch. Backup immediately.
+                    let (value, backup_from) = self.sample_chance_child(&mut arena, vl_leaf, rng);
+                    ready.push((vl_leaf, backup_from, value));
+                    continue;
+                }
+                match self.prepare_for_priors(&mut arena, vl_leaf, rng) {
+                    LeafOutcome::Done(v) => {
+                        ready.push((vl_leaf, vl_leaf, v));
+                    }
+                    LeafOutcome::NeedPriors { value, actions, cached_logits } => {
+                        if let Some(logits) = cached_logits {
+                            // Playout already evaluated priors — skip batched call
+                            self.finalize_with_priors(&mut arena, vl_leaf, actions, &logits);
+                            ready.push((vl_leaf, vl_leaf, value));
+                        } else {
+                            pending.push((vl_leaf, actions, value));
+                        }
+                    }
+                }
+            }
+
+            if !pending.is_empty() {
+                let states: Vec<&CombatState> = pending.iter()
+                    .map(|(idx, _, _)| arena.nodes[*idx].state.as_ref().unwrap())
+                    .collect();
+                let actions_refs: Vec<&[Action]> = pending.iter()
+                    .map(|(_, a, _)| a.as_slice())
+                    .collect();
+                let results = self.inference.evaluate_batch(&states, &actions_refs);
+
+                for ((vl_leaf, actions, value), (logits, _)) in
+                    pending.into_iter().zip(results.into_iter())
+                {
+                    self.finalize_with_priors(&mut arena, vl_leaf, actions, &logits);
+                    ready.push((vl_leaf, vl_leaf, value));
+                }
+            }
+
+            // Remove virtual losses + real backups. Order matters: remove
+            // VL first so backup's visit_count += 1 lines up with the final
+            // state a sequential search would have produced.
+            for (vl_leaf, backup_from, value) in ready {
+                self.remove_virtual_loss(&mut arena, vl_leaf);
+                self.backup(&mut arena, backup_from, value);
+                sims_done += 1;
+            }
+        }
+
+        self.extract_result(&arena, root_idx, temperature, rng)
+    }
+
+    /// Walk from `leaf_idx` to root, incrementing virtual_visits at each
+    /// node. Keeps subsequent selects in the same batch off this path.
+    fn add_virtual_loss(&self, arena: &mut Arena, mut node_idx: usize) {
+        loop {
+            arena.nodes[node_idx].virtual_visits += 1;
+            match arena.nodes[node_idx].parent {
+                Some(parent) => node_idx = parent,
+                None => break,
+            }
+        }
+    }
+
+    /// Inverse of `add_virtual_loss`. Called once the leaf's real value is
+    /// ready to back up. Uses saturating_sub as a safety net against
+    /// mismatched add/remove pairs (should never trigger in correct code).
+    fn remove_virtual_loss(&self, arena: &mut Arena, mut node_idx: usize) {
+        loop {
+            arena.nodes[node_idx].virtual_visits =
+                arena.nodes[node_idx].virtual_visits.saturating_sub(1);
+            match arena.nodes[node_idx].parent {
+                Some(parent) => node_idx = parent,
+                None => break,
+            }
+        }
+    }
+
     /// Extract SearchResult from a completed search tree.
     fn extract_result(
         &self,
@@ -352,7 +563,44 @@ impl<'a> MCTS<'a> {
     }
 
     // --- Expand: compute child state, evaluate with NN ---
+    //
+    // Split into two halves:
+    //   `prepare_for_priors` runs everything up to the priors NN call and
+    //     returns either Done(value) or NeedPriors {value, actions, cached}.
+    //   `finalize_with_priors` applies priors, creates children.
+    //
+    // Sequential `expand` composes them with an immediate serial NN call.
+    // Batched search collects NeedPriors outcomes across K leaves and runs
+    // one batched NN call before finalizing all of them.
+
     fn expand(&self, arena: &mut Arena, node_idx: usize, rng: &mut impl Rng) -> f32 {
+        match self.prepare_for_priors(arena, node_idx, rng) {
+            LeafOutcome::Done(value) => value,
+            LeafOutcome::NeedPriors { value, actions, cached_logits } => {
+                let logits = cached_logits.unwrap_or_else(|| {
+                    let state = arena.nodes[node_idx].state.as_ref().unwrap();
+                    let (l, _) = self.inference.evaluate(state, &actions);
+                    l
+                });
+                self.finalize_with_priors(arena, node_idx, actions, &logits);
+                value
+            }
+        }
+    }
+
+    /// Phase-A: run everything up to (but not including) the priors NN call.
+    /// Returns `Done(v)` when no priors are needed (terminal, chance node
+    /// already handled), or `NeedPriors` with the leaf value, final action
+    /// list, and optional logits cached from the turn-boundary playout's
+    /// first step. When `cached_logits` is `Some`, the caller can skip the
+    /// priors NN call entirely — playout step 0 already evaluated the same
+    /// state with the same actions.
+    fn prepare_for_priors(
+        &self,
+        arena: &mut Arena,
+        node_idx: usize,
+        rng: &mut impl Rng,
+    ) -> LeafOutcome {
         // Lazy state computation for non-root nodes
         if arena.nodes[node_idx].state.is_none() {
             let parent_idx = arena.nodes[node_idx].parent.unwrap();
@@ -377,7 +625,7 @@ impl<'a> MCTS<'a> {
                 // Evaluate pre-draw state for this node's leaf value
                 let state = arena.nodes[node_idx].state.as_ref().unwrap();
                 let v = self.estimate_leaf_value(state);
-                return v;
+                return LeafOutcome::Done(v);
             }
         }
 
@@ -389,7 +637,7 @@ impl<'a> MCTS<'a> {
                 arena.nodes[node_idx].is_terminal = true;
                 arena.nodes[node_idx].is_expanded = true;
                 arena.nodes[node_idx].terminal_value = value;
-                return value;
+                return LeafOutcome::Done(value);
             }
         }
 
@@ -430,7 +678,7 @@ impl<'a> MCTS<'a> {
                 arena.nodes[node_idx].is_terminal = true;
                 arena.nodes[node_idx].is_expanded = true;
                 arena.nodes[node_idx].terminal_value = tv;
-                return tv;
+                return LeafOutcome::Done(tv);
             }
 
             combat::start_turn(&mut resolved, rng);
@@ -448,7 +696,9 @@ impl<'a> MCTS<'a> {
             let state = arena.nodes[node_idx].state.as_ref().unwrap();
             enumerate_actions(state)
         };
+        let mut forced_eot_happened = false;
         if actions.is_empty() {
+            forced_eot_happened = true;
             // Forced end-of-turn: resolve without a network decision
             let mut resolved = arena.nodes[node_idx].state.take().unwrap();
             let mut ais = arena.nodes[node_idx].enemy_ais.take();
@@ -463,7 +713,7 @@ impl<'a> MCTS<'a> {
                 arena.nodes[node_idx].is_terminal = true;
                 arena.nodes[node_idx].is_expanded = true;
                 arena.nodes[node_idx].terminal_value = tv;
-                return tv;
+                return LeafOutcome::Done(tv);
             }
 
             combat::start_turn(&mut resolved, rng);
@@ -484,28 +734,37 @@ impl<'a> MCTS<'a> {
                 arena.nodes[node_idx].is_expanded = true;
                 arena.nodes[node_idx].is_terminal = true;
                 arena.nodes[node_idx].terminal_value = 0.0;
-                return 0.0;
+                return LeafOutcome::Done(0.0);
             }
         }
 
-        // Neural network policy priors.
-        // Reuse the turn-boundary playout's first-step logits when they
-        // match: this only holds when the playout actually ran step 0
-        // (state wasn't turn_ended and had legal actions), the node state
-        // hasn't been mutated since (turn_ended was false at entry and no
-        // forced-EoT re-enumeration fired), and the action count matches.
-        // Saves one forward pass per leaf expansion in the common case.
-        let state = arena.nodes[node_idx].state.as_ref().unwrap();
-        let logits = match cached_logits {
-            Some(l) if !turn_ended && l.len() == actions.len() => l,
-            _ => {
-                let (fresh, _) = self.inference.evaluate(state, &actions);
-                fresh
-            }
+        // Cached-logits reuse: safe only when the playout actually ran step 0
+        // on this exact (state, actions) pair — i.e. the entry state was not
+        // turn_ended and no forced-EoT fired. The action-count check is a
+        // belt-and-suspenders guard for edge cases (e.g. enumerate_actions
+        // returning a different list due to hand mutations during playout).
+        let usable_cached = match &cached_logits {
+            Some(l) if !turn_ended && !forced_eot_happened && l.len() == actions.len() => true,
+            _ => false,
         };
-        let priors = if !actions.is_empty() { softmax(&logits) } else { vec![] };
+        LeafOutcome::NeedPriors {
+            value,
+            actions,
+            cached_logits: if usable_cached { cached_logits } else { None },
+        }
+    }
 
-        // Create child nodes (lazy — state=None)
+    /// Phase-B: apply priors to a prepared leaf and create its children.
+    /// Called after the priors NN call (batched or serial) completes.
+    fn finalize_with_priors(
+        &self,
+        arena: &mut Arena,
+        node_idx: usize,
+        actions: Vec<Action>,
+        logits: &[f32],
+    ) {
+        let priors = if !actions.is_empty() { softmax(logits) } else { vec![] };
+
         let mut children = Vec::with_capacity(actions.len());
         for (i, _action) in actions.iter().enumerate() {
             let child_idx = arena.alloc(Node::new(None, Some(node_idx), i));
@@ -517,8 +776,6 @@ impl<'a> MCTS<'a> {
         arena.nodes[node_idx].legal_actions = actions;
         arena.nodes[node_idx].children = children;
         arena.nodes[node_idx].is_expanded = true;
-
-        value
     }
 
     // --- Backup: propagate value up the tree ---
