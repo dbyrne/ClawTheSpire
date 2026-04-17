@@ -32,12 +32,14 @@ from rich.text import Text
 
 from .deterministic_advisor import (
     AUTO_ACTIONS,
-    detect_screen_type,
+    Decision,
     decide_boss_relic,
     decide_card_reward,
+    decide_deck_select,
     decide_map,
     decide_rest,
     decide_shop,
+    detect_screen_type,
 )
 from .game_data import strip_markup
 from .bridge import state_from_mcp
@@ -46,13 +48,6 @@ from .data_loader import load_cards
 from .game_client import GameClient
 from .game_data import load_game_data
 from .run_logger import RunLogger
-from .alphazero.encoding import build_vocabs_from_card_db, EncoderConfig
-from .alphazero.network import STS2Network
-from .alphazero.state_tensor import encode_state as az_encode_state
-from .option_types import (
-    OPTION_REST, OPTION_SMITH, OPTION_SHOP_REMOVE, OPTION_SHOP_BUY,
-    OPTION_SHOP_LEAVE, ROOM_TYPE_TO_OPTION,
-)
 from .state_serializer import combat_state_to_json
 
 
@@ -121,20 +116,14 @@ class Runner:
         self._turn_targets_chosen = None
         self._turn_start_gs = None
 
-        # Neural network + Rust MCTS (initialized lazily after card_db is loaded)
-        self._network: STS2Network | None = None
-        self._mcts_vocabs = None
-        self._mcts_config = None
-        self._onnx_full_path: str | None = None
-        self._onnx_value_path: str | None = None
-        self._onnx_combat_path: str | None = None
-        self._vocab_json: str | None = None
-        self._enemy_profiles_json: str | None = None
-
-        # BetaOne MCTS (alternative to AlphaZero)
-        self._use_betaone = False
+        # BetaOne combat MCTS (loaded in _init_deps)
         self._betaone_onnx_path: str | None = None
         self._betaone_card_vocab_json: str | None = None
+
+        # DeckNet card-reward decisions (loaded in _init_deps)
+        self._decknet = None
+        self._decknet_card_vocab: dict[str, int] | None = None
+        self._checkpoint_name: str | None = None
         self._card_reward_handled = False  # Reset when leaving reward screen
         self._deck_select_stuck = False  # Track stuck deck_select screens
         self._stuck_since: float | None = None  # Timestamp when we got stuck
@@ -280,27 +269,13 @@ class Runner:
         if self._live:
             self._live.start()
 
-    def _review_head_values(self, gs: dict) -> str:
-        """Get value head + combat head predictions for review display."""
-        if not self._network:
-            return ""
-        try:
-            import torch
-            _, hidden, *_ = self._az_run_state_tensors(gs)
-            with torch.no_grad():
-                v = self._network.value_head(hidden).item()
-                c = max(-1.0, min(1.0, self._network.combat_head(hidden).item()))
-            return f"  Heads: value={v:+.2f}  combat={c:+.2f}"
-        except Exception:
-            return ""
-
     def _review_combat_decision(self, label, sim_state, gs, hand, policy,
                                 root_value, solve_ms, child_values=None,
                                 child_visits=None) -> None:
         """Consolidated review display for all combat MCTS decisions."""
         if not self.review_mode:
             return
-        head_vals = self._review_head_values(gs)
+        head_vals = ""
         alts = self._review_combat_alternatives(
             sim_state, hand, policy, child_values, child_visits)
         total_vis = sum(child_visits) if child_visits else 0
@@ -414,23 +389,21 @@ class Runner:
         if not routing:
             return
 
-        # Expected network-handled types (should NOT be "auto" or "deterministic")
-        expected_network = {"card_reward", "map", "rest", "shop", "deck_select"}
+        # DeckNet is expected to handle card rewards when a checkpoint is loaded
+        expect_decknet = self._decknet is not None
 
-        # Build summary lines
         lines = []
         warnings = []
         for st in sorted(routing):
             parts = [f"{src}={n}" for src, n in sorted(routing[st].items())]
             lines.append(f"  {st}: {', '.join(parts)}")
-            # Flag if a network-expected type was resolved without the network
-            if st in expected_network:
-                non_net = sum(n for src, n in routing[st].items() if src != "network")
-                net = routing[st].get("network", 0)
-                if non_net > 0 and net == 0:
-                    warnings.append(f"  ⚠ {st}: ALL decisions bypassed network ({non_net}x {', '.join(s for s in routing[st] if s != 'network')})")
-                elif non_net > 0:
-                    warnings.append(f"  ⚠ {st}: {non_net}/{net + non_net} bypassed network")
+            if st == "card_reward" and expect_decknet:
+                det = sum(n for src, n in routing[st].items() if src != "decknet")
+                dn = routing[st].get("decknet", 0)
+                if det > 0 and dn == 0:
+                    warnings.append(f"  WARN {st}: ALL decisions bypassed DeckNet ({det}x deterministic)")
+                elif det > 0:
+                    warnings.append(f"  WARN {st}: {det}/{det + dn} bypassed DeckNet")
 
         # Log to TUI
         self._log_action("[bold]Decision routing:[/bold]")
@@ -525,80 +498,59 @@ class Runner:
     # ------------------------------------------------------------------
 
     def _init_deps(self) -> None:
+        from pathlib import Path as _Path
+        import json as _json
+        import torch
+
         self.console.print("[dim]Loading card database...[/dim]")
         self.card_db = load_cards()
         self.console.print(f"[dim]Loaded {len(self.card_db)} cards[/dim]")
         self.console.print("[dim]Loading game data...[/dim]")
         self.game_data = load_game_data()
-        # Initialize network + Rust MCTS
-        self.console.print("[dim]Initializing neural network + Rust MCTS...[/dim]")
-        self._mcts_vocabs = build_vocabs_from_card_db(self.card_db)
-        self._mcts_config = EncoderConfig()
-        import torch
-        network = STS2Network(self._mcts_vocabs, self._mcts_config)
-        # Load latest checkpoint if available
-        from pathlib import Path as _Path
-        ckpt_dir = _Path(__file__).resolve().parents[3] / "alphazero_checkpoints"
-        ckpts = sorted(ckpt_dir.glob("gen_*.pt"), key=lambda p: p.stat().st_mtime) if ckpt_dir.exists() else []
-        self._checkpoint_name = None
-        if ckpts:
-            ckpt = torch.load(ckpts[-1], map_location="cpu", weights_only=True)
-            saved = ckpt["model_state"]
-            current = network.state_dict()
-            compatible = {k: v for k, v in saved.items()
-                          if k in current and v.shape == current[k].shape}
-            skipped = set(saved.keys()) - set(compatible.keys())
-            if any("trunk.0" in k for k in skipped):
-                for k in [k for k in compatible if k.startswith("trunk.")]:
-                    compatible.pop(k)
-            network.load_state_dict(compatible, strict=False)
-            self._checkpoint_name = ckpts[-1].name
-            self.console.print(f"[dim]Loaded checkpoint: {self._checkpoint_name} ({len(compatible)}/{len(saved)} params)[/dim]")
-        else:
-            self.console.print("[dim]No checkpoint found — using random network[/dim]")
-        self._network = network
 
-        # Export ONNX for Rust MCTS engine
-        import tempfile
-        from .alphazero.onnx_export import export_onnx, export_vocabs_json
-        self._onnx_dir = tempfile.mkdtemp(prefix="sts2_onnx_")
-        self._onnx_full_path, self._onnx_value_path, _ = export_onnx(
-            network, self._mcts_config, self._onnx_dir,
-        )
-        self._onnx_combat_path = str(_Path(self._onnx_dir) / "combat_model.onnx")
-        vocab_path = str(_Path(self._onnx_dir) / "vocabs.json")
-        export_vocabs_json(self._mcts_vocabs, vocab_path)
-        with open(vocab_path) as f:
-            self._vocab_json = f.read()
-        # Load enemy profiles for MCTS intent prediction (same as self-play)
-        from .simulator import _load_enemy_profiles
-        import json as _json
-        self._enemy_profiles_json = _json.dumps(_load_enemy_profiles())
-        self.console.print(f"[dim]Exported ONNX models to {self._onnx_dir}[/dim]")
-
-        # BetaOne: check for betaone checkpoint and use if available
+        # Load BetaOne combat checkpoint (required for combat MCTS)
         betaone_ckpt_dir = _Path(__file__).resolve().parents[3] / "betaone_checkpoints"
         betaone_latest = betaone_ckpt_dir / "betaone_latest.pt"
         betaone_vocab = betaone_ckpt_dir / "card_vocab.json"
-        if betaone_latest.exists() and betaone_vocab.exists():
-            from .betaone.network import BetaOneNetwork, export_onnx as betaone_export_onnx
-            import json as _json2
-            with open(betaone_vocab) as f:
-                card_vocab = _json2.load(f)
-            self._betaone_card_vocab_json = _json2.dumps(card_vocab)
-            betaone_net = BetaOneNetwork(num_cards=len(card_vocab))
-            betaone_ckpt = torch.load(betaone_latest, map_location="cpu", weights_only=False)
-            try:
-                betaone_net.load_state_dict(betaone_ckpt["model_state_dict"])
-                self._betaone_onnx_path = betaone_export_onnx(betaone_net, str(betaone_ckpt_dir / "onnx"))
-                self._use_betaone = True
-                self.console.print(f"[green]BetaOne MCTS active (gen {betaone_ckpt.get('gen', '?')})[/green]")
-            except RuntimeError as e:
-                self.console.print(f"[yellow]BetaOne checkpoint incompatible: {e}[/yellow]")
+        if not (betaone_latest.exists() and betaone_vocab.exists()):
+            raise RuntimeError(
+                f"BetaOne checkpoint missing: expected {betaone_latest} + "
+                f"{betaone_vocab}. Train or copy a BetaOne experiment into "
+                f"betaone_checkpoints/ before running."
+            )
+        from .betaone.network import BetaOneNetwork, export_onnx as betaone_export_onnx
+        with open(betaone_vocab) as f:
+            card_vocab = _json.load(f)
+        self._betaone_card_vocab_json = _json.dumps(card_vocab)
+        betaone_net = BetaOneNetwork(num_cards=len(card_vocab))
+        betaone_ckpt = torch.load(betaone_latest, map_location="cpu", weights_only=False)
+        betaone_net.load_state_dict(betaone_ckpt["model_state_dict"])
+        self._betaone_onnx_path = betaone_export_onnx(betaone_net, str(betaone_ckpt_dir / "onnx"))
+        self._checkpoint_name = f"betaone gen {betaone_ckpt.get('gen', '?')}"
+        self.console.print(f"[green]BetaOne combat MCTS active (gen {betaone_ckpt.get('gen', '?')})[/green]")
+
+        # Load DeckNet card-reward checkpoint (optional — falls back to
+        # deterministic card picks if missing)
+        decknet_ckpt_dir = _Path(__file__).resolve().parents[3] / "decknet_checkpoints"
+        decknet_latest = decknet_ckpt_dir / "decknet_latest.pt"
+        decknet_vocab = decknet_ckpt_dir / "card_vocab.json"
+        if decknet_latest.exists() and decknet_vocab.exists():
+            from .decknet.network import DeckNet
+            with open(decknet_vocab) as f:
+                dn_vocab = _json.load(f)
+            dn_net = DeckNet(num_cards=len(dn_vocab))
+            dn_ckpt = torch.load(decknet_latest, map_location="cpu", weights_only=False)
+            dn_net.load_state_dict(dn_ckpt["model_state_dict"])
+            dn_net.eval()
+            self._decknet = dn_net
+            self._decknet_card_vocab = dn_vocab
+            self.console.print(f"[green]DeckNet card-reward active (gen {dn_ckpt.get('gen', '?')})[/green]")
+        else:
+            self.console.print("[yellow]No DeckNet checkpoint — card rewards use deterministic advisor[/yellow]")
 
         self.logger.metadata = {
-            "checkpoint": self._checkpoint_name or "none",
-            "betaone": self._use_betaone,
+            "checkpoint": self._checkpoint_name,
+            "decknet": self._decknet is not None,
         }
         try:
             health = self.client.get_health()
@@ -607,35 +559,9 @@ class Runner:
         except ConnectionError:
             self.console.print("[yellow]Game not reachable yet — will retry[/yellow]")
 
-    def _rust_mcts_search(self, sim_state, num_simulations=200, temperature=0):
-        """Run MCTS via Rust engine. Returns (Action, policy, root_value)."""
-        if self._use_betaone:
-            return self._betaone_mcts_search(sim_state, num_simulations, temperature)
-        return self._alphazero_mcts_search(sim_state, num_simulations, temperature)
-
-    def _alphazero_mcts_search(self, sim_state, num_simulations=200, temperature=0):
-        """AlphaZero MCTS (3 ONNX models, full vocabs)."""
+    def _rust_mcts_search(self, sim_state, num_simulations=100, temperature=0):
+        """Run BetaOne MCTS via Rust engine. Returns (Action, policy, root_value)."""
         import sts2_engine
-        from .actions import Action
-
-        state_json = combat_state_to_json(sim_state)
-        result = sts2_engine.mcts_search(
-            state_json,
-            self._onnx_full_path,
-            self._onnx_value_path,
-            self._vocab_json,
-            num_simulations,
-            float(temperature),
-            int(time.time() * 1000) & 0xFFFFFFFF,
-            enemy_profiles_json=self._enemy_profiles_json,
-            onnx_combat_path=self._onnx_combat_path,
-        )
-        return self._parse_mcts_result(result)
-
-    def _betaone_mcts_search(self, sim_state, num_simulations=100, temperature=0):
-        """BetaOne MCTS (1 ONNX model, card vocab only)."""
-        import sts2_engine
-        from .actions import Action
 
         state_json = combat_state_to_json(sim_state)
         result = sts2_engine.betaone_mcts_search(
@@ -1856,36 +1782,24 @@ class Runner:
                 pick_worst = any(kw in prompt for kw in (
                     "discard", "exhaust", "put on top", "draw pile",
                 ))
-                net_decision = self._az_decide_combat_discard(
-                    gs, sel, pick_worst=pick_worst)
-                if net_decision is None:
+                pick_idx, reasoning = self._pick_combat_hand_card(
+                    sel, pick_worst=pick_worst)
+                if pick_idx is None:
                     raise RuntimeError(
-                        f"Network combat select returned None — "
+                        f"No combat_hand pick candidate — "
                         f"kind={kind!r} prompt={prompt!r} "
                         f"cards: {[c.get('name') for c in sel.get('cards', [])]}"
                     )
-                pick_idx = net_decision.option_index
-                self._log_action(f"  [blue]{net_decision.reasoning}[/blue]")
-                self._track_decision("deck_select", "network")
-                if self.review_mode and net_decision.head_scores:
-                    opts = net_decision.head_scores.get("options", [])
-                    card_lines = [f"  {o['label']}  score={o['score']:+.3f}" for o in opts]
-                    card_names = [c.get("name", "?") for c in sel.get("cards", [])]
-                    self._review_pause(
-                        f"[bold]{prompt.title()}:[/bold] {net_decision.reasoning}\n"
-                        + "\n".join(card_lines) + "\n"
-                        f"  Hand: {', '.join(card_names)}"
-                    )
+                self._log_action(f"  [green]{reasoning}[/green]")
+                self._track_decision("deck_select", "deterministic")
                 if self.logger:
                     self.logger.log_decision(
                         game_state=gs, screen_type="deck_select",
                         options=["select_deck_card"],
                         choice={"action": "select_deck_card",
                                 "option_index": pick_idx,
-                                "reasoning": net_decision.reasoning},
-                        source="network",
-                        network_value=net_decision.network_value,
-                        head_scores=net_decision.head_scores,
+                                "reasoning": reasoning},
+                        source="deterministic",
                     )
                 if not self.dry_run:
                     try:
@@ -1990,88 +1904,69 @@ class Runner:
                         self._log_action(f"  [red]Failed: {e}[/red]")
                 return
 
-        # Try network-based decisions first, fall back to deterministic
-        _NETWORK_HANDLERS = {
-            "rest": self._az_decide_rest,
-            "map": self._az_decide_map,
-            "shop": self._az_decide_shop,
-            "card_reward": self._az_decide_card_reward,
-            "event": self._az_decide_event,
-            "bundle": self._az_decide_bundle,
-        }
-        _DETERMINISTIC_HANDLERS = {
-            "rest": lambda: decide_rest(gs),
-            "card_reward": lambda: decide_card_reward(gs, self.game_data),
-            "map": lambda: decide_map(gs),
-            "shop": lambda: decide_shop(gs, self.game_data),
-            "boss_relic": lambda: decide_boss_relic(gs, self.game_data),
-        }
-
-        net_handler = _NETWORK_HANDLERS.get(screen_type)
-        if net_handler:
-            decision = net_handler(gs)
+        # Card reward: DeckNet when available, otherwise deterministic advisor.
+        # Everything else: deterministic advisor.
+        if screen_type == "card_reward" and self._decknet is not None:
+            decision = self._decknet_decide_card_reward(gs)
             if decision is not None:
                 self._execute_deterministic(
                     gs, decision, screen_type, actions, run,
                 )
                 return
 
-        # Deterministic fallback — only for screen types that have no
-        # network handler (currently just boss_relic).  For types that DO
-        # have a network handler, reaching here means the network crashed
-        # (which now raises), so this is dead code for those types.
+        _DETERMINISTIC_HANDLERS = {
+            "rest": lambda: decide_rest(gs),
+            "card_reward": lambda: decide_card_reward(gs, self.game_data),
+            "map": lambda: decide_map(gs),
+            "shop": lambda: decide_shop(gs, self.game_data),
+            "boss_relic": lambda: decide_boss_relic(gs, self.game_data),
+            "event": lambda: self._pick_first_unlocked_event_option(gs),
+            "bundle": lambda: Decision("choose_bundle", 0, "deterministic: first bundle"),
+        }
+
         handler = _DETERMINISTIC_HANDLERS.get(screen_type)
         if handler:
-            if screen_type in _NETWORK_HANDLERS:
-                # Should never reach here — network handler should have
-                # either returned a decision or raised.
-                raise RuntimeError(
-                    f"Deterministic fallback reached for '{screen_type}' — "
-                    f"network handler should have handled this"
-                )
             decision = handler()
+            if decision is None:
+                raise RuntimeError(
+                    f"Deterministic handler returned None for {screen_type!r}"
+                )
             self._execute_deterministic(
                 gs, decision, screen_type, actions, run,
             )
             return
 
-        # No handler for this screen type.
         raise RuntimeError(
-            f"Unhandled screen type {screen_type!r} — no network or "
-            f"deterministic handler registered. Available actions: {actions}"
+            f"Unhandled screen type {screen_type!r} — no handler registered. "
+            f"Available actions: {actions}"
         )
 
     # ------------------------------------------------------------------
-    # AlphaZero network non-combat decisions
+    # DeckNet card-reward decisions
     # ------------------------------------------------------------------
 
-    def _az_run_state_tensors(self, gs: dict) -> tuple:
-        """Build encoded state tensors from live game state for non-combat decisions.
-
-        Returns (state_tensors, hidden, hp, max_hp, gold, floor, deck_cards).
-        """
-        import torch
+    def _build_decknet_state(self, gs: dict):
+        """Build a DeckBuildingState from live game state for DeckNet inference."""
+        from .decknet.state import (
+            CardRef, DeckBuildingState, MapRoom, PlayerStats, RoomType,
+        )
         from .deterministic_advisor import _get_deck, _gold, _floor
-        from .models import PlayerState, CombatState
 
         run = gs.get("run") or {}
-        hp = run.get("current_hp", 70)
-        max_hp = run.get("max_hp", 70)
-        gold = _gold(gs)
-        floor = _floor(gs)
+        hp = int(run.get("current_hp", 70))
+        max_hp = int(run.get("max_hp", 70))
+        gold = int(_gold(gs))
+        floor = int(_floor(gs))
+        potions = len([p for p in run.get("potions") or [] if p])
 
-        # Build deck as Card objects
-        deck_cards = []
+        deck = []
         for raw in _get_deck(gs):
-            card_id = raw.get("card_id") or raw.get("id", "")
-            card = self.card_db.get(card_id)
-            if not card and raw.get("upgraded"):
-                card = self.card_db.get(card_id.rstrip("+") + "+")
-            if card:
-                deck_cards.append(card)
+            cid = (raw.get("card_id") or raw.get("id") or "").rstrip("+")
+            if not cid:
+                continue
+            deck.append(CardRef(id=cid, upgraded=bool(raw.get("upgraded"))))
 
-        # Relics from game state
-        relic_ids = frozenset(
+        relics = frozenset(
             r.get("id", r.get("relic_id", ""))
             for r in (run.get("relics") or [])
             if isinstance(r, dict)
@@ -2080,22 +1975,158 @@ class Runner:
             if isinstance(r, str)
         )
 
-        # Remaining map path from game state
+        # Map ahead: convert BFS path of game node types to RoomType enum
         remaining_path = self._extract_remaining_path(gs, floor)
+        node_to_room = {
+            "Monster": RoomType.NORMAL, "Weak": RoomType.WEAK,
+            "Elite": RoomType.ELITE, "Boss": RoomType.BOSS,
+            "RestSite": RoomType.REST, "Rest": RoomType.REST,
+            "Shop": RoomType.SHOP, "Event": RoomType.EVENT,
+            "Treasure": RoomType.TREASURE, "Unknown": RoomType.UNKNOWN,
+        }
+        map_ahead = [
+            MapRoom(
+                room_type=node_to_room.get(t, RoomType.UNKNOWN),
+                floors_ahead=i,
+            )
+            for i, t in enumerate(remaining_path[:10])
+        ]
 
-        player = PlayerState(hp=hp, max_hp=max_hp, energy=3, max_energy=3,
-                             draw_pile=list(deck_cards))
-        dummy = CombatState(
-            player=player, enemies=[], floor=floor, gold=gold,
-            relics=relic_ids, act_id=self._current_act_id,
-            boss_id=self._current_boss_id, map_path=remaining_path,
+        # Map our sim act_id (e.g. "OVERGROWTH") to the numeric act
+        act_num = {"OVERGROWTH": 1, "UNDERDOCKS": 2, "HIVE": 2, "GLORY": 3}.get(
+            self._current_act_id, 1,
         )
-        st = az_encode_state(dummy, self._mcts_vocabs, self._mcts_config)
 
+        return DeckBuildingState(
+            deck=deck,
+            player=PlayerStats(hp=hp, max_hp=max_hp, gold=gold, potions=potions),
+            relics=relics,
+            act=act_num,
+            floor=floor,
+            map_ahead=map_ahead,
+            boss_id=self._current_boss_id,
+        )
+
+    def _decknet_decide_card_reward(self, gs: dict) -> "Decision | None":
+        """Use DeckNet to pick the best card reward (including skip).
+
+        Enumerates IDENTITY (skip) + one ADD per offered card, applies each
+        mod to the current state, batches them through V, and picks argmax.
+        """
+        from .decknet.encoder import encode_batch
+        from .decknet.state import CardRef, DeckModification, ModKind, apply_mod
+        import torch
+
+        reward_data = gs.get("reward") or {}
+        av_reward = (gs.get("agent_view") or {}).get("reward") or {}
+        rewards = (
+            reward_data.get("card_options")
+            or av_reward.get("cards")
+            or gs.get("card_rewards")
+            or gs.get("rewards")
+            or (gs.get("selection") or {}).get("cards")
+            or []
+        )
+        if not rewards:
+            return None
+
+        state = self._build_decknet_state(gs)
+
+        # Candidates: skip (IDENTITY), then one ADD per offered card
+        mods: list[DeckModification] = [DeckModification(kind=ModKind.IDENTITY)]
+        card_labels: list[str] = ["skip"]
+        card_indices: list[int | None] = [None]
+        for i, info in enumerate(rewards):
+            cid = (info.get("card_id") or info.get("id") or "").rstrip("+")
+            upgraded = bool(info.get("upgraded"))
+            name = info.get("name") or cid or "?"
+            if not cid:
+                continue
+            mods.append(DeckModification(
+                kind=ModKind.ADD, card=CardRef(id=cid, upgraded=upgraded),
+            ))
+            card_labels.append(name)
+            card_indices.append(info.get("index", i))
+
+        candidate_states = [apply_mod(state, m) for m in mods]
+        batch = encode_batch(candidate_states, self._decknet_card_vocab)
         with torch.no_grad():
-            hidden = self._network.encode_state(**st)
+            values = self._decknet(
+                batch["card_ids"], batch["card_stats"],
+                batch["deck_mask"], batch["global_state"],
+            )
+        best = int(torch.argmax(values).item())
+        value_list = values.tolist()
 
-        return st, hidden, hp, max_hp, gold, floor, deck_cards
+        hs = {
+            "head": "decknet_v",
+            "chosen": best,
+            "options": [
+                {"label": lbl, "score": round(v, 4)}
+                for lbl, v in zip(card_labels, value_list)
+            ],
+        }
+
+        if best == 0:
+            return Decision(
+                "skip_reward_cards", None,
+                f"DeckNet: skip (V={value_list[0]:+.3f})",
+                network_value=float(value_list[0]), head_scores=hs,
+            )
+        return Decision(
+            "choose_reward_card", card_indices[best],
+            f"DeckNet: take {card_labels[best]} (V={value_list[best]:+.3f})",
+            network_value=float(value_list[best]), head_scores=hs,
+        )
+
+    def _pick_first_unlocked_event_option(self, gs: dict) -> "Decision":
+        """Deterministic event handler: pick the first unlocked option."""
+        event = gs.get("event") or (gs.get("agent_view") or {}).get("event") or {}
+        options = event.get("options") or []
+        for i, opt in enumerate(options):
+            if not opt.get("locked"):
+                idx = opt.get("index", i)
+                label = opt.get("title") or opt.get("name") or f"option {idx}"
+                return Decision(
+                    "choose_event_option", idx,
+                    f"deterministic: first unlocked ({label})",
+                )
+        return Decision("choose_event_option", 0, "deterministic: fallback 0")
+
+    def _pick_combat_hand_card(
+        self, sel: dict, pick_worst: bool,
+    ) -> "tuple[int | None, str]":
+        """Pick a card from hand for a mid-combat selection screen.
+
+        For discard/exhaust/put-on-top (pick_worst=True): prefer Strike,
+        then Defend, else first card. For keep/duplicate (pick_worst=False):
+        prefer non-Strike/Defend cards, else first card.
+        """
+        cards = sel.get("cards", [])
+        if not cards:
+            return None, "no cards in selection"
+
+        def base_name(info: dict) -> str:
+            return (info.get("name") or info.get("card_id") or "").rstrip("+")
+
+        def is_basic(info: dict) -> bool:
+            name = base_name(info)
+            return "Strike" in name or "Defend" in name
+
+        if pick_worst:
+            for info in cards:
+                if is_basic(info):
+                    idx = info.get("index", cards.index(info))
+                    return idx, f"deterministic: discard {base_name(info)}"
+            first = cards[0]
+            return first.get("index", 0), f"deterministic: discard {base_name(first)}"
+
+        for info in cards:
+            if not is_basic(info):
+                idx = info.get("index", cards.index(info))
+                return idx, f"deterministic: keep {base_name(info)}"
+        first = cards[0]
+        return first.get("index", 0), f"deterministic: keep {base_name(first)}"
 
     def _detect_run_context(self, gs: dict) -> None:
         """Detect act_id and boss_id from game state at run start."""
@@ -2317,657 +2348,6 @@ class Runner:
             except Exception:
                 pass
 
-    def _az_decide_combat_discard(self, gs: dict, sel: dict,
-                                    pick_worst: bool = True) -> "Decision | None":
-        """Use network to pick a card mid-combat (Survivor, Acrobatics, etc.).
-
-        This is a WORKAROUND using OPTION_SHOP_REMOVE to score hand cards.
-        The option head was trained for "how good is removing this card from
-        the deck permanently?" — higher score = better removal target =
-        LESS valuable card.
-
-        pick_worst=True: discard/exhaust — pick the LEAST valuable card
-            to throw away. High OPTION_SHOP_REMOVE score = less valuable
-            = good discard target. Use MAX score.
-        pick_worst=False: copy/duplicate — pick the MOST valuable card.
-            Low OPTION_SHOP_REMOVE score = more valuable = good copy
-            target. Use MIN score.
-        """
-        import torch
-        from .deterministic_advisor import Decision
-        from .option_types import OPTION_SHOP_REMOVE
-
-        if not self._network or not self._mcts_vocabs:
-            return None
-
-        try:
-            st, hidden, hp, max_hp, gold, floor, deck = self._az_run_state_tensors(gs)
-            network = self._network
-            vocabs = self._mcts_vocabs
-
-            cards = sel.get("cards", [])
-            if not cards:
-                return None
-
-            # Score each card — use OPTION_SHOP_REMOVE type since we're
-            # evaluating "how good is the deck without this card"
-            opt_types = []
-            opt_cards = []
-            option_labels = []
-            game_indices = []
-
-            for card_info in cards:
-                card_id = card_info.get("card_id") or card_info.get("id", "")
-                name = card_info.get("name", "?")
-                idx = card_info.get("index", len(opt_types))
-                opt_types.append(OPTION_SHOP_REMOVE)
-                opt_cards.append(vocabs.cards.get(card_id.rstrip("+")))
-                option_labels.append(name)
-                game_indices.append(idx)
-
-            if not opt_types:
-                return None
-
-            with torch.no_grad():
-                _, scores = network.pick_best_option(
-                    hidden, opt_types, opt_cards)
-                if pick_worst:
-                    # High score = "removing is good" = card is less valuable
-                    # = good discard target. Pick MAX.
-                    best_idx = max(range(len(scores)), key=lambda i: scores[i])
-                    verb = "discard"
-                else:
-                    # Low score = "removing is bad" = card is more valuable
-                    # = good copy/duplicate target. Pick MIN.
-                    best_idx = min(range(len(scores)), key=lambda i: scores[i])
-                    verb = "select"
-
-            chosen_idx = game_indices[best_idx]
-            card_name = option_labels[best_idx]
-            nv = network.value_head(hidden).item()
-
-            hs = {
-                "head": "option_eval",
-                "chosen": best_idx,
-                "options": [{"label": lbl, "score": round(s, 4)}
-                            for lbl, s in zip(option_labels, scores)],
-            }
-
-            return Decision("select_deck_card", chosen_idx,
-                            f"Network: {verb} {card_name} (score={scores[best_idx]:.2f})",
-                            network_value=nv, head_scores=hs)
-        except Exception as e:
-            self._log_action(f"  [dim]Network combat discard failed ({e})[/dim]")
-            return None
-
-    def _az_decide_rest(self, gs: dict) -> "Decision | None":
-        """Use network to decide rest vs upgrade at a rest site."""
-        import torch
-        from .deterministic_advisor import Decision
-
-        try:
-            st, hidden, hp, max_hp, gold, floor, deck = self._az_run_state_tensors(gs)
-            network = self._network
-            vocabs = self._mcts_vocabs
-
-            opt_types = [OPTION_REST]
-            opt_cards = [0]
-            rest_idx_map = [None]  # option idx → rest option index
-
-            # Find rest/upgrade option indices from game state
-            rest_data = gs.get("rest") or (gs.get("agent_view") or {}).get("rest") or {}
-            options = rest_data.get("options", [])
-            game_rest_idx, game_upgrade_idx = None, None
-            for i, opt in enumerate(options):
-                name = (opt.get("name") or opt.get("title") or opt.get("id", "")).lower()
-                idx = opt.get("index", i)
-                if "rest" in name or "heal" in name or "sleep" in name:
-                    game_rest_idx = idx
-                elif "upgrade" in name or "smith" in name:
-                    game_upgrade_idx = idx
-
-            # Build upgrade options
-            upgrade_deck_indices = []
-            if game_upgrade_idx is not None:
-                for di, card in enumerate(deck):
-                    if not card.upgraded and card.card_type not in ("Status", "Curse"):
-                        up = self.card_db.get_upgraded(card.id)
-                        if up:
-                            opt_types.append(OPTION_SMITH)
-                            opt_cards.append(vocabs.cards.get(card.id.rstrip("+")))
-                            upgrade_deck_indices.append(di)
-
-            with torch.no_grad():
-                best_idx, scores = network.pick_best_option(hidden, opt_types, opt_cards)
-                nv = network.value_head(hidden).item()
-
-            # Build labeled scores for telemetry
-            option_labels = ["Rest"]
-            for di in upgrade_deck_indices:
-                option_labels.append(f"Smith {deck[di].name}")
-            hs = {
-                "head": "option_eval",
-                "chosen": best_idx,
-                "options": [{"label": lbl, "score": round(s, 4)} for lbl, s in zip(option_labels, scores)],
-            }
-
-            if best_idx == 0:
-                return Decision("choose_rest_option",
-                                game_rest_idx if game_rest_idx is not None else 0,
-                                f"Network: rest (score={scores[0]:.2f})",
-                                network_value=nv, head_scores=hs)
-            else:
-                card_di = upgrade_deck_indices[best_idx - 1]
-                card_name = deck[card_di].name
-                return Decision("choose_rest_option",
-                                game_upgrade_idx if game_upgrade_idx is not None else 1,
-                                f"Network: upgrade {card_name} (score={scores[best_idx]:.2f})",
-                                network_value=nv, head_scores=hs)
-        except Exception as e:
-            self._log_action(f"  [red]Network rest FAILED: {e}[/red]")
-            raise
-
-    def _az_decide_map(self, gs: dict) -> "Decision | None":
-        """Use network to score map node types and pick the best."""
-        import torch
-        from .deterministic_advisor import Decision
-
-        try:
-            st, hidden, hp, max_hp, gold, floor, deck = self._az_run_state_tensors(gs)
-            network = self._network
-
-            map_data = gs.get("map") or (gs.get("agent_view") or {}).get("map") or {}
-            nodes = map_data.get("available_nodes") or map_data.get("nodes") or []
-            if not nodes:
-                return None
-
-            opt_types = []
-            opt_cards = []
-            node_indices = []
-
-            for i, node in enumerate(nodes):
-                idx = node.get("index", i)
-                t = (node.get("node_type") or node.get("type") or
-                     node.get("icon") or node.get("symbol", "")).lower()
-
-                # Map game node type to our option type
-                if "elite" in t:
-                    rt = "elite"
-                elif "rest" in t:
-                    rt = "rest"
-                elif "shop" in t or "merchant" in t:
-                    rt = "shop"
-                elif "event" in t or "unknown" in t or "mystery" in t:
-                    rt = "event"
-                else:
-                    rt = "normal"  # monster, treasure, etc.
-
-                opt_type = ROOM_TYPE_TO_OPTION.get(rt)
-                if opt_type is not None:
-                    opt_types.append(opt_type)
-                    opt_cards.append(0)
-                    node_indices.append(idx)
-
-            if not opt_types:
-                return None
-
-            with torch.no_grad():
-                best_idx, scores = network.pick_best_option(hidden, opt_types, opt_cards)
-                nv = network.value_head(hidden).item()
-
-            # Build labeled scores for telemetry
-            _OPT_NAMES = {v: k for k, v in ROOM_TYPE_TO_OPTION.items()}
-            option_labels = [f"{_OPT_NAMES.get(ot, '?')} (node {ni})" for ot, ni in zip(opt_types, node_indices)]
-            hs = {
-                "head": "option_eval",
-                "chosen": best_idx,
-                "options": [{"label": lbl, "score": round(s, 4)} for lbl, s in zip(option_labels, scores)],
-            }
-
-            chosen_node = node_indices[best_idx]
-            return Decision("choose_map_node", chosen_node,
-                            f"Network: node {chosen_node} (score={scores[best_idx]:.2f})",
-                            network_value=nv, head_scores=hs)
-        except Exception as e:
-            self._log_action(f"  [red]Network map FAILED: {e}[/red]")
-            raise
-
-    def _az_decide_shop(self, gs: dict) -> "Decision | None":
-        """Use network for one shop action (remove/buy/leave)."""
-        import torch
-        from .deterministic_advisor import Decision
-
-        try:
-            st, hidden, hp, max_hp, gold, floor, deck = self._az_run_state_tensors(gs)
-            network = self._network
-            vocabs = self._mcts_vocabs
-            actions = gs.get("available_actions", [])
-
-            opt_types = []
-            opt_cards = []
-            shop_actions = []  # (action_name, option_index, reasoning)
-
-            shop = gs.get("shop") or (gs.get("agent_view") or {}).get("shop") or {}
-
-            # Log shop snapshot on first visit (before any purchases)
-            if not getattr(self, "_shop_snapshot_logged", False) and self.logger:
-                run = gs.get("run") or {}
-                self.logger._emit({
-                    "type": "shop_snapshot",
-                    "floor": run.get("floor", 0),
-                    "gold": gold,
-                    "cards": [
-                        {"card_id": c.get("card_id", c.get("id", "")),
-                         "name": c.get("name", ""),
-                         "price": c.get("price", c.get("cost", 0)),
-                         "rarity": c.get("rarity", "")}
-                        for c in shop.get("cards", [])
-                        if c.get("name")
-                    ],
-                    "relics": [
-                        {"relic_id": r.get("relic_id", r.get("id", "")),
-                         "name": r.get("name", ""),
-                         "price": r.get("price", r.get("cost", 0))}
-                        for r in shop.get("relics", [])
-                    ],
-                    "potions": [
-                        {"name": p.get("name", ""),
-                         "price": p.get("price", p.get("cost", 0))}
-                        for p in shop.get("potions", [])
-                    ],
-                    "remove_cost": shop.get("remove_cost"),
-                })
-                self._shop_snapshot_logged = True
-
-            # Remove card options
-            if "remove_card_at_shop" in actions:
-                remove_cost = shop.get("remove_cost", 75)
-                if isinstance(remove_cost, int) and remove_cost <= gold:
-                    for di, card in enumerate(deck):
-                        if card.name in ("Strike", "Defend") and not card.upgraded:
-                            opt_types.append(OPTION_SHOP_REMOVE)
-                            opt_cards.append(vocabs.cards.get(card.id.rstrip("+")))
-                            shop_actions.append(("remove_card_at_shop", None,
-                                                 f"Remove {card.name}"))
-
-            # Buy card options
-            if "buy_card" in actions:
-                cards = shop.get("cards", [])
-                for i, card_info in enumerate(cards):
-                    price = card_info.get("price", card_info.get("cost", 999))
-                    if not isinstance(price, int) or price > gold or price <= 0:
-                        continue
-                    # Skip sold-out slots (empty name or missing card_id)
-                    card_id = card_info.get("card_id") or card_info.get("id", "")
-                    name = card_info.get("name", "")
-                    if not card_id or not name:
-                        continue
-                    opt_types.append(OPTION_SHOP_BUY)
-                    opt_cards.append(vocabs.cards.get(card_id.rstrip("+")))
-                    shop_actions.append(("buy_card", i, f"Buy {name} ({price}g)"))
-
-            # Leave option
-            if "close_shop_inventory" in actions:
-                opt_types.append(OPTION_SHOP_LEAVE)
-                opt_cards.append(0)
-                shop_actions.append(("close_shop_inventory", None, "Leave shop"))
-
-            if not opt_types:
-                return None
-
-            with torch.no_grad():
-                best_idx, scores = network.pick_best_option(hidden, opt_types, opt_cards)
-                nv = network.value_head(hidden).item()
-
-            # Build labeled scores for telemetry
-            option_labels = [sa[2] for sa in shop_actions]
-            hs = {
-                "head": "option_eval",
-                "chosen": best_idx,
-                "options": [{"label": lbl, "score": round(s, 4)} for lbl, s in zip(option_labels, scores)],
-            }
-
-            action_name, opt_idx, reason = shop_actions[best_idx]
-            return Decision(action_name, opt_idx,
-                            f"Network: {reason} (score={scores[best_idx]:.2f})",
-                            network_value=nv, head_scores=hs)
-        except Exception as e:
-            self._log_action(f"  [red]Network shop FAILED: {e}[/red]")
-            raise
-
-    def _az_decide_card_reward(self, gs: dict) -> "Decision | None":
-        """Pick a random card reward (always take, never skip) for deck diversity."""
-        import random as _rand
-        from .deterministic_advisor import Decision
-
-        # Get offered cards from the game state.
-        reward_data = gs.get("reward") or {}
-        av_reward = (gs.get("agent_view") or {}).get("reward") or {}
-        rewards = (
-            reward_data.get("card_options")
-            or av_reward.get("cards")
-            or gs.get("card_rewards")
-            or gs.get("rewards")
-            or (gs.get("selection") or {}).get("cards")
-            or []
-        )
-
-        if not rewards:
-            return None
-
-        pick = _rand.randrange(len(rewards))
-        card_info = rewards[pick]
-        name = card_info.get("name") or card_info.get("card_id", "?")
-        chosen_idx = card_info.get("index", pick)
-
-        self._card_reward_handled = True
-        return Decision("choose_reward_card", chosen_idx,
-                        f"Random: take {name} ({pick + 1}/{len(rewards)})")
-
-    def _az_decide_bundle(self, gs: dict) -> "Decision | None":
-        """Use network option head to pick a card bundle (e.g. Neow's Scroll Boxes).
-
-        Each bundle contains several cards.  We score each bundle by averaging
-        the network's per-card option scores, then pick the best bundle.
-        """
-        import torch
-        from .deterministic_advisor import Decision
-        from .option_types import OPTION_BUNDLE
-
-        try:
-            st, hidden, hp, max_hp, gold, floor, deck = self._az_run_state_tensors(gs)
-            network = self._network
-            vocabs = self._mcts_vocabs
-
-            # Get bundle data — mod exposes gs["bundles"] as array of
-            # {index, cards: [{card_id, name, upgraded, ...}, ...]}
-            bundles = (
-                gs.get("bundles")
-                or (gs.get("agent_view") or {}).get("bundles")
-                or []
-            )
-            if not bundles:
-                return None
-
-            # Score each bundle by evaluating its cards through the option head
-            from .alphazero.encoding import card_stats_vector
-            bundle_scores: list[tuple[int, float, str]] = []
-
-            for bundle in bundles:
-                b_idx = bundle.get("i", bundle.get("index", 0))
-                cards = bundle.get("cards", [])
-                if not cards:
-                    bundle_scores.append((b_idx, 0.0, "empty"))
-                    continue
-
-                # Build option arrays for all cards in this bundle
-                opt_types = []
-                opt_cards = []
-                opt_stats = []
-                card_names = []
-
-                for card_info in cards:
-                    name = card_info.get("name") or card_info.get("card_id", "?")
-                    # Agent view uses 'line' with formatted text
-                    if "line" in card_info:
-                        line = card_info["line"]
-                        # Extract card name from formatted line (first part before cost)
-                        name = line.split(" (")[0].strip() if " (" in line else line
-
-                    card_id = (card_info.get("card_id") or name).rstrip("+")
-                    upgraded = card_info.get("upgraded", False)
-
-                    opt_types.append(OPTION_BUNDLE)
-                    opt_cards.append(vocabs.cards.get(card_id))
-                    card_def = self.card_db.get(card_id, upgraded=upgraded)
-                    if card_def:
-                        opt_stats.append(card_stats_vector(card_def))
-                    else:
-                        opt_stats.append([0.0] * self._mcts_config.card_stats_dim)
-                    card_names.append(name)
-
-                with torch.no_grad():
-                    _, scores = network.pick_best_option(
-                        hidden, opt_types, opt_cards,
-                        option_card_stats=opt_stats)
-
-                avg_score = sum(scores) / len(scores)
-                label = ", ".join(card_names)
-                bundle_scores.append((b_idx, avg_score, label))
-
-            # Pick bundle with highest average score
-            best = max(bundle_scores, key=lambda x: x[1])
-            nv = network.value_head(hidden).item()
-
-            hs = {
-                "head": "option_eval",
-                "chosen": best[0],
-                "bundles": [
-                    {"i": idx, "cards": label, "score": round(sc, 4)}
-                    for idx, sc, label in bundle_scores
-                ],
-            }
-
-            return Decision(
-                "choose_bundle", best[0],
-                f"Network: bundle {best[0]} [{best[2]}] "
-                f"(avg_score={best[1]:.2f})",
-                network_value=nv, head_scores=hs,
-            )
-        except Exception as e:
-            self._log_action(f"  [red]Network bundle FAILED: {e}[/red]")
-            raise
-
-    def _az_decide_event(self, gs: dict) -> "Decision | None":
-        """Use network option head to decide between event options.
-
-        Validates against event profiles to ensure we only handle events
-        we've trained on.  Raises RuntimeError for unknown events.
-        """
-        import torch
-        from .deterministic_advisor import Decision
-        from .option_types import categorize_event_option
-        from .game_data import strip_markup
-        from .simulator import _load_event_profiles
-
-        try:
-            st, hidden, hp, max_hp, gold, floor, deck = self._az_run_state_tensors(gs)
-            network = self._network
-
-            event = gs.get("event") or (gs.get("agent_view") or {}).get("event") or {}
-            options = event.get("options") or []
-
-            unlocked = [(i, o) for i, o in enumerate(options) if not o.get("locked")]
-            if len(unlocked) <= 1:
-                return None  # Let auto-handler deal with single/no options
-
-            # Identify the event and look up its profile
-            event_name = strip_markup(
-                event.get("title") or event.get("name", ""))
-            event_id = event.get("event_id") or event.get("id", "")
-
-            profiles = _load_event_profiles()
-            profile = profiles.get(event_id) or profiles.get(
-                event_name.upper().replace(" ", "_").replace("?", "").strip("_"))
-
-            # For Neow, match options against the pool by title
-            if profile and profile.get("is_neow"):
-                pool_by_title = {
-                    strip_markup(o["title"]): o
-                    for o in profile.get("neow_pool", [])
-                }
-            elif profile:
-                pool_by_title = {
-                    strip_markup(o["title"]): o
-                    for o in profile.get("options", [])
-                }
-            else:
-                pool_by_title = None
-
-            if pool_by_title is None:
-                raise RuntimeError(
-                    f"No event profile for {event_id!r} / {event_name!r} — "
-                    f"run build_event_profiles.py to add it"
-                )
-
-            opt_types = []
-            opt_cards = []
-            option_labels = []
-            game_indices = []
-
-            for i, opt in unlocked:
-                desc = opt.get("description", "")
-                title = strip_markup(
-                    opt.get("title") or opt.get("name", ""))
-                label = title or strip_markup(desc)[:40] or f"Option {i}"
-
-                # Match against profile to get trained option_type.
-                # Dynamic events (e.g. potion-based) generate option titles
-                # at runtime.  Try prefix matching as a fallback before
-                # giving up — "Insert Uncommon Potion" matches "Insert".
-                profiled = pool_by_title.get(title)
-                if not profiled:
-                    # Prefix fallback: match the longest profile key that
-                    # is a prefix of the runtime title (or vice versa).
-                    for pkey, pval in pool_by_title.items():
-                        if title.startswith(pkey.split(" ")[0]):
-                            profiled = pval
-                            break
-                if profiled and "option_type" in profiled:
-                    opt_types.append(profiled["option_type"])
-                else:
-                    # Unknown option — use generic type so we don't crash.
-                    self._log_action(
-                        f"  [yellow]Unknown event option {title!r} for "
-                        f"{event_name!r} — using default option_type[/yellow]"
-                    )
-                    opt_types.append(19)  # 19 = misc event option
-
-                opt_cards.append(0)
-                option_labels.append(label)
-                game_indices.append(opt.get("index", i))
-
-            with torch.no_grad():
-                best_idx, scores = network.pick_best_option(
-                    hidden, opt_types, opt_cards)
-                nv = network.value_head(hidden).item()
-
-            hs = {
-                "head": "option_eval",
-                "chosen": best_idx,
-                "options": [{"label": lbl, "score": round(s, 4)}
-                            for lbl, s in zip(option_labels, scores)],
-            }
-
-            chosen_game_idx = game_indices[best_idx]
-            chosen_label = option_labels[best_idx]
-
-            return Decision(
-                "choose_event_option", chosen_game_idx,
-                f"Network: {chosen_label} (score={scores[best_idx]:.2f})",
-                network_value=nv, head_scores=hs,
-            )
-        except Exception as e:
-            self._log_action(f"  [red]Network event FAILED: {e}[/red]")
-            raise
-
-    def _az_decide_deck_select(self, gs: dict) -> "Decision | None":
-        """Use network option head for deck card selection (add/remove/upgrade).
-
-        For ALL operation types, the option head scores "how good is this
-        action?" — pick_best_option (max score) is always correct.
-        Do NOT invert scores for removal — the network was trained with
-        max score = best removal target.
-        """
-        """Use network option head for card selection (removal/upgrade/transform)."""
-        import torch
-        from .deterministic_advisor import Decision
-        from .option_types import OPTION_SHOP_REMOVE, OPTION_SMITH, OPTION_CARD_REWARD, OPTION_EVENT_TRANSFORM
-
-        try:
-            st, hidden, hp, max_hp, gold, floor, deck = self._az_run_state_tensors(gs)
-            network = self._network
-            vocabs = self._mcts_vocabs
-
-            sel = gs.get("selection") or {}
-            kind = (sel.get("kind") or "").lower()
-            cards = sel.get("cards", [])
-
-            if not cards:
-                return None
-
-            # Use kind + prompt to determine operation type
-            prompt_text = strip_markup(sel.get("prompt") or "").lower()
-            is_upgrade = kind in ("deck_upgrade_select", "combat_hand_upgrade_select",
-                                  "deck_enchant_select")
-            is_remove_prompt = "remove" in prompt_text or "destroy" in prompt_text
-            is_transform = "transform" in prompt_text
-            is_add_prompt = ("add" in prompt_text
-                             or ("choose" in prompt_text and not is_remove_prompt
-                                 and not is_transform))
-            is_add = not is_upgrade and not is_remove_prompt and not is_transform and is_add_prompt
-            is_remove = not is_upgrade and not is_add
-
-            # Build options for the unified option head
-            opt_types = []
-            opt_cards = []
-            card_indices = []
-            option_labels = []
-
-            for card_info in cards:
-                card_id = card_info.get("card_id") or card_info.get("id", "")
-                name = card_info.get("name", "?")
-                idx = card_info.get("index", len(opt_types))
-
-                if is_upgrade:
-                    opt_types.append(OPTION_SMITH)
-                elif is_add:
-                    opt_types.append(OPTION_CARD_REWARD)
-                elif is_transform:
-                    opt_types.append(OPTION_EVENT_TRANSFORM)
-                else:
-                    opt_types.append(OPTION_SHOP_REMOVE)
-
-                opt_cards.append(vocabs.cards.get(card_id.rstrip("+")))
-                card_indices.append(idx)
-                option_labels.append(name)
-
-            if not opt_types:
-                return None
-
-            with torch.no_grad():
-                # For all operation types (remove, upgrade, add), the option
-                # head scores "how good is this action?" — highest = best.
-                # No inversion needed: the network was trained with
-                # pick_best_option (max score) for OPTION_SHOP_REMOVE too.
-                best_idx, scores = network.pick_best_option(
-                    hidden, opt_types, opt_cards)
-
-            chosen_idx = card_indices[best_idx]
-            card_name = option_labels[best_idx]
-            nv = network.value_head(hidden).item()
-            if is_upgrade:
-                action = "upgrade"
-            elif is_add:
-                action = "add"
-            elif is_transform:
-                action = "transform"
-            else:
-                action = "remove"
-
-            hs = {
-                "head": "option_eval",
-                "chosen": best_idx,
-                "options": [{"label": lbl, "score": round(s, 4)} for lbl, s in zip(option_labels, scores)],
-            }
-
-            return Decision("select_deck_card", chosen_idx,
-                            f"Network: {action} {card_name} (score={scores[best_idx]:.2f})",
-                            network_value=nv, head_scores=hs)
-        except Exception as e:
-            self._log_action(f"  [red]Network deck_select FAILED: {e}[/red]")
-            raise
-
     # ------------------------------------------------------------------
     # Deterministic decision execution
     # ------------------------------------------------------------------
@@ -3050,7 +2430,7 @@ class Runner:
         # Execute
         if not self.dry_run:
             # Review pause — show non-combat decision before applying
-            head_vals = self._review_head_values(gs) if self.review_mode else ""
+            head_vals = ""
             scores_str = ""
             if decision.head_scores and "options" in decision.head_scores:
                 opts = decision.head_scores["options"]
@@ -3127,8 +2507,8 @@ class Runner:
             self._handle_single_deck_select(gs)
 
     def _handle_single_deck_select(self, gs: dict) -> None:
-        """Single-select deck screen — network required."""
-        decision = self._az_decide_deck_select(gs)
+        """Single-select deck screen — uses the deterministic advisor."""
+        decision = decide_deck_select(gs)
         actions = gs.get("available_actions", [])
         run = gs.get("run") or {}
         self._execute_deterministic(gs, decision, "deck_select", actions, run)
@@ -3148,113 +2528,74 @@ class Runner:
                     pass
             self._log_action("  [dim]auto: confirm_selection[/dim]")
 
-    def _az_score_deck_cards(self, gs: dict) -> "list[tuple[int, str, float]]":
-        """Score all cards in a deck_select screen using the network.
+    def _rank_deck_cards_deterministic(
+        self, gs: dict,
+    ) -> "list[tuple[int, str, float]]":
+        """Rank deck_select cards for multi-select using deterministic advisor logic.
 
-        Returns list of (game_index, card_name, score) sorted best-first.
-        Raises if the network is unavailable.
+        Returns list of (game_index, card_name, score) sorted best-first for
+        the detected operation (upgrade wants highest-value, remove wants
+        lowest-value). The "score" is just a rank proxy for logging.
         """
-        import torch
-        from .option_types import (
-            OPTION_SHOP_REMOVE, OPTION_SMITH,
-            OPTION_CARD_REWARD, OPTION_EVENT_TRANSFORM,
-        )
-
-        if not self._network or not self._mcts_vocabs:
-            raise RuntimeError("Network required for deck_select but not initialized")
-
-        st, hidden, hp, max_hp, gold, floor, deck = self._az_run_state_tensors(gs)
-        network = self._network
-        vocabs = self._mcts_vocabs
+        from .config import CARD_TIERS, CHARACTER_CONFIG, detect_character
+        from .deterministic_advisor import _card_tier
 
         sel = gs.get("selection") or {}
-        kind = (sel.get("kind") or "").lower()
+        prompt = strip_markup(sel.get("prompt") or "").lower()
         cards = sel.get("cards", [])
         if not cards:
-            raise RuntimeError("deck_select has no cards")
+            return []
 
-        prompt_text = strip_markup(sel.get("prompt") or "").lower()
-        is_upgrade = kind in ("deck_upgrade_select", "combat_hand_upgrade_select",
-                              "deck_enchant_select")
-        is_remove_prompt = "remove" in prompt_text or "destroy" in prompt_text
-        is_transform = "transform" in prompt_text
-        is_add_prompt = ("add" in prompt_text
-                         or ("choose" in prompt_text and not is_remove_prompt
-                             and not is_transform))
-        is_add = not is_upgrade and not is_remove_prompt and not is_transform and is_add_prompt
+        character = detect_character(gs)
+        cfg = CHARACTER_CONFIG.get(character, CHARACTER_CONFIG["ironclad"])
+        protect = set(cfg.get("protect_cards", [cfg["key_card"]]))
 
-        opt_types = []
-        opt_cards = []
-        card_indices = []
-        option_labels = []
+        is_remove = "remove" in prompt or "destroy" in prompt or "transform" in prompt
 
-        for card_info in cards:
-            card_id = card_info.get("card_id") or card_info.get("id", "")
-            name = card_info.get("name", "?")
-            idx = card_info.get("index", len(opt_types))
-            if is_upgrade:
-                opt_types.append(OPTION_SMITH)
-            elif is_add:
-                opt_types.append(OPTION_CARD_REWARD)
-            elif is_transform:
-                opt_types.append(OPTION_EVENT_TRANSFORM)
+        tier_rank = {"S": 100, "A": 70, "B": 30, "avoid": 0}
+        scored: list[tuple[int, str, float]] = []
+        for i, info in enumerate(cards):
+            name = info.get("name", info.get("card_id", "?"))
+            idx = info.get("index", i)
+            base = name.rstrip("+")
+            if is_remove:
+                if name in protect:
+                    score = 100.0
+                elif "Strike" in base or "Defend" in base:
+                    score = 0.0
+                else:
+                    tier = _card_tier(base, character)
+                    score = float(tier_rank.get(tier, 50))
+                scored.append((idx, name, -score))
             else:
-                opt_types.append(OPTION_SHOP_REMOVE)
-            opt_cards.append(vocabs.cards.get(card_id.rstrip("+")))
-            card_indices.append(idx)
-            option_labels.append(name)
+                tier = _card_tier(base, character)
+                score = float(tier_rank.get(tier, 15))
+                if info.get("type", "").lower() == "power":
+                    score += 10.0
+                scored.append((idx, name, score))
 
-        if not opt_types:
-            raise RuntimeError("deck_select produced no scoreable options")
-
-        with torch.no_grad():
-            _, scores = network.pick_best_option(hidden, opt_types, opt_cards)
-
-        # Return (game_index, name, score) sorted by score descending
-        ranked = sorted(
-            zip(card_indices, option_labels, scores),
-            key=lambda x: x[2], reverse=True,
-        )
-        return ranked
+        scored.sort(key=lambda x: x[2], reverse=True)
+        return scored
 
     def _handle_multi_deck_select(self, gs: dict, cards: list, prompt_text: str) -> None:
-        """Multi-select deck screen — use network scores to pick the top N cards."""
+        """Multi-select deck screen — pick the top N cards via deterministic ranking."""
         import re
         multi_match = re.search(r"choose\s+(\d+)", prompt_text)
         num_to_pick = int(multi_match.group(1)) if multi_match else 2
 
-        ranked = self._az_score_deck_cards(gs)
+        ranked = self._rank_deck_cards_deterministic(gs)
         priority = [idx for idx, _, _ in ranked]
 
-        # Log the full ranking
         ranking_str = ", ".join(
-            f"{name}={score:.3f}" for _, name, score in ranked
+            f"{name}={score:.1f}" for _, name, score in ranked
         )
         self._log_action(
-            f"  [blue]Multi-select ({num_to_pick}/{len(cards)}): "
-            f"network ranking: {ranking_str}[/blue]"
+            f"  [green]Multi-select ({num_to_pick}/{len(cards)}): "
+            f"deterministic ranking: {ranking_str}[/green]"
         )
-        # Log each pick as a decision with head_scores
         if self.logger:
-            nv = None
-            try:
-                import torch
-                st, hidden, *_ = self._az_run_state_tensors(gs)
-                nv = self._network.value_head(hidden).item()
-            except Exception:
-                pass
-            hs = {
-                "head": "option_eval",
-                "chosen": None,  # filled per-pick below
-                "options": [
-                    {"label": name, "score": round(score, 4)}
-                    for _, name, score in ranked
-                ],
-            }
-            # Log top-N picks as a single grouped decision
             for pick_num in range(min(num_to_pick, len(ranked))):
                 pick_idx, pick_name, pick_score = ranked[pick_num]
-                hs_copy = {**hs, "chosen": pick_num}
                 self.logger.log_decision(
                     game_state=gs,
                     screen_type="deck_select",
@@ -3262,14 +2603,12 @@ class Runner:
                     choice={
                         "action": "select_deck_card",
                         "option_index": pick_idx,
-                        "reasoning": f"Network multi-select {pick_num+1}/{num_to_pick}: "
-                                     f"{pick_name} (score={pick_score:.2f})",
+                        "reasoning": f"deterministic multi-select {pick_num+1}/{num_to_pick}: "
+                                     f"{pick_name} (score={pick_score:.1f})",
                     },
-                    source="network",
-                    network_value=nv,
-                    head_scores=hs_copy,
+                    source="deterministic",
                 )
-        self._track_decision("deck_select", "network")
+        self._track_decision("deck_select", "deterministic")
 
         picked = 0
         max_attempts = num_to_pick * 3  # Safety limit
@@ -3687,37 +3026,46 @@ class Runner:
     def _evaluate_card_reward(
         self, gs: dict, card_options: list,
     ) -> int | None:
-        """Ask the network which card to take. Returns card_index or None (skip)."""
-        decision = self._az_decide_card_reward(gs)
-        if decision is not None:
-            self._log_action(f"  [blue]{decision.reasoning}[/blue]")
-            self._track_decision("card_reward", "network")
-            if self.review_mode and decision.head_scores:
-                opts = decision.head_scores.get("options", [])
-                scores_str = "\n".join(
-                    f"  {o['label']}  score={o['score']:+.3f}" for o in opts)
-                self._review_pause(
-                    f"[bold]CARD REWARD:[/bold] {decision.reasoning}\n"
-                    f"{scores_str}"
-                )
-            if self.logger:
-                self.logger.log_decision(
-                    game_state=gs, screen_type="card_reward",
-                    options=gs.get("available_actions", []),
-                    choice={"action": decision.action,
-                            "option_index": decision.option_index,
-                            "reasoning": decision.reasoning},
-                    source="network",
-                    network_value=decision.network_value,
-                    head_scores=decision.head_scores,
-                )
-            if decision.action == "choose_reward_card":
-                return decision.option_index
-            else:
-                self._deck_size_after_skip = len(
-                    (gs.get("run") or {}).get("deck", [])
-                )
-                return None
+        """Pick a card reward via DeckNet, or deterministic advisor as fallback.
+
+        Returns card_index to take, or None to skip.
+        """
+        if self._decknet is not None:
+            decision = self._decknet_decide_card_reward(gs)
+            source = "decknet"
+        else:
+            decision = decide_card_reward(gs, self.game_data)
+            source = "deterministic"
+
+        if decision is None:
+            return None
+
+        self._log_action(f"  [blue]{decision.reasoning}[/blue]")
+        self._track_decision("card_reward", source)
+        if self.review_mode and decision.head_scores:
+            opts = decision.head_scores.get("options", [])
+            scores_str = "\n".join(
+                f"  {o['label']}  score={o['score']:+.3f}" for o in opts)
+            self._review_pause(
+                f"[bold]CARD REWARD:[/bold] {decision.reasoning}\n"
+                f"{scores_str}"
+            )
+        if self.logger:
+            self.logger.log_decision(
+                game_state=gs, screen_type="card_reward",
+                options=gs.get("available_actions", []),
+                choice={"action": decision.action,
+                        "option_index": decision.option_index,
+                        "reasoning": decision.reasoning},
+                source=source,
+                network_value=decision.network_value,
+                head_scores=decision.head_scores,
+            )
+        if decision.action == "choose_reward_card":
+            return decision.option_index
+        self._deck_size_after_skip = len(
+            (gs.get("run") or {}).get("deck", [])
+        )
         return None
 
     # ------------------------------------------------------------------

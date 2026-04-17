@@ -156,6 +156,8 @@ def cmd_benchmark(args):
     pomcp = bool(mcts_cfg.get("pomcp", False))
     turn_boundary_eval = bool(mcts_cfg.get("turn_boundary_eval", False))
     pw_k = float(mcts_cfg.get("pw_k", 1.0))
+    if args.pw_k is not None:
+        pw_k = args.pw_k
 
     print(f"Benchmarking: {exp.config.name}")
     print(f"  Encounter set: {es_name} ({len(encounters)} encounters)")
@@ -697,6 +699,9 @@ def main():
                     help="Checkpoint to benchmark (default: latest)")
     p.add_argument("--sims", type=int, default=400,
                     help="MCTS simulations per decision (default: 400)")
+    p.add_argument("--pw-k", type=float, default=None,
+                    help="Progressive widening multiplier for POMCP chance "
+                         "nodes (overrides config; higher = wider)")
     p.set_defaults(func=cmd_benchmark)
 
     # compare

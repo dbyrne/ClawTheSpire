@@ -461,16 +461,30 @@ class Experiment:
                        checkpoint: str = "latest") -> None:
         """Save a benchmark result, aggregating with existing results.
 
-        If a result with the same (suite, mode, mcts_sims) key exists,
+        If a result with the same (suite, mode, mcts_sims, pw_k) key exists,
         wins and games are summed and WR/CI recomputed from the totals.
         This lets you accumulate results across runs for tighter CIs.
+
+        pw_k is part of the key so runs with different progressive-widening
+        settings never merge. Legacy rows without pw_k are treated as 1.0
+        (all pre-existing benchmarks used the default).
         """
         import math
 
         self.benchmarks_dir.mkdir(exist_ok=True)
         path = self.benchmarks_dir / "results.jsonl"
 
-        key = (suite_id, result["mode"], result.get("mcts_sims", 0))
+        def _pw_key(val):
+            # Normalize for key: policy mode has no pw_k (None); mcts mode
+            # defaults to 1.0 when missing (legacy rows).
+            if val is None:
+                return None
+            return round(float(val), 4)
+
+        new_pw_k = result.get("pw_k")
+        if result["mode"] == "mcts" and new_pw_k is None:
+            new_pw_k = 1.0
+        key = (suite_id, result["mode"], result.get("mcts_sims", 0), _pw_key(new_pw_k))
         new_wins = result.get("wins", 0)
         new_games = result.get("games", 0)
 
@@ -483,9 +497,15 @@ class Experiment:
                     if not line.strip():
                         continue
                     row = json.loads(line)
-                    row_key = (row.get("suite"), row.get("mode"), row.get("mcts_sims", 0))
+                    row_pw_k = row.get("pw_k")
+                    if row.get("mode") == "mcts" and row_pw_k is None:
+                        row_pw_k = 1.0
+                    row_key = (row.get("suite"), row.get("mode"),
+                               row.get("mcts_sims", 0), _pw_key(row_pw_k))
                     if row_key == key:
                         # Aggregate: sum wins and games
+                        if row.get("pw_k") is None and new_pw_k is not None:
+                            row["pw_k"] = new_pw_k  # backfill legacy pw_k
                         row["wins"] = row.get("wins", 0) + new_wins
                         row["games"] = row.get("games", 0) + new_games
                         n = row["games"]
@@ -508,6 +528,7 @@ class Experiment:
                 "suite": suite_id,
                 "mode": result["mode"],
                 "mcts_sims": result.get("mcts_sims", 0),
+                "pw_k": new_pw_k,
                 "timestamp": time.time(),
                 "checkpoint": checkpoint,
                 "gen": result.get("gen"),
