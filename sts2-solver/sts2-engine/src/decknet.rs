@@ -39,9 +39,12 @@ use crate::types::*;
 pub const MAX_DECK: usize = 48;
 pub const MAX_MAP_AHEAD: usize = 10;
 
-/// Room type one-hot slots — order must match RoomType enum in Python.
-/// Indices: monster=0, elite=1, boss=2, rest=3, shop=4, event=5, treasure=6, unknown=7
-pub const NUM_ROOM_TYPES: usize = 8;
+/// Room type one-hot slots — order must match RoomType enum in Python
+/// decknet/state.py. Keep in lockstep; a size mismatch here silently
+/// shifts GLOBAL_DIM which crashes ONNX inference.
+/// Indices: monster=0, weak=1, normal=2, elite=3, boss=4,
+///          rest=5, shop=6, event=7, treasure=8, unknown=9
+pub const NUM_ROOM_TYPES: usize = 10;
 
 pub const PLAYER_DIM: usize = 5;
 pub const RELIC_DIM: usize = 26;
@@ -263,14 +266,19 @@ fn parse_act(act_id: &str) -> i32 {
 }
 
 fn room_type_index(room_name: &str) -> usize {
+    // Mirror Python decknet/state.py RoomType order:
+    // monster=0, weak=1, normal=2, elite=3, boss=4, rest=5, shop=6,
+    // event=7, treasure=8, unknown=9
     match room_name {
-        "monster" | "weak" | "normal" => 0,
-        "elite" => 1,
-        "boss" => 2,
-        "rest" => 3,
-        "shop" => 4,
-        "event" => 5,
-        "treasure" => 6,
-        _ => 7, // unknown
+        "monster" => 0,
+        "weak" => 1,
+        "normal" => 2,
+        "elite" => 3,
+        "boss" => 4,
+        "rest" => 5,
+        "shop" => 6,
+        "event" => 7,
+        "treasure" => 8,
+        _ => 9, // unknown
     }
 }

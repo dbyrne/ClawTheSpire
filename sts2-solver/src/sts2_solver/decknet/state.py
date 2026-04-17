@@ -25,7 +25,12 @@ from typing import Union
 # ---------------------------------------------------------------------------
 
 class RoomType(str, Enum):
-    MONSTER = "monster"       # regular fight
+    MONSTER = "monster"       # regular fight (umbrella)
+    # STS2 uses fine-grained variants for monster rooms; treat them as
+    # equivalent to MONSTER semantically but preserve the original string
+    # so round-trip serialization is stable.
+    WEAK = "weak"             # weak-pool monster fight
+    NORMAL = "normal"         # normal-pool monster fight
     ELITE = "elite"           # elite fight
     BOSS = "boss"             # act boss
     REST = "rest"             # campfire
