@@ -32,6 +32,11 @@ HIDDEN_DIM = 128
 ACTION_HIDDEN = 64
 HAND_PROJ_DIM = 32
 CARD_EMBED_DIM = 16
+# Default value-head depth (1 hidden layer = legacy v2 behavior). Individual
+# experiments can override via `architecture.value_head_layers` in their config.
+# This is a per-experiment knob, not a version-bumping change — legacy
+# checkpoints without the field default to 1 and load cleanly.
+VALUE_HEAD_LAYERS = 1
 
 # Architecture versioning — bump ARCH_VERSION on any change that breaks
 # checkpoint compatibility (any dimension constant above).
@@ -49,7 +54,20 @@ ARCH_META = {
     "action_dim": ACTION_DIM,
     "max_hand": MAX_HAND,
     "max_actions": MAX_ACTIONS,
+    "value_head_layers": VALUE_HEAD_LAYERS,
 }
+
+
+def network_kwargs_from_meta(arch_meta: dict | None) -> dict:
+    """Extract BetaOneNetwork() constructor kwargs from a checkpoint's arch_meta.
+
+    Legacy checkpoints may not have `value_head_layers` — default to 1 so
+    v2-era weights load cleanly.
+    """
+    meta = arch_meta or {}
+    return {
+        "value_head_layers": meta.get("value_head_layers", 1),
+    }
 
 
 class ArchitectureMismatchError(RuntimeError):
@@ -57,9 +75,9 @@ class ArchitectureMismatchError(RuntimeError):
     pass
 
 
-def network_stats(num_cards: int = 120) -> dict:
+def network_stats(num_cards: int = 120, value_head_layers: int | None = None) -> dict:
     """Return architecture stats: param count, layer shapes, input/output dims."""
-    net = BetaOneNetwork(num_cards=num_cards)
+    net = BetaOneNetwork(num_cards=num_cards, value_head_layers=value_head_layers)
     layers = {}
     for name, param in net.named_parameters():
         layers[name] = list(param.shape)
@@ -70,13 +88,18 @@ def network_stats(num_cards: int = 120) -> dict:
         "trunk_input": BASE_STATE_DIM + HAND_PROJ_DIM,
         "trunk_hidden": HIDDEN_DIM,
         "policy_hidden": ACTION_HIDDEN,
+        "value_head_layers": net.value_head_layers,
         "layers": layers,
     }
 
 
 class BetaOneNetwork(nn.Module):
-    def __init__(self, num_cards: int = 120):
+    def __init__(self, num_cards: int = 120, value_head_layers: int | None = None):
         super().__init__()
+
+        self.value_head_layers = (
+            value_head_layers if value_head_layers is not None else VALUE_HEAD_LAYERS
+        )
 
         # Learned card embedding (shared between hand and actions)
         self.card_embed = nn.Embedding(num_cards, CARD_EMBED_DIM, padding_idx=0)
@@ -100,11 +123,30 @@ class BetaOneNetwork(nn.Module):
         self.policy_query = nn.Linear(HIDDEN_DIM, ACTION_HIDDEN)
         self.action_encoder = nn.Linear(CARD_EMBED_DIM + ACTION_DIM, ACTION_HIDDEN)
 
-        # Value: state → scalar (clamped to [-1, 1.3] at inference in Rust)
-        self.value_head = nn.Sequential(
-            nn.Linear(HIDDEN_DIM, 64),
-            nn.ReLU(),
-            nn.Linear(64, 1),
+        # Value: state → scalar (clamped to [-1, 1.3] at inference in Rust).
+        # Depth is configurable to test whether a deeper head can represent
+        # compound/conditional logic that the 1-layer legacy head misses.
+        self.value_head = self._build_value_head(self.value_head_layers)
+
+    @staticmethod
+    def _build_value_head(layers: int) -> nn.Sequential:
+        if layers == 1:
+            # Legacy v2 head: 128 -> 64 -> 1
+            return nn.Sequential(
+                nn.Linear(HIDDEN_DIM, 64), nn.ReLU(),
+                nn.Linear(64, 1),
+            )
+        if layers == 3:
+            # Deeper head: 128 -> 256 -> 128 -> 64 -> 1
+            return nn.Sequential(
+                nn.Linear(HIDDEN_DIM, 256), nn.ReLU(),
+                nn.Linear(256, 128), nn.ReLU(),
+                nn.Linear(128, 64), nn.ReLU(),
+                nn.Linear(64, 1),
+            )
+        raise ValueError(
+            f"unsupported value_head_layers={layers}; add a new branch in "
+            "BetaOneNetwork._build_value_head to support it."
         )
 
     def forward(

@@ -1775,14 +1775,19 @@ def _card_id_lookup(card: dict, vocab: dict[str, int]) -> int:
 
 def run_eval(checkpoint_path: str | None = None) -> dict:
     """Run all eval scenarios against the network. Returns results dict."""
+    from .network import network_kwargs_from_meta
     # Load card vocab
     card_vocab = _load_card_vocab()
     num_cards = len(card_vocab)
 
-    # Load model
-    net = BetaOneNetwork(num_cards=num_cards)
+    # Load model — peek at checkpoint meta first so we construct the
+    # right architecture (value_head_layers may vary between experiments).
+    net_kwargs: dict = {}
     if checkpoint_path and os.path.exists(checkpoint_path):
         ckpt = torch.load(checkpoint_path, weights_only=False)
+        net_kwargs = network_kwargs_from_meta(ckpt.get("arch_meta"))
+    net = BetaOneNetwork(num_cards=num_cards, **net_kwargs)
+    if checkpoint_path and os.path.exists(checkpoint_path):
         try:
             net.load_state_dict(ckpt["model_state_dict"])
         except RuntimeError:
@@ -2170,6 +2175,10 @@ def build_value_comparisons() -> list[ValueComparison]:
         worse=_vstate(base_player, [enemy(40, 50, damage=20)], [defend(), strike(), defend(), defend()]),
     ))
 
+    # Append expanded scenarios (failure-mode-organized categories)
+    from .value_eval_expanded import build_expanded_comparisons
+    comps.extend(build_expanded_comparisons())
+
     return comps
 
 
@@ -2206,10 +2215,12 @@ def _eval_value(net, state_dict, card_vocab) -> float:
 
 def run_value_eval(checkpoint_path: str) -> dict:
     """Test value head: does V(better) > V(worse) for obvious state pairs?"""
+    from .network import network_kwargs_from_meta
     card_vocab = _load_card_vocab(checkpoint_path)
-    net = BetaOneNetwork(num_cards=len(card_vocab))
 
     ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+    kwargs = network_kwargs_from_meta(ckpt.get("arch_meta"))
+    net = BetaOneNetwork(num_cards=len(card_vocab), **kwargs)
     if "model_state_dict" in ckpt:
         try:
             net.load_state_dict(ckpt["model_state_dict"])

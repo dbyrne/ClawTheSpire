@@ -1,0 +1,55 @@
+name: pomcp-valuedepth-v1
+method: mcts_selfplay
+description: 'Value-head depth experiment. Cold-restart fork of pwfix1000 with value_head_layers=3
+  (4-layer MLP, ~50K value-head params vs legacy 8K). All other config identical to
+  pwfix1000 (POMCP on, 1000 sims, c_puct=1.5, pw_k=1.0, mcts_bootstrap=true, turn_boundary_eval=true,
+  dense_value_targets=true). Tests whether compound/conditional/arithmetic failures
+  in value eval are a value-head capacity bottleneck. Baseline to beat: pwfix1000
+  @ 98/117 (future_value 19/22, arithmetic 15/24). Eval every 10 gens; kill if value
+  eval < 100/117 at gen 30.'
+created: '2026-04-17T18:28:10+00:00'
+parent: mcts-bootstrap-pwfix1000
+parent_checkpoint: latest
+network_type: betaone
+architecture:
+  arch_version: 2
+  base_state_dim: 137
+  hidden_dim: 128
+  action_hidden: 64
+  hand_proj_dim: 32
+  card_embed_dim: 16
+  card_stats_dim: 28
+  relic_dim: 26
+  action_dim: 35
+  max_hand: 10
+  max_actions: 30
+  value_head_layers: 3
+  num_cards: 578
+  total_params: 138291
+  state_dim: 427
+  trunk_input: 169
+training:
+  generations: 100
+  combats_per_gen: 256
+  lr: 0.0003
+  batch_size: 512
+  mcts:
+    num_sims: 1000
+    temperature: 1.0
+    replay_capacity: 50000
+    train_epochs: 4
+    value_coef: 1.0
+    turn_boundary_eval: true
+    dense_value_targets: true
+    gamma: 0.99
+    c_puct: 1.5
+    pomcp: true
+    mcts_bootstrap: true
+    eval_every: 10
+data:
+  mode: encounter_set
+  encounter_set: lean-decks-v1
+checkpoints:
+  save_every: 50
+  keep_best: true
+  cold_start: true

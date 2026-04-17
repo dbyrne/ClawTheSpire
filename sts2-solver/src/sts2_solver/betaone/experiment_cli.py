@@ -379,7 +379,7 @@ def cmd_calibrate(args):
     from .calibrate import calibrate_all
     from .packages import PACKAGES, calibrate_packages
     from .data_utils import build_monster_data_json, load_solver_json, build_card_vocab
-    from .network import BetaOneNetwork, export_onnx
+    from .network import BetaOneNetwork, export_onnx, network_kwargs_from_meta
     from .training_set import save_training_set, TRAINING_SETS_DIR
     from .paths import BENCHMARK_DIR
     import torch
@@ -404,7 +404,10 @@ def cmd_calibrate(args):
     import json as _json
     card_vocab = _json.loads(vocab_path.read_text(encoding="utf-8"))
     card_vocab_json = _json.dumps(card_vocab)
-    net = BetaOneNetwork(num_cards=len(card_vocab))
+    net = BetaOneNetwork(
+        num_cards=len(card_vocab),
+        **network_kwargs_from_meta(ckpt.get("arch_meta")),
+    )
     net.load_state_dict(ckpt["model_state_dict"])
     onnx_dir = str(TRAINING_SETS_DIR / "_calibration_onnx")
     onnx_path = export_onnx(net, onnx_dir)
@@ -496,7 +499,7 @@ def cmd_generate(args):
     from .generate_encounters import generate_combined
     from .encounter_set import save_encounter_set
     from .data_utils import build_monster_data_json, load_solver_json
-    from .network import BetaOneNetwork, export_onnx
+    from .network import BetaOneNetwork, export_onnx, network_kwargs_from_meta
     from .paths import BENCHMARK_DIR
     import torch
 
@@ -525,7 +528,10 @@ def cmd_generate(args):
     vocab_path = BENCHMARK_DIR / "card_vocab.json"
     card_vocab = _json.loads(vocab_path.read_text(encoding="utf-8"))
     card_vocab_json = _json.dumps(card_vocab)
-    net = BetaOneNetwork(num_cards=len(card_vocab))
+    net = BetaOneNetwork(
+        num_cards=len(card_vocab),
+        **network_kwargs_from_meta(ckpt.get("arch_meta")),
+    )
     net.load_state_dict(ckpt["model_state_dict"])
     from .encounter_set import ENCOUNTER_SETS_DIR
     onnx_dir = str(ENCOUNTER_SETS_DIR / "_calibration_onnx")

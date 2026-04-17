@@ -17,7 +17,9 @@ from pathlib import Path
 import sts2_engine
 
 from .data_utils import build_monster_data_json, load_solver_json
-from .network import BetaOneNetwork, export_onnx, load_checkpoint
+from .network import (
+    BetaOneNetwork, export_onnx, load_checkpoint, network_kwargs_from_meta,
+)
 from .paths import SOLVER_ROOT, SOLVER_PKG, BENCHMARK_DIR
 from .deck_gen import lookup_card
 
@@ -36,7 +38,13 @@ def _build_card_vocab() -> tuple[dict, str]:
 
 def _load_checkpoint(path: str) -> tuple[BetaOneNetwork, dict]:
     card_vocab, _ = _build_card_vocab()
-    net = BetaOneNetwork(num_cards=len(card_vocab))
+    # Peek at arch_meta first so we construct a network matching the
+    # checkpoint's architecture (value_head_layers may differ between
+    # experiments now that depth is tunable).
+    import torch
+    ckpt_peek = torch.load(path, map_location="cpu", weights_only=False)
+    kwargs = network_kwargs_from_meta(ckpt_peek.get("arch_meta"))
+    net = BetaOneNetwork(num_cards=len(card_vocab), **kwargs)
     ckpt = load_checkpoint(path, network=net, strict=False)
     net.eval()
     return net, ckpt

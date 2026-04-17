@@ -518,12 +518,18 @@ class Runner:
                 f"{betaone_vocab}. Train or copy a BetaOne experiment into "
                 f"betaone_checkpoints/ before running."
             )
-        from .betaone.network import BetaOneNetwork, export_onnx as betaone_export_onnx
+        from .betaone.network import (
+            BetaOneNetwork, export_onnx as betaone_export_onnx,
+            network_kwargs_from_meta,
+        )
         with open(betaone_vocab) as f:
             card_vocab = _json.load(f)
         self._betaone_card_vocab_json = _json.dumps(card_vocab)
-        betaone_net = BetaOneNetwork(num_cards=len(card_vocab))
         betaone_ckpt = torch.load(betaone_latest, map_location="cpu", weights_only=False)
+        betaone_net = BetaOneNetwork(
+            num_cards=len(card_vocab),
+            **network_kwargs_from_meta(betaone_ckpt.get("arch_meta")),
+        )
         betaone_net.load_state_dict(betaone_ckpt["model_state_dict"])
         self._betaone_onnx_path = betaone_export_onnx(betaone_net, str(betaone_ckpt_dir / "onnx"))
         self._checkpoint_name = f"betaone gen {betaone_ckpt.get('gen', '?')}"

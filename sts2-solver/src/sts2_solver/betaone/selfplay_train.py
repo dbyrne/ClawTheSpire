@@ -248,6 +248,7 @@ def train(
     q_target_mix: float = 0.0,
     q_target_temp: float = 0.5,
     eval_every: int = 0,
+    value_head_layers: int = 1,
 ):
     os.makedirs(output_dir, exist_ok=True)
     onnx_dir = os.path.join(output_dir, "onnx")
@@ -262,7 +263,7 @@ def train(
     num_cards = len(card_vocab)
 
     # Network + optimizer
-    network = BetaOneNetwork(num_cards=num_cards)
+    network = BetaOneNetwork(num_cards=num_cards, value_head_layers=value_head_layers)
     optimizer = torch.optim.Adam(network.parameters(), lr=lr)
     print(f"BetaOne self-play: {network.param_count():,} params, {num_cards} card vocab")
 

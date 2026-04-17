@@ -167,10 +167,13 @@ def main():
     if not Path(onnx_path).exists():
         # Export from latest checkpoint
         import torch
-        from .network import BetaOneNetwork, export_onnx
+        from .network import BetaOneNetwork, export_onnx, network_kwargs_from_meta
         card_vocab = json.loads((_CHECKPOINTS / "card_vocab.json").read_text(encoding="utf-8"))
-        net = BetaOneNetwork(num_cards=len(card_vocab))
         ckpt = torch.load(_CHECKPOINTS / "betaone_latest.pt", weights_only=False)
+        net = BetaOneNetwork(
+            num_cards=len(card_vocab),
+            **network_kwargs_from_meta(ckpt.get("arch_meta")),
+        )
         net.load_state_dict(ckpt["model_state_dict"])
         onnx_path = export_onnx(net, str(_CHECKPOINTS / "onnx"))
         print(f"Exported ONNX from gen {ckpt.get('gen', '?')}")

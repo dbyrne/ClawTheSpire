@@ -70,6 +70,7 @@ def train(
     ppo_epochs: int = 4,
     ppo_batch_size: int = 256,
     output_dir: str = "betaone_checkpoints",
+    value_head_layers: int = 1,
 ):
     os.makedirs(output_dir, exist_ok=True)
     onnx_dir = os.path.join(output_dir, "onnx")
@@ -84,7 +85,7 @@ def train(
     num_cards = len(card_vocab)
 
     # Network + optimizer
-    network = BetaOneNetwork(num_cards=num_cards)
+    network = BetaOneNetwork(num_cards=num_cards, value_head_layers=value_head_layers)
     optimizer = torch.optim.Adam(network.parameters(), lr=lr)
     print(f"BetaOne network: {network.param_count():,} parameters ({num_cards} card vocab)")
 
