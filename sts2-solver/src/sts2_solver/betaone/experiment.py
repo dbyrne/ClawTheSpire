@@ -64,11 +64,16 @@ MCTS_DEFAULTS = {
 class ExperimentConfig:
     # Metadata
     name: str
-    method: str  # "mcts_selfplay" or "ppo"
+    method: str  # "mcts_selfplay" or "ppo" (BetaOne) or "decknet_selfplay" (DeckNet)
     description: str = ""
     created: str = ""
     parent: str | None = None
     parent_checkpoint: str | None = None
+    # Which network trains this experiment. "betaone" is the combat network
+    # (legacy default for back-compat). "decknet" is the deck-building
+    # network. Used by experiment_cli to route train/eval to the right
+    # module and by the TUI to pick appropriate metrics.
+    network_type: str = "betaone"
 
     # Architecture (recorded for compatibility checking)
     architecture: dict = field(default_factory=lambda: dict(ARCH_META))
@@ -98,6 +103,7 @@ class ExperimentConfig:
             created=raw.get("created", ""),
             parent=raw.get("parent"),
             parent_checkpoint=raw.get("parent_checkpoint"),
+            network_type=raw.get("network_type", "betaone"),
             architecture=raw.get("architecture", dict(ARCH_META)),
             training=raw.get("training", {}),
             data=raw.get("data", {"mode": "encounter_set", "encounter_set": None}),
@@ -112,6 +118,7 @@ class ExperimentConfig:
             "created": self.created,
             "parent": self.parent,
             "parent_checkpoint": self.parent_checkpoint,
+            "network_type": self.network_type,
             "architecture": self.architecture,
             "training": self.training,
             "data": self.data,
@@ -121,7 +128,11 @@ class ExperimentConfig:
             yaml.dump(data, f, default_flow_style=False, sort_keys=False)
 
     def to_train_kwargs(self) -> dict[str, Any]:
-        """Convert config to kwargs for selfplay_train.train() or train.train()."""
+        """Convert config to kwargs for the appropriate train() function.
+
+        Dispatch is network_type-first (betaone vs decknet), then method-
+        specific within betaone.
+        """
         t = self.training
         d = self.data
         ck = self.checkpoints
@@ -132,6 +143,24 @@ class ExperimentConfig:
                 return default
             return float(v)
 
+        # --- DeckNet: full-run self-play training, no encounter set ---
+        if self.network_type == "decknet":
+            dn = t.get("decknet", {})
+            return {
+                "num_generations": t.get("generations", 10),
+                "runs_per_gen": t.get("runs_per_gen", 100),
+                "mcts_sims": dn.get("mcts_sims", 200),
+                "temperature": _float(dn.get("temperature"), 1.0),
+                "combat_replays": dn.get("combat_replays", 1),
+                "lr": _float(t.get("lr"), 3e-4),
+                "batch_size": t.get("batch_size", 256),
+                "train_steps_per_gen": dn.get("train_steps_per_gen", 50),
+                "option_epsilon": _float(dn.get("option_epsilon"), 0.15),
+                "replay_capacity": dn.get("replay_capacity", 50_000),
+                "betaone_checkpoint": dn.get("betaone_checkpoint", ""),
+            }
+
+        # --- BetaOne: encounter-set-gated ---
         encounter_set_id = d.get("encounter_set")
         if not encounter_set_id:
             raise ValueError(
@@ -241,20 +270,36 @@ class Experiment:
         # Set creation timestamp
         config.created = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
-        # Ensure architecture matches current code and compute network stats
-        config.architecture = dict(ARCH_META)
-        # Use actual card vocab size if available
-        vocab_path = BENCHMARK_DIR / "card_vocab.json"
-        if vocab_path.exists():
-            import json as _json
-            num_cards = len(_json.loads(vocab_path.read_text(encoding="utf-8")))
+        # Architecture metadata: recorded for compatibility checking. BetaOne
+        # uses the combat ARCH_META; DeckNet tracks its own shape so mixing
+        # networks in one dashboard doesn't confuse readers.
+        if config.network_type == "decknet":
+            from ..decknet.network import DeckNet
+            vocab_path = BENCHMARK_DIR / "card_vocab.json"
+            if vocab_path.exists():
+                import json as _json
+                num_cards = len(_json.loads(vocab_path.read_text(encoding="utf-8")))
+            else:
+                num_cards = 120
+            _net = DeckNet(num_cards=num_cards)
+            config.architecture = {
+                "network": "decknet",
+                "num_cards": num_cards,
+                "total_params": _net.param_count(),
+            }
         else:
-            num_cards = config.architecture.get("num_cards", 120)
-        stats = network_stats(num_cards)
-        config.architecture["num_cards"] = stats["num_cards"]
-        config.architecture["total_params"] = stats["total_params"]
-        config.architecture["state_dim"] = stats["state_dim"]
-        config.architecture["trunk_input"] = stats["trunk_input"]
+            config.architecture = dict(ARCH_META)
+            vocab_path = BENCHMARK_DIR / "card_vocab.json"
+            if vocab_path.exists():
+                import json as _json
+                num_cards = len(_json.loads(vocab_path.read_text(encoding="utf-8")))
+            else:
+                num_cards = config.architecture.get("num_cards", 120)
+            stats = network_stats(num_cards)
+            config.architecture["num_cards"] = stats["num_cards"]
+            config.architecture["total_params"] = stats["total_params"]
+            config.architecture["state_dim"] = stats["state_dim"]
+            config.architecture["trunk_input"] = stats["trunk_input"]
 
         # Create directory structure
         exp.dir.mkdir(parents=True, exist_ok=True)
@@ -324,8 +369,17 @@ class Experiment:
             if not config_path.exists():
                 continue
             config = ExperimentConfig.from_yaml(config_path)
-            progress = _read_progress(d / "betaone_progress.json")
-            if config.method == "ppo":
+            # DeckNet writes decknet_progress.json; BetaOne writes betaone_progress.json
+            prog_name = (
+                "decknet_progress.json" if config.network_type == "decknet"
+                else "betaone_progress.json"
+            )
+            progress = _read_progress(d / prog_name)
+            if config.network_type == "decknet":
+                dn = config.training.get("decknet", {})
+                sims = dn.get("mcts_sims", "?")
+                method_str = f"DeckNet-{sims}"
+            elif config.method == "ppo":
                 method_str = "PPO"
             else:
                 mcts = config.training.get("mcts", {})

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 
@@ -23,7 +24,14 @@ from .paths import EXPERIMENTS_DIR, TEMPLATES_DIR
 
 
 def _format_method(config) -> str:
-    """Format method string with sim count for MCTS/POMCP."""
+    """Format method string for display. DeckNet gets its own label since
+    it's a different network type; BetaOne distinguishes PPO vs MCTS/POMCP
+    based on method and the pomcp flag.
+    """
+    if getattr(config, "network_type", "betaone") == "decknet":
+        dn = config.training.get("decknet", {})
+        sims = dn.get("mcts_sims", "?")
+        return f"DeckNet-{sims}"
     if config.method == "ppo":
         return "PPO"
     mcts = config.training.get("mcts", {})
@@ -81,12 +89,19 @@ def cmd_train(args):
     kwargs["output_dir"] = exp.output_dir()
 
     if args.cold_start:
-        kwargs["cold_start"] = True
+        # Only BetaOne training respects a cold_start flag; DeckNet always
+        # trains its current in-memory net, no checkpoint resume yet.
+        if config.network_type != "decknet":
+            kwargs["cold_start"] = True
 
-    print(f"Training experiment: {config.name} ({config.method})")
+    print(f"Training experiment: {config.name} "
+          f"(network={config.network_type}, method={config.method})")
     print(f"  Output: {exp.output_dir()}")
 
-    if config.method == "mcts_selfplay":
+    # Dispatch to the right training entry point
+    if config.network_type == "decknet":
+        from ..decknet.train import train
+    elif config.method == "mcts_selfplay":
         from .selfplay_train import train
     else:
         from .train import train
@@ -174,6 +189,41 @@ def cmd_eval(args):
         print(f"Experiment '{args.name}' not found.")
         sys.exit(1)
 
+    config = exp.config
+
+    # --- DeckNet eval: separate harness with its own scenarios ---
+    if config.network_type == "decknet":
+        import json as _json
+        from ..decknet.eval import run_eval as decknet_run_eval
+        from ..decknet.network import DeckNet
+        import torch
+
+        ckpt_path = str(exp.dir / "decknet_latest.pt")
+        if args.checkpoint and args.checkpoint != "latest":
+            ckpt_path = str(exp.dir / f"decknet_{args.checkpoint}.pt")
+
+        from .paths import BENCHMARK_DIR
+        card_vocab = _json.loads((BENCHMARK_DIR / "card_vocab.json").read_text(encoding="utf-8"))
+        net = DeckNet(num_cards=len(card_vocab))
+        if os.path.exists(ckpt_path):
+            ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+            net.load_state_dict(ckpt["model_state_dict"])
+            gen = ckpt.get("gen", "?")
+        else:
+            print(f"No checkpoint at {ckpt_path} — evaluating untrained network.")
+            gen = 0
+
+        print(f"Evaluating DeckNet: {config.name} (gen {gen})")
+        result = decknet_run_eval(net, card_vocab, verbose=True)
+        result["gen"] = gen
+        # Save to same eval.jsonl location as BetaOne for TUI visibility
+        exp.save_eval(result, suite_id="decknet-phase0")
+        print(f"\nDeckNet eval saved: {result['passed']}/{result['total']} "
+              f"({result['passed']/max(result['total'],1):.1%})")
+        print(f"  -> {exp.benchmarks_dir / 'eval.jsonl'}")
+        return
+
+    # --- BetaOne eval: existing combat-scenario harness ---
     from .eval import run_eval, run_value_eval
     from .suite import get_current_eval_suite
 

@@ -1,0 +1,31 @@
+name: decknet-phase0
+method: decknet_selfplay
+description: "DeckNet Phase 0 \u2014 card-reward decisions via V-over-deck, other\
+  \ non-combat decisions random"
+created: '2026-04-17T14:57:16+00:00'
+parent: null
+parent_checkpoint: null
+network_type: decknet
+architecture:
+  network: decknet
+  num_cards: 578
+  total_params: 64321
+training:
+  generations: 10
+  runs_per_gen: 100
+  lr: 0.0003
+  batch_size: 256
+  decknet:
+    mcts_sims: 200
+    temperature: 1.0
+    combat_replays: 1
+    train_steps_per_gen: 50
+    option_epsilon: 0.15
+    replay_capacity: 50000
+    betaone_checkpoint: experiments/mcts-bootstrap-pwfix1000/betaone_latest.pt
+data:
+  mode: full_run
+checkpoints:
+  save_every: 5
+  keep_best: false
+  cold_start: false

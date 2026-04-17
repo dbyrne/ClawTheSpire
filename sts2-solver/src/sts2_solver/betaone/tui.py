@@ -105,8 +105,11 @@ def _collect_experiments() -> list[dict]:
         with open(d / "config.yaml", encoding="utf-8") as f:
             config = yaml.safe_load(f)
 
-        progress = _load_json(d / "betaone_progress.json")
-        history = _load_jsonl_all(d / "betaone_history.jsonl", tail=60)
+        net_type = config.get("network_type", "betaone")
+        prog_name = "decknet_progress.json" if net_type == "decknet" else "betaone_progress.json"
+        hist_name = "decknet_history.jsonl" if net_type == "decknet" else "betaone_history.jsonl"
+        progress = _load_json(d / prog_name)
+        history = _load_jsonl_all(d / hist_name, tail=60)
         eval_result = _load_jsonl_last(d / "benchmarks" / "eval.jsonl")
         eval_history = _load_jsonl_all(d / "benchmarks" / "eval.jsonl", tail=60)
         value_eval_history = _load_jsonl_all(d / "benchmarks" / "value_eval.jsonl", tail=60)
@@ -115,6 +118,7 @@ def _collect_experiments() -> list[dict]:
         experiments.append({
             "name": config.get("name", d.name),
             "method": config.get("method", "?"),
+            "network_type": config.get("network_type", "betaone"),
             "description": config.get("description", ""),
             "parent": config.get("parent"),
             "arch": config.get("architecture", {}),
@@ -194,7 +198,12 @@ def build_dashboard(experiments: list[dict]) -> Group:
         ts = exp["data"].get("encounter_set") or exp["data"].get("training_set", "")
         ts_str = _resolve_ts_name(ts) if ts else "-"
 
-        if exp["method"] == "ppo":
+        net_type = exp.get("network_type", "betaone")
+        if net_type == "decknet":
+            dn = exp.get("training", {}).get("decknet", {})
+            sims = dn.get("mcts_sims", "?")
+            method = f"DeckNet-{sims}"
+        elif exp["method"] == "ppo":
             method = "PPO"
         else:
             mcts = exp.get("training", {}).get("mcts", {})
@@ -202,8 +211,15 @@ def build_dashboard(experiments: list[dict]) -> Group:
             prefix = "POMCP" if mcts.get("pomcp", False) else "MCTS"
             method = f"{prefix}-{sims}"
 
-        # Replay buffer (MCTS only)
-        if exp["method"] != "ppo" and p:
+        # Replay buffer: BetaOne MCTS tracks per-step buffer; DeckNet tracks
+        # per-decision buffer. PPO has no buffer. Show best effort per type.
+        if net_type == "decknet" and p:
+            buf_size = p.get("buffer_size", 0)
+            buf_cap = exp.get("training", {}).get("decknet", {}).get("replay_capacity", 0)
+            buf_str = f"{buf_size//1000}K/{buf_cap//1000}K" if buf_cap else (
+                f"{buf_size//1000}K" if buf_size else "-"
+            )
+        elif net_type == "betaone" and exp["method"] != "ppo" and p:
             buf_size = p.get("buffer_size", 0)
             buf_cap = exp.get("training", {}).get("mcts", {}).get("replay_capacity", 0)
             if buf_cap:
@@ -213,16 +229,15 @@ def build_dashboard(experiments: list[dict]) -> Group:
         else:
             buf_str = "-"
 
-        # C_PUCT and Dirichlet noise frac (MCTS only). Fall back to code defaults
-        # so experiments that don't set the key still show the effective value —
-        # defaults live in MCTS_DEFAULTS so they can't drift across consumers.
-        mcts_cfg = exp.get("training", {}).get("mcts", {}) if exp["method"] != "ppo" else {}
-        if exp["method"] == "ppo":
-            cpuct_str = "-"
-            noise_str = "-"
-        else:
+        # C_PUCT / noise columns are BetaOne-MCTS-specific knobs. Blank for
+        # DeckNet and PPO.
+        if net_type == "betaone" and exp["method"] != "ppo":
+            mcts_cfg = exp.get("training", {}).get("mcts", {})
             cpuct_str = f"{mcts_cfg.get('c_puct', MCTS_DEFAULTS['c_puct'])}"
             noise_str = f"{mcts_cfg.get('noise_frac', MCTS_DEFAULTS['noise_frac'])}"
+        else:
+            cpuct_str = "-"
+            noise_str = "-"
 
         color = exp_color_map.get(exp["name"], "white")
         name_text = Text(exp["name"], style=color)
