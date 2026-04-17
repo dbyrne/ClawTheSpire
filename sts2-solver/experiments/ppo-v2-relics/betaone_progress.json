@@ -1,0 +1,76 @@
+{
+  "gen": 1803,
+  "win_rate": 0.75,
+  "tier_wr": 0.75,
+  "regressed": null,
+  "regressed_detail": null,
+  "cumulative_win_rate": 0.6772,
+  "avg_hp": 10.8,
+  "avg_reward": 0.0452,
+  "steps": 13382,
+  "episodes": 512,
+  "tier": 10,
+  "tier_name": "Final exam",
+  "gens_at_tier": 1792,
+  "tier_change": "hold",
+  "policy_loss": -0.00829,
+  "value_loss": 0.48927,
+  "entropy": 0.7962,
+  "temperature": 0.512,
+  "gen_time": 3.48,
+  "timestamp": 1776230951.9105635,
+  "recorded_encounters": 16,
+  "avg_calibrated_hp": 18.1,
+  "cal_hp_history": [
+    [
+      0,
+      18.2
+    ],
+    [
+      200,
+      17.9
+    ],
+    [
+      400,
+      18.0
+    ],
+    [
+      600,
+      18.1
+    ],
+    [
+      800,
+      18.8
+    ],
+    [
+      1000,
+      18.7
+    ],
+    [
+      1200,
+      17.9
+    ],
+    [
+      1400,
+      17.7
+    ],
+    [
+      1600,
+      18.2
+    ],
+    [
+      1800,
+      18.1
+    ]
+  ],
+  "num_generations": 2000,
+  "cumulative_wins": 621290,
+  "cumulative_games": 917504,
+  "best_win_rate": 0.7891,
+  "tier_cumulative": {
+    "10": [
+      520280,
+      759936
+    ]
+  }
+}

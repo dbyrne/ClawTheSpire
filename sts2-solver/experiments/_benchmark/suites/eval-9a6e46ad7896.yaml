@@ -1,0 +1,25 @@
+suite_id: eval-9a6e46ad7896
+name: eval
+type: eval
+scenario_count: 75
+scenario_hash: 8f9c35d77984
+categories:
+- block
+- block_cards
+- combo
+- damage
+- debuff
+- debuff_cards
+- discard
+- draw
+- draw_cycle
+- energy
+- lethal
+- multi_enemy
+- poison
+- relic
+- shiv
+- sly
+- survival
+- synergy
+- targeting

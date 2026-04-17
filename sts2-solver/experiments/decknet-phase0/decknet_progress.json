@@ -1,0 +1,14 @@
+{
+  "gen": 55,
+  "runs": 200,
+  "wins": 17,
+  "win_rate": 0.085,
+  "avg_floor": 10.59,
+  "samples_added": 910,
+  "buffer_size": 50272,
+  "loss": 0.34033,
+  "trained": true,
+  "gen_time": 30.54,
+  "timestamp": 1776446130.851201,
+  "num_generations": 100
+}

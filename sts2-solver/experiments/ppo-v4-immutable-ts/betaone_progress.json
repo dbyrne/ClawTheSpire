@@ -1,0 +1,34 @@
+{
+  "gen": 817,
+  "win_rate": 0.3906,
+  "tier_wr": 0.3906,
+  "regressed": null,
+  "regressed_detail": null,
+  "cumulative_win_rate": 0.3724,
+  "avg_hp": 7.7,
+  "avg_reward": -0.0156,
+  "steps": 6988,
+  "episodes": 256,
+  "tier": 10,
+  "tier_name": "Recorded encounters",
+  "gens_at_tier": 817,
+  "tier_change": "hold",
+  "policy_loss": -0.00422,
+  "value_loss": 0.48718,
+  "entropy": 0.6062,
+  "temperature": 0.821,
+  "gen_time": 4.65,
+  "timestamp": 1776278891.679312,
+  "recorded_encounters": 20,
+  "training_set": "ts-f059d8766b9a",
+  "num_generations": 2000,
+  "cumulative_wins": 77896,
+  "cumulative_games": 209152,
+  "best_win_rate": 0.5234,
+  "tier_cumulative": {
+    "10": [
+      77896,
+      209152
+    ]
+  }
+}

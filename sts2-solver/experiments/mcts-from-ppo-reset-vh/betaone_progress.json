@@ -1,0 +1,19 @@
+{
+  "gen": 168,
+  "win_rate": 0.5078,
+  "avg_hp": 5.4,
+  "steps": 6003,
+  "buffer_size": 194621,
+  "episodes": 256,
+  "tier": 10,
+  "tier_name": "Recorded encounters",
+  "tier_change": "hold",
+  "gens_at_tier": 0,
+  "policy_loss": 0.97118,
+  "value_loss": 0.31311,
+  "num_sims": 400,
+  "gen_time": 183.0,
+  "timestamp": 1776274504.7786498,
+  "num_generations": 3000,
+  "best_win_rate": 0.5977
+}

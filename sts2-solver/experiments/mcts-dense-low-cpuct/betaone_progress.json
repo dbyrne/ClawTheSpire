@@ -1,0 +1,19 @@
+{
+  "gen": 78,
+  "win_rate": 0.3516,
+  "avg_hp": 6.8,
+  "steps": 4500,
+  "buffer_size": 47664,
+  "episodes": 256,
+  "tier": 10,
+  "tier_name": "Final exam",
+  "tier_change": "hold",
+  "gens_at_tier": 78,
+  "policy_loss": 1.21871,
+  "value_loss": 0.28232,
+  "num_sims": 400,
+  "gen_time": 48.15,
+  "timestamp": 1776308204.9352474,
+  "num_generations": 1500,
+  "best_win_rate": 0.4648
+}

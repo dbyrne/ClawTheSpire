@@ -1,0 +1,12 @@
+encounter_set_id: es-494df99e24be
+name: draw-synergy-v1
+encounter_count: 105
+avg_hp: 33.4
+source:
+  type: combined
+  calibrated_with:
+    checkpoint: mcts-bootstrap-pwfix1000
+    gen: 83
+    method: policy
+    combats_per_hp: 64
+    decks_per_encounter: 3

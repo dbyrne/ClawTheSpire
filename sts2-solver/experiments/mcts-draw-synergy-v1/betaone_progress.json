@@ -1,0 +1,16 @@
+{
+  "gen": 31,
+  "win_rate": 0.8281,
+  "avg_hp": 12.2,
+  "steps": 7082,
+  "buffer_size": 43660,
+  "episodes": 256,
+  "encounter_set": "draw-synergy-v1",
+  "policy_loss": 1.16323,
+  "value_loss": 0.03976,
+  "num_sims": 1000,
+  "gen_time": 263.82,
+  "timestamp": 1776441926.0575626,
+  "num_generations": 100,
+  "best_win_rate": 0.8281
+}

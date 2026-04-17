@@ -1,0 +1,4 @@
+{"suite": "es-base-es-v1-7af4cfe921ce", "mode": "policy", "mcts_sims": 0, "timestamp": 1776341316.2545838, "checkpoint": "latest", "gen": 1372, "win_rate": 0.2979, "wins": 563, "games": 1890, "ci95_lo": 0.2777, "ci95_hi": 0.3189}
+{"suite": "es-base-es-v1-7af4cfe921ce", "mode": "mcts", "mcts_sims": 400, "timestamp": 1776341316.2605834, "checkpoint": "latest", "gen": 1372, "win_rate": 0.4196, "wins": 793, "games": 1890, "ci95_lo": 0.3975, "ci95_hi": 0.442}
+{"suite": "es-lean-decks-v1-ed5193d56cce", "mode": "policy", "mcts_sims": 0, "timestamp": 1776341433.563424, "checkpoint": "latest", "gen": 1372, "win_rate": 0.4333, "wins": 819, "games": 1890, "ci95_lo": 0.4111, "ci95_hi": 0.4558}
+{"suite": "es-lean-decks-v1-ed5193d56cce", "mode": "mcts", "mcts_sims": 400, "timestamp": 1776341433.569424, "checkpoint": "latest", "gen": 1372, "win_rate": 0.6159, "wins": 1164, "games": 1890, "ci95_lo": 0.5937, "ci95_hi": 0.6375}
