@@ -482,6 +482,10 @@ class Experiment:
     def config(self) -> ExperimentConfig:
         return ExperimentConfig.from_yaml(self.config_path)
 
+    @property
+    def _ckpt_prefix(self) -> str:
+        return "decknet" if self.config.network_type == "decknet" else "betaone"
+
     def output_dir(self) -> str:
         """Return the path training scripts should use as output_dir."""
         return str(self.dir)
@@ -635,22 +639,23 @@ class Experiment:
         exp = Experiment.create(new_name, config=config, overrides=overrides)
 
         # Copy checkpoint with gen reset to 0
+        prefix = source._ckpt_prefix
         if resolved == "latest":
-            src_ckpt = source.dir / "betaone_latest.pt"
+            src_ckpt = source.dir / f"{prefix}_latest.pt"
         else:
-            src_ckpt = source.dir / f"betaone_{resolved}.pt"
+            src_ckpt = source.dir / f"{prefix}_{resolved}.pt"
 
         if not src_ckpt.exists():
             raise FileNotFoundError(
                 f"Source checkpoint {src_ckpt.name} not found in {source.dir}. "
-                f"Available: betaone_latest.pt + any betaone_gen<N>.pt files."
+                f"Available: {prefix}_latest.pt + any {prefix}_gen<N>.pt files."
             )
 
         import torch
         ckpt = torch.load(str(src_ckpt), map_location="cpu", weights_only=False)
         ckpt["gen"] = 0
         ckpt["win_rate"] = 0.0
-        torch.save(ckpt, str(exp.dir / "betaone_latest.pt"))
+        torch.save(ckpt, str(exp.dir / f"{exp._ckpt_prefix}_latest.pt"))
 
         return exp
 
@@ -757,12 +762,13 @@ class Experiment:
         disk rotation to benchmark their finalized experiment.
         """
         cfg = self.config
+        prefix = self._ckpt_prefix
 
         def _finalized_path() -> Path:
-            gen_ckpt = self.dir / f"betaone_gen{cfg.concluded_gen}.pt"
+            gen_ckpt = self.dir / f"{prefix}_gen{cfg.concluded_gen}.pt"
             if gen_ckpt.exists():
                 return gen_ckpt
-            latest = self.dir / "betaone_latest.pt"
+            latest = self.dir / f"{prefix}_latest.pt"
             if latest.exists():
                 try:
                     import torch
@@ -778,7 +784,7 @@ class Experiment:
         if spec == "auto":
             if cfg.concluded_gen is not None:
                 return _finalized_path()
-            return self.dir / "betaone_latest.pt"
+            return self.dir / f"{prefix}_latest.pt"
         if spec in ("finalized", "concluded"):
             if cfg.concluded_gen is None:
                 raise ValueError(
@@ -787,10 +793,10 @@ class Experiment:
                 )
             return _finalized_path()
         if spec == "latest":
-            return self.dir / "betaone_latest.pt"
+            return self.dir / f"{prefix}_latest.pt"
         # "gen30" or raw "30"
         gen_str = spec if spec.startswith("gen") else f"gen{spec}"
-        return self.dir / f"betaone_{gen_str}.pt"
+        return self.dir / f"{prefix}_{gen_str}.pt"
 
     def finalize(self, gen: int, reason: str) -> None:
         """Mark a specific gen as the experiment's canonical conclusion.
@@ -814,8 +820,9 @@ class Experiment:
 
         # Require a recoverable checkpoint. Accept either the gen-specific .pt
         # or the latest .pt if its recorded gen matches.
-        gen_ckpt = self.dir / f"betaone_gen{gen}.pt"
-        latest_ckpt = self.dir / "betaone_latest.pt"
+        prefix = self._ckpt_prefix
+        gen_ckpt = self.dir / f"{prefix}_gen{gen}.pt"
+        latest_ckpt = self.dir / f"{prefix}_latest.pt"
         ckpt_ok = gen_ckpt.exists()
         if not ckpt_ok and latest_ckpt.exists():
             import torch
@@ -827,7 +834,7 @@ class Experiment:
         if not ckpt_ok:
             raise FileNotFoundError(
                 f"No checkpoint for gen {gen}. Expected {gen_ckpt.name} or "
-                f"betaone_latest.pt@gen={gen}. The .pt may have been rotated out."
+                f"{prefix}_latest.pt@gen={gen}. The .pt may have been rotated out."
             )
 
         config = self.config

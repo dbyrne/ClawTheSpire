@@ -29,3 +29,9 @@ checkpoints:
   save_every: 5
   keep_best: false
   cold_start: false
+concluded_gen: 30
+concluded_reason: "Closed Phase 0 \u2014 pairwise margin loss AMPLIFIED deck-size\
+  \ ordering instead of breaking it (corr +0.81); asymmetric data made the shortcut\
+  \ sharper. Final 7%, catastrophic. Pairwise margin disqualified for asymmetric-data\
+  \ regimes."
+concluded_at: '2026-04-18T19:31:30+00:00'

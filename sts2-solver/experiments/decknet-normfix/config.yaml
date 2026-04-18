@@ -28,3 +28,9 @@ checkpoints:
   save_every: 5
   keep_best: false
   cold_start: false
+concluded_gen: 20
+concluded_reason: "Closed Phase 0 \u2014 peak eval 67% at gen 15-20 (tied untrained\
+  \ baseline), corr(size,V) ~= 0 confirms clean pick distribution. Gen 20 designated\
+  \ reusable warm-start for Phase 1. Drifted down to 47% after gen 20; pinning to\
+  \ peak/warm-start gen."
+concluded_at: '2026-04-18T19:31:21+00:00'

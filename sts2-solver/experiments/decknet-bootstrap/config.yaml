@@ -29,3 +29,9 @@ checkpoints:
   save_every: 5
   keep_best: false
   cold_start: false
+concluded_gen: 30
+concluded_reason: "Closed Phase 0 \u2014 policy-weight bootstrap learned deck-size\
+  \ shortcut (corr +0.88, 'bigger = better' because MCTS policy weight is relative-to-hand\
+  \ and asymmetric across drafts). Final eval 20% vs 67% untrained baseline. Policy\
+  \ weight disqualified as card-quality target."
+concluded_at: '2026-04-18T19:31:24+00:00'

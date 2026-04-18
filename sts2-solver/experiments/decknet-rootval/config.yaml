@@ -30,3 +30,9 @@ checkpoints:
   save_every: 5
   keep_best: false
   cold_start: false
+concluded_gen: 15
+concluded_reason: "Closed Phase 0 \u2014 MCTS root_value (combat winnability) is too\
+  \ coarse: shortcut broken (corr +0.13) but signal does not match curated eval scenarios'\
+  \ fine-grained synergies (poison stacking, draw cycling). Drifted down, no peak\
+  \ above baseline. Pinning gen 15 (last eval)."
+concluded_at: '2026-04-18T19:31:33+00:00'

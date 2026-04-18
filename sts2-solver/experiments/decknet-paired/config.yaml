@@ -29,3 +29,8 @@ checkpoints:
   save_every: 5
   keep_best: false
   cold_start: false
+concluded_gen: 30
+concluded_reason: "Closed Phase 0 \u2014 paired chosen+skip samples partially broke\
+  \ deck-size shortcut (corr +0.32 vs bootstrap's +0.88) but did not close gap to\
+  \ baseline. Peak 60% at gen 15-20, final 47% vs 67% untrained."
+concluded_at: '2026-04-18T19:31:27+00:00'

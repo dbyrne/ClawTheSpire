@@ -29,3 +29,8 @@ checkpoints:
   save_every: 5
   keep_best: false
   cold_start: false
+concluded_gen: 100
+concluded_reason: "Closed Phase 0 \u2014 compressed loser targets (3*ACT_FLOORS denominator)\
+  \ collapsed [-1,+1] range, model learned bigger-deck=worse shortcut (corr -0.53).\
+  \ Final eval 33% vs 67% untrained baseline. Root cause identified and fixed in decknet-normfix."
+concluded_at: '2026-04-18T19:31:18+00:00'
