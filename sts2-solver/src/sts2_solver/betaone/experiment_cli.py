@@ -951,6 +951,14 @@ def cmd_session(args):
             ["cmd", "/c", "start", "Claude: " + args.name, "cmd", "/k", batch],
             creationflags=_subprocess.CREATE_NEW_CONSOLE,
         )
+        # Also print the exact shell sequence as a fallback. Useful if the
+        # spawn doesn't visibly open a window (sandboxed tool contexts,
+        # remote SSH, etc.) — user can paste this into any terminal.
+        print()
+        print("If no terminal window appears, paste these into one manually:")
+        print(f"  cd /d {worktree_solver}")
+        print(f"  call .venv\\Scripts\\activate.bat")
+        print(f"  claude{claude_flags}")
     else:
         # macOS/Linux terminal spawning varies by environment. Print the
         # commands for copy-paste rather than trying to detect the right
