@@ -328,16 +328,11 @@ pub fn draw_cards(state: &mut CombatState, count: i32, rng: &mut impl Rng) {
         state.pending_draws += count;
         return;
     }
-    state.cards_drawn_this_turn += count;
-    // Corrosive Wave: each card drawn applies Poison to ALL enemies
-    let cw_amt = state.player.get_power("_corrosive_wave");
-    if cw_amt > 0 {
-        for i in 0..state.enemies.len() {
-            if state.enemies[i].is_alive() {
-                apply_power_single(&mut state.enemies[i], "Poison", cw_amt * count);
-            }
-        }
-    }
+    // Track ACTUAL cards drawn — capped by hand size and pile contents. Earlier
+    // versions counted the requested `count` upfront, inflating both
+    // cards_drawn_this_turn and Corrosive Wave's per-draw poison when draws
+    // truncated (hand near full, both piles emptied mid-draw, etc.).
+    let mut actual_drawn: i32 = 0;
     for _ in 0..count {
         if state.player.hand.len() >= MAX_HAND_SIZE {
             break;
@@ -346,19 +341,20 @@ pub fn draw_cards(state: &mut CombatState, count: i32, rng: &mut impl Rng) {
             // Shuffle discard into draw
             state.player.draw_pile.append(&mut state.player.discard_pile);
             shuffle_vec(&mut state.player.draw_pile, rng);
-            // Pendulum relic: draw extra card on shuffle
+            // Pendulum relic: draw extra card on shuffle (counts as a draw)
             if state.relics.contains("PENDULUM") && !state.player.draw_pile.is_empty()
                 && state.player.hand.len() < MAX_HAND_SIZE
             {
                 let extra = state.player.draw_pile.pop().unwrap();
                 state.player.hand.push(extra);
+                actual_drawn += 1;
             }
         }
         if state.player.hand.len() >= MAX_HAND_SIZE {
             break;
         }
         if let Some(card) = state.player.draw_pile.pop() {
-            // Hellraiser: auto-play Strikes when drawn
+            // Hellraiser: auto-play Strikes when drawn (still counts as a draw)
             if state.player.get_power("Hellraiser") > 0
                 && (card.tags.contains("Strike") || card.name.contains("Strike"))
             {
@@ -369,6 +365,20 @@ pub fn draw_cards(state: &mut CombatState, count: i32, rng: &mut impl Rng) {
                 state.player.discard_pile.push(card);
             } else {
                 state.player.hand.push(card);
+            }
+            actual_drawn += 1;
+        }
+        // If neither pile yields a card, the iteration is a no-op (don't
+        // increment actual_drawn).
+    }
+
+    state.cards_drawn_this_turn += actual_drawn;
+    // Corrosive Wave: poison-per-actual-draw, NOT per requested.
+    let cw_amt = state.player.get_power("_corrosive_wave");
+    if cw_amt > 0 && actual_drawn > 0 {
+        for i in 0..state.enemies.len() {
+            if state.enemies[i].is_alive() {
+                apply_power_single(&mut state.enemies[i], "Poison", cw_amt * actual_drawn);
             }
         }
     }
