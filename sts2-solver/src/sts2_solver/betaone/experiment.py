@@ -123,14 +123,20 @@ def _setup_worktree_venv(worktree_solver: Path) -> None:
         [str(venv_python), "-m", "pip", "install", "-e", "."],
         cwd=str(worktree_solver), check=True,
     )
-    # Install maturin + build the worktree's Rust wheel into this venv.
+    # Install maturin into the venv. Need --force-reinstall because maturin
+    # is already importable via --system-site-packages (system Python has it),
+    # and without --force-reinstall pip says "already satisfied" and skips —
+    # leaving no maturin.exe in the venv's Scripts/ and maturin's Python
+    # entry point fails with "Unable to find maturin script" when the
+    # binary wrapper isn't where it expects. --no-deps avoids pulling in
+    # maturin's own deps twice.
     subprocess.run(
-        [str(venv_python), "-m", "pip", "install", "maturin"],
+        [str(venv_python), "-m", "pip", "install",
+         "--force-reinstall", "--no-deps", "maturin"],
         check=True,
     )
     subprocess.run(
-        [str(venv_dir / ("Scripts/maturin.exe" if sys.platform == "win32" else "bin/maturin")),
-         "develop", "--release"],
+        [str(venv_python), "-m", "maturin", "develop", "--release"],
         cwd=str(worktree_solver / "sts2-engine"), check=True,
     )
 
