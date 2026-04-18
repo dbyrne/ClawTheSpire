@@ -121,7 +121,13 @@ fn raw_damage_to_enemy(state: &mut CombatState, enemy_idx: usize, damage: i32) {
     if enemy_idx >= state.enemies.len() || !state.enemies[enemy_idx].is_alive() {
         return;
     }
-    let dmg = apply_block_and_plating(&mut state.enemies[enemy_idx], damage);
+    // Intangible clamps incoming damage to 1 regardless of source (attack,
+    // potion, thorns, poison tick, etc.). Applied before block.
+    let mut dmg = damage;
+    if state.enemies[enemy_idx].get_power("Intangible") > 0 && dmg > 0 {
+        dmg = 1;
+    }
+    let dmg = apply_block_and_plating(&mut state.enemies[enemy_idx], dmg);
     state.enemies[enemy_idx].hp -= dmg;
     if !state.enemies[enemy_idx].is_alive() {
         on_enemy_death(state, enemy_idx, false);
@@ -717,6 +723,11 @@ fn enemy_attacks_player(state: &mut CombatState, enemy_idx: usize) {
         }
         if state.player.get_power("Tank") > 0 {
             raw *= 2;
+        }
+
+        // Intangible clamps incoming damage to 1 (before block).
+        if state.player.get_power("Intangible") > 0 && raw > 0 {
+            raw = 1;
         }
 
         raw = apply_block_player(&mut state.player, raw);

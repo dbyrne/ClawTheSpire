@@ -350,9 +350,9 @@ def bullet_time():   return lookup_card("BULLET_TIME")
 # Enemy shorthand
 # ---------------------------------------------------------------------------
 
-def enemy(hp, max_hp=None, intent="Attack", damage=10, hits=1, powers=None):
+def enemy(hp, max_hp=None, intent="Attack", damage=10, hits=1, powers=None, block=0):
     return {
-        "hp": hp, "max_hp": max_hp or hp, "block": 0,
+        "hp": hp, "max_hp": max_hp or hp, "block": block,
         "intent_type": intent, "intent_damage": damage, "intent_hits": hits,
         "powers": powers or {},
     }
@@ -582,18 +582,21 @@ def build_scenarios() -> list[Scenario]:
     ))
 
     scenarios.append(Scenario(
-        name="attack_skip_plated_armor_target",
+        name="attack_skip_plating_target",
         category="targeting",
-        description="Two enemies — one has Plated Armor 10 (absorbs Strike). Hit the other.",
+        description="Two enemies — one has Plating 10 (starts turn with 10 block). Hit the other.",
         player={"hp": 50, "max_hp": 70, "energy": 1, "block": 0},
-        enemies=[enemy(30, 30, damage=8, powers={"Plated Armor": 10}), enemy(30, 30, damage=8)],
+        enemies=[
+            enemy(30, 30, damage=8, powers={"Plating": 10}, block=10),
+            enemy(30, 30, damage=8),
+        ],
         hand=[strike()],
         actions=[
-            ActionSpec("play_card", strike(), target_idx=0, label="Strike Plated Armor (0 dmg through)"),
-            ActionSpec("play_card", strike(), target_idx=1, label="Strike non-PA (6 dmg)"),
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike Plating enemy (block absorbs)"),
+            ActionSpec("play_card", strike(), target_idx=1, label="Strike non-Plating (6 dmg)"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[1],       # 6 damage vs 0 (PA absorbs the 6)
+        best_actions=[1],       # 6 damage vs 0 HP (block absorbs)
     ))
 
     # ===== SYNERGY RECOGNITION =====

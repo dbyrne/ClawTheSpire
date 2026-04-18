@@ -169,9 +169,17 @@ pub fn deal_damage(state: &mut CombatState, target_idx: usize, base_damage: i32,
             state.enemies[target_idx].powers.insert("_skittish_triggered".to_string(), 1);
         }
 
-        per_hit = apply_block_and_plating(&mut state.enemies[target_idx], per_hit);
+        // Damage caps are applied BEFORE block — the cap is on raw incoming
+        // damage, then block absorbs whatever got past the cap. Intangible
+        // doesn't decrement per hit (it ticks at end of turn); Slippery and
+        // Hardened Shell do decrement/track per hit.
 
-        // Slippery: cap damage to 1 per hit
+        // Intangible: clamp incoming damage to 1 per hit
+        if state.enemies[target_idx].get_power("Intangible") > 0 && per_hit > 0 {
+            per_hit = 1;
+        }
+
+        // Slippery: cap damage to 1 per hit (consumes one stack)
         let slippery = state.enemies[target_idx].get_power("Slippery");
         if slippery > 0 && per_hit > 0 {
             per_hit = 1;
@@ -183,7 +191,7 @@ pub fn deal_damage(state: &mut CombatState, target_idx: usize, base_damage: i32,
             }
         }
 
-        // Hardened Shell: cap total HP loss per turn
+        // Hardened Shell: cap total HP loss per turn (tracked across hits)
         let shell = state.enemies[target_idx].get_power("Hardened Shell");
         if shell > 0 {
             let taken = state.enemies[target_idx].get_power("_shell_damage_taken");
@@ -193,6 +201,8 @@ pub fn deal_damage(state: &mut CombatState, target_idx: usize, base_damage: i32,
                 "_shell_damage_taken".to_string(), taken + per_hit,
             );
         }
+
+        per_hit = apply_block_and_plating(&mut state.enemies[target_idx], per_hit);
 
         state.enemies[target_idx].hp -= per_hit;
 
