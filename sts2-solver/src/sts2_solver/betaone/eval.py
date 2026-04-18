@@ -551,6 +551,51 @@ def build_scenarios() -> list[Scenario]:
         best_actions=[0],       # kill the low-HP one to remove its damage
     ))
 
+    scenarios.append(Scenario(
+        name="neutralize_skip_artifact_target",
+        category="targeting",
+        description="Neutralize applies Weak — pick the non-Artifact enemy so debuff lands",
+        player={"hp": 50, "max_hp": 70, "energy": 1, "block": 0},
+        enemies=[enemy(30, 30, damage=8, powers={"Artifact": 1}), enemy(30, 30, damage=8)],
+        hand=[neutralize()],
+        actions=[
+            ActionSpec("play_card", neutralize(), target_idx=0, label="Neutralize Artifact enemy (wasted Weak)"),
+            ActionSpec("play_card", neutralize(), target_idx=1, label="Neutralize non-Artifact enemy (Weak lands)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[1],       # Artifact eats the Weak on target 0
+    ))
+
+    scenarios.append(Scenario(
+        name="attack_skip_intangible_target",
+        category="targeting",
+        description="Two enemies — one Intangible (all dmg -> 1). Dagger Throw the other.",
+        player={"hp": 50, "max_hp": 70, "energy": 1, "block": 0},
+        enemies=[enemy(30, 30, damage=8, powers={"Intangible": 2}), enemy(30, 30, damage=8)],
+        hand=[dagger_throw()],
+        actions=[
+            ActionSpec("play_card", dagger_throw(), target_idx=0, label="Dagger Throw Intangible (1 dmg)"),
+            ActionSpec("play_card", dagger_throw(), target_idx=1, label="Dagger Throw non-Intangible (9 dmg)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[1],       # 9 damage vs 1 damage
+    ))
+
+    scenarios.append(Scenario(
+        name="attack_skip_plated_armor_target",
+        category="targeting",
+        description="Two enemies — one has Plated Armor 10 (absorbs Strike). Hit the other.",
+        player={"hp": 50, "max_hp": 70, "energy": 1, "block": 0},
+        enemies=[enemy(30, 30, damage=8, powers={"Plated Armor": 10}), enemy(30, 30, damage=8)],
+        hand=[strike()],
+        actions=[
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike Plated Armor (0 dmg through)"),
+            ActionSpec("play_card", strike(), target_idx=1, label="Strike non-PA (6 dmg)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[1],       # 6 damage vs 0 (PA absorbs the 6)
+    ))
+
     # ===== SYNERGY RECOGNITION =====
 
     scenarios.append(Scenario(
