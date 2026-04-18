@@ -357,43 +357,16 @@ class TestTierConfigCompleteness:
                         f"T{i} sampled {enc} not in custom_encounters {cfg.custom_encounters}"
                     )
 
-    def test_regression_and_review_handle_custom_deck(self):
-        """The regression check and review combats must handle custom_deck.
-        This catches the bug where custom_deck tiers fell through to
-        random deck generation."""
-        from sts2_solver.betaone.curriculum import TIER_CONFIGS
-
-        has_custom_deck = any(cfg.custom_deck is not None for cfg in TIER_CONFIGS)
-        if not has_custom_deck:
-            return  # no custom decks, nothing to check
-
-        from pathlib import Path
-        train_src = Path(__file__).parent.parent / "src" / "sts2_solver" / "betaone" / "train.py"
-        code = train_src.read_text()
-
-        assert "check_cfg.custom_deck" in code, (
-            "Regression check doesn't handle custom_deck — will use wrong deck"
-        )
-        assert "review_cfg.custom_deck" in code, (
-            "Review combats don't handle custom_deck — will use wrong deck"
-        )
-
-    def test_regression_and_review_handle_custom_hp(self):
-        """If any tier has non-default player_hp, the regression check and
-        review must use it."""
-        from sts2_solver.betaone.curriculum import TIER_CONFIGS
-
-        has_custom_hp = any(cfg.player_hp != 70 for cfg in TIER_CONFIGS)
-        if not has_custom_hp:
-            return
-
-        from pathlib import Path
-        train_src = Path(__file__).parent.parent / "src" / "sts2_solver" / "betaone" / "train.py"
-        code = train_src.read_text()
-
-        assert "check_cfg.player_hp" in code, (
-            "Regression check doesn't use tier-specific player_hp"
-        )
+    # NOTE: `test_regression_and_review_handle_custom_deck` and
+    # `test_regression_and_review_handle_custom_hp` were removed. They
+    # asserted that train.py's curriculum-regression/review code paths
+    # consumed TierConfig.custom_deck and .player_hp. Those code paths no
+    # longer exist — curriculum-tier training was replaced with encounter-
+    # set training (see experiment_cli's "legacy modes ... no longer
+    # supported" guard). The curriculum module survives as a library for
+    # generate_encounters.py's final-exam encounter set, and the
+    # library-level tests above (sample_deck, sample_encounters, etc.)
+    # still cover that.
 
     def test_all_code_paths_use_tier_config_not_hardcoded(self):
         """No hardcoded player_hp=70 should remain in rollout calls."""
