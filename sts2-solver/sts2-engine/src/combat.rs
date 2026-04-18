@@ -361,11 +361,8 @@ pub fn start_combat(state: &mut CombatState) {
         state.player.add_power("Thorns", 3);
     }
     if state.relics.contains("BAG_OF_MARBLES") {
-        for enemy in state.enemies.iter_mut() {
-            if enemy.is_alive() {
-                enemy.add_power("Vulnerable", 1);
-            }
-        }
+        // Vulnerable is a debuff — must respect Artifact.
+        crate::effects::apply_power_to_all_enemies(state, "Vulnerable", 1);
     }
     if state.relics.contains("FESTIVE_POPPER") {
         let indices = state.alive_enemy_indices();
@@ -795,8 +792,8 @@ pub fn tick_enemy_powers(state: &mut CombatState) {
         if territorial > 0 {
             state.enemies[i].add_power("Strength", territorial);
         }
-        // Debuff decay
-        for debuff in &["Vulnerable", "Weak"] {
+        // Debuff decay (and Intangible — single-turn defensive buff per STS rules).
+        for debuff in &["Vulnerable", "Weak", "Intangible"] {
             let val = state.enemies[i].get_power(debuff);
             if val > 0 {
                 let new_val = val - 1;
@@ -893,14 +890,10 @@ fn tick_start_of_turn_powers(state: &mut CombatState, rng: &mut impl Rng) {
         draw_cards(state, brutality, rng);
     }
 
-    // Noxious Fumes
+    // Noxious Fumes — Poison is a debuff, must respect Artifact.
     let fumes = state.player.get_power("Noxious Fumes");
     if fumes > 0 {
-        for enemy in state.enemies.iter_mut() {
-            if enemy.is_alive() {
-                enemy.add_power("Poison", fumes);
-            }
-        }
+        crate::effects::apply_power_to_all_enemies(state, "Poison", fumes);
     }
 
     // Infinite Blades
@@ -948,7 +941,12 @@ fn tick_start_of_turn_powers(state: &mut CombatState, rng: &mut impl Rng) {
 }
 
 fn tick_end_of_turn_powers(state: &mut CombatState) {
-    for debuff in &["Vulnerable", "Weak", "Frail", "Tangled"] {
+    // Player-side single-turn powers that decrement at end of turn.
+    // Intangible: STS rule = "this turn, all damage taken reduced to 1; -1 at end of turn".
+    //   Without this, a single Wraith Form play makes player permanently 1-damage-capped.
+    // Accelerant: STS rule = single-turn buff that doubles poison ticks; should expire.
+    //   Without this, one Accelerant play permanently 2x's all future poison damage.
+    for debuff in &["Vulnerable", "Weak", "Frail", "Tangled", "Intangible", "Accelerant"] {
         let val = state.player.get_power(debuff);
         if val > 0 {
             let new_val = val - 1;
