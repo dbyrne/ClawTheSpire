@@ -57,7 +57,9 @@ sts2-experiment fork <new> --from <src>       # forks off experiment/<src> into 
 sts2-experiment finalize <name> --gen N --reason "..."   # mark canonical conclusion (any dir)
 sts2-experiment ship <name>                   # sync finalized data (not code) to main's experiments/
                                               # merge code separately: git merge experiment/<name>
-sts2-experiment archive <name>                # git worktree remove; branch + history retained
+sts2-experiment archive <name> [--force]      # keep config/PLAN/benchmarks/history + concluded-gen .pt
+                                              # in experiments/_archive/<name>/; worktree removed
+                                              # (branch retained). Requires finalize unless --force.
 sts2-experiment unfinalize <name>             # clear concluded marker
 
 # Action commands (run from INSIDE the worktree's venv — cd ../sts2-<name>/sts2-solver first)
