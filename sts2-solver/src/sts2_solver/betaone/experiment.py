@@ -256,6 +256,54 @@ def _find_experiment_dir(name: str) -> Path:
     return EXPERIMENTS_DIR / name
 
 
+def _archive_keep_set(
+    source_dir: Path, prefix: str, concluded_gen: int | None
+) -> list[Path]:
+    """Allow-list of files to retain on archive (existing paths only).
+
+    Aggressive policy — keep the experiment's RECORD plus just the pinned
+    checkpoint. Specifically:
+      - config.yaml, PLAN.md, card_vocab.json
+      - {prefix}_history.jsonl, {prefix}_progress.json
+      - benchmarks/eval.jsonl, value_eval.jsonl, results.jsonl
+      - {prefix}_gen{concluded_gen}.pt, OR {prefix}_latest.pt if its recorded
+        gen matches concluded_gen (mirrors finalize()'s checkpoint-resolution)
+
+    Drops everything else (non-concluded gen-N .pts, .venv, onnx/, logs).
+    """
+    keep: list[Path] = []
+    for name in [
+        "config.yaml", "PLAN.md", "card_vocab.json",
+        f"{prefix}_history.jsonl", f"{prefix}_progress.json",
+    ]:
+        p = source_dir / name
+        if p.exists():
+            keep.append(p)
+    bench = source_dir / "benchmarks"
+    if bench.exists():
+        for name in ["eval.jsonl", "value_eval.jsonl", "results.jsonl"]:
+            p = bench / name
+            if p.exists():
+                keep.append(p)
+    if concluded_gen is not None:
+        gen_pt = source_dir / f"{prefix}_gen{concluded_gen}.pt"
+        if gen_pt.exists():
+            keep.append(gen_pt)
+        else:
+            latest_pt = source_dir / f"{prefix}_latest.pt"
+            if latest_pt.exists():
+                try:
+                    import torch
+                    ck = torch.load(
+                        str(latest_pt), map_location="cpu", weights_only=False
+                    )
+                    if ck.get("gen") == concluded_gen:
+                        keep.append(latest_pt)
+                except Exception:
+                    pass
+    return keep
+
+
 # MCTS knobs that behave as training hyperparameters. Kept here so TUI and any
 # other consumer can show the *effective* value for an experiment even when the
 # config omits a key (i.e. the code default is in effect). Update in this one
@@ -704,14 +752,72 @@ class Experiment:
             })
         return results
 
-    def archive(self) -> None:
-        """Move experiment to _archive/."""
-        archive_dir = EXPERIMENTS_DIR / "_archive"
-        archive_dir.mkdir(exist_ok=True)
-        dest = archive_dir / self.name
+    def archive(self, force: bool = False) -> dict:
+        """Archive the experiment: keep the record + concluded-gen .pt, drop the rest.
+
+        Writes the allow-list (see _archive_keep_set) to
+        experiments/_archive/<name>/ on main. For worktree experiments, runs
+        `git worktree remove --force` after copying — branch + commits stay
+        intact, so `git worktree add <path> experiment/<name>` restores it.
+        For legacy in-tree experiments, the source dir is deleted after
+        copying.
+
+        Requires concluded_gen to be set (run `finalize` first) unless
+        force=True. Archiving without a pinned gen keeps only the record
+        (config/PLAN/benchmarks/history/progress) — no checkpoint, since
+        there's no canonical one to retain.
+        """
+        cfg = self.config
+        if cfg.concluded_gen is None and not force:
+            raise ValueError(
+                f"'{self.name}' is not finalized. Finalize it first with "
+                f"`sts2-experiment finalize {self.name} --gen <N> --reason \"...\"`, "
+                "or pass --force to archive without a pinned gen."
+            )
+
+        archive_root = EXPERIMENTS_DIR / "_archive"
+        archive_root.mkdir(exist_ok=True)
+        dest = archive_root / self.name
         if dest.exists():
             raise FileExistsError(f"Archive destination exists: {dest}")
-        shutil.move(str(self.dir), str(dest))
+
+        keep_paths = _archive_keep_set(
+            self.dir, self._ckpt_prefix, cfg.concluded_gen
+        )
+        dest.mkdir(parents=True)
+        copied: list[str] = []
+        total_bytes = 0
+        for src in keep_paths:
+            rel = src.relative_to(self.dir)
+            dst = dest / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+            copied.append(str(rel).replace("\\", "/"))
+            total_bytes += src.stat().st_size
+
+        # Clean up source. Worktree detection: self.dir may have been resolved
+        # into a sibling worktree by _find_experiment_dir, so check whether it
+        # actually lives under the expected worktree path before invoking git.
+        worktree_path = _experiment_worktree_path(self.name)
+        is_worktree = (
+            worktree_path.exists()
+            and self.dir.resolve().is_relative_to(worktree_path.resolve())
+        )
+        if is_worktree:
+            _run_git(
+                ["worktree", "remove", "--force", str(worktree_path)],
+                cwd=REPO_ROOT,
+            )
+        else:
+            shutil.rmtree(str(self.dir))
+
+        return {
+            "dest": dest,
+            "kept": copied,
+            "kept_bytes": total_bytes,
+            "source_kind": "worktree" if is_worktree else "in-tree",
+            "branch_retained": is_worktree,
+        }
 
     def info(self) -> dict:
         """Return detailed info about this experiment.

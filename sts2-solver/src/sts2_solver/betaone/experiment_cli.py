@@ -846,39 +846,41 @@ def cmd_dashboard(args):
 
 
 def cmd_archive(args):
-    """Remove an experiment's worktree + venv but keep the branch.
+    """Archive an experiment.
 
-    Reclaims disk (the venv is ~300MB, checkpoints can be several GB).
-    The branch stays in git so the full history is recoverable — to pick
-    the experiment back up, `git worktree add <path> experiment/<name>`
-    and run venv setup again.
+    Keeps the record (config, PLAN, benchmarks, history, progress, vocab) plus
+    the concluded-gen checkpoint in experiments/_archive/<name>/ on main.
+    Drops non-concluded-gen checkpoints, .venv/, train.log, and onnx exports.
+
+    For worktree experiments, also removes the worktree (branch stays in git
+    so full history is recoverable via `git worktree add <path> experiment/<name>`).
+
+    Requires the experiment to be finalized unless --force is passed.
     """
-    import sys as _sys
-    from .experiment import _experiment_worktree_path, _experiment_branch, _run_git
+    from .experiment import _experiment_branch, _experiment_worktree_path
 
-    worktree_path = _experiment_worktree_path(args.name)
-    if not worktree_path.exists():
-        # Fall back to legacy in-tree archive (pre-worktree experiments).
-        exp = Experiment(args.name)
-        if not exp.exists:
-            print(f"Experiment '{args.name}' not found (no worktree, no in-tree dir).")
-            _sys.exit(1)
-        exp.archive()
-        print(f"Archived legacy in-tree experiment: {args.name}")
-        return
-
-    # Worktree-based archive: remove the worktree (and its venv inside).
-    # Git's `worktree remove` refuses if the worktree has uncommitted changes
-    # or locked state — force unless the user passed --keep-uncommitted.
-    from .experiment import REPO_ROOT
-    print(f"Removing worktree at {worktree_path}...")
+    exp = Experiment(args.name)
+    if not exp.exists:
+        print(f"Experiment '{args.name}' not found.")
+        sys.exit(1)
     try:
-        _run_git(["worktree", "remove", "--force", str(worktree_path)], cwd=REPO_ROOT)
-    except RuntimeError as e:
+        result = exp.archive(force=args.force)
+    except (ValueError, FileExistsError, RuntimeError) as e:
         print(f"Error: {e}")
-        _sys.exit(1)
-    print(f"Archived: worktree removed, branch {_experiment_branch(args.name)} retained.")
-    print(f"To restore: git worktree add {worktree_path} {_experiment_branch(args.name)}")
+        sys.exit(1)
+
+    mb = result["kept_bytes"] / (1024 * 1024)
+    print(f"Archived {args.name}: {len(result['kept'])} files kept ({mb:.1f} MB)")
+    print(f"  Dest: {result['dest']}")
+    for f in result["kept"]:
+        print(f"    {f}")
+    if result["source_kind"] == "worktree":
+        branch = _experiment_branch(args.name)
+        worktree = _experiment_worktree_path(args.name)
+        print(f"  Removed: worktree (branch '{branch}' retained)")
+        print(f"  To restore: git worktree add {worktree} {branch}")
+    else:
+        print(f"  Removed: in-tree dir")
 
 
 def cmd_finalize(args):
@@ -1192,6 +1194,10 @@ def main():
     # archive
     p = sub.add_parser("archive", help="Archive an experiment")
     p.add_argument("name", help="Experiment name")
+    p.add_argument(
+        "--force", action="store_true",
+        help="Archive without a pinned concluded_gen (no checkpoint retained)",
+    )
     p.set_defaults(func=cmd_archive)
 
     # finalize
