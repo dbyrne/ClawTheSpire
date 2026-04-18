@@ -184,6 +184,17 @@ def compute_mixed_policy_target(
 # Training step
 # ---------------------------------------------------------------------------
 
+def _shared_trunk_params(network: BetaOneNetwork) -> list[torch.nn.Parameter]:
+    """Params on the pure-shared backbone (both heads read via h, no side paths).
+    Excludes card_embed (dual-path via action_encoder would conflate signal)."""
+    return [
+        p
+        for m in (network.hand_proj, network.attn_q, network.attn_k,
+                  network.attn_v, network.trunk)
+        for p in m.parameters()
+    ]
+
+
 def train_batch(
     network: BetaOneNetwork,
     optimizer: torch.optim.Optimizer,
@@ -195,8 +206,15 @@ def train_batch(
     target_policies: torch.Tensor,
     target_values: torch.Tensor,
     value_coef: float = 1.0,
+    measure_grad_conflict: bool = False,
 ) -> dict[str, float]:
-    """Single training step: cross-entropy policy + MSE value."""
+    """Single training step: cross-entropy policy + MSE value.
+
+    If `measure_grad_conflict` is True, also compute cosine similarity between
+    policy-loss and value-loss gradients on the shared trunk, plus their
+    individual L2 norms. Adds 2 extra backward passes (~2-3x step cost when
+    enabled) — sample at a rate in the caller, don't enable per-step.
+    """
     logits, values = network(states, action_features, action_masks,
                              hand_card_ids, action_card_ids)
 
@@ -207,6 +225,23 @@ def train_batch(
     # Value loss: MSE against game outcome
     value_loss = F.mse_loss(values.squeeze(-1), target_values)
 
+    out = {
+        "policy_loss": policy_loss.item(),
+        "value_loss": value_loss.item(),
+    }
+
+    if measure_grad_conflict:
+        shared = _shared_trunk_params(network)
+        g_P = torch.autograd.grad(policy_loss, shared, retain_graph=True)
+        g_V = torch.autograd.grad(value_loss, shared, retain_graph=True)
+        g_P_flat = torch.cat([g.reshape(-1) for g in g_P])
+        g_V_flat = torch.cat([g.reshape(-1) for g in g_V])
+        out["grad_cos_pv"] = F.cosine_similarity(
+            g_P_flat.unsqueeze(0), g_V_flat.unsqueeze(0), dim=1
+        ).item()
+        out["grad_norm_p"] = g_P_flat.norm().item()
+        out["grad_norm_v"] = g_V_flat.norm().item()
+
     loss = policy_loss + value_coef * value_loss
 
     optimizer.zero_grad()
@@ -214,10 +249,7 @@ def train_batch(
     nn.utils.clip_grad_norm_(network.parameters(), 1.0)
     optimizer.step()
 
-    return {
-        "policy_loss": policy_loss.item(),
-        "value_loss": value_loss.item(),
-    }
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -247,6 +279,7 @@ def train(
     q_target_temp: float = 0.5,
     eval_every: int = 0,
     value_head_layers: int = 1,
+    grad_conflict_sample_every: int = 10,
 ):
     os.makedirs(output_dir, exist_ok=True)
     onnx_dir = os.path.join(output_dir, "onnx")
@@ -501,6 +534,9 @@ def train(
         total_ploss = 0.0
         total_vloss = 0.0
         n_updates = 0
+        grad_cos_samples: list[float] = []
+        grad_np_samples: list[float] = []
+        grad_nv_samples: list[float] = []
 
         buf_size = len(replay)
         updates_per_epoch = max(1, buf_size // batch_size)
@@ -514,15 +550,24 @@ def train(
                 # Reshape action features from flat to (B, MAX_ACTIONS, ACTION_DIM)
                 b_act_feat = b_act_feat.reshape(-1, MAX_ACTIONS, ACTION_DIM)
 
+                measure = (
+                    grad_conflict_sample_every > 0
+                    and n_updates % grad_conflict_sample_every == 0
+                )
                 metrics = train_batch(
                     network, optimizer,
                     b_states, b_act_feat, b_act_masks,
                     b_hand_ids, b_action_ids,
                     b_policies, b_values,
                     value_coef=value_coef,
+                    measure_grad_conflict=measure,
                 )
                 total_ploss += metrics["policy_loss"]
                 total_vloss += metrics["value_loss"]
+                if measure:
+                    grad_cos_samples.append(metrics["grad_cos_pv"])
+                    grad_np_samples.append(metrics["grad_norm_p"])
+                    grad_nv_samples.append(metrics["grad_norm_v"])
                 n_updates += 1
 
         n = max(n_updates, 1)
@@ -558,6 +603,16 @@ def train(
             "gen_time": round(elapsed, 2),
             "timestamp": time.time(),
         }
+        if grad_cos_samples:
+            import statistics
+            record["grad_cos_pv_mean"] = round(statistics.fmean(grad_cos_samples), 4)
+            record["grad_cos_pv_std"] = (
+                round(statistics.stdev(grad_cos_samples), 4)
+                if len(grad_cos_samples) > 1 else 0.0
+            )
+            record["grad_norm_p_mean"] = round(statistics.fmean(grad_np_samples), 4)
+            record["grad_norm_v_mean"] = round(statistics.fmean(grad_nv_samples), 4)
+            record["grad_conflict_samples"] = len(grad_cos_samples)
         with open(history_path, "a") as f:
             f.write(json.dumps(record) + "\n")
         with open(progress_path, "w") as f:

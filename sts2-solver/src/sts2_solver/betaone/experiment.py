@@ -484,6 +484,9 @@ class ExperimentConfig:
                 "q_target_temp": _float(mcts.get("q_target_temp"), 0.5),
                 "eval_every": mcts.get("eval_every", 0),
                 "value_head_layers": value_head_layers,
+                "grad_conflict_sample_every": mcts.get(
+                    "grad_conflict_sample_every", 10
+                ),
             }
         else:  # ppo
             ppo = t.get("ppo", {})
