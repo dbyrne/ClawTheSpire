@@ -2,11 +2,10 @@ name: pomcp-valuedepth-v1
 method: mcts_selfplay
 description: 'Value-head depth experiment. Cold-restart fork of pwfix1000 with value_head_layers=3
   (4-layer MLP, ~50K value-head params vs legacy 8K). All other config identical to
-  pwfix1000 (POMCP on, 1000 sims, c_puct=1.5, pw_k=1.0, mcts_bootstrap=true, turn_boundary_eval=true,
-  dense_value_targets=true). Tests whether compound/conditional/arithmetic failures
-  in value eval are a value-head capacity bottleneck. Baseline to beat: pwfix1000
-  @ 98/117 (future_value 19/22, arithmetic 15/24). Eval every 10 gens; kill if value
-  eval < 100/117 at gen 30.'
+  pwfix1000 (POMCP on, 1000 sims, c_puct=1.5, pw_k=1.0, mcts_bootstrap=true, turn_boundary_eval=true).
+  Tests whether compound/conditional/arithmetic failures in value eval are a value-head
+  capacity bottleneck. Baseline to beat: pwfix1000 @ 98/117 (future_value 19/22, arithmetic
+  15/24). Eval every 10 gens; kill if value eval < 100/117 at gen 30.'
 created: '2026-04-17T18:28:10+00:00'
 parent: mcts-bootstrap-pwfix1000
 parent_checkpoint: latest
@@ -40,8 +39,6 @@ training:
     train_epochs: 4
     value_coef: 1.0
     turn_boundary_eval: true
-    dense_value_targets: true
-    gamma: 0.99
     c_puct: 1.5
     pomcp: true
     mcts_bootstrap: true
@@ -53,3 +50,7 @@ checkpoints:
   save_every: 50
   keep_best: true
   cold_start: false
+concluded_gen: 30
+concluded_reason: handagg-seq-v1 gen 10 matched on targeted value-eval subsets; no
+  further gains
+concluded_at: '2026-04-18T12:27:41+00:00'

@@ -79,15 +79,28 @@ def compute_recorded_suite(
 
 
 def compute_eval_suite() -> dict:
-    """Compute an eval benchmark suite definition from current scenario set."""
-    from .eval import build_scenarios
-    scenarios = build_scenarios()
+    """Compute an eval benchmark suite definition from current scenario set.
 
-    # Build a stable hash from scenario names + categories + expected answers
-    sig_parts = []
-    for sc in scenarios:
-        sig_parts.append(f"{sc.category}/{sc.name}:{sorted(sc.best_actions)}")
-    sig = "\n".join(sorted(sig_parts))
+    Hashes BOTH policy-eval scenarios (build_scenarios) AND value-eval
+    comparisons (build_value_comparisons) so any change to either harness
+    bumps the suite_id. Previously only policy scenarios were hashed, which
+    let the value-eval set silently grow from 25 -> 121 items while the
+    suite_id stayed identical — rows tagged with that ID were NOT actually
+    apples-to-apples.
+    """
+    from .eval import build_scenarios, build_value_comparisons
+    scenarios = build_scenarios()
+    comparisons = build_value_comparisons()
+
+    policy_sig_parts = [
+        f"{sc.category}/{sc.name}:{sorted(sc.best_actions)}" for sc in scenarios
+    ]
+    value_sig_parts = [
+        f"{c.category}/{c.name}" for c in comparisons
+    ]
+    policy_sig = "\n".join(sorted(policy_sig_parts))
+    value_sig = "\n".join(sorted(value_sig_parts))
+    combined_sig = f"POLICY:\n{policy_sig}\nVALUE:\n{value_sig}"
 
     categories = sorted(set(sc.category for sc in scenarios))
 
@@ -95,7 +108,8 @@ def compute_eval_suite() -> dict:
         "name": "eval",
         "type": "eval",
         "scenario_count": len(scenarios),
-        "scenario_hash": _content_hash(sig),
+        "value_scenario_count": len(comparisons),
+        "scenario_hash": _content_hash(combined_sig),
         "categories": categories,
     }
 

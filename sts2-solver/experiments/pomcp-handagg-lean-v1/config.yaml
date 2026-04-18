@@ -1,0 +1,55 @@
+name: pomcp-handagg-lean-v1
+method: mcts_selfplay
+description: 'Hand-agg lean ablation: zero total_cards_draw + total_energy_gain (dims
+  2, 3 of hand_agg) while keeping the 174-dim architecture. Tests hypothesis that
+  these two aggregates are lossy signals for conditional-draw and conditional-energy
+  cards (Prepared, Calculated Gamble, Tools of the Trade, Adrenaline) that hurt draw/draw_cycle
+  P-Eval while helping V-Eval arithmetic. Cold-start 30 gens matching handagg-seq-v1
+  config (1000 sims, value_head_layers=3, POMCP+pwfix+qtarget). Target: recover draw
+  P-Eval 0/4 -> 2+/4 and draw_cycle 1/5 -> 3+/5 without regressing V-Eval below 85%.'
+created: '2026-04-18T13:21:09+00:00'
+parent: pomcp-handagg-seq-v1
+parent_checkpoint: latest
+network_type: betaone
+architecture:
+  arch_version: 2
+  base_state_dim: 142
+  hidden_dim: 128
+  action_hidden: 64
+  hand_proj_dim: 32
+  card_embed_dim: 16
+  card_stats_dim: 28
+  relic_dim: 26
+  hand_agg_dim: 5
+  action_dim: 35
+  max_hand: 10
+  max_actions: 30
+  value_head_layers: 3
+  num_cards: 578
+  total_params: 138941
+  state_dim: 432
+  trunk_input: 174
+  hand_agg_lean: true
+training:
+  generations: 30
+  combats_per_gen: 256
+  lr: 0.0003
+  batch_size: 512
+  mcts:
+    num_sims: 1000
+    temperature: 1.0
+    replay_capacity: 50000
+    train_epochs: 4
+    value_coef: 1.0
+    c_puct: 1.5
+    pomcp: true
+    mcts_bootstrap: true
+    turn_boundary_eval: true
+    eval_every: 10
+data:
+  mode: encounter_set
+  encounter_set: lean-decks-v1
+checkpoints:
+  save_every: 10
+  keep_best: true
+  cold_start: true

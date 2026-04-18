@@ -429,3 +429,20 @@ pub fn betaone_mcts_search(
     dict.set_item("root_value", root_value)?;
     Ok(dict.into())
 }
+
+// ---------------------------------------------------------------------------
+// Encoding parity FFI: expose Rust's BetaOne encode_state to Python so
+// tests can byte-diff Python's encoder against Rust's. Without this, the
+// Python eval and Rust self-play could silently encode states differently
+// and we'd never notice until the model behaves badly.
+// ---------------------------------------------------------------------------
+
+/// Encode a CombatState (provided as JSON) using the Rust BetaOne encoder.
+/// Returns the flat STATE_DIM f32 vector. Used for Python↔Rust parity tests.
+#[pyfunction]
+pub fn betaone_encode_state(state_json: &str) -> PyResult<Vec<f32>> {
+    let state: CombatState = serde_json::from_str(state_json)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("state: {e}")))?;
+    let v = super::encode::encode_state(&state);
+    Ok(v.to_vec())
+}

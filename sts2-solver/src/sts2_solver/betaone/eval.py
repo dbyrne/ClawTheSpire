@@ -19,7 +19,7 @@ from pathlib import Path
 import torch
 
 from .deck_gen import lookup_card
-from .network import BetaOneNetwork, STATE_DIM, ACTION_DIM, MAX_ACTIONS, MAX_HAND, CARD_STATS_DIM, CARD_EMBED_DIM
+from .network import BetaOneNetwork, STATE_DIM, ACTION_DIM, MAX_ACTIONS, MAX_HAND, CARD_STATS_DIM, CARD_EMBED_DIM, HAND_AGG_DIM
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +126,7 @@ def encode_state(scenario: "Scenario") -> list[float]:
         pending_choice=scenario.pending_choice is not None,
     ))
     v.extend(encode_relics(scenario.relics))
+    v.extend(encode_hand_aggregates(scenario.hand))
     # Individual hand cards (MAX_HAND × CARD_STATS_DIM) + hand mask (MAX_HAND)
     hand_cards = [0.0] * (MAX_HAND * CARD_STATS_DIM)
     hand_mask = [0.0] * MAX_HAND
@@ -138,6 +139,41 @@ def encode_state(scenario: "Scenario") -> list[float]:
     v.extend(hand_cards)
     v.extend(hand_mask)
     assert len(v) == STATE_DIM, f"State dim {len(v)} != {STATE_DIM}"
+    return v
+
+
+def encode_hand_aggregates(hand: list[dict] | None) -> list[float]:
+    """Hand-aggregate features → HAND_AGG_DIM floats (mirrors Rust encode_hand_aggregates).
+
+    Order: total_damage, total_block, total_cards_draw, total_energy_gain, count_powers.
+
+    STS2_HAND_AGG_LEAN=1 zeros dims 2 (total_cards_draw) and 3
+    (total_energy_gain) — the handagg-lean experiment's ablation. Rust
+    encoder mirrors this check; both must agree for parity tests to pass.
+    """
+    v = [0.0] * HAND_AGG_DIM
+    if not hand:
+        return v
+    total_damage = 0
+    total_block = 0
+    total_draws = 0
+    total_energy_gain = 0
+    count_powers = 0
+    for c in hand[:MAX_HAND]:
+        dmg = c.get("damage") or 0
+        hits = c.get("hit_count", 1) or 1
+        total_damage += dmg * max(hits, 1)
+        total_block += c.get("block") or 0
+        total_draws += c.get("cards_draw", 0) or 0
+        total_energy_gain += c.get("energy_gain", 0) or 0
+        if c.get("card_type") == "Power":
+            count_powers += 1
+    lean = os.environ.get("STS2_HAND_AGG_LEAN") == "1"
+    v[0] = total_damage / 50.0
+    v[1] = total_block / 50.0
+    v[2] = 0.0 if lean else total_draws / 10.0
+    v[3] = 0.0 if lean else total_energy_gain / 3.0
+    v[4] = count_powers / 5.0
     return v
 
 
@@ -1773,6 +1809,81 @@ def _card_id_lookup(card: dict, vocab: dict[str, int]) -> int:
     return vocab.get(base_id, 1)  # 1 = UNK
 
 
+def _warm_load_state_dict(net: "BetaOneNetwork", raw_old_state: dict) -> None:
+    """Load an older-arch checkpoint into the current network.
+
+    The current arch drift we handle: base_state_dim grew from 137 to 142
+    (hand_agg inserted at pos 137 on the trunk-input concat). A naive
+    slice-copy of trunk.1.weight shifts the hand_pooled weights by 5
+    columns and produces a near-random network — we detect this exact
+    shape jump and remap weights around the insertion point. Other
+    dim-mismatches fall back to the generic "append-at-end" warm-start.
+
+    Note: there is NO key rename layer. A past refactor briefly renamed
+    trunk.* to input_norm/trunk_in/trunk_blocks.*, but that was reverted.
+    Both old and current checkpoints use the same nn.Sequential key names
+    (card_embed, hand_proj, attn_q/k/v, trunk.0/1/3, value_head.*, ...).
+    """
+    import torch.nn as nn
+    from .network import BASE_STATE_DIM, HAND_PROJ_DIM, HAND_AGG_DIM
+
+    old_state = raw_old_state
+    new_state = net.state_dict()
+
+    OLD_TRUNK_IN = BASE_STATE_DIM + HAND_PROJ_DIM - HAND_AGG_DIM  # 169
+    NEW_TRUNK_IN = BASE_STATE_DIM + HAND_PROJ_DIM                 # 174
+    INSERT_AT = BASE_STATE_DIM - HAND_AGG_DIM                     # 137
+
+    def _hand_agg_insert_remap(old_t, new_t, axis, key):
+        # Zero / identity init on the new tensor first.
+        if new_t.dim() == 2:
+            new_t.zero_()
+        elif new_t.dim() == 1:
+            new_t.fill_(1.0) if "weight" in key else new_t.zero_()
+        # Leading slice: old[..., :INSERT_AT] -> new[..., :INSERT_AT]
+        lead = tuple(slice(0, INSERT_AT) if i == axis else slice(None)
+                     for i in range(old_t.dim()))
+        new_t[lead] = old_t[lead]
+        # Trailing slice: old[..., INSERT_AT:] -> new[..., INSERT_AT+HAND_AGG_DIM:]
+        tail_old = tuple(slice(INSERT_AT, old_t.shape[axis]) if i == axis
+                         else slice(None) for i in range(old_t.dim()))
+        tail_new = tuple(slice(INSERT_AT + HAND_AGG_DIM,
+                               INSERT_AT + HAND_AGG_DIM
+                               + (old_t.shape[axis] - INSERT_AT))
+                         if i == axis else slice(None)
+                         for i in range(old_t.dim()))
+        new_t[tail_new] = old_t[tail_old]
+
+    for key in new_state:
+        if key not in old_state:
+            if "trunk" in key and "weight" in key and new_state[key].dim() == 2:
+                nn.init.eye_(new_state[key])
+            continue
+        if old_state[key].shape == new_state[key].shape:
+            new_state[key] = old_state[key]
+            continue
+        if (old_state[key].dim() == new_state[key].dim()
+                and all(o <= n for o, n in zip(old_state[key].shape, new_state[key].shape))):
+            old_t = old_state[key]
+            new_t = new_state[key].clone()
+            diffs = [i for i, (o, n) in enumerate(zip(old_t.shape, new_t.shape)) if o != n]
+            if (len(diffs) == 1
+                    and old_t.shape[diffs[0]] == OLD_TRUNK_IN
+                    and new_t.shape[diffs[0]] == NEW_TRUNK_IN):
+                _hand_agg_insert_remap(old_t, new_t, diffs[0], key)
+            else:
+                # Generic append-at-end warm-start (correct only if new dims
+                # were appended, not inserted).
+                if new_t.dim() == 1:
+                    new_t = torch.ones_like(new_t) if "weight" in key else torch.zeros_like(new_t)
+                elif new_t.dim() == 2:
+                    new_t = torch.zeros_like(new_t)
+                slices = tuple(slice(0, o) for o in old_t.shape)
+                new_t[slices] = old_t
+            new_state[key] = new_t
+    net.load_state_dict(new_state)
+
+
 def run_eval(checkpoint_path: str | None = None) -> dict:
     """Run all eval scenarios against the network. Returns results dict."""
     from .network import network_kwargs_from_meta
@@ -1786,40 +1897,20 @@ def run_eval(checkpoint_path: str | None = None) -> dict:
     if checkpoint_path and os.path.exists(checkpoint_path):
         ckpt = torch.load(checkpoint_path, weights_only=False)
         net_kwargs = network_kwargs_from_meta(ckpt.get("arch_meta"))
+        # Restore encoder ablation from the checkpoint so eval matches how
+        # the model was trained. Checkpoint arch_meta is authoritative here;
+        # don't trust any pre-existing env var from a prior run.
+        lean = bool((ckpt.get("arch_meta") or {}).get("hand_agg_lean", False))
+        if lean:
+            os.environ["STS2_HAND_AGG_LEAN"] = "1"
+        else:
+            os.environ.pop("STS2_HAND_AGG_LEAN", None)
     net = BetaOneNetwork(num_cards=num_cards, **net_kwargs)
     if checkpoint_path and os.path.exists(checkpoint_path):
         try:
             net.load_state_dict(ckpt["model_state_dict"])
         except RuntimeError:
-            # Dimension-aware warm-start for older checkpoints
-            import torch.nn as nn
-            # Remap old Sequential trunk keys → new residual trunk keys
-            _WARM_KEY_MAP = {
-                "trunk.0.weight": "input_norm.weight",
-                "trunk.0.bias":   "input_norm.bias",
-                "trunk.1.weight": "trunk_in.weight",
-                "trunk.1.bias":   "trunk_in.bias",
-                "trunk.3.weight": "trunk_blocks.0.linear1.weight",
-                "trunk.3.bias":   "trunk_blocks.0.linear1.bias",
-                "trunk.5.weight": "trunk_blocks.0.linear2.weight",
-                "trunk.5.bias":   "trunk_blocks.0.linear2.bias",
-            }
-            old_state = {_WARM_KEY_MAP.get(k, k): v for k, v in ckpt["model_state_dict"].items()}
-            new_state = net.state_dict()
-            for key in new_state:
-                if key not in old_state:
-                    if "trunk" in key and "weight" in key and new_state[key].dim() == 2:
-                        nn.init.eye_(new_state[key])
-                elif old_state[key].shape == new_state[key].shape:
-                    new_state[key] = old_state[key]
-                elif old_state[key].dim() == new_state[key].dim() and all(
-                    o <= n for o, n in zip(old_state[key].shape, new_state[key].shape)
-                ):
-                    if new_state[key].dim() == 1:
-                        new_state[key] = torch.ones_like(new_state[key]) if "weight" in key else torch.zeros_like(new_state[key])
-                    slices = tuple(slice(0, o) for o in old_state[key].shape)
-                    new_state[key][slices] = old_state[key]
-            net.load_state_dict(new_state)
+            _warm_load_state_dict(net, ckpt["model_state_dict"])
             print("(warm-started from older checkpoint)")
         gen = ckpt.get("gen", "?")
         print(f"Loaded checkpoint: gen {gen}")
@@ -2220,22 +2311,19 @@ def run_value_eval(checkpoint_path: str) -> dict:
 
     ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
     kwargs = network_kwargs_from_meta(ckpt.get("arch_meta"))
+    # Mirror run_eval: restore hand_agg_lean from arch_meta so the encoder
+    # matches the model's training-time encoding.
+    lean = bool((ckpt.get("arch_meta") or {}).get("hand_agg_lean", False))
+    if lean:
+        os.environ["STS2_HAND_AGG_LEAN"] = "1"
+    else:
+        os.environ.pop("STS2_HAND_AGG_LEAN", None)
     net = BetaOneNetwork(num_cards=len(card_vocab), **kwargs)
     if "model_state_dict" in ckpt:
         try:
             net.load_state_dict(ckpt["model_state_dict"])
         except RuntimeError:
-            new_state = net.state_dict()
-            old_state = ckpt["model_state_dict"]
-            for key in old_state:
-                if key in new_state and old_state[key].shape == new_state[key].shape:
-                    new_state[key] = old_state[key]
-                elif key in new_state:
-                    if new_state[key].dim() == 1:
-                        new_state[key] = torch.ones_like(new_state[key]) if "weight" in key else torch.zeros_like(new_state[key])
-                    slices = tuple(slice(0, o) for o in old_state[key].shape)
-                    new_state[key][slices] = old_state[key]
-            net.load_state_dict(new_state)
+            _warm_load_state_dict(net, ckpt["model_state_dict"])
         gen = ckpt.get("gen", "?")
     else:
         gen = 0

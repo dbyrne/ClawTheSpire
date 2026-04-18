@@ -41,9 +41,19 @@ def _load_checkpoint(path: str) -> tuple[BetaOneNetwork, dict]:
     # Peek at arch_meta first so we construct a network matching the
     # checkpoint's architecture (value_head_layers may differ between
     # experiments now that depth is tunable).
+    import os
     import torch
     ckpt_peek = torch.load(path, map_location="cpu", weights_only=False)
-    kwargs = network_kwargs_from_meta(ckpt_peek.get("arch_meta"))
+    meta = ckpt_peek.get("arch_meta") or {}
+    kwargs = network_kwargs_from_meta(meta)
+    # Restore encoder ablation from arch_meta so the Rust self-play (invoked
+    # by _eval_batch below) produces state encoded the same way the model
+    # was trained. Without this, a handagg-lean checkpoint would be fed
+    # non-lean encoder state and benchmark scores would be junk.
+    if meta.get("hand_agg_lean"):
+        os.environ["STS2_HAND_AGG_LEAN"] = "1"
+    else:
+        os.environ.pop("STS2_HAND_AGG_LEAN", None)
     net = BetaOneNetwork(num_cards=len(card_vocab), **kwargs)
     ckpt = load_checkpoint(path, network=net, strict=False)
     net.eval()
@@ -59,7 +69,6 @@ def _eval_batch(
     pomcp: bool = False,
     turn_boundary_eval: bool = False,
     pw_k: float = 1.0,
-    batch_size_mcts: int = 1,
 ) -> int:
     """Run a batch of combats at a single HP level. Returns win count."""
     if use_mcts:
@@ -79,7 +88,6 @@ def _eval_batch(
             pomcp=pomcp,
             turn_boundary_eval=turn_boundary_eval,
             pw_k=pw_k,
-            batch_size=batch_size_mcts,
         )
     else:
         r = sts2_engine.collect_betaone_rollouts(
@@ -108,7 +116,6 @@ def benchmark_checkpoint(
     pomcp: bool = False,
     turn_boundary_eval: bool = False,
     pw_k: float = 1.0,
-    batch_size_mcts: int = 1,
 ) -> list[dict]:
     """Benchmark a checkpoint against an encounter set.
 
@@ -176,7 +183,6 @@ def benchmark_checkpoint(
                 batch_enc, batch_dks, hp, batch_seeds, use_mcts, num_sims,
                 c_puct=c_puct, pomcp=pomcp,
                 turn_boundary_eval=turn_boundary_eval, pw_k=pw_k,
-                batch_size_mcts=batch_size_mcts,
             )
             wins += batch_wins
             n_games += len(batch_enc)
@@ -209,7 +215,6 @@ def benchmark_checkpoint(
             "c_puct": c_puct if use_mcts else None,
             "pomcp": pomcp if use_mcts else None,
             "turn_boundary_eval": turn_boundary_eval if use_mcts else None,
-            "batch_size_mcts": batch_size_mcts if use_mcts else None,
             "elapsed": round(elapsed, 1),
         })
 

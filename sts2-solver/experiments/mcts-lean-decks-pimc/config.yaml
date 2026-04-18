@@ -35,8 +35,6 @@ training:
     train_epochs: 4
     value_coef: 1.0
     turn_boundary_eval: true
-    dense_value_targets: true
-    gamma: 0.99
     c_puct: 1.5
     determinizations: 4
 data:

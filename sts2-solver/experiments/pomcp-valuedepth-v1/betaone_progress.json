@@ -1,16 +1,16 @@
 {
-  "gen": 25,
-  "win_rate": 0.7227,
-  "avg_hp": 11.7,
-  "steps": 6549,
-  "buffer_size": 45847,
+  "gen": 45,
+  "win_rate": 0.6953,
+  "avg_hp": 10.9,
+  "steps": 6941,
+  "buffer_size": 46305,
   "episodes": 256,
   "encounter_set": "lean-decks-v1",
-  "policy_loss": 1.23785,
-  "value_loss": 0.05054,
+  "policy_loss": 1.24425,
+  "value_loss": 0.03569,
   "num_sims": 1000,
-  "gen_time": 426.61,
-  "timestamp": 1776458749.4085066,
+  "gen_time": 541.28,
+  "timestamp": 1776467894.1389816,
   "num_generations": 100,
-  "best_win_rate": 0.7539
+  "best_win_rate": 0.7734
 }

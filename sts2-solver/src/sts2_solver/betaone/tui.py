@@ -94,10 +94,51 @@ def _collect_experiments() -> list[dict]:
     if not EXPERIMENTS_DIR.exists():
         return []
 
-    dirs = [
-        d for d in sorted(EXPERIMENTS_DIR.iterdir(), key=lambda p: p.stat().st_mtime)
+    import yaml as _yaml
+    def _is_concluded(d: Path) -> bool:
+        try:
+            with open(d / "config.yaml", encoding="utf-8") as f:
+                return _yaml.safe_load(f).get("concluded_gen") is not None
+        except Exception:
+            return False
+
+    def _is_live(d: Path) -> bool:
+        """Live = running or stalled (progress timestamp < 10 min old)."""
+        cfg_path = d / "config.yaml"
+        try:
+            with open(cfg_path, encoding="utf-8") as f:
+                net_type = _yaml.safe_load(f).get("network_type", "betaone")
+        except Exception:
+            return False
+        prog_name = ("decknet_progress.json" if net_type == "decknet"
+                     else "betaone_progress.json")
+        prog = _load_json(d / prog_name)
+        if not prog:
+            return False
+        return (time.time() - prog.get("timestamp", 0)) < 600
+
+    all_dirs = [
+        d for d in EXPERIMENTS_DIR.iterdir()
         if not d.name.startswith("_") and d.is_dir() and (d / "config.yaml").exists()
-    ][-MAX_EXPERIMENTS:]
+    ]
+    # Three-tier render order (top -> bottom):
+    #   1. stopped  (inactive, fills remaining slots with most-recent-first)
+    #   2. done     (finalized reference; always shown)
+    #   3. live     (running or stalled in last 10 min; always shown at bottom)
+    # Rationale: the rows you most want visible while monitoring are the ones
+    # actively producing data. Scrolling's natural eye-landing is the bottom
+    # row, so the live ones go there. Done experiments sit above as frozen
+    # reference; stopped experiments fill the rest if there's room.
+    live = sorted((d for d in all_dirs if _is_live(d) and not _is_concluded(d)),
+                  key=lambda p: p.stat().st_mtime)
+    done = sorted((d for d in all_dirs if _is_concluded(d)),
+                  key=lambda p: p.stat().st_mtime)
+    stopped = sorted((d for d in all_dirs
+                      if not _is_live(d) and not _is_concluded(d)),
+                     key=lambda p: p.stat().st_mtime)
+    # Always include all live and all done; fill remaining with most-recent stopped.
+    remaining = max(MAX_EXPERIMENTS - len(live) - len(done), 0)
+    dirs = stopped[-remaining:] + done + live
 
     experiments = []
     for d in dirs:
@@ -110,9 +151,24 @@ def _collect_experiments() -> list[dict]:
         hist_name = "decknet_history.jsonl" if net_type == "decknet" else "betaone_history.jsonl"
         progress = _load_json(d / prog_name)
         history = _load_jsonl_all(d / hist_name, tail=60)
-        eval_result = _load_jsonl_last(d / "benchmarks" / "eval.jsonl")
-        eval_history = _load_jsonl_all(d / "benchmarks" / "eval.jsonl", tail=60)
-        value_eval_history = _load_jsonl_all(d / "benchmarks" / "value_eval.jsonl", tail=60)
+        eval_all = _load_jsonl_all(d / "benchmarks" / "eval.jsonl", tail=200)
+        value_eval_all = _load_jsonl_all(d / "benchmarks" / "value_eval.jsonl", tail=200)
+
+        concluded_gen = config.get("concluded_gen")
+        if concluded_gen is not None:
+            # Pin the surfaced eval to the concluded gen so finalized
+            # experiments report their canonical scores, not whatever happened
+            # to be the latest eval run.
+            pinned = [r for r in eval_all if r.get("gen") == concluded_gen]
+            eval_result = pinned[-1] if pinned else None
+            pinned_v = [r for r in value_eval_all if r.get("gen") == concluded_gen]
+            value_eval_result = pinned_v[-1] if pinned_v else None
+        else:
+            eval_result = eval_all[-1] if eval_all else None
+            value_eval_result = value_eval_all[-1] if value_eval_all else None
+
+        eval_history = eval_all[-60:]
+        value_eval_history = value_eval_all[-60:]
         benchmarks = _load_jsonl_all(d / "benchmarks" / "results.jsonl", tail=10)
 
         experiments.append({
@@ -127,9 +183,11 @@ def _collect_experiments() -> list[dict]:
             "progress": progress,
             "history": history,
             "eval": eval_result,
+            "value_eval": value_eval_result,
             "eval_history": eval_history,
             "value_eval_history": value_eval_history,
             "benchmarks": benchmarks,
+            "concluded_gen": concluded_gen,
             "dir": d,
         })
 
@@ -209,20 +267,28 @@ def build_dashboard(experiments: list[dict]) -> Group:
         overview.add_column("Gen", justify="right", max_width=7)
         overview.add_column("Train WR", justify="right", max_width=8)
         overview.add_column("Best", justify="right", max_width=7)
-        overview.add_column("Eval", justify="right", max_width=7)
+        overview.add_column("P-Eval", justify="right", max_width=7)
+        overview.add_column("V-Eval", justify="right", max_width=7)
+        overview.add_column("Suite", justify="right", max_width=9)
         overview.add_column("ET Avg", justify="right", max_width=7)
         overview.add_column("Buffer", justify="right", max_width=10)
         overview.add_column("C", justify="right", max_width=4)
         overview.add_column("Noise", justify="right", max_width=5)
-        overview.add_column("K", justify="right", max_width=4)
         overview.add_column("Encounter Set", max_width=18)
 
         for exp in betaone_exps:
             p = exp["progress"]
             ev = exp["eval"]
+            vev = exp.get("value_eval")
             arch = exp["arch"]
+            concluded = exp.get("concluded_gen")
 
-            if p:
+            if concluded is not None:
+                status = Text("done", style="bold cyan")
+                gen_str = f"{concluded}*"
+                wr = "-"
+                best = "-"
+            elif p:
                 age = time.time() - p.get("timestamp", 0)
                 status = _status_text(age)
                 gen = str(p.get("gen", 0))
@@ -240,6 +306,19 @@ def build_dashboard(experiments: list[dict]) -> Group:
             params_str = f"{params//1000}K" if isinstance(params, int) else "-"
 
             eval_str = f"{ev['score']:.0%}" if ev and "score" in ev else "-"
+            vev_str = f"{vev['score']:.0%}" if vev and "score" in vev else "-"
+            # Suite signature = "<P-total>/<V-total>" (scenario counts).
+            # Same signature across rows means the P-Eval and V-Eval scores
+            # were computed against the same number of scenarios — a direct,
+            # readable apples-to-apples check. The stored suite_id hash
+            # historically only covered policy scenarios, so it could match
+            # while V-Eval silently drifted; showing raw totals exposes that.
+            p_total = ev.get("total") if ev else None
+            v_total = vev.get("total") if vev else None
+            if p_total or v_total:
+                suite_str = f"{p_total or '-'}/{v_total or '-'}"
+            else:
+                suite_str = "-"
             et_str = f"{ev['end_turn_avg']:.0%}" if ev and ev.get("end_turn_avg") else "-"
 
             ts = exp["data"].get("encounter_set") or exp["data"].get("training_set", "")
@@ -250,7 +329,6 @@ def build_dashboard(experiments: list[dict]) -> Group:
                 buf_str = "-"
                 cpuct_str = "-"
                 noise_str = "-"
-                batch_str = "-"
             else:
                 mcts = exp.get("training", {}).get("mcts", {})
                 sims = mcts.get("num_sims", "?")
@@ -267,16 +345,17 @@ def build_dashboard(experiments: list[dict]) -> Group:
                     buf_str = "-"
                 cpuct_str = f"{mcts.get('c_puct', MCTS_DEFAULTS['c_puct'])}"
                 noise_str = f"{mcts.get('noise_frac', MCTS_DEFAULTS['noise_frac'])}"
-                # Batched MCTS K (1 = sequential). Shown so batched vs
-                # sequential experiments are visually distinguishable.
-                bsz = mcts.get("batch_size_mcts", 1)
-                batch_str = str(bsz) if bsz and bsz > 1 else "1"
 
             color = exp_color_map.get(exp["name"], "white")
             name_text = Text(exp["name"], style=color)
+            # Finalized rows render dim so active experiments visually dominate;
+            # the pinned scores are still legible, just deprioritized.
+            row_style = "dim" if concluded is not None else None
             overview.add_row(name_text, method, params_str, status,
-                             gen_str, wr, best, eval_str, et_str, buf_str,
-                             cpuct_str, noise_str, batch_str, ts_str)
+                             gen_str, wr, best, eval_str, vev_str, suite_str,
+                             et_str, buf_str,
+                             cpuct_str, noise_str, ts_str,
+                             style=row_style)
 
         left_parts.append(overview)
 
@@ -351,7 +430,6 @@ def build_dashboard(experiments: list[dict]) -> Group:
                 "suite": suite_short,
                 "mode": b.get("mode", "?"),
                 "sims": b.get("mcts_sims", 0),
-                "batch": b.get("batch_size_mcts") or 1,
                 "wr": b.get("win_rate", 0),
                 "ci_lo": b.get("ci95_lo", 0),
                 "ci_hi": b.get("ci95_hi", 0),
@@ -367,12 +445,12 @@ def build_dashboard(experiments: list[dict]) -> Group:
         bench_table.add_column("95% CI", justify="right", max_width=16)
         bench_table.add_column("N", justify="right", max_width=6)
 
-        # Deduplicate: keep most recent per (experiment, suite, mode, sims, batch).
-        # Include sims + batch so sweeps don't collapse onto each other —
+        # Deduplicate: keep most recent per (experiment, suite, mode, sims).
+        # Include sims so sweeps don't collapse onto each other —
         # results.jsonl keys the same way on save.
         seen = {}
         for row in reversed(bench_rows):
-            key = (row["name"], row["suite"], row["mode"], row["sims"], row["batch"])
+            key = (row["name"], row["suite"], row["mode"], row["sims"])
             if key not in seen:
                 seen[key] = row
 
@@ -383,8 +461,6 @@ def build_dashboard(experiments: list[dict]) -> Group:
         prev_suite = None
         for row in sorted_rows:
             mode_str = f"{row['mode']}" + (f"-{row['sims']}" if row['sims'] > 0 else "")
-            if row["batch"] and row["batch"] > 1:
-                mode_str += f"/K{row['batch']}"
             ci = f"[{row['ci_lo']:.1%}, {row['ci_hi']:.1%}]"
             # Visual separator between suites
             suite_display = row["suite"] if row["suite"] != prev_suite else ""

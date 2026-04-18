@@ -13,16 +13,40 @@ from sts2_solver.betaone.eval import (
     encode_player,
     encode_enemy,
     encode_context,
+    encode_hand_aggregates,
+    encode_state,
+    Scenario,
+    ActionSpec,
     _TARGET_OFFSET,
     _FLAG_END_TURN,
     _FLAG_USE_POTION,
 )
-from sts2_solver.betaone.network import STATE_DIM, ACTION_DIM, MAX_ACTIONS
+from sts2_solver.betaone.network import (
+    STATE_DIM,
+    BASE_STATE_DIM,
+    ACTION_DIM,
+    MAX_ACTIONS,
+    MAX_HAND,
+    CARD_STATS_DIM,
+    HAND_AGG_DIM,
+)
+
+
+HAS_BETAONE_ENCODE_FFI = hasattr(sts2_engine, "betaone_encode_state")
 
 
 class TestDimensions:
     def test_state_dim(self):
-        assert STATE_DIM == 134  # player(20) + enemies(80) + context(6) + hand_mean_pool(28)
+        # base(142) + hand_cards(10*28=280) + hand_mask(10) = 432
+        assert STATE_DIM == 432
+        assert STATE_DIM == BASE_STATE_DIM + MAX_HAND * CARD_STATS_DIM + MAX_HAND
+
+    def test_base_state_dim(self):
+        # player(25) + enemies(5*16=80) + context(6) + relics(26) + hand_agg(5) = 142
+        assert BASE_STATE_DIM == 142
+
+    def test_hand_agg_dim(self):
+        assert HAND_AGG_DIM == 5
 
     def test_action_dim(self):
         assert ACTION_DIM == CS.TOTAL + 4 + 3  # card_stats + target + flags(end_turn, use_potion, is_discard)
@@ -86,10 +110,109 @@ class TestCardStatsEncoding:
         assert stats[CS.SPAWNS_CARDS] == 0.0
 
 
+class TestHandAggregates:
+    """Verify hand-aggregate features compute correctly.
+
+    These are the 5 new features added to base_state to expose hand
+    composition directly to the value head. Must match Rust exactly —
+    order, formula, normalization.
+    """
+
+    def _strike(self):
+        return {"id": "STRIKE", "cost": 1, "card_type": "Attack", "target": "AnyEnemy",
+                "damage": 6, "hit_count": 1, "block": 0, "cards_draw": 0,
+                "energy_gain": 0, "keywords": [], "powers_applied": []}
+
+    def _defend(self):
+        return {"id": "DEFEND", "cost": 1, "card_type": "Skill", "target": "Self",
+                "damage": 0, "hit_count": 1, "block": 5, "cards_draw": 0,
+                "energy_gain": 0, "keywords": [], "powers_applied": []}
+
+    def _adrenaline(self):
+        return {"id": "ADRENALINE", "cost": 0, "card_type": "Skill", "target": "Self",
+                "damage": 0, "hit_count": 1, "block": 0, "cards_draw": 2,
+                "energy_gain": 1, "keywords": ["Exhaust"], "powers_applied": []}
+
+    def _footwork(self):
+        return {"id": "FOOTWORK", "cost": 1, "card_type": "Power", "target": "Self",
+                "damage": 0, "hit_count": 1, "block": 0, "cards_draw": 0,
+                "energy_gain": 0, "keywords": [], "powers_applied": [["Dexterity", 2]]}
+
+    def _dagger_throw(self):
+        return {"id": "DAGGER_THROW", "cost": 1, "card_type": "Attack", "target": "AnyEnemy",
+                "damage": 9, "hit_count": 1, "block": 0, "cards_draw": 0,
+                "energy_gain": 0, "keywords": [], "powers_applied": []}
+
+    def test_dimensions_and_empty(self):
+        assert encode_hand_aggregates(None) == [0.0] * HAND_AGG_DIM
+        assert encode_hand_aggregates([]) == [0.0] * HAND_AGG_DIM
+
+    def test_damage_index_0(self):
+        # 2 Strikes (6 dmg each, 1 hit) + 2 Defends (0 dmg) = 12; /50 = 0.24
+        agg = encode_hand_aggregates([self._strike(), self._strike(), self._defend(), self._defend()])
+        assert abs(agg[0] - 12 / 50) < 1e-6, f"total_damage expected 12/50, got {agg[0]}"
+
+    def test_block_index_1(self):
+        # 2 Defends (5 block each) + 2 Strikes (0 block) = 10; /50 = 0.20
+        agg = encode_hand_aggregates([self._strike(), self._strike(), self._defend(), self._defend()])
+        assert abs(agg[1] - 10 / 50) < 1e-6
+
+    def test_cards_draw_index_2(self):
+        # Adrenaline draws 2; /10 = 0.20
+        agg = encode_hand_aggregates([self._adrenaline(), self._strike(), self._strike(), self._defend()])
+        assert abs(agg[2] - 2 / 10) < 1e-6
+
+    def test_energy_gain_index_3(self):
+        # Adrenaline gives 1 energy; /3 = 0.333
+        agg = encode_hand_aggregates([self._adrenaline(), self._strike(), self._strike(), self._defend()])
+        assert abs(agg[3] - 1 / 3) < 1e-6
+
+    def test_count_powers_index_4(self):
+        # Footwork is a Power; others are not
+        agg = encode_hand_aggregates([self._footwork(), self._strike(), self._strike(), self._defend()])
+        assert abs(agg[4] - 1 / 5) < 1e-6
+
+        # Two powers
+        agg = encode_hand_aggregates([self._footwork(), self._footwork(), self._strike(), self._defend()])
+        assert abs(agg[4] - 2 / 5) < 1e-6
+
+    def test_hand_swap_produces_distinct_aggregates(self):
+        """The whole point: swapping one card changes the aggregate vector.
+        If these hands produced identical aggregates, the feature would be
+        useless for the hand-swap eval tests."""
+        hand_with_adrenaline = [self._adrenaline(), self._strike(), self._strike(), self._defend()]
+        hand_with_defend = [self._defend(), self._strike(), self._strike(), self._defend()]
+        agg_a = encode_hand_aggregates(hand_with_adrenaline)
+        agg_b = encode_hand_aggregates(hand_with_defend)
+        # cards_draw differs (2 vs 0), energy_gain differs (1 vs 0)
+        assert agg_a[2] != agg_b[2]
+        assert agg_a[3] != agg_b[3]
+        # block differs too (0 from Adrenaline vs 5 from Defend)
+        assert agg_a[1] != agg_b[1]
+
+    def test_hit_count_scales_damage(self):
+        """hand_total_damage = sum(damage * max(hit_count, 1)).
+        Tests a multi-hit card sums correctly."""
+        multi_hit = {**self._strike(), "damage": 4, "hit_count": 3}  # 4 × 3 = 12
+        agg = encode_hand_aggregates([multi_hit, self._defend()])
+        assert abs(agg[0] - 12 / 50) < 1e-6
+
+    def test_x_cost_under_represented_as_expected(self):
+        """Tier 1 hand_total_damage does NOT special-case X-cost. Skewer
+        (damage=7, hit_count=1, is_x_cost=true) contributes 7 regardless
+        of player energy. This is a documented simplification — X-cost
+        awareness depends on attention pool + is_x_cost flag + energy."""
+        skewer = {"id": "SKEWER", "cost": -1, "card_type": "Attack", "target": "AnyEnemy",
+                  "damage": 7, "hit_count": 1, "block": 0, "cards_draw": 0,
+                  "energy_gain": 0, "is_x_cost": True, "keywords": [], "powers_applied": []}
+        agg = encode_hand_aggregates([skewer])
+        assert abs(agg[0] - 7 / 50) < 1e-6  # not scaled by energy
+
+
 class TestPlayerEncoding:
     def test_dimensions(self):
         p = encode_player({"hp": 70, "max_hp": 70, "energy": 3, "max_energy": 3})
-        assert len(p) == 20
+        assert len(p) == 25
 
     def test_hp_frac(self):
         p = encode_player({"hp": 35, "max_hp": 70, "energy": 3, "max_energy": 3})
@@ -295,9 +418,244 @@ class TestTierConfigCompleteness:
 
 class TestFullStateDim:
     def test_total(self):
+        """Verify the sum of Python encoder parts matches STATE_DIM."""
         p = encode_player({"hp": 70, "max_hp": 70, "energy": 3, "max_energy": 3})
         enemies = [encode_enemy(None) for _ in range(5)]
         c = encode_context(0, 0, 0, 0, 0)
-        hand_pool = [0.0] * CS.TOTAL  # mean-pooled card stats (28 dims)
-        total = len(p) + sum(len(e) for e in enemies) + len(c) + len(hand_pool)
-        assert total == STATE_DIM
+        # encode_relics dim = RELIC_DIM (26) but we don't import it here;
+        # instead we compute the base directly and let BASE_STATE_DIM compare.
+        relics_dim = 26
+        hand_agg = encode_hand_aggregates([])  # empty hand = zero vector
+        hand_cards = [0.0] * (MAX_HAND * CARD_STATS_DIM)
+        hand_mask = [0.0] * MAX_HAND
+        total = (len(p) + sum(len(e) for e in enemies) + len(c)
+                 + relics_dim + len(hand_agg) + len(hand_cards) + len(hand_mask))
+        assert total == STATE_DIM, f"computed {total} != STATE_DIM {STATE_DIM}"
+
+
+# ---------------------------------------------------------------------------
+# Real Python↔Rust byte-equality test
+#
+# The above tests cover Python encoding logic in isolation. THIS class
+# proves Python and Rust produce bit-identical state vectors for the same
+# CombatState. If they diverge, training (Rust self-play) and eval
+# (Python scenarios) measure different things and silent corruption can
+# masquerade as model failure.
+# ---------------------------------------------------------------------------
+
+def _rust_card(name, cost, card_type, target, damage=0, block=0, hit_count=1,
+               cards_draw=0, energy_gain=0, hp_loss=0, keywords=None,
+               powers_applied=None, is_x_cost=False, upgraded=False, spawns=None):
+    """Card dict that Rust deserializes into Card and Python uses in scenarios.
+
+    Field names must match Rust's Card struct (id, name, cost, card_type,
+    target, damage Option, block Option, hit_count, cards_draw, energy_gain,
+    hp_loss, keywords, powers_applied, spawns_cards, is_x_cost)."""
+    return {
+        "id": name.upper().replace(" ", "_"),
+        "name": name,
+        "cost": cost,
+        "card_type": card_type,
+        "target": target,
+        "upgraded": upgraded,
+        "damage": damage if damage > 0 else None,
+        "block": block if block > 0 else None,
+        "hit_count": hit_count,
+        "powers_applied": [list(p) for p in (powers_applied or [])],
+        "cards_draw": cards_draw,
+        "energy_gain": energy_gain,
+        "hp_loss": hp_loss,
+        "keywords": list(keywords or []),
+        "tags": [],
+        "spawns_cards": list(spawns or []),
+        "is_x_cost": is_x_cost,
+    }
+
+
+def _rust_combat_state_json(player, enemies, hand, turn=3, relics=None):
+    """Build a CombatState JSON that Rust can deserialize.
+
+    Player and enemies are minimal — enough fields for encode_state to
+    not blow up. Hand is the focus (this is what hand_aggregates reads)."""
+    return json.dumps({
+        "player": {
+            "hp": player["hp"],
+            "max_hp": player["max_hp"],
+            "block": player.get("block", 0),
+            "energy": player.get("energy", 3),
+            "max_energy": player.get("max_energy", 3),
+            "powers": player.get("powers", {}),
+            "hand": hand,
+            "draw_pile": [],
+            "discard_pile": [],
+            "exhaust_pile": [],
+            "potions": [],
+        },
+        "enemies": [
+            {
+                "id": e.get("id", "DUMMY"),
+                "name": e.get("name", "Dummy"),
+                "hp": e["hp"],
+                "max_hp": e["max_hp"],
+                "block": e.get("block", 0),
+                "powers": e.get("powers", {}),
+                "intent_type": e.get("intent_type"),
+                "intent_damage": e.get("intent_damage"),
+                "intent_hits": e.get("intent_hits", 1),
+                "intent_block": e.get("intent_block"),
+                "predicted_intents": [],
+            }
+            for e in enemies
+        ],
+        "turn": turn,
+        "relics": list(relics or []),
+        "act_id": "",
+        "boss_id": "",
+        "map_path": [],
+    })
+
+
+def _python_scenario(player, enemies, hand, turn=3):
+    """Build a Python Scenario equivalent to the Rust CombatState above.
+    Python's encode_state takes a Scenario and reads player/enemies/hand
+    using the same field names as the dicts above (plus enemy intent_type
+    is translated to powers via existing logic in encode_enemy).
+
+    draw_size/discard_size/exhaust_size are set to 0 to match the empty
+    draw_pile/discard_pile/exhaust_pile in _rust_combat_state_json."""
+    py_enemies = []
+    for e in enemies:
+        py_enemies.append({
+            "hp": e["hp"],
+            "max_hp": e["max_hp"],
+            "block": e.get("block", 0),
+            "intent_type": e.get("intent_type"),
+            "intent_damage": e.get("intent_damage"),
+            "intent_hits": e.get("intent_hits", 1),
+            "powers": e.get("powers", {}),
+        })
+    return Scenario(
+        name="parity",
+        category="parity",
+        description="",
+        player=player,
+        enemies=py_enemies,
+        hand=hand,
+        actions=[ActionSpec("end_turn", label="End")],
+        best_actions=[0],
+        turn=turn,
+        draw_size=0,
+        discard_size=0,
+        exhaust_size=0,
+    )
+
+
+@pytest.mark.skipif(
+    not HAS_BETAONE_ENCODE_FFI,
+    reason="sts2_engine.betaone_encode_state not available — wheel needs rebuild after adding the FFI",
+)
+class TestPythonRustByteEquality:
+    """The actual parity guarantee: Python encoder == Rust encoder, byte-for-byte."""
+
+    def _diff_report(self, py_v, rs_v):
+        """If vectors differ, surface where so a failure is debuggable."""
+        assert len(py_v) == len(rs_v) == STATE_DIM, (
+            f"length mismatch: py={len(py_v)}, rs={len(rs_v)}, expected {STATE_DIM}"
+        )
+        diffs = []
+        for i, (a, b) in enumerate(zip(py_v, rs_v)):
+            if abs(a - b) > 1e-7:
+                # Annotate which slice this index falls into so we can
+                # quickly localize whether it's player/enemy/context/etc.
+                section = self._section_of(i)
+                diffs.append((i, section, a, b, a - b))
+        if diffs:
+            msg = f"{len(diffs)} dim(s) differ:\n"
+            for i, section, a, b, d in diffs[:20]:
+                msg += f"  [{i}] {section}: py={a:.6f} rs={b:.6f} diff={d:+.6f}\n"
+            if len(diffs) > 20:
+                msg += f"  ...and {len(diffs) - 20} more\n"
+            raise AssertionError(msg)
+
+    @staticmethod
+    def _section_of(idx):
+        # Layout: player(25), enemies(80), context(6), relics(26), hand_agg(5),
+        #         hand_cards(280), hand_mask(10) — total 432
+        if idx < 25: return f"player[{idx}]"
+        if idx < 105: return f"enemy_slot{(idx - 25) // 16}[{(idx - 25) % 16}]"
+        if idx < 111: return f"context[{idx - 105}]"
+        if idx < 137: return f"relic[{idx - 111}]"
+        if idx < 142: return f"hand_agg[{idx - 137}]"
+        if idx < 422: return f"hand_card{(idx - 142) // 28}.stat[{(idx - 142) % 28}]"
+        return f"hand_mask[{idx - 422}]"
+
+    def test_empty_hand(self):
+        """Edge case: empty hand still produces a valid state vector."""
+        player = {"hp": 50, "max_hp": 70, "energy": 3, "max_energy": 3, "block": 0}
+        enemies = [{"id": "DUMMY", "name": "Dummy", "hp": 40, "max_hp": 50,
+                    "intent_type": "Attack", "intent_damage": 10, "intent_hits": 1}]
+        hand = []
+        rs_v = sts2_engine.betaone_encode_state(_rust_combat_state_json(player, enemies, hand))
+        py_v = encode_state(_python_scenario(player, enemies, hand))
+        self._diff_report(py_v, rs_v)
+
+    def test_simple_hand(self):
+        """4-card vanilla hand: 2 Strikes + 2 Defends."""
+        player = {"hp": 50, "max_hp": 70, "energy": 3, "max_energy": 3, "block": 0}
+        enemies = [{"id": "DUMMY", "name": "Dummy", "hp": 40, "max_hp": 50,
+                    "intent_type": "Attack", "intent_damage": 10, "intent_hits": 1}]
+        hand = [
+            _rust_card("Strike", 1, "Attack", "AnyEnemy", damage=6),
+            _rust_card("Strike", 1, "Attack", "AnyEnemy", damage=6),
+            _rust_card("Defend", 1, "Skill", "Self", block=5),
+            _rust_card("Defend", 1, "Skill", "Self", block=5),
+        ]
+        rs_v = sts2_engine.betaone_encode_state(_rust_combat_state_json(player, enemies, hand))
+        py_v = encode_state(_python_scenario(player, enemies, hand))
+        self._diff_report(py_v, rs_v)
+
+    def test_payoff_card_hand(self):
+        """Hand with Adrenaline + Footwork — exercises hand_aggregates indices
+        for cards_draw, energy_gain, count_powers, all simultaneously."""
+        player = {"hp": 50, "max_hp": 70, "energy": 3, "max_energy": 3, "block": 0}
+        enemies = [{"id": "DUMMY", "name": "Dummy", "hp": 40, "max_hp": 50,
+                    "intent_type": "Attack", "intent_damage": 10, "intent_hits": 1}]
+        hand = [
+            _rust_card("Adrenaline", 0, "Skill", "Self", cards_draw=2,
+                       energy_gain=1, keywords=["Exhaust"]),
+            _rust_card("Footwork", 1, "Power", "Self",
+                       powers_applied=[("Dexterity", 2)]),
+            _rust_card("Strike", 1, "Attack", "AnyEnemy", damage=6),
+            _rust_card("Defend", 1, "Skill", "Self", block=5),
+        ]
+        rs_v = sts2_engine.betaone_encode_state(_rust_combat_state_json(player, enemies, hand))
+        py_v = encode_state(_python_scenario(player, enemies, hand))
+        self._diff_report(py_v, rs_v)
+
+    def test_x_cost_card_hand(self):
+        """Hand with Skewer at varied energy — verifies X-cost hand_total_damage
+        matches between Python and Rust (both should produce damage*hit_count = 7,
+        not multiply by energy)."""
+        player = {"hp": 50, "max_hp": 70, "energy": 2, "max_energy": 3, "block": 0}
+        enemies = [{"id": "DUMMY", "name": "Dummy", "hp": 40, "max_hp": 50,
+                    "intent_type": "Attack", "intent_damage": 10, "intent_hits": 1}]
+        hand = [
+            _rust_card("Skewer", -1, "Attack", "AnyEnemy", damage=7,
+                       hit_count=1, is_x_cost=True),
+            _rust_card("Strike", 1, "Attack", "AnyEnemy", damage=6),
+        ]
+        rs_v = sts2_engine.betaone_encode_state(_rust_combat_state_json(player, enemies, hand))
+        py_v = encode_state(_python_scenario(player, enemies, hand))
+        self._diff_report(py_v, rs_v)
+
+    def test_full_hand(self):
+        """10-card hand at the MAX_HAND ceiling — exercises every hand slot."""
+        player = {"hp": 50, "max_hp": 70, "energy": 3, "max_energy": 3, "block": 0}
+        enemies = [{"id": "DUMMY", "name": "Dummy", "hp": 40, "max_hp": 50,
+                    "intent_type": "Attack", "intent_damage": 10, "intent_hits": 1}]
+        hand = [
+            _rust_card("Strike", 1, "Attack", "AnyEnemy", damage=6),
+        ] * 10
+        rs_v = sts2_engine.betaone_encode_state(_rust_combat_state_json(player, enemies, hand))
+        py_v = encode_state(_python_scenario(player, enemies, hand))
+        self._diff_report(py_v, rs_v)

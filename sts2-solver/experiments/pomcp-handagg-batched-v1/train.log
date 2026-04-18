@@ -1,0 +1,477 @@
+Training experiment: pomcp-handagg-batched-v1 (network=betaone, method=mcts_selfplay)
+  Output: C:\coding-projects\STS2\sts2-solver\experiments\pomcp-handagg-batched-v1
+Note: mcts_bootstrap=True overrides dense_value_targets — disabling dense reward compute.
+BetaOne self-play: 138,941 params, 578 card vocab
+Encounter set: lean-decks-v1 (189 encounters, avg HP 32.1)
+Cold start (forced)
+Replay buffer: capacity 50,000 steps
+Gen    1 | win  6.6% | hp  3.3 | steps  4511 | buf   4511 | pi 1.562 | v 0.159 | sims 1000 | 122.3s
+Gen    2 | win 14.5% | hp  5.5 | steps  4642 | buf   9153 | pi 1.534 | v 0.114 | sims 1000 | 146.9s
+Gen    3 | win 19.1% | hp  6.2 | steps  5123 | buf  14276 | pi 1.510 | v 0.087 | sims 1000 | 167.7s
+Gen    4 | win 27.3% | hp  8.2 | steps  5008 | buf  19284 | pi 1.501 | v 0.077 | sims 1000 | 166.7s
+Gen    5 | win 30.5% | hp  8.1 | steps  5513 | buf  24797 | pi 1.489 | v 0.071 | sims 1000 | 174.2s
+Gen    6 | win 36.3% | hp  8.8 | steps  5082 | buf  29879 | pi 1.478 | v 0.072 | sims 1000 | 161.2s
+Gen    7 | win 35.5% | hp  7.1 | steps  4795 | buf  34674 | pi 1.472 | v 0.070 | sims 1000 | 135.1s
+Gen    8 | win 33.6% | hp  8.2 | steps  5473 | buf  40147 | pi 1.460 | v 0.068 | sims 1000 | 192.7s
+Gen    9 | win 35.9% | hp  9.2 | steps  5079 | buf  45226 | pi 1.456 | v 0.067 | sims 1000 | 179.1s
+Gen   10 | win 37.1% | hp  7.3 | steps  4696 | buf  49922 | pi 1.450 | v 0.065 | sims 1000 | 168.6s
+Loaded checkpoint: gen 10
+
+============================================================
+BetaOne Eval — Gen 10 — 46/80 passed
+============================================================
+
+[FAIL] discard: 2/4
+    ok  discard_status_over_strike
+    ok  discard_sly_for_value
+  MISS  gamble_with_tactician_in_hand
+        chose: Strike (6 dmg, no Sly trigger) (47%)
+        probs: Calculated Gamble (discards Tactician → triggers Sly energy): 26%, Strike (6 dmg, no Sly trigger): 47%, End turn: 28%
+  MISS  prepared_discards_slimed
+        chose: Strike (6 dmg, Slimed stuck in hand) (45%)
+        probs: Prepared (discard Slimed, draw 2 fresh cards): 30%, Strike (6 dmg, Slimed stuck in hand): 46%, End turn: 25%
+
+[FAIL] block: 2/3
+  MISS  dont_overblock
+        chose: Defend (42%)
+        probs: Strike enemy: 39%, Defend: 42%, End turn: 19%
+    ok  block_when_lethal
+    ok  attack_when_enemy_defending
+
+[PASS] energy: 2/2
+    ok  dont_end_turn_with_energy
+    ok  play_zero_cost_before_end
+
+[FAIL] lethal: 1/2
+   BAD  take_lethal_over_block
+        chose: Defend (45%)
+        probs: Strike (lethal): 39%, Defend: 45%, End turn: 17%
+    ok  let_poison_kill
+
+[PASS] targeting: 2/2
+    ok  target_vulnerable_enemy
+    ok  kill_low_hp_enemy
+
+[FAIL] synergy: 3/4
+    ok  accelerant_with_poison
+    ok  play_power_early
+   BAD  accelerant_without_poison_is_bad
+        chose: Accelerant (no poison to amplify) (46%)
+        probs: Accelerant (no poison to amplify): 46%, Strike: 34%, End turn: 20%
+    ok  apply_poison_before_accelerant
+
+[FAIL] poison: 6/8
+    ok  poison_vs_strike_high_hp
+    ok  noxious_fumes_early
+    ok  accelerant_high_poison
+    ok  block_over_accelerant_low_hp
+    ok  poison_over_block_free_turn
+    ok  let_poison_finish_dont_waste_attack
+   BAD  discard_infection_over_poison_card
+        chose: discard Deadly Poison (31%)
+        probs: discard Deadly Poison: 31%, discard Strike: 20%, discard Infection: 28%, discard Defend: 21%
+   BAD  dont_overstack_dying_poison
+        chose: Deadly Poison (+5 poison, overkill) (40%)
+        probs: Deadly Poison (+5 poison, overkill): 40%, Defend (5 block vs 12 — saves HP): 37%, End turn: 23%
+
+[PASS] shiv: 5/5
+    ok  blade_dance_with_accuracy
+    ok  accuracy_early
+    ok  blade_dance_over_defend_free_turn
+    ok  shiv_targets_low_hp
+    ok  blade_dance_vs_defend_incoming_8
+
+[FAIL] sly: 4/5
+    ok  discard_sly_over_normal
+    ok  discard_sly_reflex_for_draw
+    ok  sly_over_status_in_discard
+  MISS  acrobatics_with_sly_hand
+        chose: Defend (5 block) (45%)
+        probs: Acrobatics (draw 3, discard 1 -> trigger Sly): 29%, Defend (5 block): 45%, End turn: 26%
+    ok  survivor_triggers_sly
+
+[FAIL] debuff: 0/2
+  MISS  weak_vs_multi_hit
+        chose: Defend (5 block vs 24) (39%)
+        probs: Neutralize (Weak, 3x6=18): 38%, Defend (5 block vs 24): 39%, End turn: 23%
+  MISS  dont_debuff_dying_enemy
+        chose: Neutralize (Weak, doesn't kill) (42%)
+        probs: Strike (6 dmg, lethal): 41%, Neutralize (Weak, doesn't kill): 42%, End turn: 17%
+
+[FAIL] draw: 0/4
+  MISS  backflip_over_defend
+        chose: Defend (block only) (33%)
+        probs: Backflip (block + draw 2): 22%, Defend (block only): 33%, Strike: 30%, End turn: 15%
+  MISS  adrenaline_always_play
+        chose: Defend (34%)
+        probs: Adrenaline (0-cost, draw 2, +1 energy): 19%, Strike: 30%, Defend: 34%, End turn: 17%
+   BAD  acrobatics_dig_with_burst
+        chose: Strike (Attack — doesn't consume Burst, but uses last energy) (39%)
+        probs: Acrobatics (Skill — Burst doubles draw 3 → 6): 34%, Strike (Attack — doesn't consume Burst, but uses last energy): 39%, End turn: 27%
+  MISS  adrenaline_before_strike
+        chose: Strike (locks in 1 energy) (33%)
+        probs: Adrenaline (0-cost, +1 energy, +2 draw): 22%, Strike (locks in 1 energy): 33%, Dagger Throw (locks in 1 energy): 26%, End turn: 19%
+
+[PASS] multi_enemy: 2/2
+    ok  aoe_vs_single_target
+    ok  aoe_kills_multiple_low
+
+[FAIL] combo: 3/5
+  MISS  burst_before_blade_dance
+        chose: Blade Dance (3 shivs) (31%)
+        probs: Burst (next Skill plays twice): 28%, Blade Dance (3 shivs): 31%, Defend: 27%, End turn: 14%
+    ok  burst_wasted_if_no_skill
+   BAD  finisher_after_attacks
+        chose: Finisher FIRST (scales only to what's played BEFORE it) (29%)
+        probs: Strike (6 dmg, counts for Finisher scaling): 29%, Dagger Throw (9 dmg, also scales Finisher): 27%, Finisher FIRST (scales only to what's played BEFORE it): 29%, End turn: 14%
+    ok  infinite_blades_power_early
+    ok  well_laid_plans_early
+
+[FAIL] survival: 1/3
+    ok  block_over_power_low_hp
+  MISS  skip_block_when_safe
+        chose: Defend (block 5 vs 4 — 1 wasted block) (37%)
+        probs: Strike (6 dmg — makes progress): 35%, Defend (block 5 vs 4 — 1 wasted block): 37%, End turn: 28%
+   BAD  intangible_skip_block
+        chose: Defend (Intangible makes block pointless) (45%)
+        probs: Strike (Intangible absorbs the hit): 34%, Defend (Intangible makes block pointless): 45%, End turn: 21%
+
+[FAIL] damage: 3/4
+   BAD  dagger_throw_over_strike
+        chose: Strike (6 dmg) (41%)
+        probs: Dagger Throw (9 dmg): 33%, Strike (6 dmg): 42%, End turn: 26%
+    ok  predator_high_energy
+    ok  skewer_with_3_energy
+    ok  omnislice_free_damage
+
+[FAIL] block_cards: 2/4
+   BAD  escape_plan_free_block
+        chose: End turn (69%)
+        probs: Escape Plan (0-cost, 3 block): 31%, End turn: 69%
+    ok  cloak_and_dagger_over_defend
+    ok  blur_keeps_block
+  MISS  wraith_form_early_high_hp
+        chose: Strike (32%)
+        probs: Wraith Form (Intangible 2 turns): 19%, Strike: 32%, Defend: 31%, End turn: 17%
+
+[FAIL] debuff_cards: 2/3
+    ok  sucker_punch_over_strike
+    ok  piercing_wail_vs_multi_enemy
+  MISS  malaise_high_energy
+        chose: Defend (5 block vs 15) (47%)
+        probs: Malaise (3 Weak + 3 Str down): 38%, Defend (5 block vs 15): 47%, End turn: 15%
+
+[FAIL] draw_cycle: 2/5
+  MISS  prepared_free_cycle
+        chose: Defend (33%)
+        probs: Prepared (0-cost, draw 2 discard 1): 18%, Strike: 30%, Defend: 33%, End turn: 20%
+  MISS  prepared_with_sly_in_hand
+        chose: Strike (49%)
+        probs: Prepared (draw 2, discard Tactician for energy): 22%, Strike: 49%, End turn: 29%
+    ok  tools_of_the_trade_early
+    ok  dont_acrobatics_at_lethal
+  MISS  calculated_gamble_dead_hand
+        chose: Defend (5 block vs 15 dmg) (37%)
+        probs: Calculated Gamble (discard hand, draw same #, exhaust): 18%, Strike (6 dmg, 1 energy): 29%, Defend (5 block vs 15 dmg): 36%, End turn: 16%
+
+[FAIL] powers: 2/5
+  MISS  double_damage_biggest_attack
+        chose: Strike (6 dmg x2 = 12, wastes the bigger slot) (40%)
+        probs: Dagger Throw (9 dmg x2 = 18, uses Double Damage efficiently): 34%, Strike (6 dmg x2 = 12, wastes the bigger slot): 40%, End turn: 26%
+    ok  afterimage_dont_end_turn
+  MISS  weak_player_defers_attack
+        chose: Defend (5 block) (33%)
+        probs: Footwork (Dex+, scales all future block — better with Weak active): 29%, Strike (6 dmg x 0.75 = 4.5 — diminished by Weak): 26%, Defend (5 block): 33%, End turn: 12%
+  MISS  noxious_fumes_skip_redundant_poison
+        chose: Deadly Poison (+5 poison, redundant with Fumes + no immediate impact) (45%)
+        probs: Dagger Throw (9 dmg — Fumes handles poison stacking for free): 30%, Deadly Poison (+5 poison, redundant with Fumes + no immediate impact): 45%, End turn: 25%
+    ok  accuracy_blade_dance_over_strike
+
+[FAIL] relic: 2/8
+   BAD  orichalcum_skip_block
+        chose: Defend (39%)
+        probs: Strike enemy: 38%, Defend: 39%, End turn: 24%
+    ok  no_orichalcum_must_block
+   BAD  anchor_turn1_offense
+        chose: Defend (39%)
+        probs: Strike enemy: 38%, Defend: 39%, End turn: 24%
+   BAD  velvet_choker_play_limit
+        chose: Defend (6th card) (37%)
+        probs: Strike (6th card): 36%, Defend (6th card): 36%, End turn: 27%
+  MISS  kunai_attack_priority
+        chose: Defend (47%)
+        probs: Strike enemy: 37%, Defend: 47%, End turn: 16%
+  MISS  lantern_turn1_aggro
+        chose: Defend (39%)
+        probs: Strike enemy: 39%, Defend: 39%, End turn: 22%
+  MISS  burning_blood_aggro
+        chose: Defend (47%)
+        probs: Strike (likely lethal): 36%, Defend: 47%, End turn: 16%
+    ok  cloak_clasp_end_turn_early
+
+End Turn bias (scenarios where ET is wrong):
+  Avg ET prob: 18.9% across 77 scenarios
+  High ET (>20%):
+    escape_plan_free_block: 69%
+    omnislice_free_damage: 36%
+    play_zero_cost_before_end: 34%
+    burst_wasted_if_no_skill: 29%
+    prepared_with_sly_in_hand: 29%
+    skip_block_when_safe: 28%
+    gamble_with_tactician_in_hand: 28%
+    velvet_choker_play_limit: 27%
+    acrobatics_dig_with_burst: 27%
+    blur_keeps_block: 26%
+
+
+============================================================
+Value Head Eval — Gen 10 — 72/121 passed
+============================================================
+
+[PASS] hp: 3/3
+    ok  enemy_lower_hp                  V=-0.149 vs -0.182  margin=+0.032
+    ok  player_higher_hp                V=-0.172 vs -0.289  margin=+0.116
+    ok  enemy_nearly_dead               V=-0.112 vs -0.187  margin=+0.075
+
+[FAIL] defense: 1/2
+  MISS  block_vs_incoming               V=-0.193 vs -0.192  margin=-0.001
+    ok  safe_hp_vs_lethal_range         V=-0.182 vs -0.678  margin=+0.497
+
+[PASS] poison: 2/2
+    ok  poison_on_enemy                 V=-0.107 vs -0.182  margin=+0.074
+    ok  heavy_poison                    V=+0.222 vs -0.179  margin=+0.401
+
+[FAIL] powers: 3/4
+    ok  player_strength                 V=-0.116 vs -0.182  margin=+0.066
+    ok  player_dexterity                V=-0.172 vs -0.182  margin=+0.010
+    ok  intangible                      V=-0.207 vs -0.210  margin=+0.002
+  MISS  noxious_fumes_power             V=-0.197 vs -0.182  margin=-0.015
+
+[FAIL] debuffs: 1/2
+    ok  enemy_weak                      V=-0.114 vs -0.182  margin=+0.068
+  MISS  enemy_vulnerable                V=-0.212 vs -0.182  margin=-0.030
+
+[FAIL] multi: 0/1
+  MISS  one_enemy_vs_two                V=-0.172 vs -0.124  margin=-0.049
+
+[PASS] tempo: 1/1
+    ok  early_turn_same_hp              V=-0.166 vs -0.173  margin=+0.007
+
+[FAIL] resources: 0/1
+  MISS  more_energy                     V=-0.182 vs -0.173  margin=-0.008
+
+[FAIL] hand: 3/9
+  MISS  blade_dance_vs_strike           V=-0.187 vs -0.182  margin=-0.006
+    ok  skewer_vs_strike                V=-0.167 vs -0.182  margin=+0.015
+    ok  predator_vs_strike              V=-0.166 vs -0.182  margin=+0.016
+  MISS  backflip_vs_defend              V=-0.193 vs -0.182  margin=-0.011
+  MISS  adrenaline_in_hand              V=-0.222 vs -0.182  margin=-0.040
+  MISS  prepared_vs_strike              V=-0.194 vs -0.182  margin=-0.012
+  MISS  burst_plus_blade_dance          V=-0.197 vs -0.182  margin=-0.015
+    ok  larger_hand                     V=-0.153 vs -0.197  margin=+0.043
+  MISS  wraith_form_in_hand             V=-0.257 vs -0.223  margin=-0.035
+
+[FAIL] compound_scaling: 21/26
+    ok  poison_more_8_vs_3              V=-0.130 vs -0.179  margin=+0.050
+    ok  poison_more_15_vs_8             V=+0.014 vs -0.130  margin=+0.144
+    ok  poison_more_25_vs_15            V=+0.439 vs +0.014  margin=+0.424
+    ok  poison_more_40_vs_25            V=+0.753 vs +0.439  margin=+0.315
+    ok  poison_more_30_vs_2             V=+0.610 vs -0.186  margin=+0.795
+    ok  poison_more_30_vs_10            V=+0.610 vs -0.107  margin=+0.717
+    ok  strength_1_vs_0                 V=-0.173 vs -0.182  margin=+0.009
+    ok  strength_3_vs_1                 V=-0.116 vs -0.173  margin=+0.057
+    ok  strength_5_vs_2                 V=+0.019 vs -0.159  margin=+0.178
+    ok  strength_7_vs_3                 V=+0.216 vs -0.116  margin=+0.332
+    ok  strength_2_vs_0                 V=-0.159 vs -0.182  margin=+0.023
+    ok  dexterity_3_vs_0                V=-0.172 vs -0.192  margin=+0.020
+    ok  dexterity_5_vs_2                V=-0.150 vs -0.180  margin=+0.029
+    ok  dexterity_2_vs_0                V=-0.180 vs -0.192  margin=+0.012
+  MISS  noxious_fumes_2_vs_0            V=-0.197 vs -0.182  margin=-0.015
+  MISS  noxious_fumes_4_vs_2            V=-0.229 vs -0.197  margin=-0.032
+  MISS  noxious_fumes_3_vs_1            V=-0.217 vs -0.184  margin=-0.033
+    ok  fewer_hits_1_vs_3               V=-0.173 vs -0.244  margin=+0.072
+    ok  fewer_hits_2_vs_5               V=-0.196 vs -0.340  margin=+0.144
+    ok  fewer_hits_1_vs_4               V=-0.173 vs -0.305  margin=+0.132
+  MISS  vulnerable_4_vs_1               V=-0.211 vs -0.208  margin=-0.003
+    ok  vulnerable_6_vs_2               V=-0.203 vs -0.212  margin=+0.009
+  MISS  vulnerable_3_vs_1               V=-0.214 vs -0.208  margin=-0.005
+    ok  enemy_weak_4_vs_1               V=+0.091 vs -0.176  margin=+0.267
+    ok  enemy_weak_5_vs_2               V=+0.200 vs -0.123  margin=+0.322
+    ok  enemy_weak_3_vs_1               V=-0.015 vs -0.176  margin=+0.162
+
+[FAIL] conditional_value: 15/20
+    ok  block_matters_without_intangible  V=-0.205 vs -0.210  margin=+0.005
+  MISS  intangible_beats_partial_block  V=-0.207 vs -0.203  margin=-0.005
+    ok  player_no_weak_vs_weak_1        V=-0.182 vs -0.186  margin=+0.005
+    ok  player_no_weak_vs_weak_3        V=-0.182 vs -0.208  margin=+0.026
+    ok  player_no_weak_vs_weak_5        V=-0.182 vs -0.229  margin=+0.047
+    ok  player_no_vulnerable_vs_1       V=-0.182 vs -0.192  margin=+0.010
+    ok  player_no_vulnerable_vs_3       V=-0.182 vs -0.212  margin=+0.030
+    ok  player_no_frail_vs_1            V=-0.192 vs -0.200  margin=+0.008
+    ok  player_no_frail_vs_3            V=-0.192 vs -0.222  margin=+0.030
+  MISS  enemy_no_block_better           V=-0.170 vs -0.149  margin=-0.021
+    ok  neutralize_vs_no_artifact       V=-0.182 vs -0.198  margin=+0.016
+    ok  accelerant_with_poison_precondition  V=-0.105 vs -0.191  margin=+0.086
+  MISS  burst_with_skill_in_hand        V=-0.199 vs -0.146  margin=-0.053
+  MISS  accuracy_with_shiv_source       V=-0.176 vs -0.172  margin=-0.004
+    ok  killing_blow_at_low_enemy_hp    V=-0.146 vs -0.172  margin=+0.025
+    ok  no_slimed_vs_slimed             V=-0.182 vs -0.209  margin=+0.028
+    ok  energy_with_playable_hand       V=-0.182 vs -0.204  margin=+0.022
+    ok  block_when_no_incoming          V=-0.023 vs -0.062  margin=+0.039
+  MISS  blade_dance_with_vulnerable     V=-0.224 vs -0.187  margin=-0.036
+    ok  enemy_no_plated_armor           V=-0.182 vs -0.205  margin=+0.023
+
+[FAIL] arithmetic_compare: 18/28
+    ok  skewer_3e_vs_strike             V=-0.167 vs -0.182  margin=+0.015
+  MISS  dagger_throw_vs_strike          V=-0.202 vs -0.182  margin=-0.021
+    ok  omnislice_vs_strike             V=-0.167 vs -0.182  margin=+0.015
+  MISS  blade_dance_vs_strike_arith     V=-0.187 vs -0.182  margin=-0.006
+    ok  cloak_vs_defend                 V=-0.174 vs -0.182  margin=+0.008
+  MISS  block_20_vs_5_vs_15dmg          V=-0.198 vs -0.192  margin=-0.006
+  MISS  block_15_vs_0_vs_15dmg          V=-0.194 vs -0.192  margin=-0.002
+  MISS  block_25_vs_10_vs_15dmg         V=-0.205 vs -0.193  margin=-0.012
+  MISS  block_10_vs_0_vs_15dmg          V=-0.193 vs -0.192  margin=-0.001
+  MISS  block_30_vs_15_vs_15dmg         V=-0.211 vs -0.194  margin=-0.017
+    ok  player_hp_30_vs_20              V=-0.241 vs -0.356  margin=+0.115
+    ok  player_hp_50_vs_30              V=-0.182 vs -0.241  margin=+0.059
+    ok  player_hp_25_vs_15              V=-0.289 vs -0.458  margin=+0.169
+    ok  player_hp_40_vs_20              V=-0.194 vs -0.356  margin=+0.162
+    ok  player_hp_60_vs_40              V=-0.172 vs -0.194  margin=+0.021
+    ok  player_hp_35_vs_25              V=-0.208 vs -0.289  margin=+0.081
+    ok  enemy_hp_15_vs_30               V=-0.134 vs -0.170  margin=+0.036
+    ok  enemy_hp_5_vs_25                V=-0.112 vs -0.162  margin=+0.051
+    ok  enemy_hp_20_vs_40               V=-0.149 vs -0.182  margin=+0.032
+    ok  enemy_hp_10_vs_35               V=-0.120 vs -0.175  margin=+0.054
+    ok  enemy_hp_8_vs_30                V=-0.118 vs -0.170  margin=+0.052
+    ok  three_strikes_vs_one            V=-0.162 vs -0.195  margin=+0.033
+    ok  energy_3_vs_1                   V=-0.182 vs -0.189  margin=+0.007
+  MISS  energy_2_vs_0                   V=-0.186 vs -0.173  margin=-0.013
+  MISS  skewer_energy_3_vs_1            V=-0.167 vs -0.149  margin=-0.018
+    ok  skewer_3e_vs_dagger_throw       V=-0.167 vs -0.202  margin=+0.035
+    ok  skewer_2e_vs_dagger_throw       V=-0.170 vs -0.207  margin=+0.037
+  MISS  dagger_throw_vs_skewer_1e       V=-0.210 vs -0.149  margin=-0.061
+
+[FAIL] future_value: 4/22
+  MISS  adrenaline_over_defend          V=-0.213 vs -0.182  margin=-0.031
+    ok  prepared_over_defend            V=-0.177 vs -0.182  margin=+0.004
+  MISS  backflip_over_defend_fv         V=-0.187 vs -0.162  margin=-0.025
+  MISS  acrobatics_over_strike_extra    V=-0.193 vs -0.182  margin=-0.012
+  MISS  calculated_gamble_dead_hand     V=-0.200 vs -0.195  margin=-0.005
+  MISS  footwork_power_over_strike      V=-0.230 vs -0.196  margin=-0.034
+  MISS  wraith_form_long_fight          V=-0.326 vs -0.272  margin=-0.054
+  MISS  accuracy_with_blade_dance       V=-0.189 vs -0.179  margin=-0.010
+  MISS  noxious_fumes_power_over_defend  V=-0.212 vs -0.193  margin=-0.018
+  MISS  infinite_blades_long_fight      V=-0.268 vs -0.219  margin=-0.049
+  MISS  well_laid_plans_over_strike     V=-0.265 vs -0.219  margin=-0.047
+    ok  power_early_turn_1_vs_6         V=-0.258 vs -0.272  margin=+0.014
+    ok  draw_engine_early_vs_late       V=-0.196 vs -0.218  margin=+0.021
+  MISS  more_cards_to_draw              V=-0.193 vs -0.162  margin=-0.031
+  MISS  burst_blade_combo               V=-0.211 vs -0.189  margin=-0.022
+  MISS  burst_acrobatics_combo          V=-0.200 vs -0.195  margin=-0.004
+  MISS  poison_primer_for_accelerant    V=-0.218 vs -0.179  margin=-0.039
+  MISS  tactician_over_defend           V=-0.218 vs -0.194  margin=-0.024
+  MISS  reflex_over_strike_with_discard  V=-0.198 vs -0.177  margin=-0.021
+  MISS  escape_plan_over_defend         V=-0.192 vs -0.185  margin=-0.006
+  MISS  expose_over_strike              V=-0.197 vs -0.184  margin=-0.013
+    ok  sucker_punch_over_strike        V=-0.185 vs -0.196  margin=+0.011
+
+       eval: 46/80 (57%) | value: 72/121 (60%)
+Gen   11 | win 35.5% | hp  8.4 | steps  5254 | buf  46023 | pi 1.427 | v 0.066 | sims 1000 | 167.5s
+Gen   12 | win 34.0% | hp  7.1 | steps  5060 | buf  45960 | pi 1.418 | v 0.066 | sims 1000 | 162.2s
+Gen   13 | win 39.1% | hp  8.6 | steps  4863 | buf  45815 | pi 1.414 | v 0.064 | sims 1000 | 137.1s
+Gen   14 | win 46.5% | hp  8.3 | steps  4846 | buf  45148 | pi 1.410 | v 0.062 | sims 1000 | 160.6s
+Gen   15 | win 39.1% | hp  8.4 | steps  5149 | buf  45215 | pi 1.403 | v 0.062 | sims 1000 | 187.8s
+Gen   16 | win 45.3% | hp  8.5 | steps  5322 | buf  45742 | pi 1.392 | v 0.060 | sims 1000 | 165.3s
+Gen   17 | win 39.8% | hp  7.4 | steps  5076 | buf  45345 | pi 1.391 | v 0.061 | sims 1000 | 181.1s
+Gen   18 | win 35.9% | hp  9.4 | steps  5356 | buf  45622 | pi 1.386 | v 0.061 | sims 1000 | 176.3s
+Gen   19 | win 40.6% | hp  7.6 | steps  5099 | buf  46025 | pi 1.378 | v 0.062 | sims 1000 | 153.3s
+Gen   20 | win 44.9% | hp  8.4 | steps  5422 | buf  46193 | pi 1.374 | v 0.060 | sims 1000 | 189.6s
+Loaded checkpoint: gen 20
+
+============================================================
+BetaOne Eval — Gen 20 — 57/80 passed
+============================================================
+
+[FAIL] discard: 2/4
+    ok  discard_status_over_strike
+    ok  discard_sly_for_value
+  MISS  gamble_with_tactician_in_hand
+        chose: Strike (6 dmg, no Sly trigger) (57%)
+        probs: Calculated Gamble (discards Tactician → triggers Sly energy): 23%, Strike (6 dmg, no Sly trigger): 57%, End turn: 20%
+  MISS  prepared_discards_slimed
+        chose: Strike (6 dmg, Slimed stuck in hand) (61%)
+        probs: Prepared (discard Slimed, draw 2 fresh cards): 24%, Strike (6 dmg, Slimed stuck in hand): 61%, End turn: 15%
+
+[PASS] block: 3/3
+    ok  dont_overblock
+    ok  block_when_lethal
+    ok  attack_when_enemy_defending
+
+[PASS] energy: 2/2
+    ok  dont_end_turn_with_energy
+    ok  play_zero_cost_before_end
+
+[FAIL] lethal: 1/2
+    ok  take_lethal_over_block
+  MISS  let_poison_kill
+        chose: Strike (overkill) (43%)
+        probs: Strike (overkill): 43%, Defend: 40%, End turn: 17%
+
+[PASS] targeting: 2/2
+    ok  target_vulnerable_enemy
+    ok  kill_low_hp_enemy
+
+[FAIL] synergy: 3/4
+    ok  accelerant_with_poison
+    ok  play_power_early
+   BAD  accelerant_without_poison_is_bad
+        chose: Accelerant (no poison to amplify) (51%)
+        probs: Accelerant (no poison to amplify): 51%, Strike: 39%, End turn: 10%
+    ok  apply_poison_before_accelerant
+
+[FAIL] poison: 5/8
+    ok  poison_vs_strike_high_hp
+    ok  noxious_fumes_early
+    ok  accelerant_high_poison
+    ok  block_over_accelerant_low_hp
+    ok  poison_over_block_free_turn
+  MISS  let_poison_finish_dont_waste_attack
+        chose: Strike (overkill) (42%)
+        probs: Defend: 40%, Strike (overkill): 42%, End turn: 18%
+   BAD  discard_infection_over_poison_card
+        chose: discard Deadly Poison (39%)
+        probs: discard Deadly Poison: 39%, discard Strike: 20%, discard Infection: 18%, discard Defend: 23%
+   BAD  dont_overstack_dying_poison
+        chose: Deadly Poison (+5 poison, overkill) (53%)
+        probs: Deadly Poison (+5 poison, overkill): 53%, Defend (5 block vs 12 — saves HP): 31%, End turn: 16%
+
+[PASS] shiv: 5/5
+    ok  blade_dance_with_accuracy
+    ok  accuracy_early
+    ok  blade_dance_over_defend_free_turn
+    ok  shiv_targets_low_hp
+    ok  blade_dance_vs_defend_incoming_8
+
+[FAIL] sly: 4/5
+    ok  discard_sly_over_normal
+    ok  discard_sly_reflex_for_draw
+    ok  sly_over_status_in_discard
+  MISS  acrobatics_with_sly_hand
+        chose: Defend (5 block) (53%)
+        probs: Acrobatics (draw 3, discard 1 -> trigger Sly): 23%, Defend (5 block): 53%, End turn: 24%
+    ok  survivor_triggers_sly
+
+[PASS] debuff: 2/2
+    ok  weak_vs_multi_hit
+    ok  dont_debuff_dying_enemy
+
+[FAIL] draw: 0/4
+  MISS  backflip_over_defend
+        chose: Strike (40%)
+        probs: Backflip (block + draw 2): 19%, Defend (block only): 31%, Strike: 40%, End turn: 10%
+  MISS  adrenaline_always_play
+        chose: Strike (42%)
+        probs: Adrenaline (0-cost, draw 2, +1 energy): 14%, Strike: 42%, Defend: 30%, End turn: 14%
+   BAD  acrobatics_dig_with_burst
+        chose: Strike (Attack — doesn't consume Burst, but uses last energy) (53%)
+        probs: Acrobatics (Skill — Burst doubles draw 3 → 6): 26%, Strike (Attack — doesn't consume Burst, but uses last energy): 53%, End turn: 20%

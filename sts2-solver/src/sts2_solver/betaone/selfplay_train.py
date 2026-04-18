@@ -238,8 +238,6 @@ def train(
     replay_capacity: int = 200_000,
     cold_start: bool = False,
     turn_boundary_eval: bool = False,
-    dense_value_targets: bool = False,
-    gamma: float = 0.99,
     c_puct: float = 2.5,
     pomcp: bool = False,
     mcts_bootstrap: bool = False,
@@ -249,20 +247,24 @@ def train(
     q_target_temp: float = 0.5,
     eval_every: int = 0,
     value_head_layers: int = 1,
-    batch_size_mcts: int = 1,
+    hand_agg_lean: bool = False,
 ):
     os.makedirs(output_dir, exist_ok=True)
     onnx_dir = os.path.join(output_dir, "onnx")
     os.makedirs(onnx_dir, exist_ok=True)
 
-    # mcts_bootstrap supersedes dense_value_targets — the Rust-side reward
-    # computation is dead work when bootstrap is on. Strip the flag here so
-    # the Rust self-play loop skips the per-turn reward plumbing entirely.
-    # Configs that set both don't fail; they just get a one-line notice.
-    if mcts_bootstrap and dense_value_targets:
-        print("Note: mcts_bootstrap=True overrides dense_value_targets — "
-              "disabling dense reward compute.")
-        dense_value_targets = False
+    # hand_agg_lean is an encoder ablation (zero dims 2,3 of hand_agg).
+    # Flag travels through to both the Python encoder (for eval inside the
+    # training loop) and the Rust encoder (for self-play rollouts and
+    # inference) via an env var, because the Rust FFI doesn't currently
+    # thread experiment config through. Must be set before any call into
+    # sts2_engine.* so thread-local cached ONNX sessions see a consistent
+    # encoding. Recorded in the checkpoint's arch_meta for eval to restore.
+    if hand_agg_lean:
+        os.environ["STS2_HAND_AGG_LEAN"] = "1"
+        print("hand_agg_lean=True: zeroing total_cards_draw + total_energy_gain in hand_agg")
+    else:
+        os.environ.pop("STS2_HAND_AGG_LEAN", None)
 
     # Load game data
     monster_json = build_monster_data_json()
@@ -288,73 +290,90 @@ def train(
     history_path = os.path.join(output_dir, "betaone_history.jsonl")
     progress_path = os.path.join(output_dir, "betaone_progress.json")
 
-    # Resume from checkpoint (unless cold start)
-    if not cold_start:
-        latest_ckpt = find_latest_checkpoint(output_dir)
-        if latest_ckpt:
-            ckpt = torch.load(latest_ckpt, weights_only=False)
+    # Resume if any checkpoint exists. cold_start is advisory: if checkpoints
+    # are present we always resume to protect history/progress — the flag was a
+    # footgun that silently wiped logs when left true in a mid-training config.
+    # For a true restart, delete the experiment directory explicitly.
+    latest_ckpt = find_latest_checkpoint(output_dir)
+    if latest_ckpt:
+        if cold_start:
+            print(f"cold_start=True but {os.path.basename(latest_ckpt)} exists — "
+                  "resuming to preserve history. Delete the experiment dir for a true restart.")
+        ckpt = torch.load(latest_ckpt, weights_only=False)
+        try:
+            network.load_state_dict(ckpt["model_state_dict"])
+            print(f"Loaded checkpoint: gen {ckpt.get('gen', '?')}")
             try:
-                network.load_state_dict(ckpt["model_state_dict"])
-                print(f"Loaded checkpoint: gen {ckpt.get('gen', '?')}")
-                try:
-                    optimizer.load_state_dict(ckpt["optimizer_state_dict"])
-                except (ValueError, KeyError):
-                    print("Optimizer reset")
-                start_gen = ckpt.get("gen", 0) + 1
-                best_win_rate = ckpt.get("win_rate", 0.0)
-            except RuntimeError:
-                # Dimension-aware warm-start
-                old_state = ckpt["model_state_dict"]
-                new_state = network.state_dict()
+                optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+            except (ValueError, KeyError):
+                print("Optimizer reset")
+            start_gen = ckpt.get("gen", 0) + 1
+            best_win_rate = ckpt.get("win_rate", 0.0)
+        except RuntimeError:
+            # Dimension-aware warm-start
+            old_state = ckpt["model_state_dict"]
+            new_state = network.state_dict()
 
-                # Reset value_head entirely when layer count changes.
-                # The slice-copy below would otherwise wedge the old readout
-                # matrix [1, H] into a new hidden-layer position [H', H] at
-                # slice [:1, :H], turning a read-out into a semantically
-                # broken first row of a hidden→hidden transform. Random init
-                # is strictly better than that — layers that don't exist in
-                # the old head stay at init, and the readout layer starts
-                # fresh rather than from a displaced weight.
-                old_vh_keys = {k for k in old_state if k.startswith("value_head.")}
-                new_vh_keys = {k for k in new_state if k.startswith("value_head.")}
-                reset_value_head = old_vh_keys != new_vh_keys
+            # Reset value_head entirely when layer count changes.
+            # The slice-copy below would otherwise wedge the old readout
+            # matrix [1, H] into a new hidden-layer position [H', H] at
+            # slice [:1, :H], turning a read-out into a semantically
+            # broken first row of a hidden→hidden transform. Random init
+            # is strictly better than that — layers that don't exist in
+            # the old head stay at init, and the readout layer starts
+            # fresh rather than from a displaced weight.
+            old_vh_keys = {k for k in old_state if k.startswith("value_head.")}
+            new_vh_keys = {k for k in new_state if k.startswith("value_head.")}
+            reset_value_head = old_vh_keys != new_vh_keys
 
-                loaded, skipped, reset = 0, 0, 0
-                for key in new_state:
-                    if reset_value_head and key.startswith("value_head."):
-                        reset += 1
-                        continue
-                    if key not in old_state:
-                        skipped += 1
-                        continue
-                    old_t = old_state[key]
-                    new_t = new_state[key]
-                    if old_t.shape == new_t.shape:
-                        new_state[key] = old_t
-                        loaded += 1
-                    elif old_t.dim() == new_t.dim() and all(
-                        o <= n for o, n in zip(old_t.shape, new_t.shape)
-                    ):
-                        slices = tuple(slice(0, o) for o in old_t.shape)
-                        new_state[key][slices] = old_t
-                        loaded += 1
-                    else:
-                        skipped += 1
-                network.load_state_dict(new_state)
-                msg = f"Warm-start: {loaded} loaded, {skipped} new/skipped"
-                if reset_value_head:
-                    msg += f", {reset} value_head reset (layer count changed)"
-                print(msg)
-                for f in [history_path, progress_path]:
-                    if os.path.exists(f):
-                        os.remove(f)
-        else:
-            print("Cold start — no checkpoint found")
+            loaded, skipped, reset = 0, 0, 0
+            for key in new_state:
+                if reset_value_head and key.startswith("value_head."):
+                    reset += 1
+                    continue
+                if key not in old_state:
+                    skipped += 1
+                    continue
+                old_t = old_state[key]
+                new_t = new_state[key]
+                if old_t.shape == new_t.shape:
+                    new_state[key] = old_t
+                    loaded += 1
+                elif old_t.dim() == new_t.dim() and all(
+                    o <= n for o, n in zip(old_t.shape, new_t.shape)
+                ):
+                    # Init new dims to identity-of-this-op semantics, then
+                    # copy old into the leading slice. Without the explicit
+                    # init, 2D Linear weights keep their kaiming-uniform
+                    # values in the new columns — producing random
+                    # perturbations of the trunk on warm-load that defeat
+                    # the "new feature dims contribute nothing yet" intent.
+                    # 1D LayerNorm gamma/bias keep their default (1/0)
+                    # which is correct as-is.
+                    if new_t.dim() == 2:
+                        new_state[key].zero_()
+                    elif new_t.dim() == 1:
+                        if "weight" in key:
+                            new_state[key].fill_(1.0)  # LayerNorm gamma
+                        else:
+                            new_state[key].zero_()     # LayerNorm beta
+                    slices = tuple(slice(0, o) for o in old_t.shape)
+                    new_state[key][slices] = old_t
+                    loaded += 1
+                else:
+                    skipped += 1
+            network.load_state_dict(new_state)
+            msg = f"Warm-start: {loaded} loaded, {skipped} new/skipped"
+            if reset_value_head:
+                msg += f", {reset} value_head reset (layer count changed)"
+            print(msg)
+            # Architecture changed — old history reflects a different network,
+            # don't mix it with post-warmstart metrics.
+            for f in [history_path, progress_path]:
+                if os.path.exists(f):
+                    os.remove(f)
     else:
-        print("Cold start (forced)")
-        for f in [history_path, progress_path]:
-            if os.path.exists(f):
-                os.remove(f)
+        print("Cold start — no checkpoint found")
 
     # No runtime calibration — use pre-calibrated training set HPs.
     player_max_hp = 70
@@ -379,7 +398,6 @@ def train(
         gen_states, gen_act_feat, gen_act_masks = [], [], []
         gen_hand_ids, gen_action_ids, gen_policies = [], [], []
         gen_visits, gen_q_values = [], []
-        gen_rewards = []
         gen_mcts_values = []
         gen_combat_indices = []
         combat_offset = 0
@@ -410,12 +428,10 @@ def train(
                 gen_id=gen,
                 add_noise=True,
                 turn_boundary_eval=turn_boundary_eval,
-                dense_value_targets=dense_value_targets,
                 c_puct=c_puct,
                 pomcp=pomcp,
                 noise_frac=noise_frac,
                 pw_k=pw_k,
-                batch_size=batch_size_mcts,
             )
 
             n_steps = rollout["total_steps"]
@@ -437,8 +453,6 @@ def train(
                 gen_q_values.extend(np.array(rollout["child_q_values"], dtype=np.float32).reshape(-1, MAX_ACTIONS))
             gen_combat_indices.extend(ci)
             gen_mcts_values.extend(np.array(rollout["mcts_values"], dtype=np.float32))
-            if dense_value_targets:
-                gen_rewards.extend(np.array(rollout["rewards"], dtype=np.float32))
             all_outcomes.extend(rollout["outcomes"])
             all_final_hps.extend(rollout["final_hps"])
 
@@ -455,17 +469,6 @@ def train(
             # The search already assigns credit through tree backup — terminal
             # HP-scaled win/loss is the only reward signal.
             gen_values = np.array(gen_mcts_values, dtype=np.float32)
-        elif dense_value_targets:
-            # Monte Carlo returns: G_t = sum_{k=t}^{T} gamma^{k-t} * r_k
-            rewards_arr = np.array(gen_rewards, dtype=np.float32)
-            for ci in range(len(all_outcomes)):
-                mask = combat_indices == ci
-                ep_r = rewards_arr[mask].copy()
-                G = 0.0
-                for t in reversed(range(len(ep_r))):
-                    G = ep_r[t] + gamma * G
-                    ep_r[t] = G
-                gen_values[mask] = ep_r
         else:
             # Broadcast game outcome (HP-scaled: win → 1.0 + 0.3*hp_frac, lose → -1.0)
             for ci, outcome in enumerate(all_outcomes):
@@ -578,10 +581,14 @@ def train(
 
         best_win_rate = max(best_win_rate, win_rate)
 
-        # Checkpoints
+        # Checkpoints. arch_meta records hand_agg_lean so eval can restore the
+        # encoder ablation without needing the experiment config on hand —
+        # checkpoint + ckpt["arch_meta"] is a self-contained artifact.
+        arch_meta = dict(network.arch_meta())
+        arch_meta["hand_agg_lean"] = hand_agg_lean
         ckpt_data = {
             "gen": gen,
-            "arch_meta": network.arch_meta(),
+            "arch_meta": arch_meta,
             "model_state_dict": network.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
             "win_rate": win_rate,

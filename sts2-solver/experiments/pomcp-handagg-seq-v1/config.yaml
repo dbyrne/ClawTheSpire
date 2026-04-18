@@ -1,0 +1,57 @@
+name: pomcp-handagg-seq-v1
+method: mcts_selfplay
+description: 'Hand-aggregate features (5 hand-summary dims in base_state: total_damage,
+  total_block, total_cards_draw, total_energy_gain, count_powers). Cold-start, value_head_layers=3.
+  Sequential MCTS (no batching). 100 gens, 1000 sims, POMCP+pwfix+qtarget config matching
+  valuedepth-v1. Tests whether hand-aggregate features close the value-eval hand-swap
+  failures (future_value, hand, arithmetic_compare card-swap subset). Paired with
+  pomcp-handagg-batched-v1 for batching A/B.'
+created: '2026-04-18T00:48:54+00:00'
+parent: null
+parent_checkpoint: null
+network_type: betaone
+architecture:
+  arch_version: 2
+  base_state_dim: 142
+  hidden_dim: 128
+  action_hidden: 64
+  hand_proj_dim: 32
+  card_embed_dim: 16
+  card_stats_dim: 28
+  relic_dim: 26
+  hand_agg_dim: 5
+  action_dim: 35
+  max_hand: 10
+  max_actions: 30
+  value_head_layers: 3
+  num_cards: 578
+  total_params: 138941
+  state_dim: 432
+  trunk_input: 174
+training:
+  generations: 100
+  combats_per_gen: 256
+  lr: 0.0003
+  batch_size: 512
+  mcts:
+    num_sims: 1000
+    temperature: 1.0
+    replay_capacity: 50000
+    train_epochs: 4
+    value_coef: 1.0
+    c_puct: 1.5
+    pomcp: true
+    mcts_bootstrap: true
+    turn_boundary_eval: true
+    eval_every: 10
+data:
+  mode: encounter_set
+  encounter_set: lean-decks-v1
+checkpoints:
+  save_every: 10
+  keep_best: true
+  cold_start: false
+concluded_gen: 30
+concluded_reason: peak combined eval 86.6% (eval 83.8% + value_eval 88.4%); hand-agg
+  architectural gain already present by gen 10 and did not compound further with training
+concluded_at: '2026-04-18T12:32:40+00:00'

@@ -1,0 +1,16 @@
+{
+  "gen": 84,
+  "win_rate": 0.6875,
+  "avg_hp": 8.9,
+  "steps": 6374,
+  "buffer_size": 6374,
+  "episodes": 256,
+  "encounter_set": "lean-decks-v1",
+  "policy_loss": 1.2424,
+  "value_loss": 0.05727,
+  "num_sims": 1000,
+  "gen_time": 205.85,
+  "timestamp": 1776514709.6781352,
+  "num_generations": 100,
+  "best_win_rate": 0.7266
+}

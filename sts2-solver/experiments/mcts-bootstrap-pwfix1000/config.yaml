@@ -1,13 +1,13 @@
 name: mcts-bootstrap-pwfix1000
 method: mcts_selfplay
 description: 'POMCP fix + 1000 sims, cold start. v1 config except: POMCP weighted-
-  fallback fix (commit 55af88d) and num_sims 400->1000. Tests whether the
-  combination of cleaner Q (more sims) + correct chance-node value backup (fix)
-  is enough to flip draw scenarios without needing noise=0.5 compensation.
-  Capped at 100 gens (~7hr).'
+  fallback fix (commit 55af88d) and num_sims 400->1000. Tests whether the combination
+  of cleaner Q (more sims) + correct chance-node value backup (fix) is enough to flip
+  draw scenarios without needing noise=0.5 compensation. Capped at 100 gens (~7hr).'
 created: '2026-04-17T02:26:38+00:00'
 parent: mcts-bootstrap-v1
 parent_checkpoint: latest
+network_type: betaone
 architecture:
   arch_version: 2
   base_state_dim: 137
@@ -36,8 +36,6 @@ training:
     train_epochs: 4
     value_coef: 1.0
     turn_boundary_eval: true
-    dense_value_targets: true
-    gamma: 0.99
     c_puct: 1.5
     pomcp: true
     mcts_bootstrap: true
@@ -48,3 +46,7 @@ checkpoints:
   save_every: 50
   keep_best: true
   cold_start: true
+concluded_gen: 83
+concluded_reason: peak combined 81.7% (eval 78.8% + value_eval 83.8%); baseline for
+  valuedepth and qtarget forks
+concluded_at: '2026-04-18T12:32:42+00:00'

@@ -43,8 +43,6 @@ MCTS_DEFAULTS = {
     "value_coef": 1.0,
     "replay_capacity": 200_000,
     "turn_boundary_eval": False,
-    "dense_value_targets": False,
-    "gamma": 0.99,
     "c_puct": 2.5,
     "pomcp": False,
     "mcts_bootstrap": False,
@@ -53,11 +51,6 @@ MCTS_DEFAULTS = {
     "q_target_mix": 0.0,
     "q_target_temp": 0.5,
     "eval_every": 0,
-    # Virtual-loss batched MCTS search. 1 = sequential (no virtual loss).
-    # >1 = collect K leaves per round, batch NN calls. K=32 empirically gives
-    # ~2x speedup at num_sims=1000 on the current model. Quality cost is
-    # minor finite-sim visit-distribution noise; asymptotically unbiased.
-    "batch_size_mcts": 1,
 }
 
 
@@ -97,6 +90,14 @@ class ExperimentConfig:
         "save_every": 10, "keep_best": True, "cold_start": False,
     })
 
+    # Finalization: when an experiment is "done," promote a specific gen as its
+    # canonical result. `info`, `compare`, and `list` then report scores at
+    # concluded_gen instead of latest, so later readers don't have to re-derive
+    # which gen was the peak. `None` on all three fields = not finalized.
+    concluded_gen: int | None = None
+    concluded_reason: str | None = None
+    concluded_at: str | None = None  # ISO timestamp
+
     @classmethod
     def from_yaml(cls, path: str | Path) -> ExperimentConfig:
         with open(path, encoding="utf-8") as f:
@@ -113,6 +114,9 @@ class ExperimentConfig:
             training=raw.get("training", {}),
             data=raw.get("data", {"mode": "encounter_set", "encounter_set": None}),
             checkpoints=raw.get("checkpoints", {}),
+            concluded_gen=raw.get("concluded_gen"),
+            concluded_reason=raw.get("concluded_reason"),
+            concluded_at=raw.get("concluded_at"),
         )
 
     def to_yaml(self, path: str | Path) -> None:
@@ -129,6 +133,10 @@ class ExperimentConfig:
             "data": self.data,
             "checkpoints": self.checkpoints,
         }
+        if self.concluded_gen is not None:
+            data["concluded_gen"] = self.concluded_gen
+            data["concluded_reason"] = self.concluded_reason
+            data["concluded_at"] = self.concluded_at
         with open(path, "w", encoding="utf-8") as f:
             yaml.dump(data, f, default_flow_style=False, sort_keys=False)
 
@@ -179,6 +187,7 @@ class ExperimentConfig:
 
         arch = self.architecture or {}
         value_head_layers = int(arch.get("value_head_layers", 1))
+        hand_agg_lean = bool(arch.get("hand_agg_lean", False))
 
         if self.method == "mcts_selfplay":
             mcts = t.get("mcts", {})
@@ -195,8 +204,6 @@ class ExperimentConfig:
                 "cold_start": ck.get("cold_start", False),
                 "encounter_set_id": encounter_set_id,
                 "turn_boundary_eval": mcts.get("turn_boundary_eval", False),
-                "dense_value_targets": mcts.get("dense_value_targets", False),
-                "gamma": _float(mcts.get("gamma"), 0.99),
                 "c_puct": _float(mcts.get("c_puct"), 2.5),
                 "pomcp": mcts.get("pomcp", False),
                 "mcts_bootstrap": mcts.get("mcts_bootstrap", False),
@@ -206,7 +213,7 @@ class ExperimentConfig:
                 "q_target_temp": _float(mcts.get("q_target_temp"), 0.5),
                 "eval_every": mcts.get("eval_every", 0),
                 "value_head_layers": value_head_layers,
-                "batch_size_mcts": mcts.get("batch_size_mcts", 1),
+                "hand_agg_lean": hand_agg_lean,
             }
         else:  # ppo
             ppo = t.get("ppo", {})
@@ -352,33 +359,73 @@ class Experiment:
     def fork(
         new_name: str,
         source_name: str,
-        checkpoint: str = "latest",
+        checkpoint: str = "auto",
         overrides: dict | None = None,
     ) -> Experiment:
-        """Fork a new experiment from an existing one's checkpoint."""
+        """Fork a new experiment from an existing one's checkpoint.
+
+        `checkpoint` resolution:
+          - "auto" (default): use the source's concluded_gen if finalized,
+            else use "latest". This matches the principled default — if
+            someone marked an experiment concluded, that's the gen they
+            want future work to build on, not whatever random latest.pt
+            happened to be left over from extra training past the mark.
+          - "finalized" / "concluded": require the source to be finalized
+            and use its concluded_gen. Raises if source isn't finalized.
+          - "latest": use betaone_latest.pt (last saved weights).
+          - "genN" or raw "N": use betaone_genN.pt explicitly.
+        """
         source = Experiment(source_name)
         if not source.exists:
             raise FileNotFoundError(f"Source experiment '{source_name}' not found")
 
-        config = source.config
+        src_cfg = source.config
+
+        # Resolve the checkpoint keyword to an actual .pt filename.
+        if checkpoint == "auto":
+            if src_cfg.concluded_gen is not None:
+                resolved = f"gen{src_cfg.concluded_gen}"
+            else:
+                resolved = "latest"
+        elif checkpoint in ("finalized", "concluded"):
+            if src_cfg.concluded_gen is None:
+                raise ValueError(
+                    f"Source '{source_name}' is not finalized — no concluded_gen "
+                    "to fork from. Use --checkpoint latest or finalize it first."
+                )
+            resolved = f"gen{src_cfg.concluded_gen}"
+        else:
+            resolved = checkpoint
+
+        config = src_cfg
         config.name = new_name
         config.parent = source_name
-        config.parent_checkpoint = checkpoint
+        config.parent_checkpoint = resolved
+        # A fork is a fresh experiment — don't inherit the parent's finalize
+        # marker or we'd ship the child as "done at gen N" before it runs.
+        config.concluded_gen = None
+        config.concluded_reason = None
+        config.concluded_at = None
 
         exp = Experiment.create(new_name, config=config, overrides=overrides)
 
         # Copy checkpoint with gen reset to 0
-        if checkpoint == "latest":
+        if resolved == "latest":
             src_ckpt = source.dir / "betaone_latest.pt"
         else:
-            src_ckpt = source.dir / f"betaone_{checkpoint}.pt"
+            src_ckpt = source.dir / f"betaone_{resolved}.pt"
 
-        if src_ckpt.exists():
-            import torch
-            ckpt = torch.load(str(src_ckpt), map_location="cpu", weights_only=False)
-            ckpt["gen"] = 0
-            ckpt["win_rate"] = 0.0
-            torch.save(ckpt, str(exp.dir / "betaone_latest.pt"))
+        if not src_ckpt.exists():
+            raise FileNotFoundError(
+                f"Source checkpoint {src_ckpt.name} not found in {source.dir}. "
+                f"Available: betaone_latest.pt + any betaone_gen<N>.pt files."
+            )
+
+        import torch
+        ckpt = torch.load(str(src_ckpt), map_location="cpu", weights_only=False)
+        ckpt["gen"] = 0
+        ckpt["win_rate"] = 0.0
+        torch.save(ckpt, str(exp.dir / "betaone_latest.pt"))
 
         return exp
 
@@ -420,6 +467,7 @@ class Experiment:
                 "gen": progress.get("gen", 0) if progress else 0,
                 "win_rate": progress.get("win_rate", 0.0) if progress else 0.0,
                 "best_win_rate": progress.get("best_win_rate", 0.0) if progress else 0.0,
+                "concluded_gen": config.concluded_gen,
             })
         return results
 
@@ -433,17 +481,116 @@ class Experiment:
         shutil.move(str(self.dir), str(dest))
 
     def info(self) -> dict:
-        """Return detailed info about this experiment."""
+        """Return detailed info about this experiment.
+
+        If the experiment is finalized (concluded_gen set), `latest_eval` and
+        `latest_value_eval` are pinned to that gen. Raw "most recent row"
+        readers still work — callers that want the true latest should read
+        the jsonl directly.
+        """
         config = self.config
         progress = _read_progress(self.dir / "betaone_progress.json")
         benchmarks = _read_latest_benchmark(self.benchmarks_dir / "results.jsonl")
-        eval_result = _read_latest_benchmark(self.benchmarks_dir / "eval.jsonl")
+
+        eval_path = self.benchmarks_dir / "eval.jsonl"
+        value_eval_path = self.benchmarks_dir / "value_eval.jsonl"
+        if config.concluded_gen is not None:
+            eval_result = _read_eval_at_gen(eval_path, config.concluded_gen)
+            value_eval_result = _read_eval_at_gen(value_eval_path, config.concluded_gen)
+        else:
+            eval_result = _read_latest_benchmark(eval_path)
+            value_eval_result = _read_latest_benchmark(value_eval_path)
+
         return {
             "config": config,
             "progress": progress,
             "latest_benchmark": benchmarks,
             "latest_eval": eval_result,
+            "latest_value_eval": value_eval_result,
+            "is_concluded": config.concluded_gen is not None,
         }
+
+    def resolve_checkpoint(self, spec: str = "auto") -> Path:
+        """Resolve a checkpoint spec to a .pt file path.
+
+        Accepts:
+          - "auto" (default): finalized gen if set, else betaone_latest.pt.
+            This is the principled default for benchmark/eval: whatever the
+            experiment was canonically concluded as, not whatever random
+            training checkpoint happens to be newest on disk.
+          - "finalized" / "concluded": errors if not finalized.
+          - "latest": always betaone_latest.pt.
+          - "genN" or raw "N": betaone_genN.pt.
+        """
+        cfg = self.config
+        if spec == "auto":
+            if cfg.concluded_gen is not None:
+                return self.dir / f"betaone_gen{cfg.concluded_gen}.pt"
+            return self.dir / "betaone_latest.pt"
+        if spec in ("finalized", "concluded"):
+            if cfg.concluded_gen is None:
+                raise ValueError(
+                    f"'{self.name}' is not finalized — no concluded_gen. "
+                    "Use --checkpoint latest or finalize it first."
+                )
+            return self.dir / f"betaone_gen{cfg.concluded_gen}.pt"
+        if spec == "latest":
+            return self.dir / "betaone_latest.pt"
+        # "gen30" or raw "30"
+        gen_str = spec if spec.startswith("gen") else f"gen{spec}"
+        return self.dir / f"betaone_{gen_str}.pt"
+
+    def finalize(self, gen: int, reason: str) -> None:
+        """Mark a specific gen as the experiment's canonical conclusion.
+
+        Finalize is primarily an assertion about *scores* at a gen, so the
+        hard requirement is that eval data exists at that gen. A matching
+        checkpoint (either betaone_genN.pt or betaone_latest.pt recording the
+        same gen) is also required so the pinned weights are recoverable.
+        """
+        from datetime import datetime, timezone
+
+        # Require at least one of {eval, value_eval} at this gen — otherwise
+        # we'd be pinning to empty scores.
+        eval_ok = _read_eval_at_gen(self.benchmarks_dir / "eval.jsonl", gen) is not None
+        vev_ok = _read_eval_at_gen(self.benchmarks_dir / "value_eval.jsonl", gen) is not None
+        if not (eval_ok or vev_ok):
+            raise ValueError(
+                f"No eval or value_eval data at gen {gen} for {self.name}. "
+                "Run `sts2-experiment eval <name>` at that gen before finalizing."
+            )
+
+        # Require a recoverable checkpoint. Accept either the gen-specific .pt
+        # or the latest .pt if its recorded gen matches.
+        gen_ckpt = self.dir / f"betaone_gen{gen}.pt"
+        latest_ckpt = self.dir / "betaone_latest.pt"
+        ckpt_ok = gen_ckpt.exists()
+        if not ckpt_ok and latest_ckpt.exists():
+            import torch
+            try:
+                ck = torch.load(str(latest_ckpt), map_location="cpu", weights_only=False)
+                ckpt_ok = ck.get("gen") == gen
+            except Exception:
+                pass
+        if not ckpt_ok:
+            raise FileNotFoundError(
+                f"No checkpoint for gen {gen}. Expected {gen_ckpt.name} or "
+                f"betaone_latest.pt@gen={gen}. The .pt may have been rotated out."
+            )
+
+        config = self.config
+        config.concluded_gen = int(gen)
+        config.concluded_reason = reason
+        config.concluded_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        config.to_yaml(self.config_path)
+
+    def unfinalize(self) -> None:
+        """Clear the concluded-gen marker."""
+        config = self.config
+        config.concluded_gen = None
+        config.concluded_reason = None
+        config.concluded_at = None
+        config.to_yaml(self.config_path)
 
     def save_eval(self, result: dict, suite_id: str | None = None) -> None:
         """Append eval harness results to benchmarks/eval.jsonl."""
@@ -527,7 +674,6 @@ class Experiment:
                 _float_key(row_or_result.get("c_puct")),
                 row_or_result.get("pomcp"),
                 row_or_result.get("turn_boundary_eval"),
-                row_or_result.get("batch_size_mcts"),
             )
 
         is_mcts = result["mode"] == "mcts"
@@ -542,7 +688,6 @@ class Experiment:
             _float_key(result.get("c_puct")),
             result.get("pomcp"),
             result.get("turn_boundary_eval"),
-            result.get("batch_size_mcts"),
         )
         new_wins = result.get("wins", 0)
         new_games = result.get("games", 0)
@@ -588,7 +733,6 @@ class Experiment:
                 "c_puct": result.get("c_puct"),
                 "pomcp": result.get("pomcp"),
                 "turn_boundary_eval": result.get("turn_boundary_eval"),
-                "batch_size_mcts": result.get("batch_size_mcts"),
                 "timestamp": time.time(),
                 "checkpoint": checkpoint,
                 "gen": result.get("gen"),
@@ -644,3 +788,22 @@ def _read_latest_benchmark(path: Path) -> dict | None:
     if last_line:
         return json.loads(last_line)
     return None
+
+
+def _read_eval_at_gen(path: Path, gen: int) -> dict | None:
+    """Return the most recent eval row for the given gen, or None if absent.
+    Picks the last entry so re-runs of eval at the same gen overwrite earlier
+    ones in the surfaced view.
+    """
+    if not path.exists():
+        return None
+    matched = None
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            row = json.loads(line)
+            if row.get("gen") == gen or row.get("generation") == gen:
+                matched = row
+    return matched

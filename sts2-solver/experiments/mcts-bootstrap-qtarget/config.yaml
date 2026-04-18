@@ -7,6 +7,7 @@ description: 'Q-target policy mixing: target = 0.5*visits + 0.5*softmax(Q/0.5). 
 created: '2026-04-17T09:26:06+00:00'
 parent: mcts-bootstrap-pwfix1000
 parent_checkpoint: latest
+network_type: betaone
 architecture:
   arch_version: 2
   base_state_dim: 137
@@ -35,8 +36,6 @@ training:
     train_epochs: 4
     value_coef: 1.0
     turn_boundary_eval: true
-    dense_value_targets: true
-    gamma: 0.99
     c_puct: 1.5
     pomcp: true
     mcts_bootstrap: true
@@ -49,3 +48,7 @@ checkpoints:
   save_every: 50
   keep_best: true
   cold_start: true
+concluded_gen: 54
+concluded_reason: peak combined 84.8% (eval 83.8% + value_eval 85.5%); training stopped
+  here
+concluded_at: '2026-04-18T12:32:41+00:00'

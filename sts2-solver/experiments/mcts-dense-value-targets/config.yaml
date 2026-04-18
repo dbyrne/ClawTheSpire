@@ -34,8 +34,6 @@ training:
     train_epochs: 4
     value_coef: 1.0
     turn_boundary_eval: true
-    dense_value_targets: true
-    gamma: 0.99
 data:
   mode: encounter_set
   encounter_set: base-es-v1

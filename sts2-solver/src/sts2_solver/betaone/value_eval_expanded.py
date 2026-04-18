@@ -464,6 +464,54 @@ def build_arithmetic_compare() -> list[ValueComparison]:
         worse=_vstate(_p(energy=0), _BASE_ENEMY, _BASE_HAND),
     ))
 
+    # --- X-cost scaling: same hand, V scales with energy ---
+    # Skewer at 3E deals 21 damage (7 x 3); at 1E deals 7.
+    comps.append(ValueComparison(
+        name="skewer_energy_3_vs_1",
+        category="arithmetic_compare",
+        description="Skewer at 3E (21 dmg) > Skewer at 1E (7 dmg)",
+        better=_vstate(_p(energy=3), _BASE_ENEMY,
+                       [skewer(), strike(), defend(), defend()]),
+        worse=_vstate(_p(energy=1), _BASE_ENEMY,
+                      [skewer(), strike(), defend(), defend()]),
+    ))
+
+    # --- X-cost beats fixed damage at high energy ---
+    # Skewer @ 3E = 21 dmg; Dagger Throw = 9 dmg flat.
+    comps.append(ValueComparison(
+        name="skewer_3e_vs_dagger_throw",
+        category="arithmetic_compare",
+        description="Skewer at 3E (21 dmg) > Dagger Throw (9 dmg) at 3E",
+        better=_vstate(_p(energy=3), _BASE_ENEMY,
+                       [skewer(), strike(), defend(), defend()]),
+        worse=_vstate(_p(energy=3), _BASE_ENEMY,
+                      [dagger_throw(), strike(), defend(), defend()]),
+    ))
+
+    # --- X-cost at mid energy still beats fixed damage ---
+    # Skewer @ 2E = 14 dmg; Dagger Throw = 9 dmg.
+    comps.append(ValueComparison(
+        name="skewer_2e_vs_dagger_throw",
+        category="arithmetic_compare",
+        description="Skewer at 2E (14 dmg) > Dagger Throw (9 dmg) at 2E",
+        better=_vstate(_p(energy=2), _BASE_ENEMY,
+                       [skewer(), strike(), defend(), defend()]),
+        worse=_vstate(_p(energy=2), _BASE_ENEMY,
+                      [dagger_throw(), strike(), defend(), defend()]),
+    ))
+
+    # --- Fixed damage beats X-cost at low energy ---
+    # Skewer @ 1E = 7 dmg; Dagger Throw = 9 dmg flat.
+    comps.append(ValueComparison(
+        name="dagger_throw_vs_skewer_1e",
+        category="arithmetic_compare",
+        description="Dagger Throw (9 dmg) > Skewer at 1E (7 dmg)",
+        better=_vstate(_p(energy=1), _BASE_ENEMY,
+                       [dagger_throw(), strike(), defend(), defend()]),
+        worse=_vstate(_p(energy=1), _BASE_ENEMY,
+                      [skewer(), strike(), defend(), defend()]),
+    ))
+
     return comps
 
 

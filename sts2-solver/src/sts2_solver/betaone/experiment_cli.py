@@ -133,9 +133,17 @@ def cmd_benchmark(args):
     from .encounter_set import load_encounter_set
     from .suite import get_encounter_set_suite
 
-    ckpt_path = str(exp.dir / "betaone_latest.pt")
-    if args.checkpoint and args.checkpoint != "latest":
-        ckpt_path = str(exp.dir / f"betaone_{args.checkpoint}.pt")
+    try:
+        ckpt_path_p = exp.resolve_checkpoint(args.checkpoint)
+    except ValueError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+    if not ckpt_path_p.exists():
+        print(f"Error: checkpoint not found at {ckpt_path_p}")
+        sys.exit(1)
+    ckpt_path = str(ckpt_path_p)
+    # For downstream save_benchmark logging: record resolved gen, not spec.
+    resolved_label = ckpt_path_p.name.replace("betaone_", "").replace(".pt", "")
 
     es_name = (args.encounter_set
                or exp.config.data.get("encounter_set")
@@ -156,34 +164,31 @@ def cmd_benchmark(args):
     pomcp = bool(mcts_cfg.get("pomcp", False))
     turn_boundary_eval = bool(mcts_cfg.get("turn_boundary_eval", False))
     pw_k = float(mcts_cfg.get("pw_k", 1.0))
-    batch_size_mcts = int(mcts_cfg.get("batch_size_mcts", 1))
     if args.pw_k is not None:
         pw_k = args.pw_k
 
     print(f"Benchmarking: {exp.config.name}")
+    print(f"  Checkpoint: {ckpt_path_p.name} (resolved from '{args.checkpoint}')")
     print(f"  Encounter set: {es_name} ({len(encounters)} encounters)")
-    print(f"  Mode: {args.mode}, repeats: {args.repeats}, sims: {args.sims}")
-    if args.mode in ("mcts", "both"):
-        print(f"  MCTS config: c_puct={c_puct}, pomcp={pomcp}, "
-              f"turn_boundary_eval={turn_boundary_eval}, pw_k={pw_k}, "
-              f"batch_size_mcts={batch_size_mcts}")
+    print(f"  repeats: {args.repeats}, sims: {args.sims}")
+    print(f"  MCTS config: c_puct={c_puct}, pomcp={pomcp}, "
+          f"turn_boundary_eval={turn_boundary_eval}, pw_k={pw_k}")
 
     results = benchmark_checkpoint(
         ckpt_path,
         encounter_set=encounters,
-        mode=args.mode,
+        mode="mcts",
         repeats=args.repeats,
         num_sims=args.sims,
         c_puct=c_puct,
         pomcp=pomcp,
         turn_boundary_eval=turn_boundary_eval,
         pw_k=pw_k,
-        batch_size_mcts=batch_size_mcts,
     )
 
     for result in results:
         exp.save_benchmark(result, suite_id=sid,
-                           checkpoint=args.checkpoint or "latest")
+                           checkpoint=resolved_label)
 
     print(f"  {len(results)} result(s) saved -> {exp.benchmarks_dir / 'results.jsonl'}")
 
@@ -232,9 +237,15 @@ def cmd_eval(args):
     from .eval import run_eval, run_value_eval
     from .suite import get_current_eval_suite
 
-    ckpt_path = str(exp.dir / "betaone_latest.pt")
-    if args.checkpoint and args.checkpoint != "latest":
-        ckpt_path = str(exp.dir / f"betaone_{args.checkpoint}.pt")
+    try:
+        ckpt_path_p = exp.resolve_checkpoint(args.checkpoint)
+    except ValueError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+    if not ckpt_path_p.exists():
+        print(f"Error: checkpoint not found at {ckpt_path_p}")
+        sys.exit(1)
+    ckpt_path = str(ckpt_path_p)
 
     # Compute and save suite definition
     _, suite_id = get_current_eval_suite()
@@ -269,14 +280,34 @@ def cmd_compare(args):
         config = info["config"]
         progress = info["progress"] or {}
         eval_result = info.get("latest_eval")
+        value_eval_result = info.get("latest_value_eval")
+        # For concluded experiments, show the concluded gen in the Gen column
+        # instead of the latest training gen — readers care about the canonical
+        # state, not where training happened to stop.
+        if info["is_concluded"]:
+            gen_display = f"{config.concluded_gen}*"
+        else:
+            gen_display = str(progress.get("gen", "?"))
+        # Suite signature = "<P-total>/<V-total>". The stored suite_id hash
+        # historically only covered policy scenarios; V-Eval totals could
+        # drift silently. Showing raw totals makes drift instantly visible.
+        p_total = eval_result.get("total") if eval_result else None
+        v_total = value_eval_result.get("total") if value_eval_result else None
+        if p_total or v_total:
+            suite_short = f"{p_total or '-'}/{v_total or '-'}"
+        else:
+            suite_short = "-"
         rows.append({
             "name": name,
             "method": _format_method(config),
             "params": config.architecture.get("total_params", "?"),
-            "gen": progress.get("gen", "?"),
+            "gen": gen_display,
             "wr": progress.get("win_rate", "?"),
             "best": progress.get("best_win_rate", "?"),
-            "eval": eval_result.get("score") if eval_result else None,
+            "p_eval": eval_result.get("score") if eval_result else None,
+            "v_eval": (value_eval_result["passed"] / max(value_eval_result["total"], 1)
+                       if value_eval_result else None),
+            "suite": suite_short,
         })
 
     if not rows:
@@ -284,15 +315,27 @@ def cmd_compare(args):
         return
 
     # Print comparison table
-    print(f"\n{'Experiment':<28s} {'Method':<12s} {'Params':>8s} {'Gen':>5s} {'WR':>7s} {'Best':>7s} {'Eval':>7s}")
-    print("-" * 82)
+    print(f"\n{'Experiment':<28s} {'Method':<12s} {'Params':>8s} {'Gen':>5s} "
+          f"{'WR':>7s} {'Best':>7s} {'P-Eval':>7s} {'V-Eval':>7s} {'Suite':>9s}")
+    print("-" * 99)
     for r in rows:
         wr = f"{r['wr']:.1%}" if isinstance(r["wr"], float) else str(r["wr"])
         best = f"{r['best']:.1%}" if isinstance(r["best"], float) else str(r["best"])
         gen = str(r["gen"])
         params = f"{r['params']:,}" if isinstance(r["params"], int) else str(r["params"])
-        ev = f"{r['eval']:.1%}" if r["eval"] is not None else "  -"
-        print(f"  {r['name']:<26s} {r['method']:<12s} {params:>8s} {gen:>5s} {wr:>7s} {best:>7s} {ev:>7s}")
+        pev = f"{r['p_eval']:.1%}" if r["p_eval"] is not None else "  -"
+        vev = f"{r['v_eval']:.1%}" if r["v_eval"] is not None else "  -"
+        print(f"  {r['name']:<26s} {r['method']:<12s} {params:>8s} {gen:>5s} "
+              f"{wr:>7s} {best:>7s} {pev:>7s} {vev:>7s} {r['suite']:>9s}")
+    if any("*" in r["gen"] for r in rows):
+        print("  (* = finalized at concluded_gen; scores shown are at that gen)")
+    # The Suite column shows P-total/V-total. Distinct signatures mean the
+    # scenario counts differ and scores are NOT apples-to-apples. Re-run
+    # `sts2-experiment eval <name>` at the concluded gen to align them.
+    distinct_suites = {r["suite"] for r in rows if r["suite"] != "-"}
+    if len(distinct_suites) > 1:
+        print(f"  (WARNING: {len(distinct_suites)} different scenario counts "
+              f"— scores are NOT apples-to-apples; re-run eval to align)")
 
 
 def cmd_list(args):
@@ -301,12 +344,18 @@ def cmd_list(args):
         print("No experiments found.")
         return
 
-    print(f"\n{'Experiment':<30s} {'Method':<15s} {'Gen':>5s} {'WR':>7s} {'Best':>7s}")
-    print("-" * 70)
+    print(f"\n{'Experiment':<30s} {'Method':<15s} {'Gen':>6s} {'WR':>7s} {'Best':>7s}")
+    print("-" * 72)
     for e in experiments:
         wr = f"{e['win_rate']:.1%}" if e["win_rate"] else "  -"
         best = f"{e['best_win_rate']:.1%}" if e["best_win_rate"] else "  -"
-        print(f"  {e['name']:<28s} {e['method']:<15s} {e['gen']:>5d} {wr:>7s} {best:>7s}")
+        if e.get("concluded_gen") is not None:
+            gen_str = f"{e['concluded_gen']}*"
+        else:
+            gen_str = str(e["gen"])
+        print(f"  {e['name']:<28s} {e['method']:<15s} {gen_str:>6s} {wr:>7s} {best:>7s}")
+    if any(e.get("concluded_gen") is not None for e in experiments):
+        print("  (* = finalized at concluded_gen)")
 
 
 def cmd_info(args):
@@ -320,7 +369,14 @@ def cmd_info(args):
     progress = info["progress"]
     bench = info["latest_benchmark"]
 
-    print(f"Experiment: {config.name}")
+    if info["is_concluded"]:
+        print(f"[CONCLUDED @ gen {config.concluded_gen}] {config.name}")
+        if config.concluded_reason:
+            print(f"  Reason: {config.concluded_reason}")
+        if config.concluded_at:
+            print(f"  Finalized: {config.concluded_at}")
+    else:
+        print(f"Experiment: {config.name}")
     print(f"  Method: {config.method}")
     print(f"  Created: {config.created}")
     if config.description:
@@ -368,13 +424,23 @@ def cmd_info(args):
         passed = eval_result.get("passed", 0)
         total = eval_result.get("total", 0)
         gen = eval_result.get("gen", "?")
-        print(f"\nLatest eval (gen {gen}): {passed}/{total} ({score:.1%})")
+        label = "Eval at concluded gen" if info["is_concluded"] else "Latest eval"
+        print(f"\n{label} (gen {gen}): {passed}/{total} ({score:.1%})")
         by_cat = eval_result.get("by_category", {})
         if by_cat:
             for cat, counts in sorted(by_cat.items()):
                 p, t = counts["passed"], counts["total"]
                 status = "ok" if p == t else f"{p}/{t}"
                 print(f"  {cat}: {status}")
+
+    value_result = info.get("latest_value_eval")
+    if value_result:
+        v_passed = value_result.get("passed", 0)
+        v_total = value_result.get("total", 0)
+        v_gen = value_result.get("gen", "?")
+        v_score = v_passed / max(v_total, 1)
+        v_label = "Value eval at concluded gen" if info["is_concluded"] else "Latest value eval"
+        print(f"\n{v_label} (gen {v_gen}): {v_passed}/{v_total} ({v_score:.1%})")
 
 
 def cmd_calibrate(args):
@@ -644,6 +710,40 @@ def cmd_archive(args):
     print(f"Archived: {args.name}")
 
 
+def cmd_finalize(args):
+    exp = Experiment(args.name)
+    if not exp.exists:
+        print(f"Experiment '{args.name}' not found.")
+        sys.exit(1)
+    try:
+        exp.finalize(args.gen, args.reason)
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+    cfg = exp.config
+    print(f"Finalized {cfg.name} at gen {cfg.concluded_gen}")
+    print(f"  Reason: {cfg.concluded_reason}")
+    info = exp.info()
+    e = info.get("latest_eval")
+    v = info.get("latest_value_eval")
+    if e:
+        print(f"  Decision eval: {e['passed']}/{e['total']} ({e.get('score',0):.1%})")
+    if v:
+        print(f"  Value eval:    {v['passed']}/{v['total']} ({v['passed']/max(v['total'],1):.1%})")
+
+
+def cmd_unfinalize(args):
+    exp = Experiment(args.name)
+    if not exp.exists:
+        print(f"Experiment '{args.name}' not found.")
+        sys.exit(1)
+    if exp.config.concluded_gen is None:
+        print(f"{args.name} is not finalized; nothing to clear.")
+        return
+    exp.unfinalize()
+    print(f"Unfinalized: {args.name}")
+
+
 def main():
     # Reconfigure stdout/stderr to UTF-8 so non-ASCII characters in scenario
     # labels / descriptions don't crash the eval printer on Windows cp1252.
@@ -682,8 +782,11 @@ def main():
     p.add_argument("name", help="New experiment name")
     p.add_argument("--from", dest="source", required=True,
                     help="Source experiment name")
-    p.add_argument("--checkpoint", default="latest",
-                    help="Checkpoint to fork from (default: latest)")
+    p.add_argument("--checkpoint", default="auto",
+                    help="Checkpoint to fork from. 'auto' (default) = concluded "
+                         "gen if source is finalized, else latest. Also accepts "
+                         "'finalized'/'concluded' (requires source is finalized), "
+                         "'latest', or a specific 'genN'.")
     p.add_argument("--override", "-o", nargs="*", default=[],
                     help="Override config values (key=value)")
     p.set_defaults(func=cmd_fork)
@@ -691,8 +794,10 @@ def main():
     # eval
     p = sub.add_parser("eval", help="Run eval harness and save results")
     p.add_argument("name", help="Experiment name")
-    p.add_argument("--checkpoint", default="latest",
-                    help="Checkpoint to evaluate (default: latest)")
+    p.add_argument("--checkpoint", default="auto",
+                    help="Checkpoint to evaluate. 'auto' (default) = finalized "
+                         "gen if set, else latest. Also accepts 'finalized'/"
+                         "'concluded', 'latest', or 'genN'.")
     p.set_defaults(func=cmd_eval)
 
     # benchmark
@@ -700,12 +805,12 @@ def main():
     p.add_argument("name", help="Experiment name")
     p.add_argument("--encounter-set", default=None,
                     help="Encounter set name (default: from experiment config)")
-    p.add_argument("--mode", choices=["policy", "mcts", "both"], default="both",
-                    help="Inference mode: policy, mcts, or both (default)")
     p.add_argument("--repeats", type=int, default=1,
                     help="Times to repeat each encounter (default: 1)")
-    p.add_argument("--checkpoint", default="latest",
-                    help="Checkpoint to benchmark (default: latest)")
+    p.add_argument("--checkpoint", default="auto",
+                    help="Checkpoint to benchmark. 'auto' (default) = finalized "
+                         "gen if set, else latest. Also accepts 'finalized'/"
+                         "'concluded', 'latest', or 'genN'.")
     p.add_argument("--sims", type=int, default=400,
                     help="MCTS simulations per decision (default: 400)")
     p.add_argument("--pw-k", type=float, default=None,
@@ -779,6 +884,22 @@ def main():
     p = sub.add_parser("archive", help="Archive an experiment")
     p.add_argument("name", help="Experiment name")
     p.set_defaults(func=cmd_archive)
+
+    # finalize
+    p = sub.add_parser("finalize",
+                       help="Mark a gen as the experiment's canonical conclusion")
+    p.add_argument("name", help="Experiment name")
+    p.add_argument("--gen", type=int, required=True,
+                    help="Generation to promote (must have a betaone_genN.pt)")
+    p.add_argument("--reason", required=True,
+                    help="Short note on why this gen is the conclusion")
+    p.set_defaults(func=cmd_finalize)
+
+    # unfinalize
+    p = sub.add_parser("unfinalize",
+                       help="Clear the finalized-gen marker on an experiment")
+    p.add_argument("name", help="Experiment name")
+    p.set_defaults(func=cmd_unfinalize)
 
     args = parser.parse_args()
     args.func(args)

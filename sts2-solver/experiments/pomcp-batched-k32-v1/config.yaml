@@ -1,9 +1,8 @@
 name: pomcp-batched-k32-v1
 method: mcts_selfplay
-description: '''K=32 virtual-loss batched fork of valuedepth-v1 latest (gen 30 weights).
-  Tests whether batching disrupts training quality over 100 gens vs sequential valuedepth
-  trajectory. eval_every=10.'''
-created: '2026-04-17T23:12:10+00:00'
+description: '''K=32 virtual-loss batched fork of valuedepth-v1 gen30. Tests whether
+  batching disrupts training quality over 100 gens.'''
+created: '2026-04-17T23:20:16+00:00'
 parent: pomcp-valuedepth-v1
 parent_checkpoint: latest
 network_type: betaone
@@ -36,8 +35,6 @@ training:
     train_epochs: 4
     value_coef: 1.0
     turn_boundary_eval: true
-    dense_value_targets: true
-    gamma: 0.99
     c_puct: 1.5
     pomcp: true
     mcts_bootstrap: true

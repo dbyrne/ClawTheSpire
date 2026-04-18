@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet};
 use crate::actions::enumerate_actions;
 use crate::combat;
 use crate::enemy;
-use crate::mcts::{self, MCTS};
+use crate::mcts::MCTS;
 use crate::types::*;
 
 use super::encode::{self, CardVocab};
@@ -48,7 +48,6 @@ struct Sample {
     visits: [u32; encode::MAX_ACTIONS],  // Raw visit counts per action
     q_values: [f32; encode::MAX_ACTIONS],  // Q value per child action (mean backed-up value)
     num_actions: usize,
-    reward: f32,  // Per-step reward (0 for card plays, dense for EndTurn + terminal)
     mcts_value: f32,  // MCTS root value (search-backed average for bootstrap targets)
 }
 
@@ -79,12 +78,10 @@ fn run_selfplay_combat(
     seed: u64,
     add_noise: bool,
     turn_boundary_eval: bool,
-    dense_value_targets: bool,
     c_puct: f32,
     pomcp: bool,
     noise_frac: f32,
     pw_k: f32,
-    batch_size: usize,
 ) -> SelfPlayResult {
     let card_db = CardDB::default();
     let mut rng = StdRng::seed_from_u64(seed);
@@ -155,33 +152,13 @@ fn run_selfplay_combat(
             let actions = enumerate_actions(&state);
             if actions.is_empty() {
                 // No playable cards/potions — auto end turn (no MCTS decision)
-                let hp_before = state.player.hp;
-                let energy_at_end = state.player.energy;
-                let max_energy = state.player.max_energy;
-                let enemy_hp: Vec<i32> = state.enemies.iter().map(|e| e.hp).collect();
-
                 combat::end_turn(&mut state, &card_db, &mut rng);
                 enemy::sync_enemy_ais(&state, &mut enemy_ais, &profiles);
                 combat::resolve_enemy_intents(&mut state);
                 combat::tick_enemy_powers(&mut state);
                 enemy::sync_enemy_ais(&state, &mut enemy_ais, &profiles);
 
-                if dense_value_targets {
-                    let mut reward = super::rewards::compute_turn_reward(
-                        &state, hp_before, &enemy_hp, energy_at_end, max_energy,
-                    );
-                    if let Some(outcome) = combat::is_combat_over(&state) {
-                        reward += mcts::terminal_value(outcome, &state);
-                        final_outcome = outcome;
-                        if let Some(last) = samples.last_mut() {
-                            last.reward += reward;
-                        }
-                        break 'outer;
-                    }
-                    if let Some(last) = samples.last_mut() {
-                        last.reward += reward;
-                    }
-                } else if let Some(outcome) = combat::is_combat_over(&state) {
+                if let Some(outcome) = combat::is_combat_over(&state) {
                     final_outcome = outcome;
                     break 'outer;
                 }
@@ -194,27 +171,13 @@ fn run_selfplay_combat(
             let hand_ids = encode::encode_hand_card_ids(&state, card_vocab);
             let action_ids = encode::encode_action_card_ids(&actions, &state, card_vocab);
 
-            // MCTS search — batched when batch_size > 1, else sequential.
-            // Batched path uses virtual loss to collect K leaves per round
-            // and runs their NN calls as one ONNX forward pass.
-            let result = if batch_size > 1 {
-                mcts_engine.search_batched(
-                    &state,
-                    Some(&enemy_ais),
-                    num_sims,
-                    batch_size,
-                    temperature,
-                    &mut rng,
-                )
-            } else {
-                mcts_engine.search_with_ais(
-                    &state,
-                    Some(&enemy_ais),
-                    num_sims,
-                    temperature,
-                    &mut rng,
-                )
-            };
+            let result = mcts_engine.search_with_ais(
+                &state,
+                Some(&enemy_ais),
+                num_sims,
+                temperature,
+                &mut rng,
+            );
 
             // Store sample: state + MCTS policy + raw visits + Q values
             let mut policy = [0.0f32; encode::MAX_ACTIONS];
@@ -240,42 +203,19 @@ fn run_selfplay_combat(
                 visits,
                 q_values,
                 num_actions: actions.len().min(encode::MAX_ACTIONS),
-                reward: 0.0,
                 mcts_value: result.root_value as f32,
             });
 
             // Execute chosen action
             match &result.action {
                 Action::EndTurn => {
-                    // Snapshot pre-resolution state for reward computation
-                    let hp_before = state.player.hp;
-                    let energy_at_end = state.player.energy;
-                    let max_energy = state.player.max_energy;
-                    let enemy_hp: Vec<i32> = state.enemies.iter().map(|e| e.hp).collect();
-
                     combat::end_turn(&mut state, &card_db, &mut rng);
                     enemy::sync_enemy_ais(&state, &mut enemy_ais, &profiles);
                     combat::resolve_enemy_intents(&mut state);
                     combat::tick_enemy_powers(&mut state);
                     enemy::sync_enemy_ais(&state, &mut enemy_ais, &profiles);
 
-                    // Compute per-turn reward (assigned to this EndTurn sample)
-                    if dense_value_targets {
-                        let mut reward = super::rewards::compute_turn_reward(
-                            &state, hp_before, &enemy_hp, energy_at_end, max_energy,
-                        );
-                        if let Some(outcome) = combat::is_combat_over(&state) {
-                            reward += mcts::terminal_value(outcome, &state);
-                            final_outcome = outcome;
-                            if let Some(last) = samples.last_mut() {
-                                last.reward = reward;
-                            }
-                            break 'outer;
-                        }
-                        if let Some(last) = samples.last_mut() {
-                            last.reward = reward;
-                        }
-                    } else if let Some(outcome) = combat::is_combat_over(&state) {
+                    if let Some(outcome) = combat::is_combat_over(&state) {
                         final_outcome = outcome;
                         break 'outer;
                     }
@@ -288,11 +228,6 @@ fn run_selfplay_combat(
                         );
                     }
                     if let Some(outcome) = combat::is_combat_over(&state) {
-                        if dense_value_targets {
-                            if let Some(last) = samples.last_mut() {
-                                last.reward = mcts::terminal_value(outcome, &state);
-                            }
-                        }
                         final_outcome = outcome;
                         break 'outer;
                     }
@@ -301,11 +236,6 @@ fn run_selfplay_combat(
                 Action::UsePotion { potion_idx } => {
                     combat::use_potion(&mut state, *potion_idx);
                     if let Some(outcome) = combat::is_combat_over(&state) {
-                        if dense_value_targets {
-                            if let Some(last) = samples.last_mut() {
-                                last.reward = mcts::terminal_value(outcome, &state);
-                            }
-                        }
                         final_outcome = outcome;
                         break 'outer;
                     }
@@ -314,15 +244,6 @@ fn run_selfplay_combat(
                 Action::ChooseCard { choice_idx } => {
                     crate::effects::execute_choice(&mut state, *choice_idx, &mut rng);
                 }
-            }
-        }
-    }
-
-    // If combat ended by turn limit (30 turns), apply terminal to last sample
-    if dense_value_targets && final_outcome == "lose" {
-        if let Some(last) = samples.last_mut() {
-            if last.reward == 0.0 {
-                last.reward = mcts::terminal_value("lose", &state);
             }
         }
     }
@@ -358,12 +279,10 @@ fn run_selfplay_combat(
     gen_id = 0,
     add_noise = true,
     turn_boundary_eval = false,
-    dense_value_targets = false,
     c_puct = 2.5,
     pomcp = false,
     noise_frac = 0.25,
-    pw_k = 1.0,
-    batch_size = 1
+    pw_k = 1.0
 ))]
 pub fn betaone_mcts_selfplay(
     py: Python<'_>,
@@ -384,12 +303,10 @@ pub fn betaone_mcts_selfplay(
     gen_id: i64,
     add_noise: bool,
     turn_boundary_eval: bool,
-    dense_value_targets: bool,
     c_puct: f32,
     pomcp: bool,
     noise_frac: f32,
     pw_k: f32,
-    batch_size: usize,
 ) -> PyResult<PyObject> {
     let decks: Vec<Vec<Card>> = serde_json::from_str(decks_json)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("decks: {e}")))?;
@@ -458,11 +375,10 @@ pub fn betaone_mcts_selfplay(
                         &monsters, &profiles,
                         inference, &card_vocab,
                         num_sims, temperature, seed, add_noise,
-                        turn_boundary_eval, dense_value_targets, c_puct,
+                        turn_boundary_eval, c_puct,
                         pomcp,
                         noise_frac,
                         pw_k,
-                        batch_size,
                     ))
                 })
             })
@@ -485,7 +401,6 @@ fn build_selfplay_py(py: Python<'_>, results: &[Option<SelfPlayResult>]) -> PyRe
     let mut all_visits: Vec<i64> = Vec::new();
     let mut all_q_values: Vec<f32> = Vec::new();
     let mut all_num_actions: Vec<i64> = Vec::new();
-    let mut all_rewards: Vec<f32> = Vec::new();
     let mut all_mcts_values: Vec<f32> = Vec::new();
     let mut combat_indices: Vec<i64> = Vec::new();
     let mut outcomes: Vec<String> = Vec::new();
@@ -510,7 +425,6 @@ fn build_selfplay_py(py: Python<'_>, results: &[Option<SelfPlayResult>]) -> PyRe
             all_visits.extend(sample.visits.iter().map(|&v| v as i64));
             all_q_values.extend_from_slice(&sample.q_values);
             all_num_actions.push(sample.num_actions as i64);
-            all_rewards.push(sample.reward);
             all_mcts_values.push(sample.mcts_value);
             combat_indices.push(combat_idx);
             total_steps += 1;
@@ -527,7 +441,6 @@ fn build_selfplay_py(py: Python<'_>, results: &[Option<SelfPlayResult>]) -> PyRe
     dict.set_item("child_visits", &all_visits)?;
     dict.set_item("child_q_values", &all_q_values)?;
     dict.set_item("num_actions", &all_num_actions)?;
-    dict.set_item("rewards", &all_rewards)?;
     dict.set_item("mcts_values", &all_mcts_values)?;
     dict.set_item("combat_indices", &combat_indices)?;
     dict.set_item("outcomes", outcomes)?;

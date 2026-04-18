@@ -1,0 +1,194 @@
+Training experiment: pomcp-handagg-lean-v1 (network=betaone, method=mcts_selfplay)
+  Output: C:\coding-projects\STS2\sts2-solver\experiments\pomcp-handagg-lean-v1
+hand_agg_lean=True: zeroing total_cards_draw + total_energy_gain in hand_agg
+BetaOne self-play: 138,941 params, 578 card vocab
+Encounter set: lean-decks-v1 (189 encounters, avg HP 32.1)
+Cold start — no checkpoint found
+Replay buffer: capacity 50,000 steps
+Gen    1 | win 16.8% | hp  6.7 | steps  5381 | buf   5381 | pi 1.564 | v 0.202 | sims 1000 | 149.5s
+Gen    2 | win 28.5% | hp  5.7 | steps  5412 | buf  10793 | pi 1.514 | v 0.168 | sims 1000 | 154.4s
+Gen    3 | win 49.6% | hp  9.0 | steps  6147 | buf  16940 | pi 1.477 | v 0.129 | sims 1000 | 193.3s
+Gen    4 | win 67.2% | hp  9.2 | steps  5920 | buf  22860 | pi 1.460 | v 0.119 | sims 1000 | 192.6s
+Gen    5 | win 53.9% | hp 10.1 | steps  6665 | buf  29525 | pi 1.437 | v 0.118 | sims 1000 | 206.2s
+Gen    6 | win 61.7% | hp  8.9 | steps  5879 | buf  35404 | pi 1.423 | v 0.114 | sims 1000 | 193.9s
+Gen    7 | win 64.1% | hp  9.4 | steps  5703 | buf  41107 | pi 1.408 | v 0.113 | sims 1000 | 160.1s
+Gen    8 | win 68.4% | hp 10.5 | steps  6560 | buf  47667 | pi 1.393 | v 0.112 | sims 1000 | 214.1s
+Gen    9 | win 67.2% | hp 10.6 | steps  5940 | buf  48226 | pi 1.365 | v 0.104 | sims 1000 | 199.1s
+Gen   10 | win 62.9% | hp  9.4 | steps  6265 | buf  49079 | pi 1.338 | v 0.096 | sims 1000 | 192.8s
+Loaded checkpoint: gen 10
+
+============================================================
+BetaOne Eval — Gen 10 — 63/80 passed
+============================================================
+
+[FAIL] discard: 3/4
+    ok  discard_status_over_strike
+    ok  discard_sly_for_value
+    ok  gamble_with_tactician_in_hand
+  MISS  prepared_discards_slimed
+        chose: Strike (6 dmg, Slimed stuck in hand) (45%)
+        probs: Prepared (discard Slimed, draw 2 fresh cards): 44%, Strike (6 dmg, Slimed stuck in hand): 45%, End turn: 11%
+
+[PASS] block: 3/3
+    ok  dont_overblock
+    ok  block_when_lethal
+    ok  attack_when_enemy_defending
+
+[PASS] energy: 2/2
+    ok  dont_end_turn_with_energy
+    ok  play_zero_cost_before_end
+
+[FAIL] lethal: 1/2
+    ok  take_lethal_over_block
+  MISS  let_poison_kill
+        chose: Strike (overkill) (73%)
+        probs: Strike (overkill): 73%, Defend: 23%, End turn: 4%
+
+[PASS] targeting: 2/2
+    ok  target_vulnerable_enemy
+    ok  kill_low_hp_enemy
+
+[FAIL] synergy: 3/4
+    ok  accelerant_with_poison
+    ok  play_power_early
+   BAD  accelerant_without_poison_is_bad
+        chose: Accelerant (no poison to amplify) (56%)
+        probs: Accelerant (no poison to amplify): 56%, Strike: 37%, End turn: 7%
+    ok  apply_poison_before_accelerant
+
+[FAIL] poison: 4/8
+    ok  poison_vs_strike_high_hp
+  MISS  noxious_fumes_early
+        chose: Strike (6 dmg) (39%)
+        probs: Noxious Fumes (2 poison/turn): 25%, Strike (6 dmg): 39%, Defend: 27%, End turn: 8%
+    ok  accelerant_high_poison
+  MISS  block_over_accelerant_low_hp
+        chose: Accelerant (2 poison ticks for 4) (48%)
+        probs: Accelerant (2 poison ticks for 4): 48%, Defend (5 block vs 15 incoming): 44%, End turn: 8%
+    ok  poison_over_block_free_turn
+  MISS  let_poison_finish_dont_waste_attack
+        chose: Strike (overkill) (70%)
+        probs: Defend: 25%, Strike (overkill): 70%, End turn: 5%
+    ok  discard_infection_over_poison_card
+   BAD  dont_overstack_dying_poison
+        chose: Deadly Poison (+5 poison, overkill) (60%)
+        probs: Deadly Poison (+5 poison, overkill): 60%, Defend (5 block vs 12 — saves HP): 33%, End turn: 7%
+
+[PASS] shiv: 5/5
+    ok  blade_dance_with_accuracy
+    ok  accuracy_early
+    ok  blade_dance_over_defend_free_turn
+    ok  shiv_targets_low_hp
+    ok  blade_dance_vs_defend_incoming_8
+
+[PASS] sly: 5/5
+    ok  discard_sly_over_normal
+    ok  discard_sly_reflex_for_draw
+    ok  sly_over_status_in_discard
+    ok  acrobatics_with_sly_hand
+    ok  survivor_triggers_sly
+
+[PASS] debuff: 2/2
+    ok  weak_vs_multi_hit
+    ok  dont_debuff_dying_enemy
+
+[FAIL] draw: 3/4
+    ok  backflip_over_defend
+    ok  adrenaline_always_play
+    ok  acrobatics_dig_with_burst
+  MISS  adrenaline_before_strike
+        chose: Dagger Throw (locks in 1 energy) (41%)
+        probs: Adrenaline (0-cost, +1 energy, +2 draw): 34%, Strike (locks in 1 energy): 22%, Dagger Throw (locks in 1 energy): 41%, End turn: 3%
+
+[PASS] multi_enemy: 2/2
+    ok  aoe_vs_single_target
+    ok  aoe_kills_multiple_low
+
+[FAIL] combo: 2/5
+  MISS  burst_before_blade_dance
+        chose: Blade Dance (3 shivs) (44%)
+        probs: Burst (next Skill plays twice): 37%, Blade Dance (3 shivs): 44%, Defend: 15%, End turn: 4%
+    ok  burst_wasted_if_no_skill
+   BAD  finisher_after_attacks
+        chose: Finisher FIRST (scales only to what's played BEFORE it) (42%)
+        probs: Strike (6 dmg, counts for Finisher scaling): 22%, Dagger Throw (9 dmg, also scales Finisher): 32%, Finisher FIRST (scales only to what's played BEFORE it): 42%, End turn: 3%
+    ok  infinite_blades_power_early
+  MISS  well_laid_plans_early
+        chose: Strike (6 dmg) (39%)
+        probs: Well-Laid Plans (Power — retain cards): 34%, Strike (6 dmg): 40%, Defend: 20%, End turn: 6%
+
+[FAIL] survival: 2/3
+    ok  block_over_power_low_hp
+    ok  skip_block_when_safe
+   BAD  intangible_skip_block
+        chose: Defend (Intangible makes block pointless) (46%)
+        probs: Strike (Intangible absorbs the hit): 40%, Defend (Intangible makes block pointless): 46%, End turn: 14%
+
+[PASS] damage: 4/4
+    ok  dagger_throw_over_strike
+    ok  predator_high_energy
+    ok  skewer_with_3_energy
+    ok  omnislice_free_damage
+
+[PASS] block_cards: 4/4
+    ok  escape_plan_free_block
+    ok  cloak_and_dagger_over_defend
+    ok  blur_keeps_block
+    ok  wraith_form_early_high_hp
+
+[FAIL] debuff_cards: 2/3
+    ok  sucker_punch_over_strike
+    ok  piercing_wail_vs_multi_enemy
+  MISS  malaise_high_energy
+        chose: Defend (5 block vs 15) (54%)
+        probs: Malaise (3 Weak + 3 Str down): 39%, Defend (5 block vs 15): 55%, End turn: 7%
+
+[FAIL] draw_cycle: 2/5
+  MISS  prepared_free_cycle
+        chose: Strike (43%)
+        probs: Prepared (0-cost, draw 2 discard 1): 30%, Strike: 43%, Defend: 20%, End turn: 7%
+  MISS  prepared_with_sly_in_hand
+        chose: Strike (49%)
+        probs: Prepared (draw 2, discard Tactician for energy): 41%, Strike: 49%, End turn: 10%
+  MISS  tools_of_the_trade_early
+        chose: Strike (38%)
+        probs: Tools of the Trade (Power): 34%, Strike: 38%, Defend: 22%, End turn: 7%
+    ok  dont_acrobatics_at_lethal
+    ok  calculated_gamble_dead_hand
+
+[FAIL] powers: 4/5
+    ok  double_damage_biggest_attack
+    ok  afterimage_dont_end_turn
+    ok  weak_player_defers_attack
+  MISS  noxious_fumes_skip_redundant_poison
+        chose: Deadly Poison (+5 poison, redundant with Fumes + no immediate impact) (48%)
+        probs: Dagger Throw (9 dmg — Fumes handles poison stacking for free): 45%, Deadly Poison (+5 poison, redundant with Fumes + no immediate impact): 48%, End turn: 7%
+    ok  accuracy_blade_dance_over_strike
+
+[PASS] relic: 8/8
+    ok  orichalcum_skip_block
+    ok  no_orichalcum_must_block
+    ok  anchor_turn1_offense
+    ok  velvet_choker_play_limit
+    ok  kunai_attack_priority
+    ok  lantern_turn1_aggro
+    ok  burning_blood_aggro
+    ok  cloak_clasp_end_turn_early
+
+End Turn bias (scenarios where ET is wrong):
+  Avg ET prob: 7.0% across 77 scenarios
+  High ET (>20%):
+    escape_plan_free_block: 23%
+
+
+============================================================
+Value Head Eval — Gen 10 — 97/121 passed
+============================================================
+
+[PASS] hp: 3/3
+    ok  enemy_lower_hp                  V=+0.900 vs +0.052  margin=+0.848
+    ok  player_higher_hp                V=+0.216 vs +0.060  margin=+0.156
+    ok  enemy_nearly_dead               V=+1.106 vs -0.051  margin=+1.157
+
+[FAIL] defense: 1/2
+    ok  block_vs_incoming               V=+0.016 vs -0.003  margin=+0.019
