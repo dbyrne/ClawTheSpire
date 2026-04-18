@@ -266,6 +266,7 @@ def build_dashboard(experiments: list[dict]) -> Group:
         overview.add_column("Method", max_width=10)
         overview.add_column("Params", justify="right", max_width=8)
         overview.add_column("Status", max_width=10)
+        overview.add_column("Start", max_width=20)
         overview.add_column("Gen", justify="right", max_width=7)
         overview.add_column("Train WR", justify="right", max_width=8)
         overview.add_column("Best", justify="right", max_width=7)
@@ -306,6 +307,17 @@ def build_dashboard(experiments: list[dict]) -> Group:
 
             params = arch.get("total_params")
             params_str = f"{params//1000}K" if isinstance(params, int) else "-"
+
+            # Start: "cold" if no parent, else "<-parent-name" (truncated).
+            # Parent name carries the lineage; seeing it in the fleet view
+            # answers "which experiments inherited capability from this one?"
+            # at a glance without spelunking config.yaml.
+            parent = exp.get("parent")
+            if not parent:
+                start_str = Text("cold", style="dim")
+            else:
+                abbrev = parent if len(parent) <= 18 else "…" + parent[-17:]
+                start_str = Text(f"<-{abbrev}", style="green")
 
             eval_str = f"{ev['score']:.0%}" if ev and "score" in ev else "-"
             vev_str = f"{vev['score']:.0%}" if vev and "score" in vev else "-"
@@ -353,7 +365,7 @@ def build_dashboard(experiments: list[dict]) -> Group:
             # Finalized rows render dim so active experiments visually dominate;
             # the pinned scores are still legible, just deprioritized.
             row_style = "dim" if concluded is not None else None
-            overview.add_row(name_text, method, params_str, status,
+            overview.add_row(name_text, method, params_str, status, start_str,
                              gen_str, wr, best, eval_str, vev_str, suite_str,
                              et_str, buf_str,
                              cpuct_str, noise_str, ts_str,
