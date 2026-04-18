@@ -7,7 +7,13 @@ __pycache__/
 *.egg-info/
 sim_results*.csv
 game_log.md
-.claude/
+.claude/*
+# Track the training skill specifically (larger strategic framing lives here;
+# /training skill reads it to frame results in project context). Everything
+# else in .claude/ stays local (settings.json, permissions, other skills).
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/training/
 alphazero_progress.json
 alphazero_history.jsonl
 alphazero_checkpoints/
