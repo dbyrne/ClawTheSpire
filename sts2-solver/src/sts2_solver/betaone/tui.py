@@ -265,6 +265,8 @@ def build_dashboard(experiments: list[dict]) -> Group:
         overview.add_column("Name", max_width=28)
         overview.add_column("Method", max_width=10)
         overview.add_column("Params", justify="right", max_width=8)
+        overview.add_column("VHL", justify="right", max_width=4)
+        overview.add_column("Base", justify="right", max_width=5)
         overview.add_column("Status", max_width=10)
         overview.add_column("Start", max_width=20)
         overview.add_column("Gen", justify="right", max_width=7)
@@ -307,6 +309,14 @@ def build_dashboard(experiments: list[dict]) -> Group:
 
             params = arch.get("total_params")
             params_str = f"{params//1000}K" if isinstance(params, int) else "-"
+            # Additional complexity/arch signals: value_head_layers (varies 1 vs 3
+            # across current experiments — genuine head capacity difference) and
+            # base_state_dim (encoder generation lineage: 137=legacy, 140=current,
+            # 144=enemy-intent). Both from arch_meta; shown compactly.
+            vhl = arch.get("value_head_layers")
+            vhl_str = str(vhl) if vhl is not None else "-"
+            base_dim = arch.get("base_state_dim")
+            base_str = str(base_dim) if base_dim is not None else "-"
 
             # Start: "cold" if no parent, else "<-parent-name" (truncated).
             # Parent name carries the lineage; seeing it in the fleet view
@@ -365,7 +375,8 @@ def build_dashboard(experiments: list[dict]) -> Group:
             # Finalized rows render dim so active experiments visually dominate;
             # the pinned scores are still legible, just deprioritized.
             row_style = "dim" if concluded is not None else None
-            overview.add_row(name_text, method, params_str, status, start_str,
+            overview.add_row(name_text, method, params_str, vhl_str, base_str,
+                             status, start_str,
                              gen_str, wr, best, eval_str, vev_str, suite_str,
                              et_str, buf_str,
                              cpuct_str, noise_str, ts_str,
