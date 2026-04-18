@@ -673,9 +673,15 @@ fn apply_intent_side_effects(state: &mut CombatState, i: usize) {
         }
     }
 
-    // Gas Bomb self-destruct
+    // Gas Bomb self-destruct — must route through on_enemy_death so any
+    // attached on-death powers (Illusion revive, Infested wriggler spawn,
+    // Ravenous strength transfer) fire correctly.
     if state.enemies[i].id == "GAS_BOMB" {
+        let was_alive = state.enemies[i].is_alive();
         state.enemies[i].hp = 0;
+        if was_alive {
+            crate::effects::on_enemy_death(state, i, false);
+        }
     }
 
     // Minion spawning
