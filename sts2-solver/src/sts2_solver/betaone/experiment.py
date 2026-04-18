@@ -156,6 +156,71 @@ def _activation_hint(worktree_solver: Path) -> str:
     )
 
 
+def _all_experiment_sources() -> list[tuple[str, Path]]:
+    """Return [(experiment_name, experiment_dir)] across main + worktrees.
+
+    Main contributes ALL its experiments/<N>/ subdirs (legacy experiments
+    + finalized records synced back via `ship`).
+
+    Each worktree contributes EXACTLY ONE experiment — the one whose name
+    matches the worktree's name convention (`sts2-<name>` at repo root).
+    Other experiment dirs inside a worktree are just inherited copies from
+    when the worktree was branched off main — they'd be stale and confuse
+    aggregation (e.g., before `ship` syncs finalize to main, the worktree
+    still has the pre-finalize copy). Filtering by name makes each
+    experiment have exactly one authoritative source.
+    """
+    results: list[tuple[str, Path]] = []
+
+    # Main's experiments/
+    if EXPERIMENTS_DIR.exists():
+        for d in EXPERIMENTS_DIR.iterdir():
+            if d.is_dir() and not d.name.startswith("_") and (d / "config.yaml").exists():
+                results.append((d.name, d))
+
+    # Each worktree contributes only its own named experiment.
+    try:
+        out = subprocess.run(
+            ["git", "worktree", "list", "--porcelain"],
+            cwd=str(REPO_ROOT),
+            capture_output=True, text=True, check=True,
+        ).stdout
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return results
+
+    main_root = REPO_ROOT.resolve()
+    for line in out.splitlines():
+        if not line.startswith("worktree "):
+            continue
+        path = Path(line[len("worktree "):].strip()).resolve()
+        if path == main_root:
+            continue  # main already handled above
+        # Worktree convention: ../sts2-<name>/
+        if not path.name.startswith("sts2-"):
+            continue
+        exp_name = path.name[len("sts2-"):]
+        exp_dir = path / "sts2-solver" / "experiments" / exp_name
+        if exp_dir.exists() and (exp_dir / "config.yaml").exists():
+            # Worktree copy wins over main's copy (if any) — the worktree is
+            # authoritative for its own name (live training state).
+            results = [(n, d) for (n, d) in results if n != exp_name]
+            results.append((exp_name, exp_dir))
+
+    return results
+
+
+def _find_experiment_dir(name: str) -> Path:
+    """Return the experiments/<name>/ dir via the source aggregation.
+
+    If not found anywhere, returns main's EXPERIMENTS_DIR/<name> as the
+    default (that's what `create` uses — soon-to-exist path).
+    """
+    for n, d in _all_experiment_sources():
+        if n == name:
+            return d
+    return EXPERIMENTS_DIR / name
+
+
 # MCTS knobs that behave as training hyperparameters. Kept here so TUI and any
 # other consumer can show the *effective* value for an experiment even when the
 # config omits a key (i.e. the code default is in effect). Update in this one
@@ -367,7 +432,10 @@ class Experiment:
 
     def __init__(self, name: str):
         self.name = name
-        self.dir = EXPERIMENTS_DIR / name
+        # Resolve across main + worktrees so commands run from main find
+        # experiments living in sibling worktrees automatically. Falls back
+        # to main's experiments/<name> for create() (dir doesn't exist yet).
+        self.dir = _find_experiment_dir(name)
         self.config_path = self.dir / "config.yaml"
         self.benchmarks_dir = self.dir / "benchmarks"
 
@@ -553,16 +621,19 @@ class Experiment:
 
     @staticmethod
     def list_all() -> list[dict]:
-        """List all experiments with summary info."""
-        if not EXPERIMENTS_DIR.exists():
-            return []
+        """List all experiments with summary info across main + worktrees.
+
+        Uses _all_experiment_sources which guarantees one authoritative dir
+        per name (worktrees contribute only their own named experiment, not
+        inherited copies from branching). Sorted by mtime.
+        """
         results = []
-        for d in sorted(EXPERIMENTS_DIR.iterdir(), key=lambda p: p.stat().st_mtime):
-            if d.name.startswith("_") or not d.is_dir():
-                continue
+        # Sort by mtime so most recently active rise to the bottom.
+        sources = sorted(
+            _all_experiment_sources(), key=lambda nd: nd[1].stat().st_mtime
+        )
+        for name, d in sources:
             config_path = d / "config.yaml"
-            if not config_path.exists():
-                continue
             config = ExperimentConfig.from_yaml(config_path)
             # DeckNet writes decknet_progress.json; BetaOne writes betaone_progress.json
             prog_name = (

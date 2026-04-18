@@ -90,9 +90,14 @@ MAX_EXPERIMENTS = 15
 
 
 def _collect_experiments() -> list[dict]:
-    """Gather data for the most recent MAX_EXPERIMENTS experiments by mtime."""
-    if not EXPERIMENTS_DIR.exists():
-        return []
+    """Gather data for the most recent MAX_EXPERIMENTS experiments by mtime.
+
+    Aggregates via _all_experiment_sources — one authoritative dir per
+    experiment name. Worktree experiments contribute their own dir only
+    (not inherited copies from when the worktree was branched), and the
+    worktree's copy wins over main's if both exist for the same name.
+    """
+    from .experiment import _all_experiment_sources
 
     import yaml as _yaml
     def _is_concluded(d: Path) -> bool:
@@ -117,10 +122,7 @@ def _collect_experiments() -> list[dict]:
             return False
         return (time.time() - prog.get("timestamp", 0)) < 600
 
-    all_dirs = [
-        d for d in EXPERIMENTS_DIR.iterdir()
-        if not d.name.startswith("_") and d.is_dir() and (d / "config.yaml").exists()
-    ]
+    all_dirs = [d for _name, d in _all_experiment_sources()]
     # Three-tier render order (top -> bottom):
     #   1. stopped  (inactive, fills remaining slots with most-recent-first)
     #   2. done     (finalized reference; always shown)
