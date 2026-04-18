@@ -42,7 +42,7 @@ def encode_player(p: dict) -> list[float]:
         powers.get("Weak", 0) / 5.0,
         powers.get("Frail", 0) / 5.0,
         powers.get("Vulnerable", 0) / 5.0,
-        powers.get("Artifact", 0) / 5.0,
+        powers.get("Artifact", 0) / 3.0,
         powers.get("Accuracy", 0) / 10.0,
         powers.get("Afterimage", 0) / 5.0,
         powers.get("Noxious Fumes", 0) / 5.0,
@@ -62,9 +62,9 @@ def encode_player(p: dict) -> list[float]:
 
 
 def encode_enemy(e: dict | None) -> list[float]:
-    """Encode one enemy slot → 16 floats."""
+    """Encode one enemy slot → 19 floats."""
     if e is None or e.get("hp", 0) <= 0:
-        return [0.0] * 16
+        return [0.0] * 19
     max_hp = max(e.get("max_hp", 1), 1)
     powers = e.get("powers", {})
     intent = e.get("intent_type", "")
@@ -85,6 +85,10 @@ def encode_enemy(e: dict | None) -> list[float]:
         1.0 if powers.get("Minion", 0) > 0 else 0.0,
         powers.get("Poison", 0) / 10.0,
         len([k for k in powers if not k.startswith("_")]) / 5.0,
+        # Per-enemy powers that affect target choice — must match Rust encoder.
+        powers.get("Artifact", 0) / 3.0,
+        powers.get("Plating", 0) / 10.0,
+        powers.get("Intangible", 0) / 3.0,
     ]
 
 

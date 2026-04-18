@@ -68,6 +68,7 @@ fn test_state_dim_components_sum() {
         + ENEMY_SLOTS * ENEMY_FEATURES
         + CONTEXT_DIM
         + RELIC_DIM
+        + HAND_AGG_DIM
         + MAX_HAND * CARD_STATS_DIM
         + MAX_HAND;
     assert_eq!(STATE_DIM, expected);

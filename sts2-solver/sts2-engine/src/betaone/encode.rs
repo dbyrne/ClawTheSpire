@@ -17,16 +17,16 @@ pub type CardVocab = HashMap<String, i64>;
 const UNK_IDX: i64 = 1;
 
 pub const PLAYER_DIM: usize = 25;
-pub const ENEMY_FEATURES: usize = 16;
+pub const ENEMY_FEATURES: usize = 19;
 pub const ENEMY_SLOTS: usize = 5;
 pub const CONTEXT_DIM: usize = 6;
 pub const RELIC_DIM: usize = 26;
 pub const HAND_AGG_DIM: usize = 3;  // total_damage, total_block, count_powers
 pub const MAX_HAND: usize = 10;
-const BASE_STATE_DIM: usize = PLAYER_DIM + ENEMY_SLOTS * ENEMY_FEATURES + CONTEXT_DIM + RELIC_DIM + HAND_AGG_DIM;  // 140
+const BASE_STATE_DIM: usize = PLAYER_DIM + ENEMY_SLOTS * ENEMY_FEATURES + CONTEXT_DIM + RELIC_DIM + HAND_AGG_DIM;  // 155
 const HAND_CARDS_DIM: usize = MAX_HAND * CARD_STATS_DIM;  // 10 × 28 = 280
 const HAND_MASK_DIM: usize = MAX_HAND;                     // 10
-pub const STATE_DIM: usize = BASE_STATE_DIM + HAND_CARDS_DIM + HAND_MASK_DIM;  // 432
+pub const STATE_DIM: usize = BASE_STATE_DIM + HAND_CARDS_DIM + HAND_MASK_DIM;  // 445
 
 // Relic flag indices (within the RELIC_DIM block)
 mod relic_idx {
@@ -113,7 +113,7 @@ pub fn encode_state(state: &CombatState) -> [f32; STATE_DIM] {
     v[o + 7] = p.get_power("Weak") as f32 / 5.0;
     v[o + 8] = p.get_power("Frail") as f32 / 5.0;
     v[o + 9] = p.get_power("Vulnerable") as f32 / 5.0;
-    v[o + 10] = p.get_power("Artifact") as f32 / 5.0;
+    v[o + 10] = p.get_power("Artifact") as f32 / 3.0;
     // Silent-specific scaling powers
     v[o + 11] = p.get_power("Accuracy") as f32 / 10.0;
     v[o + 12] = p.get_power("Afterimage") as f32 / 5.0;
@@ -132,7 +132,7 @@ pub fn encode_state(state: &CombatState) -> [f32; STATE_DIM] {
     v[o + 24] = if p.get_power("_master_planner") > 0 { 1.0 } else { 0.0 };
     o += PLAYER_DIM;
 
-    // --- Enemies (5 slots x 16 = 80 dims) ---
+    // --- Enemies (5 slots x 19 = 95 dims) ---
     for slot in 0..ENEMY_SLOTS {
         let b = o + slot * ENEMY_FEATURES;
         if slot < state.enemies.len() && state.enemies[slot].is_alive() {
@@ -159,6 +159,10 @@ pub fn encode_state(state: &CombatState) -> [f32; STATE_DIM] {
             v[b + 14] = e.get_power("Poison") as f32 / 10.0;
             let n_pow = e.powers.iter().filter(|(k, _)| !k.starts_with('_')).count();
             v[b + 15] = n_pow as f32 / 5.0;
+            // Per-enemy powers that affect target choice — must match Python encoder.
+            v[b + 16] = e.get_power("Artifact") as f32 / 3.0;
+            v[b + 17] = e.get_power("Plating") as f32 / 10.0;
+            v[b + 18] = e.get_power("Intangible") as f32 / 3.0;
         }
     }
     o += ENEMY_SLOTS * ENEMY_FEATURES;

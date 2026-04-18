@@ -733,15 +733,25 @@ fn enemy_attacks_player(state: &mut CombatState, enemy_idx: usize) {
         raw = apply_block_player(&mut state.player, raw);
         state.player.hp -= raw;
 
-        // Thorns
+        // Thorns — respects enemy Intangible
         let thorns = state.player.get_power("Thorns");
         if thorns > 0 {
-            state.enemies[enemy_idx].hp -= thorns;
+            let t = if state.enemies[enemy_idx].get_power("Intangible") > 0 {
+                1
+            } else {
+                thorns
+            };
+            state.enemies[enemy_idx].hp -= t;
         }
-        // Flame Barrier
+        // Flame Barrier — respects enemy Intangible
         let flame = state.player.get_power("Flame Barrier");
         if flame > 0 {
-            state.enemies[enemy_idx].hp -= flame;
+            let f = if state.enemies[enemy_idx].get_power("Intangible") > 0 {
+                1
+            } else {
+                flame
+            };
+            state.enemies[enemy_idx].hp -= f;
         }
     }
 
@@ -797,12 +807,15 @@ pub fn tick_enemy_powers(state: &mut CombatState) {
                 }
             }
         }
-        // Poison (+ Accelerant: extra ticks)
+        // Poison (+ Accelerant: extra ticks) — respects enemy Intangible
         let poison = state.enemies[i].get_power("Poison");
         if poison > 0 {
             let was_alive = state.enemies[i].is_alive();
             let extra_ticks = state.player.get_power("Accelerant");
-            let total_damage = poison * (1 + extra_ticks);
+            let mut total_damage = poison * (1 + extra_ticks);
+            if state.enemies[i].get_power("Intangible") > 0 && total_damage > 0 {
+                total_damage = 1;
+            }
             state.enemies[i].hp -= total_damage;
             let new_poison = poison - 1;
             if new_poison <= 0 {

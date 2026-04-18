@@ -206,10 +206,15 @@ pub fn deal_damage(state: &mut CombatState, target_idx: usize, base_damage: i32,
 
         state.enemies[target_idx].hp -= per_hit;
 
-        // Enemy Thorns
+        // Enemy Thorns — respects player Intangible
         let thorns = state.enemies[target_idx].get_power("Thorns");
         if thorns > 0 && per_hit > 0 {
-            state.player.hp -= thorns;
+            let thorn_dmg = if state.player.get_power("Intangible") > 0 {
+                1
+            } else {
+                thorns
+            };
+            state.player.hp -= thorn_dmg;
         }
     }
 

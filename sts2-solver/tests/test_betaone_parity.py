@@ -37,13 +37,13 @@ HAS_BETAONE_ENCODE_FFI = hasattr(sts2_engine, "betaone_encode_state")
 
 class TestDimensions:
     def test_state_dim(self):
-        # base(140) + hand_cards(10*28=280) + hand_mask(10) = 430
-        assert STATE_DIM == 430
+        # base(155) + hand_cards(10*28=280) + hand_mask(10) = 445
+        assert STATE_DIM == 445
         assert STATE_DIM == BASE_STATE_DIM + MAX_HAND * CARD_STATS_DIM + MAX_HAND
 
     def test_base_state_dim(self):
-        # player(25) + enemies(5*16=80) + context(6) + relics(26) + hand_agg(3) = 140
-        assert BASE_STATE_DIM == 140
+        # player(25) + enemies(5*19=95) + context(6) + relics(26) + hand_agg(3) = 155
+        assert BASE_STATE_DIM == 155
 
     def test_hand_agg_dim(self):
         assert HAND_AGG_DIM == 3
@@ -225,7 +225,7 @@ class TestEnemyEncoding:
     def test_dimensions(self):
         e = encode_enemy({"hp": 30, "max_hp": 50, "intent_type": "Attack",
                           "intent_damage": 10, "powers": {}})
-        assert len(e) == 16
+        assert len(e) == 19
 
     def test_dead_enemy_zeros(self):
         e = encode_enemy({"hp": 0, "max_hp": 50, "powers": {}})
