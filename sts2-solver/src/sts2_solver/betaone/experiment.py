@@ -96,6 +96,10 @@ def _create_worktree(name: str, base_branch: str = "main") -> Path:
         ["worktree", "add", str(worktree_root), "-b", branch, base_branch],
         cwd=REPO_ROOT,
     )
+    # Junction STS2-Agent from main so game data loaders in the worktree
+    # find it at the expected relative path. Read-only static data, safe
+    # to share across all worktrees.
+    _create_sts2_agent_junction(worktree_root)
     return worktree_root / "sts2-solver"
 
 
@@ -139,6 +143,37 @@ def _setup_worktree_venv(worktree_solver: Path) -> None:
         [str(venv_python), "-m", "maturin", "develop", "--release"],
         cwd=str(worktree_solver / "sts2-engine"), check=True,
     )
+
+
+def _create_sts2_agent_junction(worktree_root: Path) -> None:
+    """Create a directory junction (Windows) / symlink (Unix) from the
+    worktree to main's STS2-Agent so game data loaders find it at the
+    expected relative path (`<worktree_root>/STS2-Agent/...`).
+
+    Game data is static read-only (cards.json, enemy_profiles.json, etc.) —
+    sharing across worktrees is both safe and desirable (one copy to keep
+    in sync). Per-worktree copies would also mean ~50MB duplicated per
+    worktree and a real risk of stale game data on some worktrees.
+
+    No admin privileges needed on Windows (mklink /J makes a junction,
+    not a symlink). Requires NTFS. On Unix creates a symlink.
+    """
+    import sys
+    target = REPO_ROOT / "STS2-Agent"
+    link = worktree_root / "STS2-Agent"
+    if link.exists() or link.is_symlink():
+        return
+    if not target.exists():
+        print(f"Warning: STS2-Agent not found at {target}. Game data loaders "
+              "in the worktree will fail until this is resolved.")
+        return
+    if sys.platform == "win32":
+        subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+            check=True, capture_output=True,
+        )
+    else:
+        link.symlink_to(target)
 
 
 def _activation_hint(worktree_solver: Path) -> str:
