@@ -31,37 +31,44 @@ DeckNet is the planned run-level trainer (whole-run decision quality). Its signa
 
 When comparing two architectures, the simpler one is preferred unless the more complex one demonstrates clear eval gains over same-model gen-to-gen noise (typically ±5pp combined eval across handagg-seq's training). A 2-4 scenario difference out of 201 total combined scenarios is within noise and doesn't justify added features.
 
+**Experiments live in worktrees.**
+
+Structural code changes (encoder dims, arch, layers) go in sibling git worktrees at `C:/coding-projects/sts2-<name>/` on branch `experiment/<name>`, not on trunk with feature flags. See `project_experiment_worktrees.md` memory for the full workflow: `create` / `fork` / `finalize` / `ship` / `archive`. When reporting on a worktree experiment, note its worktree path and whether the code diff has been merged to main yet (a shipped experiment also needs `git merge experiment/<name>` or its code is only in the branch).
+
 **Eval-category frontier:**
 
 Not all eval categories are equal. Some are near-ceiling (future_value at 20/22, arithmetic_compare at 26/28); gains there are small and cheap. Others are harder-frontier (conditional_value at 14-17/20 is the biggest remaining V-Eval headroom). Moving a harder-frontier category up 3 scenarios is more valuable than holding a near-ceiling category at 20/22. Weigh category-level trades, not just net totals.
 
 ## sts2-experiment CLI reference
 
-Run from `C:/coding-projects/STS2/sts2-solver`:
+Read-only queries run from main (`C:/coding-projects/STS2/sts2-solver`) — they aggregate across worktrees automatically. Action commands (train/eval/benchmark) must run from inside the target worktree's venv so the code matches the checkpoint.
 
 ```
-# Experiments
-sts2-experiment list                          # all experiments (with done/* finalized marker)
+# Read-only queries (run from main; aggregate across main + worktrees)
+sts2-experiment list                          # all experiments (with done/* finalized marker + Start col showing cold/<-parent)
 sts2-experiment info <name>                   # detailed info + arch + eval (pinned to concluded_gen when finalized)
 sts2-experiment compare <n1> <n2> ...         # side-by-side
 sts2-experiment dashboard                     # live TUI (3-tier sort: stopped -> done -> running)
-sts2-experiment train <name>                  # start/resume (cold_start advisory; resumes if ckpt exists)
-sts2-experiment create <name> -t <template>   # new from template
-sts2-experiment fork <new> --from <src>       # fork; --checkpoint auto (finalized gen if set, else latest)
-sts2-experiment finalize <name> --gen N --reason "..."   # mark canonical conclusion
+
+# Lifecycle (run from main)
+sts2-experiment create <name> -t <template>   # creates ../sts2-<name>/ worktree + venv + config
+sts2-experiment fork <new> --from <src>       # forks off experiment/<src> into new worktree
+                                              # --checkpoint auto (finalized gen if set, else latest)
+sts2-experiment finalize <name> --gen N --reason "..."   # mark canonical conclusion (any dir)
+sts2-experiment ship <name>                   # sync finalized data (not code) to main's experiments/
+                                              # merge code separately: git merge experiment/<name>
+sts2-experiment archive <name>                # git worktree remove; branch + history retained
 sts2-experiment unfinalize <name>             # clear concluded marker
+
+# Action commands (run from INSIDE the worktree's venv — cd ../sts2-<name>/sts2-solver first)
+sts2-experiment train <name>                  # cold_start advisory; resumes if ckpt exists
+sts2-experiment eval <name>                   # P-Eval + V-Eval harness (--checkpoint auto default)
+sts2-experiment benchmark <name> --encounter-set <es> [--sims N] [--repeats N]
+                                              # MCTS-only; results.jsonl updates per-HP-batch (safe Ctrl+C)
 
 # Encounter sets (unified training + benchmark data)
 sts2-experiment generate <name> --checkpoint <exp>
 sts2-experiment encounter-sets
-
-# Benchmarking (MCTS only — policy mode removed)
-sts2-experiment benchmark <name> --encounter-set <name> [--sims N] [--repeats N]
-    --checkpoint auto    # (default) uses finalized gen if set, else latest
-    --sims defaults to 400; use 1000 to match most POMCP training configs
-    --repeats N: N passes over the encounter set (accumulates into existing row)
-    Incremental save: results.jsonl updates after each HP batch — safe to Ctrl+C
-sts2-experiment eval <name>                   # P-Eval + V-Eval harness (uses --checkpoint auto)
 ```
 
 Key concepts:
