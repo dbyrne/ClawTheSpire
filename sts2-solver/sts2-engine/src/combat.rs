@@ -415,6 +415,14 @@ pub fn start_turn(state: &mut CombatState, rng: &mut impl Rng) {
     if state.relics.contains("VELVET_CHOKER") {
         state.player.energy += 1;
     }
+    // Void in hand consumes 1 energy each at start of turn (per STS rules).
+    // Clamp to 0 to avoid negative energy enabling weird interactions.
+    let void_count: i32 = state.player.hand.iter()
+        .filter(|c| c.id == "VOID")
+        .count() as i32;
+    if void_count > 0 {
+        state.player.energy = (state.player.energy - void_count).max(0);
+    }
 
     // Block removal
     let blur = state.player.get_power("Blur");
@@ -553,6 +561,16 @@ pub fn end_turn(state: &mut CombatState, card_db: &CardDB, rng: &mut impl Rng) {
         .filter(|c| c.name == "Infection" || c.id == "INFECTION")
         .count() as i32;
     state.player.hp -= infection_count * 3;
+
+    // Burn damage — each Burn in hand at end of turn deals its damage value
+    // to the player (per STS rules; data-driven to handle Burn+).
+    let burn_dmg: i32 = state.player.hand.iter()
+        .filter(|c| c.id == "BURN")
+        .map(|c| c.damage.unwrap_or(2))
+        .sum();
+    if burn_dmg > 0 {
+        state.player.hp -= burn_dmg;
+    }
 
     // Constrict damage
     let constrict = state.player.get_power("Constrict");
