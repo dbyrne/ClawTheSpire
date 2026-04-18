@@ -52,3 +52,12 @@ checkpoints:
   save_every: 10
   keep_best: true
   cold_start: true
+concluded_gen: 38
+concluded_reason: 'Ablation of total_cards_draw + total_energy_gain hand_agg features
+  (dims 2,3 zeroed). Confirmed features net to ~0 combined eval vs handagg-seq-v1
+  gen 30: +3 conditional_value, +2 compound_scaling, -3 future_value, -2 arithmetic_compare.
+  Category trade proved structural (stable through gen 38), not transient. Drove the
+  arch simplification to 3-dim hand_agg on main (commit 93b531f). Kept as historical
+  evidence; the lean gen 38 checkpoint can''t be warm-loaded into current 3-dim arch
+  without an explicit drop-middle-cols remap.'
+concluded_at: '2026-04-18T16:32:16+00:00'
