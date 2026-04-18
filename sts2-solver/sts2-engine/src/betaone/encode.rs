@@ -21,9 +21,9 @@ pub const ENEMY_FEATURES: usize = 16;
 pub const ENEMY_SLOTS: usize = 5;
 pub const CONTEXT_DIM: usize = 6;
 pub const RELIC_DIM: usize = 26;
-pub const HAND_AGG_DIM: usize = 5;  // total_damage, total_block, total_cards_draw, total_energy_gain, count_powers
+pub const HAND_AGG_DIM: usize = 3;  // total_damage, total_block, count_powers
 pub const MAX_HAND: usize = 10;
-const BASE_STATE_DIM: usize = PLAYER_DIM + ENEMY_SLOTS * ENEMY_FEATURES + CONTEXT_DIM + RELIC_DIM + HAND_AGG_DIM;  // 142
+const BASE_STATE_DIM: usize = PLAYER_DIM + ENEMY_SLOTS * ENEMY_FEATURES + CONTEXT_DIM + RELIC_DIM + HAND_AGG_DIM;  // 140
 const HAND_CARDS_DIM: usize = MAX_HAND * CARD_STATS_DIM;  // 10 × 28 = 280
 const HAND_MASK_DIM: usize = MAX_HAND;                     // 10
 pub const STATE_DIM: usize = BASE_STATE_DIM + HAND_CARDS_DIM + HAND_MASK_DIM;  // 432
@@ -180,41 +180,32 @@ pub fn encode_state(state: &CombatState) -> [f32; STATE_DIM] {
     }
     o += RELIC_DIM;
 
-    // --- Hand aggregates (HAND_AGG_DIM = 5 dims): expose hand composition
+    // --- Hand aggregates (HAND_AGG_DIM = 3 dims): expose hand composition
     // directly to the value head. Attention-pooling over per-card stats
     // dilutes single-card swaps; these aggregates preserve the delta that
     // discriminates hand-with-payoff-card from hand-with-vanilla-card.
-    // Order must match Python encode_hand_aggregates exactly.
+    // Order: total_damage, total_block, count_powers. Must match Python
+    // encode_hand_aggregates exactly.
     //
-    // STS2_HAND_AGG_LEAN=1 zeros dims 2 (total_cards_draw) and 3
-    // (total_energy_gain) to ablate the two features that look suspicious
-    // for the handagg-lean experiment (sum-of-draws is lossy for conditional
-    // draw cards like Prepared/Calculated Gamble; sum-of-energy-gain is
-    // similarly conditional). Network arch stays 174-dim; the slots are
-    // just always zero. Python eval encoder mirrors this check.
+    // Earlier versions also summed total_cards_draw and total_energy_gain;
+    // the handagg-lean ablation showed those features traded arithmetic /
+    // future_value capacity for conditional_value at net ~zero — removed.
     {
-        let lean = std::env::var("STS2_HAND_AGG_LEAN").ok().as_deref() == Some("1");
         let mut total_damage: i32 = 0;
         let mut total_block: i32 = 0;
-        let mut total_draws: i32 = 0;
-        let mut total_energy_gain: i32 = 0;
         let mut count_powers: i32 = 0;
         for card in state.player.hand.iter().take(MAX_HAND) {
             let dmg = card.damage.unwrap_or(0);
             let hits = card.hit_count.max(1);
             total_damage += dmg * hits;
             total_block += card.block.unwrap_or(0);
-            total_draws += card.cards_draw;
-            total_energy_gain += card.energy_gain;
             if matches!(card.card_type, CardType::Power) {
                 count_powers += 1;
             }
         }
         v[o] = total_damage as f32 / 50.0;
         v[o + 1] = total_block as f32 / 50.0;
-        v[o + 2] = if lean { 0.0 } else { total_draws as f32 / 10.0 };
-        v[o + 3] = if lean { 0.0 } else { total_energy_gain as f32 / 3.0 };
-        v[o + 4] = count_powers as f32 / 5.0;
+        v[o + 2] = count_powers as f32 / 5.0;
     }
     o += HAND_AGG_DIM;
 

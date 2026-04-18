@@ -187,7 +187,6 @@ class ExperimentConfig:
 
         arch = self.architecture or {}
         value_head_layers = int(arch.get("value_head_layers", 1))
-        hand_agg_lean = bool(arch.get("hand_agg_lean", False))
 
         if self.method == "mcts_selfplay":
             mcts = t.get("mcts", {})
@@ -213,7 +212,6 @@ class ExperimentConfig:
                 "q_target_temp": _float(mcts.get("q_target_temp"), 0.5),
                 "eval_every": mcts.get("eval_every", 0),
                 "value_head_layers": value_head_layers,
-                "hand_agg_lean": hand_agg_lean,
             }
         else:  # ppo
             ppo = t.get("ppo", {})

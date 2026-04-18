@@ -37,16 +37,16 @@ HAS_BETAONE_ENCODE_FFI = hasattr(sts2_engine, "betaone_encode_state")
 
 class TestDimensions:
     def test_state_dim(self):
-        # base(142) + hand_cards(10*28=280) + hand_mask(10) = 432
-        assert STATE_DIM == 432
+        # base(140) + hand_cards(10*28=280) + hand_mask(10) = 430
+        assert STATE_DIM == 430
         assert STATE_DIM == BASE_STATE_DIM + MAX_HAND * CARD_STATS_DIM + MAX_HAND
 
     def test_base_state_dim(self):
-        # player(25) + enemies(5*16=80) + context(6) + relics(26) + hand_agg(5) = 142
-        assert BASE_STATE_DIM == 142
+        # player(25) + enemies(5*16=80) + context(6) + relics(26) + hand_agg(3) = 140
+        assert BASE_STATE_DIM == 140
 
     def test_hand_agg_dim(self):
-        assert HAND_AGG_DIM == 5
+        assert HAND_AGG_DIM == 3
 
     def test_action_dim(self):
         assert ACTION_DIM == CS.TOTAL + 4 + 3  # card_stats + target + flags(end_turn, use_potion, is_discard)
@@ -113,9 +113,12 @@ class TestCardStatsEncoding:
 class TestHandAggregates:
     """Verify hand-aggregate features compute correctly.
 
-    These are the 5 new features added to base_state to expose hand
+    These are the 3 features added to base_state to expose hand
     composition directly to the value head. Must match Rust exactly —
-    order, formula, normalization.
+    order, formula, normalization. Previously included total_cards_draw
+    and total_energy_gain; removed 2026-04-18 after the handagg-lean
+    ablation showed those two traded near-ceiling arithmetic capacity
+    for conditional_value at net ~zero.
     """
 
     def _strike(self):
@@ -157,38 +160,29 @@ class TestHandAggregates:
         agg = encode_hand_aggregates([self._strike(), self._strike(), self._defend(), self._defend()])
         assert abs(agg[1] - 10 / 50) < 1e-6
 
-    def test_cards_draw_index_2(self):
-        # Adrenaline draws 2; /10 = 0.20
-        agg = encode_hand_aggregates([self._adrenaline(), self._strike(), self._strike(), self._defend()])
-        assert abs(agg[2] - 2 / 10) < 1e-6
-
-    def test_energy_gain_index_3(self):
-        # Adrenaline gives 1 energy; /3 = 0.333
-        agg = encode_hand_aggregates([self._adrenaline(), self._strike(), self._strike(), self._defend()])
-        assert abs(agg[3] - 1 / 3) < 1e-6
-
-    def test_count_powers_index_4(self):
+    def test_count_powers_index_2(self):
         # Footwork is a Power; others are not
         agg = encode_hand_aggregates([self._footwork(), self._strike(), self._strike(), self._defend()])
-        assert abs(agg[4] - 1 / 5) < 1e-6
+        assert abs(agg[2] - 1 / 5) < 1e-6
 
         # Two powers
         agg = encode_hand_aggregates([self._footwork(), self._footwork(), self._strike(), self._defend()])
-        assert abs(agg[4] - 2 / 5) < 1e-6
+        assert abs(agg[2] - 2 / 5) < 1e-6
 
     def test_hand_swap_produces_distinct_aggregates(self):
         """The whole point: swapping one card changes the aggregate vector.
         If these hands produced identical aggregates, the feature would be
         useless for the hand-swap eval tests."""
-        hand_with_adrenaline = [self._adrenaline(), self._strike(), self._strike(), self._defend()]
-        hand_with_defend = [self._defend(), self._strike(), self._strike(), self._defend()]
-        agg_a = encode_hand_aggregates(hand_with_adrenaline)
-        agg_b = encode_hand_aggregates(hand_with_defend)
-        # cards_draw differs (2 vs 0), energy_gain differs (1 vs 0)
-        assert agg_a[2] != agg_b[2]
-        assert agg_a[3] != agg_b[3]
-        # block differs too (0 from Adrenaline vs 5 from Defend)
+        # Swap Defend for Footwork — damage unchanged, block drops by 5,
+        # powers count goes up by 1. Both measurable feature dims move.
+        hand_with_footwork = [self._footwork(), self._strike(), self._strike(), self._defend()]
+        hand_all_plain = [self._defend(), self._strike(), self._strike(), self._defend()]
+        agg_a = encode_hand_aggregates(hand_with_footwork)
+        agg_b = encode_hand_aggregates(hand_all_plain)
+        # Block differs (0 from Footwork, 5 from Defend)
         assert agg_a[1] != agg_b[1]
+        # count_powers differs (1 vs 0)
+        assert agg_a[2] != agg_b[2]
 
     def test_hit_count_scales_damage(self):
         """hand_total_damage = sum(damage * max(hit_count, 1)).

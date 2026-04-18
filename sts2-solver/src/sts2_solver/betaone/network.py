@@ -1,15 +1,16 @@
 """BetaOne network: combat-only policy + value with hand attention + card embeddings (~60K params).
 
 Architecture:
-  State (432) → split: base(142) + hand_cards(10,28) + hand_mask(10)
+  State (430) → split: base(140) + hand_cards(10,28) + hand_mask(10)
   Hand: card_embed(hand_ids) + hand_stats → Linear(44→32) → Q/K/V self-attention → pool → (32)
-  Trunk: cat(base, hand_pooled) = (174) → LayerNorm → Linear(128) → ReLU → Linear(128) → ReLU
+  Trunk: cat(base, hand_pooled) = (172) → LayerNorm → Linear(128) → ReLU → Linear(128) → ReLU
   Policy: card_embed(action_ids) + action_feats → Linear(51→64) keys, dot(query, keys) → logits
   Value:  Linear(128→64) → ReLU → Linear(64→1)
 
-  Base state includes 26 binary relic flags for simulator-active relics.
+  Base state includes 26 binary relic flags + 3 hand aggregates
+  (total_damage, total_block, count_powers).
 
-Inputs:  state (B,432), action_features (B,30,35), action_mask (B,30),
+Inputs:  state (B,430), action_features (B,30,35), action_mask (B,30),
          hand_card_ids (B,10) int64, action_card_ids (B,30) int64
 Outputs: logits (B,30), value (B,1)
 """
@@ -24,9 +25,9 @@ import torch.nn.functional as F
 MAX_HAND = 10
 CARD_STATS_DIM = 28
 RELIC_DIM = 26
-HAND_AGG_DIM = 5  # hand aggregates: total_damage, total_block, total_cards_draw, total_energy_gain, count_powers
-BASE_STATE_DIM = 142  # player(25) + enemies(80) + context(6) + relics(26) + hand_agg(5) — must match Rust
-STATE_DIM = BASE_STATE_DIM + MAX_HAND * CARD_STATS_DIM + MAX_HAND  # 432
+HAND_AGG_DIM = 3  # hand aggregates: total_damage, total_block, count_powers
+BASE_STATE_DIM = 140  # player(25) + enemies(80) + context(6) + relics(26) + hand_agg(3) — must match Rust
+STATE_DIM = BASE_STATE_DIM + MAX_HAND * CARD_STATS_DIM + MAX_HAND  # 430
 ACTION_DIM = 35
 MAX_ACTIONS = 30
 HIDDEN_DIM = 128
@@ -169,7 +170,7 @@ class BetaOneNetwork(nn.Module):
         B = state.shape[0]
 
         # Split state into components
-        base = state[:, :BASE_STATE_DIM]  # (B, 142)
+        base = state[:, :BASE_STATE_DIM]  # (B, 140)
         hand_raw = state[:, BASE_STATE_DIM:BASE_STATE_DIM + MAX_HAND * CARD_STATS_DIM]
         hand_raw = hand_raw.view(B, MAX_HAND, CARD_STATS_DIM)  # (B, 10, 28)
         hand_mask_float = state[:, BASE_STATE_DIM + MAX_HAND * CARD_STATS_DIM:]  # (B, 10)

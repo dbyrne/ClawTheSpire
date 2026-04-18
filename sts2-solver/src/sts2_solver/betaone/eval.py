@@ -145,35 +145,24 @@ def encode_state(scenario: "Scenario") -> list[float]:
 def encode_hand_aggregates(hand: list[dict] | None) -> list[float]:
     """Hand-aggregate features → HAND_AGG_DIM floats (mirrors Rust encode_hand_aggregates).
 
-    Order: total_damage, total_block, total_cards_draw, total_energy_gain, count_powers.
-
-    STS2_HAND_AGG_LEAN=1 zeros dims 2 (total_cards_draw) and 3
-    (total_energy_gain) — the handagg-lean experiment's ablation. Rust
-    encoder mirrors this check; both must agree for parity tests to pass.
+    Order: total_damage, total_block, count_powers.
     """
     v = [0.0] * HAND_AGG_DIM
     if not hand:
         return v
     total_damage = 0
     total_block = 0
-    total_draws = 0
-    total_energy_gain = 0
     count_powers = 0
     for c in hand[:MAX_HAND]:
         dmg = c.get("damage") or 0
         hits = c.get("hit_count", 1) or 1
         total_damage += dmg * max(hits, 1)
         total_block += c.get("block") or 0
-        total_draws += c.get("cards_draw", 0) or 0
-        total_energy_gain += c.get("energy_gain", 0) or 0
         if c.get("card_type") == "Power":
             count_powers += 1
-    lean = os.environ.get("STS2_HAND_AGG_LEAN") == "1"
     v[0] = total_damage / 50.0
     v[1] = total_block / 50.0
-    v[2] = 0.0 if lean else total_draws / 10.0
-    v[3] = 0.0 if lean else total_energy_gain / 3.0
-    v[4] = count_powers / 5.0
+    v[2] = count_powers / 5.0
     return v
 
 
@@ -1812,12 +1801,20 @@ def _card_id_lookup(card: dict, vocab: dict[str, int]) -> int:
 def _warm_load_state_dict(net: "BetaOneNetwork", raw_old_state: dict) -> None:
     """Load an older-arch checkpoint into the current network.
 
-    The current arch drift we handle: base_state_dim grew from 137 to 142
-    (hand_agg inserted at pos 137 on the trunk-input concat). A naive
-    slice-copy of trunk.1.weight shifts the hand_pooled weights by 5
-    columns and produces a near-random network — we detect this exact
-    shape jump and remap weights around the insertion point. Other
-    dim-mismatches fall back to the generic "append-at-end" warm-start.
+    The arch drift we handle: legacy base_state_dim=137 (pre-hand_agg)
+    checkpoints into current base_state_dim=140 (3 hand_agg dims inserted
+    at position 137 on the trunk-input concat). A naive slice-copy of
+    trunk.1.weight would shift the hand_pooled weights by 3 columns and
+    produce a near-random network — we detect this exact shape jump and
+    remap weights around the insertion point.
+
+    NOT supported: handagg-era 142-dim base checkpoints (with 5 hand_agg
+    dims: total_damage/block/cards_draw/energy_gain/count_powers).
+    The lean ablation showed total_cards_draw and total_energy_gain net
+    to ~zero, so they were removed from the arch. Loading a 142-dim
+    checkpoint into the current 140-dim network would need an explicit
+    drop-middle-columns remap which isn't implemented — raises a clear
+    error rather than silently partial-loading.
 
     Note: there is NO key rename layer. A past refactor briefly renamed
     trunk.* to input_norm/trunk_in/trunk_blocks.*, but that was reverted.
@@ -1830,9 +1827,22 @@ def _warm_load_state_dict(net: "BetaOneNetwork", raw_old_state: dict) -> None:
     old_state = raw_old_state
     new_state = net.state_dict()
 
-    OLD_TRUNK_IN = BASE_STATE_DIM + HAND_PROJ_DIM - HAND_AGG_DIM  # 169
-    NEW_TRUNK_IN = BASE_STATE_DIM + HAND_PROJ_DIM                 # 174
+    OLD_TRUNK_IN = BASE_STATE_DIM + HAND_PROJ_DIM - HAND_AGG_DIM  # 169 (pre-hand_agg)
+    NEW_TRUNK_IN = BASE_STATE_DIM + HAND_PROJ_DIM                 # 172 (current)
     INSERT_AT = BASE_STATE_DIM - HAND_AGG_DIM                     # 137
+
+    # Detect the unsupported 142-dim-base (handagg-era 5-dim) case up front.
+    old_trunk1 = raw_old_state.get("trunk.1.weight")
+    if old_trunk1 is not None and old_trunk1.shape[1] == OLD_TRUNK_IN + 5:
+        raise RuntimeError(
+            f"Cannot load 142-dim-base checkpoint into current 140-dim arch. "
+            f"trunk.1.weight shape {tuple(old_trunk1.shape)} — this is a "
+            "handagg-era (5 hand_agg dims) checkpoint. The arch was "
+            "simplified on 2026-04-18 to drop total_cards_draw and "
+            "total_energy_gain (now 3 hand_agg dims). Handagg-era "
+            "checkpoints need an explicit drop-middle-columns remap that "
+            "isn't implemented — add that helper if you need to re-eval."
+        )
 
     def _hand_agg_insert_remap(old_t, new_t, axis, key):
         # Zero / identity init on the new tensor first.
@@ -1897,14 +1907,6 @@ def run_eval(checkpoint_path: str | None = None) -> dict:
     if checkpoint_path and os.path.exists(checkpoint_path):
         ckpt = torch.load(checkpoint_path, weights_only=False)
         net_kwargs = network_kwargs_from_meta(ckpt.get("arch_meta"))
-        # Restore encoder ablation from the checkpoint so eval matches how
-        # the model was trained. Checkpoint arch_meta is authoritative here;
-        # don't trust any pre-existing env var from a prior run.
-        lean = bool((ckpt.get("arch_meta") or {}).get("hand_agg_lean", False))
-        if lean:
-            os.environ["STS2_HAND_AGG_LEAN"] = "1"
-        else:
-            os.environ.pop("STS2_HAND_AGG_LEAN", None)
     net = BetaOneNetwork(num_cards=num_cards, **net_kwargs)
     if checkpoint_path and os.path.exists(checkpoint_path):
         try:
@@ -2311,13 +2313,6 @@ def run_value_eval(checkpoint_path: str) -> dict:
 
     ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
     kwargs = network_kwargs_from_meta(ckpt.get("arch_meta"))
-    # Mirror run_eval: restore hand_agg_lean from arch_meta so the encoder
-    # matches the model's training-time encoding.
-    lean = bool((ckpt.get("arch_meta") or {}).get("hand_agg_lean", False))
-    if lean:
-        os.environ["STS2_HAND_AGG_LEAN"] = "1"
-    else:
-        os.environ.pop("STS2_HAND_AGG_LEAN", None)
     net = BetaOneNetwork(num_cards=len(card_vocab), **kwargs)
     if "model_state_dict" in ckpt:
         try:

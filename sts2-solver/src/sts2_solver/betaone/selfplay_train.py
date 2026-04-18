@@ -247,24 +247,10 @@ def train(
     q_target_temp: float = 0.5,
     eval_every: int = 0,
     value_head_layers: int = 1,
-    hand_agg_lean: bool = False,
 ):
     os.makedirs(output_dir, exist_ok=True)
     onnx_dir = os.path.join(output_dir, "onnx")
     os.makedirs(onnx_dir, exist_ok=True)
-
-    # hand_agg_lean is an encoder ablation (zero dims 2,3 of hand_agg).
-    # Flag travels through to both the Python encoder (for eval inside the
-    # training loop) and the Rust encoder (for self-play rollouts and
-    # inference) via an env var, because the Rust FFI doesn't currently
-    # thread experiment config through. Must be set before any call into
-    # sts2_engine.* so thread-local cached ONNX sessions see a consistent
-    # encoding. Recorded in the checkpoint's arch_meta for eval to restore.
-    if hand_agg_lean:
-        os.environ["STS2_HAND_AGG_LEAN"] = "1"
-        print("hand_agg_lean=True: zeroing total_cards_draw + total_energy_gain in hand_agg")
-    else:
-        os.environ.pop("STS2_HAND_AGG_LEAN", None)
 
     # Load game data
     monster_json = build_monster_data_json()
@@ -581,14 +567,9 @@ def train(
 
         best_win_rate = max(best_win_rate, win_rate)
 
-        # Checkpoints. arch_meta records hand_agg_lean so eval can restore the
-        # encoder ablation without needing the experiment config on hand —
-        # checkpoint + ckpt["arch_meta"] is a self-contained artifact.
-        arch_meta = dict(network.arch_meta())
-        arch_meta["hand_agg_lean"] = hand_agg_lean
         ckpt_data = {
             "gen": gen,
-            "arch_meta": arch_meta,
+            "arch_meta": network.arch_meta(),
             "model_state_dict": network.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
             "win_rate": win_rate,

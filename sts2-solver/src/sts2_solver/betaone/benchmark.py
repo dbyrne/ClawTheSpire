@@ -41,19 +41,10 @@ def _load_checkpoint(path: str) -> tuple[BetaOneNetwork, dict]:
     # Peek at arch_meta first so we construct a network matching the
     # checkpoint's architecture (value_head_layers may differ between
     # experiments now that depth is tunable).
-    import os
     import torch
     ckpt_peek = torch.load(path, map_location="cpu", weights_only=False)
     meta = ckpt_peek.get("arch_meta") or {}
     kwargs = network_kwargs_from_meta(meta)
-    # Restore encoder ablation from arch_meta so the Rust self-play (invoked
-    # by _eval_batch below) produces state encoded the same way the model
-    # was trained. Without this, a handagg-lean checkpoint would be fed
-    # non-lean encoder state and benchmark scores would be junk.
-    if meta.get("hand_agg_lean"):
-        os.environ["STS2_HAND_AGG_LEAN"] = "1"
-    else:
-        os.environ.pop("STS2_HAND_AGG_LEAN", None)
     net = BetaOneNetwork(num_cards=len(card_vocab), **kwargs)
     try:
         ckpt = load_checkpoint(path, network=net, strict=False)

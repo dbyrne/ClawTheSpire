@@ -29,7 +29,6 @@ architecture:
   total_params: 138941
   state_dim: 432
   trunk_input: 174
-  hand_agg_lean: true
 training:
   generations: 60
   combats_per_gen: 256
