@@ -174,17 +174,91 @@ def cmd_train(args):
 
 
 def cmd_fork(args):
+    """Fork a new experiment from an existing one, in a new worktree.
+
+    Branches off the source's experiment branch (experiment/<source>) if
+    the source lives in a worktree, else off main. The new worktree gets
+    its own venv + sts2_engine wheel like `create` does.
+
+    --no-worktree: skip worktree setup; legacy in-place fork (runs the
+    classic Experiment.fork logic in the current cwd).
+    """
+    import sys as _sys
     overrides = _parse_overrides(args.override)
-    exp = Experiment.fork(
-        args.name,
-        source_name=args.source,
-        checkpoint=args.checkpoint or "latest",
-        overrides=overrides,
+
+    if args.no_worktree:
+        # Legacy in-place fork (or inner call from the outer worktree flow).
+        exp = Experiment.fork(
+            args.name,
+            source_name=args.source,
+            checkpoint=args.checkpoint or "auto",
+            overrides=overrides,
+        )
+        config = exp.config
+        print(f"Forked experiment: {config.name}")
+        print(f"  From: {config.parent} (checkpoint: {config.parent_checkpoint})")
+        print(f"  Dir: {exp.dir}")
+        return
+
+    # Outer call: worktree-aware fork.
+    from .experiment import (
+        _create_worktree, _setup_worktree_venv, _activation_hint,
+        _experiment_worktree_path, _experiment_branch,
     )
-    config = exp.config
-    print(f"Forked experiment: {config.name}")
-    print(f"  From: {config.parent} (checkpoint: {config.parent_checkpoint})")
-    print(f"  Dir: {exp.dir}")
+    import subprocess
+
+    if _experiment_worktree_path(args.name).exists():
+        print(f"Error: worktree for '{args.name}' already exists at "
+              f"{_experiment_worktree_path(args.name)}. "
+              f"Use `sts2-experiment archive {args.name}` first.")
+        _sys.exit(1)
+
+    # Pick the base branch: if source has an experiment/<source> branch,
+    # fork off that (carries the source's code changes into the child).
+    # Otherwise fork off main.
+    source_branch = _experiment_branch(args.source)
+    from .experiment import REPO_ROOT, _run_git
+    try:
+        _run_git(["rev-parse", "--verify", source_branch], cwd=REPO_ROOT)
+        base = source_branch
+    except RuntimeError:
+        base = "main"
+    print(f"Forking '{args.name}' from '{args.source}' (base branch: {base})...")
+
+    try:
+        worktree_solver = _create_worktree(args.name, base_branch=base)
+    except (FileExistsError, RuntimeError) as e:
+        print(f"Error: {e}")
+        _sys.exit(1)
+    print(f"  worktree: {worktree_solver}")
+
+    print("Setting up worktree venv + sts2_engine (takes ~30-60s)...")
+    try:
+        _setup_worktree_venv(worktree_solver)
+    except Exception as e:
+        print(f"Venv setup failed: {e}")
+        _sys.exit(1)
+
+    # Delegate the actual fork (config + checkpoint copy) to the worktree's
+    # CLI inside its venv, so paths resolve to the worktree's dirs.
+    import sys, subprocess
+    if sys.platform == "win32":
+        venv_python = worktree_solver / ".venv" / "Scripts" / "python.exe"
+    else:
+        venv_python = worktree_solver / ".venv" / "bin" / "python"
+    inner_args = [
+        str(venv_python), "-m", "sts2_solver.betaone.experiment_cli",
+        "fork", args.name, "--from", args.source,
+        "--no-worktree",
+    ]
+    if args.checkpoint:
+        inner_args.extend(["--checkpoint", args.checkpoint])
+    for ov in (args.override or []):
+        inner_args.extend(["--override", ov])
+    subprocess.run(inner_args, cwd=str(worktree_solver), check=True)
+
+    print()
+    print(_activation_hint(worktree_solver))
 
 
 def cmd_benchmark(args):
@@ -829,6 +903,67 @@ def cmd_finalize(args):
         print(f"  Value eval:    {v['passed']}/{v['total']} ({v['passed']/max(v['total'],1):.1%})")
 
 
+def cmd_ship(args):
+    """Sync a finalized worktree experiment's data back to main.
+
+    Copies config.yaml + benchmark/eval jsonl rows from the worktree into
+    main's experiments/<name>/. Does NOT merge code — that's a separate
+    decision. Doesn't delete the branch or worktree either; `archive`
+    cleans those up when you're ready.
+    """
+    import sys as _sys
+    import shutil as _shutil
+    from .experiment import (
+        _experiment_worktree_path, _experiment_branch,
+        EXPERIMENTS_DIR,
+    )
+
+    exp = Experiment(args.name)
+    if not exp.exists:
+        print(f"Experiment '{args.name}' not found.")
+        _sys.exit(1)
+    if exp.config.concluded_gen is None:
+        print(f"Error: '{args.name}' is not finalized. Run "
+              f"`sts2-experiment finalize {args.name} --gen <N> --reason \"...\"` first.")
+        _sys.exit(1)
+
+    worktree_path = _experiment_worktree_path(args.name)
+    worktree_exp_dir = worktree_path / "sts2-solver" / "experiments" / args.name
+    if not worktree_exp_dir.exists():
+        print(f"Note: no worktree at {worktree_path} — experiment's data "
+              f"already lives in main at {exp.dir}. Nothing to sync.")
+        return
+
+    dest_dir = EXPERIMENTS_DIR / args.name
+    dest_bench = dest_dir / "benchmarks"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest_bench.mkdir(exist_ok=True)
+
+    # Copy config (contains concluded_gen + concluded_reason).
+    _shutil.copy2(worktree_exp_dir / "config.yaml", dest_dir / "config.yaml")
+    copied = ["config.yaml"]
+
+    # Copy the three benchmark/eval jsonl files if present.
+    for fname in ["results.jsonl", "eval.jsonl", "value_eval.jsonl"]:
+        src = worktree_exp_dir / "benchmarks" / fname
+        if src.exists():
+            _shutil.copy2(src, dest_bench / fname)
+            copied.append(f"benchmarks/{fname}")
+
+    print(f"Synced finalized data for {args.name} to main:")
+    print(f"  from: {worktree_exp_dir}")
+    print(f"  to:   {dest_dir}")
+    print(f"  files: {', '.join(copied)}")
+    print()
+    print("Not done: code on the experiment branch has NOT been merged.")
+    print("If the code changes should ship to main, review + merge yourself:")
+    print(f"  git diff main..{_experiment_branch(args.name)} -- sts2-solver/src sts2-solver/sts2-engine")
+    print(f"  git merge {_experiment_branch(args.name)}    # or cherry-pick the commits you want")
+    print()
+    print("To reclaim worktree disk:")
+    print(f"  sts2-experiment archive {args.name}")
+
+
 def cmd_unfinalize(args):
     exp = Experiment(args.name)
     if not exp.exists:
@@ -880,7 +1015,8 @@ def main():
     p.set_defaults(func=cmd_train)
 
     # fork
-    p = sub.add_parser("fork", help="Fork a new experiment from an existing one")
+    p = sub.add_parser("fork",
+                        help="Fork a new experiment from an existing one (in a new worktree)")
     p.add_argument("name", help="New experiment name")
     p.add_argument("--from", dest="source", required=True,
                     help="Source experiment name")
@@ -891,6 +1027,10 @@ def main():
                          "'latest', or a specific 'genN'.")
     p.add_argument("--override", "-o", nargs="*", default=[],
                     help="Override config values (key=value)")
+    p.add_argument("--no-worktree", action="store_true",
+                    help="Skip worktree creation; fork in-place in the current "
+                         "working tree's experiments/. Internal use (the outer "
+                         "call delegates here from inside the new worktree's venv).")
     p.set_defaults(func=cmd_fork)
 
     # eval
@@ -1002,6 +1142,12 @@ def main():
                        help="Clear the finalized-gen marker on an experiment")
     p.add_argument("name", help="Experiment name")
     p.set_defaults(func=cmd_unfinalize)
+
+    # ship
+    p = sub.add_parser("ship",
+                       help="Sync a finalized worktree experiment's data to main")
+    p.add_argument("name", help="Experiment name (must be finalized)")
+    p.set_defaults(func=cmd_ship)
 
     args = parser.parse_args()
     args.func(args)
