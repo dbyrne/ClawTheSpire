@@ -903,6 +903,65 @@ def cmd_finalize(args):
         print(f"  Value eval:    {v['passed']}/{v['total']} ({v['passed']/max(v['total'],1):.1%})")
 
 
+def cmd_session(args):
+    """Spawn a new Claude Code session in an experiment's worktree.
+
+    Opens a fresh terminal window with cwd set to the worktree's sts2-solver
+    dir, activates its .venv, and runs `claude --dangerously-skip-permissions`.
+    User types /training <name> themselves in the new session to pull in
+    status + framing context.
+
+    --dangerously-skip-permissions default rationale: experiment worktrees are
+    isolated (per-worktree venv, scoped branch). Fast iteration matters more
+    than per-file permission prompts inside that bounded scope. Use
+    --no-skip-permissions to opt back into prompts if you want them.
+    """
+    import sys as _sys
+    import subprocess as _subprocess
+    from .experiment import _experiment_worktree_path
+
+    worktree_root = _experiment_worktree_path(args.name)
+    worktree_solver = worktree_root / "sts2-solver"
+    if not worktree_solver.exists():
+        print(f"Error: no worktree for '{args.name}' at {worktree_root}.")
+        print(f"Create it first: sts2-experiment create {args.name} --template <t>")
+        print(f"Or fork:           sts2-experiment fork {args.name} --from <src>")
+        _sys.exit(1)
+
+    claude_flags = "" if args.no_skip_permissions else " --dangerously-skip-permissions"
+    first_prompt_hint = f"/training {args.name}"
+    plan_path = worktree_solver / "experiments" / args.name / "PLAN.md"
+    if plan_path.exists():
+        first_prompt_hint += "   # then: read experiments/{}/PLAN.md".format(args.name)
+
+    if _sys.platform == "win32":
+        # `start cmd /k "..."` opens a new cmd window that stays open after
+        # the chained command finishes. /k keeps the shell so if claude
+        # exits, the user can relaunch it without losing their terminal.
+        batch = (
+            f'cd /d "{worktree_solver}" && '
+            f'call .venv\\Scripts\\activate.bat && '
+            f'claude{claude_flags}'
+        )
+        print(f"Spawning new Claude session in worktree '{args.name}'...")
+        print(f"  worktree: {worktree_solver}")
+        print(f"  flags: claude{claude_flags}")
+        print(f"  suggested first prompt: {first_prompt_hint}")
+        _subprocess.Popen(
+            ["cmd", "/c", "start", "Claude: " + args.name, "cmd", "/k", batch],
+            creationflags=_subprocess.CREATE_NEW_CONSOLE,
+        )
+    else:
+        # macOS/Linux terminal spawning varies by environment. Print the
+        # commands for copy-paste rather than trying to detect the right
+        # terminal emulator and getting it wrong.
+        print(f"# Run these in a new terminal to start a Claude session in '{args.name}':")
+        print(f"cd {worktree_solver}")
+        print(f"source .venv/bin/activate")
+        print(f"claude{claude_flags}")
+        print(f"# then type: {first_prompt_hint}")
+
+
 def cmd_ship(args):
     """Sync a finalized worktree experiment's data back to main.
 
@@ -1148,6 +1207,16 @@ def main():
                        help="Sync a finalized worktree experiment's data to main")
     p.add_argument("name", help="Experiment name (must be finalized)")
     p.set_defaults(func=cmd_ship)
+
+    # session
+    p = sub.add_parser("session",
+                       help="Spawn a new Claude Code session in an experiment's worktree")
+    p.add_argument("name", help="Experiment name (must have a worktree)")
+    p.add_argument("--no-skip-permissions", action="store_true",
+                    help="Launch claude without --dangerously-skip-permissions "
+                         "(default is to skip permissions, since worktrees are "
+                         "scoped and we want fast iteration).")
+    p.set_defaults(func=cmd_session)
 
     args = parser.parse_args()
     args.func(args)
