@@ -1,2 +1,0 @@
-{"suite": "es-base-es-v1-7af4cfe921ce", "mode": "mcts", "mcts_sims": 1000, "timestamp": 1776395609.632744, "checkpoint": "latest", "gen": 19, "win_rate": 0.5653, "wins": 2137, "games": 3780, "ci95_lo": 0.5495, "ci95_hi": 0.5811}
-{"suite": "es-lean-decks-v1-ed5193d56cce", "mode": "mcts", "mcts_sims": 1000, "timestamp": 1776409559.2951732, "checkpoint": "latest", "gen": 19, "win_rate": 0.7646, "wins": 2890, "games": 3780, "ci95_lo": 0.7508, "ci95_hi": 0.7778}

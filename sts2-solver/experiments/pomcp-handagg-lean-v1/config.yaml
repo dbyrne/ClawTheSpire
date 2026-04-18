@@ -31,7 +31,7 @@ architecture:
   trunk_input: 174
   hand_agg_lean: true
 training:
-  generations: 30
+  generations: 60
   combats_per_gen: 256
   lr: 0.0003
   batch_size: 512

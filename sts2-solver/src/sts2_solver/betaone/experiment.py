@@ -521,11 +521,35 @@ class Experiment:
           - "finalized" / "concluded": errors if not finalized.
           - "latest": always betaone_latest.pt.
           - "genN" or raw "N": betaone_genN.pt.
+
+        For "auto" / "finalized" / "concluded": if betaone_gen{N}.pt has
+        been rotated out, falls back to betaone_latest.pt when its recorded
+        gen matches concluded_gen. Mirrors finalize()'s validation logic —
+        users shouldn't have to know which form of the checkpoint survived
+        disk rotation to benchmark their finalized experiment.
         """
         cfg = self.config
+
+        def _finalized_path() -> Path:
+            gen_ckpt = self.dir / f"betaone_gen{cfg.concluded_gen}.pt"
+            if gen_ckpt.exists():
+                return gen_ckpt
+            latest = self.dir / "betaone_latest.pt"
+            if latest.exists():
+                try:
+                    import torch
+                    ck = torch.load(str(latest), map_location="cpu", weights_only=False)
+                    if ck.get("gen") == cfg.concluded_gen:
+                        return latest
+                except Exception:
+                    pass
+            # Return the gen-specific name so the caller's existence check
+            # produces a precise error message.
+            return gen_ckpt
+
         if spec == "auto":
             if cfg.concluded_gen is not None:
-                return self.dir / f"betaone_gen{cfg.concluded_gen}.pt"
+                return _finalized_path()
             return self.dir / "betaone_latest.pt"
         if spec in ("finalized", "concluded"):
             if cfg.concluded_gen is None:
@@ -533,7 +557,7 @@ class Experiment:
                     f"'{self.name}' is not finalized — no concluded_gen. "
                     "Use --checkpoint latest or finalize it first."
                 )
-            return self.dir / f"betaone_gen{cfg.concluded_gen}.pt"
+            return _finalized_path()
         if spec == "latest":
             return self.dir / "betaone_latest.pt"
         # "gen30" or raw "30"
@@ -641,50 +665,34 @@ class Experiment:
         Dedup key: (suite, mode, mcts_sims, pw_k, c_puct, pomcp,
         turn_boundary_eval). Every MCTS inference knob that changes search
         semantics is part of the key so runs with different settings never
-        silently merge. Legacy rows missing these fields get None in the key
-        position, which makes them distinct from any new row that populates
-        the field — safer than guessing an historical default wrong.
+        silently merge.
         """
         import math
 
         self.benchmarks_dir.mkdir(exist_ok=True)
         path = self.benchmarks_dir / "results.jsonl"
 
-        def _pw_key(val):
-            # Normalize for key: policy mode has no pw_k (None); mcts mode
-            # defaults to 1.0 when missing (legacy rows pre-dating pw_k).
-            if val is None:
-                return None
-            return round(float(val), 4)
-
         def _float_key(val):
             if val is None:
                 return None
             return round(float(val), 4)
 
-        def _build_key(row_or_result, is_mcts: bool) -> tuple:
-            pw = row_or_result.get("pw_k")
-            if is_mcts and pw is None:
-                pw = 1.0  # legacy rows: pw_k was 1.0 before the knob existed
+        def _build_key(row_or_result) -> tuple:
             return (
                 row_or_result.get("suite", suite_id),  # suite uses arg on new rows
                 row_or_result.get("mode"),
                 row_or_result.get("mcts_sims", 0),
-                _pw_key(pw),
+                _float_key(row_or_result.get("pw_k")),
                 _float_key(row_or_result.get("c_puct")),
                 row_or_result.get("pomcp"),
                 row_or_result.get("turn_boundary_eval"),
             )
 
-        is_mcts = result["mode"] == "mcts"
-        new_pw_k = result.get("pw_k")
-        if is_mcts and new_pw_k is None:
-            new_pw_k = 1.0
         key = (
             suite_id,
             result["mode"],
             result.get("mcts_sims", 0),
-            _pw_key(new_pw_k),
+            _float_key(result.get("pw_k")),
             _float_key(result.get("c_puct")),
             result.get("pomcp"),
             result.get("turn_boundary_eval"),
@@ -701,12 +709,8 @@ class Experiment:
                     if not line.strip():
                         continue
                     row = json.loads(line)
-                    row_is_mcts = row.get("mode") == "mcts"
-                    row_key = _build_key(row, row_is_mcts)
-                    if row_key == key:
+                    if _build_key(row) == key:
                         # Aggregate: sum wins and games
-                        if row.get("pw_k") is None and new_pw_k is not None:
-                            row["pw_k"] = new_pw_k  # backfill legacy pw_k
                         row["wins"] = row.get("wins", 0) + new_wins
                         row["games"] = row.get("games", 0) + new_games
                         n = row["games"]
@@ -729,7 +733,7 @@ class Experiment:
                 "suite": suite_id,
                 "mode": result["mode"],
                 "mcts_sims": result.get("mcts_sims", 0),
-                "pw_k": new_pw_k,
+                "pw_k": result.get("pw_k"),
                 "c_puct": result.get("c_puct"),
                 "pomcp": result.get("pomcp"),
                 "turn_boundary_eval": result.get("turn_boundary_eval"),

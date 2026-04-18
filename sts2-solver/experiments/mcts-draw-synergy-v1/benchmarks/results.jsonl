@@ -1,3 +1,0 @@
-{"suite": "es-draw-synergy-v1-ce98b80a8075", "mode": "mcts", "mcts_sims": 1000, "timestamp": 1776443201.0998728, "checkpoint": "latest", "gen": 31, "win_rate": 0.879, "wins": 923, "games": 1050, "ci95_lo": 0.8579, "ci95_hi": 0.8974}
-{"suite": "es-base-es-v1-7af4cfe921ce", "mode": "mcts", "mcts_sims": 1000, "timestamp": 1776442511.37318, "checkpoint": "latest", "gen": 31, "win_rate": 0.5344, "wins": 101, "games": 189, "ci95_lo": 0.4633, "ci95_hi": 0.6041}
-{"suite": "es-lean-decks-v1-ed5193d56cce", "mode": "mcts", "mcts_sims": 1000, "timestamp": 1776442735.5067685, "checkpoint": "latest", "gen": 31, "win_rate": 0.709, "wins": 134, "games": 189, "ci95_lo": 0.6406, "ci95_hi": 0.7691}

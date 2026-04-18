@@ -174,6 +174,13 @@ def cmd_benchmark(args):
     print(f"  MCTS config: c_puct={c_puct}, pomcp={pomcp}, "
           f"turn_boundary_eval={turn_boundary_eval}, pw_k={pw_k}")
 
+    # Incremental save: on_progress fires after each HP batch with a delta
+    # dict. exp.save_benchmark accumulates by dedup key, so partial progress
+    # persists to results.jsonl continuously — halting mid-benchmark with
+    # Ctrl+C keeps everything completed up to the most recent HP batch.
+    def _save_partial(partial):
+        exp.save_benchmark(partial, suite_id=sid, checkpoint=resolved_label)
+
     results = benchmark_checkpoint(
         ckpt_path,
         encounter_set=encounters,
@@ -184,13 +191,12 @@ def cmd_benchmark(args):
         pomcp=pomcp,
         turn_boundary_eval=turn_boundary_eval,
         pw_k=pw_k,
+        on_progress=_save_partial,
     )
 
-    for result in results:
-        exp.save_benchmark(result, suite_id=sid,
-                           checkpoint=resolved_label)
-
-    print(f"  {len(results)} result(s) saved -> {exp.benchmarks_dir / 'results.jsonl'}")
+    # Don't save cumulative results again — incremental saves already
+    # accumulated everything through on_progress callbacks.
+    print(f"  {len(results)} result(s) saved incrementally -> {exp.benchmarks_dir / 'results.jsonl'}")
 
 
 def cmd_eval(args):

@@ -55,7 +55,17 @@ def _load_checkpoint(path: str) -> tuple[BetaOneNetwork, dict]:
     else:
         os.environ.pop("STS2_HAND_AGG_LEAN", None)
     net = BetaOneNetwork(num_cards=len(card_vocab), **kwargs)
-    ckpt = load_checkpoint(path, network=net, strict=False)
+    try:
+        ckpt = load_checkpoint(path, network=net, strict=False)
+    except RuntimeError:
+        # Older checkpoints with 137-dim base_state (pre-hand_agg) mismatch
+        # the current 142-dim network. Fall back to the dim-aware warm-start
+        # helper that remaps trunk weights around the hand_agg insertion
+        # point (otherwise a naive slice-copy would shift hand_pool weights
+        # by 5 columns and produce a near-random network).
+        from .eval import _warm_load_state_dict
+        ckpt = torch.load(path, map_location="cpu", weights_only=False)
+        _warm_load_state_dict(net, ckpt["model_state_dict"])
     net.eval()
     return net, ckpt
 
@@ -116,6 +126,7 @@ def benchmark_checkpoint(
     pomcp: bool = False,
     turn_boundary_eval: bool = False,
     pw_k: float = 1.0,
+    on_progress=None,
 ) -> list[dict]:
     """Benchmark a checkpoint against an encounter set.
 
@@ -129,9 +140,16 @@ def benchmark_checkpoint(
             Should match the model's training config — defaulting to stock
             MCTS settings here would silently change inference semantics
             from what the model was optimized for.
+        on_progress: Optional callback(partial_result_dict). Fires after
+            each HP-group batch completes with a DELTA dict (just that
+            batch's wins/games, not cumulative). Meant to be paired with
+            Experiment.save_benchmark which accumulates by dedup key, so
+            repeated calls with the same config build up the total. Lets
+            an interrupted benchmark keep partial progress on disk.
 
     Returns:
-        List of result dicts, one per mode.
+        List of result dicts, one per mode (cumulative — for display only
+        when on_progress is set, since saves already happened incrementally).
     """
     card_vocab, card_vocab_json = _build_card_vocab()
     monster_json = build_monster_data_json()
@@ -186,6 +204,40 @@ def benchmark_checkpoint(
             )
             wins += batch_wins
             n_games += len(batch_enc)
+
+            # Checkpoint progress after each HP batch. Delta dict: save_benchmark
+            # will sum wins/games into the existing accumulated row and
+            # recompute the CI from the total, so partial saves compose
+            # correctly across runs (and resume mid-interrupt).
+            if on_progress is not None:
+                batch_games = len(batch_enc)
+                batch_wr = batch_wins / max(batch_games, 1)
+                z = 1.96
+                n_b = batch_games
+                if n_b > 0:
+                    denom = 1 + z * z / n_b
+                    center = (batch_wr + z * z / (2 * n_b)) / denom
+                    margin = z * math.sqrt(
+                        (batch_wr * (1 - batch_wr) + z * z / (4 * n_b)) / n_b
+                    ) / denom
+                    b_lo = max(0, center - margin)
+                    b_hi = min(1, center + margin)
+                else:
+                    b_lo = b_hi = 0.0
+                on_progress({
+                    "mode": m,
+                    "gen": gen,
+                    "win_rate": round(batch_wr, 4),
+                    "wins": batch_wins,
+                    "games": batch_games,
+                    "mcts_sims": num_sims if use_mcts else 0,
+                    "pw_k": pw_k if use_mcts else None,
+                    "c_puct": c_puct if use_mcts else None,
+                    "pomcp": pomcp if use_mcts else None,
+                    "turn_boundary_eval": turn_boundary_eval if use_mcts else None,
+                    "ci95_lo": round(b_lo, 4),
+                    "ci95_hi": round(b_hi, 4),
+                })
 
         wr = wins / max(n_games, 1)
 
