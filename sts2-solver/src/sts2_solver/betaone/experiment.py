@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -29,7 +30,124 @@ from typing import Any
 import yaml
 
 from .network import ARCH_META, network_stats
-from .paths import EXPERIMENTS_DIR, BENCHMARK_DIR, TEMPLATES_DIR
+from .paths import EXPERIMENTS_DIR, BENCHMARK_DIR, TEMPLATES_DIR, REPO_ROOT
+
+
+# ---------------------------------------------------------------------------
+# Worktree helpers
+#
+# Experiments run in sibling git worktrees (../sts2-<name>/) so structural
+# code changes stay isolated per-experiment rather than leaking into trunk
+# as feature flags. Shared venv would force a single installed sts2_engine
+# wheel across all worktrees — instead each worktree has its own venv with
+# --system-site-packages so torch/etc are inherited but sts2_engine is
+# per-worktree. Merging back is a manual `git merge experiment/<name>`
+# once the experiment ships.
+# ---------------------------------------------------------------------------
+
+
+def _experiment_branch(name: str) -> str:
+    """Convention: all experiment branches live under experiment/* namespace."""
+    return f"experiment/{name}"
+
+
+def _experiment_worktree_path(name: str) -> Path:
+    """Convention: worktree is a sibling of the main checkout.
+    C:/coding-projects/STS2/  (main, repo root + working tree)
+    C:/coding-projects/sts2-<name>/  (experiment worktree)
+    The experiment branch's sts2-solver dir is at <worktree>/sts2-solver/.
+    """
+    return REPO_ROOT.parent / f"sts2-{name}"
+
+
+def _run_git(args: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess:
+    """Run a git command, raising on non-zero exit. Captures output."""
+    result = subprocess.run(
+        ["git", *args],
+        cwd=str(cwd) if cwd else None,
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"git {' '.join(args)} failed (cwd={cwd}):\n"
+            f"  stdout: {result.stdout}\n  stderr: {result.stderr}"
+        )
+    return result
+
+
+def _create_worktree(name: str, base_branch: str = "main") -> Path:
+    """Create a git worktree for experiment <name> on a new branch.
+
+    Returns the path to the worktree's sts2-solver directory (where the CLI
+    should cd to operate). base_branch can be 'main' or 'experiment/<parent>'
+    when forking — the new branch starts at base_branch's HEAD.
+    """
+    worktree_root = _experiment_worktree_path(name)
+    branch = _experiment_branch(name)
+
+    if worktree_root.exists():
+        raise FileExistsError(
+            f"Worktree path {worktree_root} already exists. "
+            "Pick a different name or `sts2-experiment archive <existing>` first."
+        )
+    # Let git's own error surface if the branch already exists or base_branch
+    # doesn't exist — clearer than recreating the check here.
+    _run_git(
+        ["worktree", "add", str(worktree_root), "-b", branch, base_branch],
+        cwd=REPO_ROOT,
+    )
+    return worktree_root / "sts2-solver"
+
+
+def _setup_worktree_venv(worktree_solver: Path) -> None:
+    """Create .venv/ in the worktree's sts2-solver dir and install sts2_engine.
+
+    Uses --system-site-packages so torch/rich/etc come from system Python;
+    only sts2_engine is worktree-specific (the one thing that genuinely
+    differs between worktrees). Runs maturin develop --release against the
+    worktree's Rust source so the installed wheel matches the worktree's
+    code, not main's.
+    """
+    import sys
+    venv_dir = worktree_solver / ".venv"
+    # Create the venv with the currently-running Python (whatever sts2-experiment
+    # is being invoked with). --system-site-packages inherits torch etc.
+    subprocess.run(
+        [sys.executable, "-m", "venv", "--system-site-packages", str(venv_dir)],
+        check=True,
+    )
+    venv_python = venv_dir / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+    # Install the solver project itself (editable) so sts2-experiment CLI
+    # is available in the venv.
+    subprocess.run(
+        [str(venv_python), "-m", "pip", "install", "-e", "."],
+        cwd=str(worktree_solver), check=True,
+    )
+    # Install maturin + build the worktree's Rust wheel into this venv.
+    subprocess.run(
+        [str(venv_python), "-m", "pip", "install", "maturin"],
+        check=True,
+    )
+    subprocess.run(
+        [str(venv_dir / ("Scripts/maturin.exe" if sys.platform == "win32" else "bin/maturin")),
+         "develop", "--release"],
+        cwd=str(worktree_solver / "sts2-engine"), check=True,
+    )
+
+
+def _activation_hint(worktree_solver: Path) -> str:
+    """Print-ready instructions for the user to activate the worktree venv."""
+    import sys
+    if sys.platform == "win32":
+        activate = worktree_solver / ".venv" / "Scripts" / "activate"
+    else:
+        activate = worktree_solver / ".venv" / "bin" / "activate"
+    return (
+        f"To work in this experiment:\n"
+        f"  cd {worktree_solver}\n"
+        f"  source {activate.relative_to(worktree_solver)}\n"
+        f"  sts2-experiment train <name>"
+    )
 
 
 # MCTS knobs that behave as training hyperparameters. Kept here so TUI and any

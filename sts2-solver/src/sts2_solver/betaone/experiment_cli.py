@@ -68,14 +68,78 @@ def _parse_overrides(override_strs: list[str] | None) -> dict:
 
 
 def cmd_create(args):
+    """Create a new experiment in a sibling git worktree.
+
+    --no-worktree skips the worktree step and writes the config in-place
+    (the current working tree's experiments/<name>/). This is what the
+    outer call uses when it subprocess-invokes this CLI from within the
+    newly-created worktree's venv — at which point "in-place" means the
+    worktree's dir, which is where we wanted it.
+    """
+    import sys as _sys
     overrides = _parse_overrides(args.override)
-    exp = Experiment.create(args.name, template=args.template, overrides=overrides)
-    config = exp.config
-    print(f"Created experiment: {config.name}")
-    print(f"  Method: {config.method}")
-    print(f"  Dir: {exp.dir}")
-    if config.description:
-        print(f"  Description: {config.description}")
+
+    if args.no_worktree:
+        # Inner call (running inside worktree venv): just write the config.
+        exp = Experiment.create(args.name, template=args.template, overrides=overrides)
+        config = exp.config
+        print(f"Created experiment: {config.name}")
+        print(f"  Method: {config.method}")
+        print(f"  Dir: {exp.dir}")
+        if config.description:
+            print(f"  Description: {config.description}")
+        return
+
+    # Outer call (running from main): set up the worktree, then delegate.
+    from .experiment import (
+        _create_worktree, _setup_worktree_venv, _activation_hint,
+        _experiment_worktree_path,
+    )
+
+    if _experiment_worktree_path(args.name).exists():
+        print(f"Error: worktree for '{args.name}' already exists at "
+              f"{_experiment_worktree_path(args.name)}. "
+              f"Use `sts2-experiment archive {args.name}` to remove it.")
+        _sys.exit(1)
+
+    print(f"Creating worktree for experiment '{args.name}'...")
+    try:
+        worktree_solver = _create_worktree(args.name, base_branch="main")
+    except (FileExistsError, RuntimeError) as e:
+        print(f"Error: {e}")
+        _sys.exit(1)
+    print(f"  worktree: {worktree_solver}")
+
+    print("Setting up worktree venv + sts2_engine (takes ~30-60s)...")
+    try:
+        _setup_worktree_venv(worktree_solver)
+    except Exception as e:
+        print(f"Venv setup failed: {e}")
+        print("Worktree is created but venv setup incomplete. Fix and rerun:")
+        print(f"  cd {worktree_solver}")
+        print(f"  python -m venv --system-site-packages .venv")
+        print(f"  <activate> && pip install -e . && cd sts2-engine && maturin develop --release")
+        _sys.exit(1)
+
+    # Delegate config creation to the worktree's own CLI (so paths resolve
+    # to the worktree's experiments/<name>/). The worktree's venv has the
+    # newly-built sts2_engine wheel installed.
+    import sys, subprocess
+    if sys.platform == "win32":
+        venv_python = worktree_solver / ".venv" / "Scripts" / "python.exe"
+    else:
+        venv_python = worktree_solver / ".venv" / "bin" / "python"
+    inner_args = [
+        str(venv_python), "-m", "sts2_solver.betaone.experiment_cli",
+        "create", args.name, "--template", args.template,
+        "--no-worktree",
+    ]
+    for ov in (args.override or []):
+        inner_args.extend(["--override", ov])
+    subprocess.run(inner_args, cwd=str(worktree_solver), check=True)
+
+    print()
+    print(_activation_hint(worktree_solver))
 
 
 def cmd_train(args):
@@ -708,12 +772,39 @@ def cmd_dashboard(args):
 
 
 def cmd_archive(args):
-    exp = Experiment(args.name)
-    if not exp.exists:
-        print(f"Experiment '{args.name}' not found.")
-        sys.exit(1)
-    exp.archive()
-    print(f"Archived: {args.name}")
+    """Remove an experiment's worktree + venv but keep the branch.
+
+    Reclaims disk (the venv is ~300MB, checkpoints can be several GB).
+    The branch stays in git so the full history is recoverable — to pick
+    the experiment back up, `git worktree add <path> experiment/<name>`
+    and run venv setup again.
+    """
+    import sys as _sys
+    from .experiment import _experiment_worktree_path, _experiment_branch, _run_git
+
+    worktree_path = _experiment_worktree_path(args.name)
+    if not worktree_path.exists():
+        # Fall back to legacy in-tree archive (pre-worktree experiments).
+        exp = Experiment(args.name)
+        if not exp.exists:
+            print(f"Experiment '{args.name}' not found (no worktree, no in-tree dir).")
+            _sys.exit(1)
+        exp.archive()
+        print(f"Archived legacy in-tree experiment: {args.name}")
+        return
+
+    # Worktree-based archive: remove the worktree (and its venv inside).
+    # Git's `worktree remove` refuses if the worktree has uncommitted changes
+    # or locked state — force unless the user passed --keep-uncommitted.
+    from .experiment import REPO_ROOT
+    print(f"Removing worktree at {worktree_path}...")
+    try:
+        _run_git(["worktree", "remove", "--force", str(worktree_path)], cwd=REPO_ROOT)
+    except RuntimeError as e:
+        print(f"Error: {e}")
+        _sys.exit(1)
+    print(f"Archived: worktree removed, branch {_experiment_branch(args.name)} retained.")
+    print(f"To restore: git worktree add {worktree_path} {_experiment_branch(args.name)}")
 
 
 def cmd_finalize(args):
@@ -768,12 +859,17 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
 
     # create
-    p = sub.add_parser("create", help="Create a new experiment from a template")
+    p = sub.add_parser("create",
+                        help="Create a new experiment (in a sibling git worktree)")
     p.add_argument("name", help="Experiment name")
     p.add_argument("--template", "-t", required=True,
                     help="Template name (e.g., mcts_selfplay, ppo)")
     p.add_argument("--override", "-o", nargs="*", default=[],
                     help="Override config values (key=value)")
+    p.add_argument("--no-worktree", action="store_true",
+                    help="Skip worktree creation; write config in-place. "
+                         "Internal use (the outer call delegates here from "
+                         "inside the new worktree's venv).")
     p.set_defaults(func=cmd_create)
 
     # train
