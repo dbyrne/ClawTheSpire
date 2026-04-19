@@ -37,13 +37,13 @@ HAS_BETAONE_ENCODE_FFI = hasattr(sts2_engine, "betaone_encode_state")
 
 class TestDimensions:
     def test_state_dim(self):
-        # base(155) + hand_cards(10*28=280) + hand_mask(10) = 445
-        assert STATE_DIM == 445
+        # base(156) + hand_cards(10*28=280) + hand_mask(10) = 446
+        assert STATE_DIM == 446
         assert STATE_DIM == BASE_STATE_DIM + MAX_HAND * CARD_STATS_DIM + MAX_HAND
 
     def test_base_state_dim(self):
-        # player(25) + enemies(5*19=95) + context(6) + relics(26) + hand_agg(3) = 155
-        assert BASE_STATE_DIM == 155
+        # player(25) + enemies(5*19=95) + context(6) + relics(27) + hand_agg(3) = 156
+        assert BASE_STATE_DIM == 156
 
     def test_hand_agg_dim(self):
         assert HAND_AGG_DIM == 3
@@ -391,7 +391,7 @@ class TestFullStateDim:
         c = encode_context(0, 0, 0, 0, 0)
         # encode_relics dim = RELIC_DIM (26) but we don't import it here;
         # instead we compute the base directly and let BASE_STATE_DIM compare.
-        relics_dim = 26
+        relics_dim = 27
         hand_agg = encode_hand_aggregates([])  # empty hand = zero vector
         hand_cards = [0.0] * (MAX_HAND * CARD_STATS_DIM)
         hand_mask = [0.0] * MAX_HAND

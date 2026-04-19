@@ -490,8 +490,12 @@ pub fn execute_card_effect(
             apply_power_to_player(state, "_corrosive_wave", amt);
         }
         "MASTER_PLANNER" => {
-            // When you play a Skill, it gains Sly.
-            // Simplified: Skills get Retain-like behavior — approximated as draw 1 on Skill play
+            // When you play a Skill, it gains Sly. Sly is a card-keyword that
+            // persists through discard -> reshuffle -> redraw, so future
+            // copies of a played Skill carry the Sly tag and trigger Sly
+            // effects (e.g., Tactician's energy gain on discard) thereafter.
+            // The actual keyword application happens at combat.rs:275 inside
+            // play_card while _master_planner > 0.
             apply_power_to_player(state, "_master_planner", 1);
         }
         "SERPENT_FORM" => {

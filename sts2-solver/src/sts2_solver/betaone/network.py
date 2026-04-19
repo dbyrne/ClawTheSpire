@@ -24,10 +24,10 @@ import torch.nn.functional as F
 # These must match betaone/encode.rs constants exactly
 MAX_HAND = 10
 CARD_STATS_DIM = 28
-RELIC_DIM = 26
+RELIC_DIM = 27
 HAND_AGG_DIM = 3  # hand aggregates: total_damage, total_block, count_powers
-BASE_STATE_DIM = 155  # player(25) + enemies(95=5*19) + context(6) + relics(26) + hand_agg(3) — must match Rust
-STATE_DIM = BASE_STATE_DIM + MAX_HAND * CARD_STATS_DIM + MAX_HAND  # 445
+BASE_STATE_DIM = 156  # player(25) + enemies(95=5*19) + context(6) + relics(27) + hand_agg(3) — must match Rust
+STATE_DIM = BASE_STATE_DIM + MAX_HAND * CARD_STATS_DIM + MAX_HAND  # 446
 ACTION_DIM = 35
 MAX_ACTIONS = 30
 HIDDEN_DIM = 128

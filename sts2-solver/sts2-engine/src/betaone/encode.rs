@@ -20,13 +20,13 @@ pub const PLAYER_DIM: usize = 25;
 pub const ENEMY_FEATURES: usize = 19;
 pub const ENEMY_SLOTS: usize = 5;
 pub const CONTEXT_DIM: usize = 6;
-pub const RELIC_DIM: usize = 26;
+pub const RELIC_DIM: usize = 27;
 pub const HAND_AGG_DIM: usize = 3;  // total_damage, total_block, count_powers
 pub const MAX_HAND: usize = 10;
-const BASE_STATE_DIM: usize = PLAYER_DIM + ENEMY_SLOTS * ENEMY_FEATURES + CONTEXT_DIM + RELIC_DIM + HAND_AGG_DIM;  // 155
+const BASE_STATE_DIM: usize = PLAYER_DIM + ENEMY_SLOTS * ENEMY_FEATURES + CONTEXT_DIM + RELIC_DIM + HAND_AGG_DIM;  // 156
 const HAND_CARDS_DIM: usize = MAX_HAND * CARD_STATS_DIM;  // 10 × 28 = 280
 const HAND_MASK_DIM: usize = MAX_HAND;                     // 10
-pub const STATE_DIM: usize = BASE_STATE_DIM + HAND_CARDS_DIM + HAND_MASK_DIM;  // 445
+pub const STATE_DIM: usize = BASE_STATE_DIM + HAND_CARDS_DIM + HAND_MASK_DIM;  // 446
 
 // Relic flag indices (within the RELIC_DIM block)
 mod relic_idx {
@@ -64,6 +64,8 @@ mod relic_idx {
     pub const BURNING_BLOOD: usize = 23;
     pub const BLACK_BLOOD: usize = 24;
     pub const MEAT_ON_THE_BONE: usize = 25;
+    // Draw-pile shuffle bonus
+    pub const PENDULUM: usize = 26;
 }
 
 /// Relic names in flag-index order, for encoding.
@@ -76,6 +78,7 @@ const RELIC_NAMES: [&str; RELIC_DIM] = [
     "CHANDELIER", "ART_OF_WAR", "POCKETWATCH",
     "ORICHALCUM", "CLOAK_CLASP",
     "BURNING_BLOOD", "BLACK_BLOOD", "MEAT_ON_THE_BONE",
+    "PENDULUM",
 ];
 
 // Action layout: [card_stats | target | flags]
