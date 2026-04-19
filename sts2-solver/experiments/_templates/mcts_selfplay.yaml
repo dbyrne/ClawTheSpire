@@ -19,6 +19,6 @@ data:
   encounter_set: lean-decks-v1
 
 checkpoints:
-  save_every: 10
+  save_every: 1
   keep_best: true
   cold_start: false
