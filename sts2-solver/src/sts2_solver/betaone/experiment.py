@@ -1105,9 +1105,12 @@ class Experiment:
         accumulate results across runs for tighter CIs.
 
         Dedup key: (suite, mode, mcts_sims, pw_k, c_puct, pomcp,
-        turn_boundary_eval). Every MCTS inference knob that changes search
-        semantics is part of the key so runs with different settings never
-        silently merge.
+        turn_boundary_eval, gen). Every MCTS inference knob that changes
+        search semantics is part of the key so runs with different settings
+        never silently merge. `gen` is in the key because benchmarks of
+        different checkpoints are different data even with identical
+        inference config — without gen, benchmarking gen 61 then gen 70
+        of the same experiment silently merged their wins/games.
         """
         import math
 
@@ -1128,6 +1131,7 @@ class Experiment:
                 _float_key(row_or_result.get("c_puct")),
                 row_or_result.get("pomcp"),
                 row_or_result.get("turn_boundary_eval"),
+                row_or_result.get("gen"),
             )
 
         key = (
@@ -1138,6 +1142,7 @@ class Experiment:
             _float_key(result.get("c_puct")),
             result.get("pomcp"),
             result.get("turn_boundary_eval"),
+            result.get("gen"),
         )
         new_wins = result.get("wins", 0)
         new_games = result.get("games", 0)
