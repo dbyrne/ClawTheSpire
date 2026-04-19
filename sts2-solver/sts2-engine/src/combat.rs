@@ -816,19 +816,11 @@ pub fn tick_enemy_powers(state: &mut CombatState) {
         if territorial > 0 {
             state.enemies[i].add_power("Strength", territorial);
         }
-        // Debuff decay (and Intangible — single-turn defensive buff per STS rules).
-        for debuff in &["Vulnerable", "Weak", "Intangible"] {
-            let val = state.enemies[i].get_power(debuff);
-            if val > 0 {
-                let new_val = val - 1;
-                if new_val <= 0 {
-                    state.enemies[i].powers.remove(*debuff);
-                } else {
-                    state.enemies[i].powers.insert(debuff.to_string(), new_val);
-                }
-            }
-        }
-        // Poison (+ Accelerant: extra ticks) — respects enemy Intangible
+        // Poison FIRST (before Intangible decrements), so Intangible-1 enemies
+        // still get the clamp on their final-Intangible-stack tick. Per STS:
+        // damage taken THIS turn is clamped to 1 by Intangible, then Intangible
+        // decrements at end of turn. Poison-tick is "damage taken this turn,"
+        // so it must apply against the still-positive Intangible stack.
         let poison = state.enemies[i].get_power("Poison");
         if poison > 0 {
             let was_alive = state.enemies[i].is_alive();
@@ -848,6 +840,22 @@ pub fn tick_enemy_powers(state: &mut CombatState) {
                 state.enemies[i].hp = 0;
                 if was_alive {
                     on_enemy_death(state, i, true);
+                }
+            }
+        }
+        // Debuff decay (and Intangible — single-turn defensive buff per STS rules).
+        // Runs AFTER poison so Intangible protects the final-stack poison tick.
+        if !state.enemies[i].is_alive() {
+            continue;
+        }
+        for debuff in &["Vulnerable", "Weak", "Intangible"] {
+            let val = state.enemies[i].get_power(debuff);
+            if val > 0 {
+                let new_val = val - 1;
+                if new_val <= 0 {
+                    state.enemies[i].powers.remove(*debuff);
+                } else {
+                    state.enemies[i].powers.insert(debuff.to_string(), new_val);
                 }
             }
         }
