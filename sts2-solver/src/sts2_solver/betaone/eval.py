@@ -392,6 +392,24 @@ def build_scenarios() -> list[Scenario]:
     ))
 
     scenarios.append(Scenario(
+        name="survivor_discard_keep_dodge_and_roll",
+        category="discard",
+        description="Survivor just played (8 block applied), discard-from-hand triggered. Hand = Dodge and Roll + 2 Defends vs 12 incoming. Discarding a Defend keeps D&R playable: Survivor(8) + D&R(4) + Defend(5) = 17 block this turn (covers 12) PLUS 4 more block next turn from D&R's trigger = net 21 block over 2 turns. Discarding D&R gets 18 block this turn but 0 future — strictly worse because 6 block is wasted vs the enemy's 12 either way. NOTE: requires sim to implement D&R's next-turn block; currently broken (see known sim bugs).",
+        player={"hp": 50, "max_hp": 70, "energy": 2, "block": 8},  # Survivor already applied 8 block
+        enemies=[enemy(40, 50, damage=12)],
+        hand=[lookup_card("DODGE_AND_ROLL"), defend(), defend()],
+        actions=[
+            ActionSpec("choose_card", lookup_card("DODGE_AND_ROLL"),
+                       label="discard Dodge and Roll (loses the +4 next-turn block)"),
+            ActionSpec("choose_card", defend(), label="discard Defend (keep D&R for +4 next turn)"),
+            ActionSpec("choose_card", defend(), label="discard Defend (keep D&R for +4 next turn)"),
+        ],
+        best_actions=[1, 2],    # discard a Defend, keep D&R's multi-turn value
+        bad_actions=[0],        # discard D&R throws away the next-turn block for 1 extra block this turn (wasted overflow anyway)
+        pending_choice={"choice_type": "discard_from_hand"},
+    ))
+
+    scenarios.append(Scenario(
         name="discard_sly_for_value",
         category="discard",
         description="Discard Tactician (Sly, +1 energy on discard) over normal cards",
@@ -507,6 +525,23 @@ def build_scenarios() -> list[Scenario]:
         ],
         best_actions=[0],       # kill the enemy
         bad_actions=[1, 2],     # blocking a dead enemy / ending turn
+    ))
+
+    scenarios.append(Scenario(
+        name="lethal_over_dodge_and_roll",
+        category="lethal",
+        description="1 enemy 13 HP attacking for 9, 3 energy with 3 Strikes + Dodge and Roll — 3 Strikes = 18 dmg lethal (0 HP lost). Dodge and Roll first wastes 1 energy on 4 block; leftover 2 Strikes = 12 dmg (enemy survives at 1 HP and hits for 9-4=5).",
+        player={"hp": 50, "max_hp": 70, "energy": 3, "block": 0},
+        enemies=[enemy(13, 50, damage=9)],
+        hand=[strike(), strike(), strike(), lookup_card("DODGE_AND_ROLL")],
+        actions=[
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike (toward lethal)"),
+            ActionSpec("play_card", lookup_card("DODGE_AND_ROLL"),
+                       label="Dodge and Roll (skips lethal, costs 5 HP net)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],      # kill the enemy, avoid the 9 entirely
+        bad_actions=[1, 2],    # D&R misses lethal; end turn eats full 9
     ))
 
     scenarios.append(Scenario(
@@ -1109,6 +1144,30 @@ def build_scenarios() -> list[Scenario]:
         ],
         best_actions=[0, 1],    # either attack first is fine; Finisher LAST maximizes its scaling
         bad_actions=[2, 3],     # Finisher first → scales by 0 attacks → minimum damage; ending turn wastes energy
+    ))
+
+    scenarios.append(Scenario(
+        name="neutralize_before_calculated_gamble",
+        category="combo",
+        description="Calculated Gamble discards hand — play Neutralize (0-cost, 3 dmg + Weak) FIRST so the Weak actually gets applied before the discard",
+        player={"hp": 60, "max_hp": 70, "energy": 2, "block": 0},
+        enemies=[enemy(40, 50, damage=12)],  # attacking — Weak applies savings
+        hand=[calculated_gamble(), neutralize(), strike(), defend()],
+        actions=[
+            ActionSpec("play_card", neutralize(), target_idx=0,
+                       label="Neutralize (0-cost, 3 dmg + 1 Weak)"),
+            ActionSpec("play_card", calculated_gamble(),
+                       label="Calculated Gamble FIRST (discards Neutralize, loses the Weak)"),
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike (1 energy, 6 dmg)"),
+            ActionSpec("play_card", defend(), label="Defend (1 energy, 5 block)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        # Neutralize is free + applies Weak (reduces enemy's 12 to 9). If you fire
+        # Calculated Gamble first, Neutralize goes to discard without applying
+        # Weak this turn — you lose the damage reduction precisely when you were
+        # about to cycle and also wanted more protection.
+        best_actions=[0],
+        bad_actions=[1, 4],
     ))
 
     scenarios.append(Scenario(
