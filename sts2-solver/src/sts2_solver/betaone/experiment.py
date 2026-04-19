@@ -586,6 +586,10 @@ class ExperimentConfig:
                     "grad_conflict_sample_every", 10
                 ),
                 "save_every": ck.get("save_every", 10),
+                "reanalyse_every": mcts.get("reanalyse_every", 0),
+                "reanalyse_frac": _float(mcts.get("reanalyse_frac"), 0.25),
+                "reanalyse_min_gen": mcts.get("reanalyse_min_gen", 10),
+                "reanalyse_sims": mcts.get("reanalyse_sims"),
             }
         else:  # ppo
             ppo = t.get("ppo", {})

@@ -30,5 +30,6 @@ fn sts2_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(betaone::mcts_ffi::betaone_mcts_search, m)?)?;
     m.add_function(wrap_pyfunction!(betaone::mcts_ffi::betaone_encode_state, m)?)?;
     m.add_function(wrap_pyfunction!(betaone::selfplay::betaone_mcts_selfplay, m)?)?;
+    m.add_function(wrap_pyfunction!(betaone::selfplay::betaone_mcts_reanalyse, m)?)?;
     Ok(())
 }
