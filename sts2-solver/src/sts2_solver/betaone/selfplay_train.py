@@ -323,6 +323,7 @@ def train(
     eval_every: int = 0,
     value_head_layers: int = 1,
     grad_conflict_sample_every: int = 10,
+    save_every: int = 10,
 ):
     os.makedirs(output_dir, exist_ok=True)
     onnx_dir = os.path.join(output_dir, "onnx")
@@ -689,7 +690,10 @@ def train(
         }
         latest_path = os.path.join(output_dir, "betaone_latest.pt")
         torch.save(ckpt_data, latest_path)
-        if gen % 10 == 0 or win_rate >= best_win_rate:
+        # save_every from config (default 10) — save milestones at that cadence
+        # PLUS any new-best WR gens. save_every=1 preserves every gen for
+        # post-hoc benchmarking / analysis.
+        if gen % max(save_every, 1) == 0 or win_rate >= best_win_rate:
             torch.save(ckpt_data, os.path.join(output_dir, f"betaone_gen{gen}.pt"))
 
         # Periodic eval curve: append eval.jsonl / value_eval.jsonl so the TUI

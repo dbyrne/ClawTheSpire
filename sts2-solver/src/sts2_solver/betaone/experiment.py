@@ -585,6 +585,7 @@ class ExperimentConfig:
                 "grad_conflict_sample_every": mcts.get(
                     "grad_conflict_sample_every", 10
                 ),
+                "save_every": ck.get("save_every", 10),
             }
         else:  # ppo
             ppo = t.get("ppo", {})
