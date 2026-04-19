@@ -103,8 +103,56 @@ def _create_worktree(name: str, base_branch: str = "main") -> Path:
     return worktree_root / "sts2-solver"
 
 
-def _setup_worktree_venv(worktree_solver: Path) -> None:
+def _venv_python(venv_dir: Path) -> Path:
+    import sys
+    return venv_dir / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+
+
+def _venv_maturin(venv_dir: Path) -> Path:
+    import sys
+    return venv_dir / ("Scripts/maturin.exe" if sys.platform == "win32" else "bin/maturin")
+
+
+def _venv_ok(venv_dir: Path) -> bool:
+    """True iff venv exists with --system-site-packages=true and a working
+    python interpreter. A venv without system-site-packages is not OK: we'd
+    be missing torch/numpy which are inherited from the system Python."""
+    cfg = venv_dir / "pyvenv.cfg"
+    if not cfg.exists() or not _venv_python(venv_dir).exists():
+        return False
+    try:
+        return "include-system-site-packages = true" in cfg.read_text()
+    except OSError:
+        return False
+
+
+def _venv_solver_installed(venv_dir: Path) -> bool:
+    """True iff the venv can import sts2_solver (this worktree's editable
+    install)."""
+    result = subprocess.run(
+        [str(_venv_python(venv_dir)), "-c", "import sts2_solver"],
+        capture_output=True,
+    )
+    return result.returncode == 0
+
+
+def _venv_has_engine(venv_dir: Path) -> bool:
+    """True iff sts2_engine is importable from the venv."""
+    result = subprocess.run(
+        [str(_venv_python(venv_dir)), "-c", "import sts2_engine"],
+        capture_output=True,
+    )
+    return result.returncode == 0
+
+
+def _setup_worktree_venv(worktree_solver: Path, *, rebuild_engine: bool = True) -> None:
     """Create .venv/ in the worktree's sts2-solver dir and install sts2_engine.
+
+    Idempotent: each step is gated on whether it's already done, so re-running
+    after a partial/interrupted setup picks up where it left off. Pass
+    rebuild_engine=False to skip the maturin develop step when you know the
+    Rust source hasn't changed since the last build (rare; the default always
+    rebuilds since cargo incremental makes it cheap when nothing's changed).
 
     Uses --system-site-packages so torch/rich/etc come from system Python;
     only sts2_engine is worktree-specific (the one thing that genuinely
@@ -112,37 +160,87 @@ def _setup_worktree_venv(worktree_solver: Path) -> None:
     worktree's Rust source so the installed wheel matches the worktree's
     code, not main's.
     """
-    import sys
+    import sys, shutil
     venv_dir = worktree_solver / ".venv"
-    # Create the venv with the currently-running Python (whatever sts2-experiment
-    # is being invoked with). --system-site-packages inherits torch etc.
-    subprocess.run(
-        [sys.executable, "-m", "venv", "--system-site-packages", str(venv_dir)],
-        check=True,
-    )
-    venv_python = venv_dir / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
-    # Install the solver project itself (editable) so sts2-experiment CLI
-    # is available in the venv.
-    subprocess.run(
-        [str(venv_python), "-m", "pip", "install", "-e", "."],
-        cwd=str(worktree_solver), check=True,
-    )
-    # Install maturin into the venv. Need --force-reinstall because maturin
-    # is already importable via --system-site-packages (system Python has it),
-    # and without --force-reinstall pip says "already satisfied" and skips —
-    # leaving no maturin.exe in the venv's Scripts/ and maturin's Python
-    # entry point fails with "Unable to find maturin script" when the
-    # binary wrapper isn't where it expects. --no-deps avoids pulling in
-    # maturin's own deps twice.
-    subprocess.run(
-        [str(venv_python), "-m", "pip", "install",
-         "--force-reinstall", "--no-deps", "maturin"],
-        check=True,
-    )
-    subprocess.run(
-        [str(venv_python), "-m", "maturin", "develop", "--release"],
-        cwd=str(worktree_solver / "sts2-engine"), check=True,
-    )
+
+    # Step 1: Venv exists with system-site-packages. If it exists without
+    # the flag (e.g. `uv sync` created it), recreate — flipping the flag
+    # in pyvenv.cfg post-hoc is fragile because the venv's paths may have
+    # been baked in wrong.
+    if _venv_ok(venv_dir):
+        print("  [1/4] venv ok (skip)")
+    else:
+        print("  [1/4] creating venv (--system-site-packages)...")
+        if venv_dir.exists():
+            shutil.rmtree(venv_dir)
+        subprocess.run(
+            [sys.executable, "-m", "venv", "--system-site-packages", str(venv_dir)],
+            check=True,
+        )
+
+    venv_python = _venv_python(venv_dir)
+
+    # Step 2: sts2-solver editable install. --force-reinstall --no-deps
+    # because the system Python already has main's sts2-solver editable, and
+    # without --force-reinstall pip resolves `import sts2_solver` to main's
+    # path (not the worktree's), silently breaking the whole point of having
+    # separate worktrees. Check uses the venv's own .pth file, not just
+    # whether the import succeeds (which it always does via system site-
+    # packages).
+    editable_pth = venv_dir / "Lib" / "site-packages" / "_editable_impl_sts2_solver.pth"
+    unix_pth = venv_dir / "lib" / "python3.11" / "site-packages" / "_editable_impl_sts2_solver.pth"
+    if editable_pth.exists() or unix_pth.exists():
+        print("  [2/4] sts2-solver ok (skip)")
+    else:
+        print("  [2/4] installing sts2-solver (editable, --force-reinstall)...")
+        subprocess.run(
+            [str(venv_python), "-m", "pip", "install",
+             "--force-reinstall", "--no-deps", "-e", "."],
+            cwd=str(worktree_solver), check=True,
+        )
+
+    # Step 3: maturin in venv Scripts. --force-reinstall --no-deps because
+    # maturin is already importable via --system-site-packages (system Python
+    # has it), and without --force-reinstall pip says "already satisfied" and
+    # skips — leaving no maturin.exe in the venv's Scripts/, and maturin's
+    # Python entry point then fails with "Unable to find maturin script".
+    if _venv_maturin(venv_dir).exists():
+        print("  [3/4] maturin ok (skip)")
+    else:
+        print("  [3/4] installing maturin into venv...")
+        subprocess.run(
+            [str(venv_python), "-m", "pip", "install",
+             "--force-reinstall", "--no-deps", "maturin"],
+            check=True,
+        )
+
+    # Step 4: build + install sts2_engine from this worktree's Rust source.
+    # Default is to always run: cargo incremental makes it fast (~5-10s) when
+    # nothing changed, and it's the only way to guarantee the installed wheel
+    # matches the current source. Callers can opt out via rebuild_engine=False.
+    if not rebuild_engine and _venv_has_engine(venv_dir):
+        print("  [4/4] sts2_engine ok (skip, rebuild_engine=False)")
+    else:
+        print("  [4/4] building sts2_engine (maturin develop --release)...")
+        subprocess.run(
+            [str(venv_python), "-m", "maturin", "develop", "--release"],
+            cwd=str(worktree_solver / "sts2-engine"), check=True,
+        )
+
+
+def _is_our_worktree(worktree_root: Path, name: str) -> bool:
+    """True iff the path is a git worktree checked out on experiment/<name>.
+    Used to decide whether an existing worktree dir is ours to resume setup
+    on, vs. a stray dir with the same name that we shouldn't touch."""
+    expected = _experiment_branch(name)
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=str(worktree_root), capture_output=True, text=True, check=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
+    return result.stdout.strip() == expected
 
 
 def _create_sts2_agent_junction(worktree_root: Path) -> None:

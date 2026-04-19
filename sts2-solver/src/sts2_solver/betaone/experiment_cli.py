@@ -93,50 +93,62 @@ def cmd_create(args):
     # Outer call (running from main): set up the worktree, then delegate.
     from .experiment import (
         _create_worktree, _setup_worktree_venv, _activation_hint,
-        _experiment_worktree_path,
+        _experiment_worktree_path, _is_our_worktree,
     )
 
-    if _experiment_worktree_path(args.name).exists():
-        print(f"Error: worktree for '{args.name}' already exists at "
-              f"{_experiment_worktree_path(args.name)}. "
-              f"Use `sts2-experiment archive {args.name}` to remove it.")
-        _sys.exit(1)
+    worktree_root = _experiment_worktree_path(args.name)
+    worktree_solver = worktree_root / "sts2-solver"
+    exp_config = worktree_solver / "experiments" / args.name / "config.yaml"
 
-    print(f"Creating worktree for experiment '{args.name}'...")
-    try:
-        worktree_solver = _create_worktree(args.name, base_branch="main")
-    except (FileExistsError, RuntimeError) as e:
-        print(f"Error: {e}")
-        _sys.exit(1)
-    print(f"  worktree: {worktree_solver}")
+    if worktree_root.exists():
+        # Existing worktree: either ours (resume partial setup) or a stray
+        # dir we shouldn't touch.
+        if not _is_our_worktree(worktree_root, args.name):
+            print(f"Error: {worktree_root} exists but isn't a git worktree "
+                  f"on branch 'experiment/{args.name}'. Either a stray dir "
+                  f"or a worktree for a different experiment. Clean up "
+                  f"manually or pick a different name.")
+            _sys.exit(1)
+        if exp_config.exists():
+            print(f"Resuming: worktree + config exist. Verifying venv/engine...")
+        else:
+            print(f"Resuming: worktree exists, config missing. Completing setup...")
+    else:
+        print(f"Creating worktree for experiment '{args.name}'...")
+        try:
+            worktree_solver = _create_worktree(args.name, base_branch="main")
+        except (FileExistsError, RuntimeError) as e:
+            print(f"Error: {e}")
+            _sys.exit(1)
+        print(f"  worktree: {worktree_solver}")
 
-    print("Setting up worktree venv + sts2_engine (takes ~30-60s)...")
+    print("Setting up venv + sts2_engine (idempotent)...")
     try:
         _setup_worktree_venv(worktree_solver)
     except Exception as e:
         print(f"Venv setup failed: {e}")
-        print("Worktree is created but venv setup incomplete. Fix and rerun:")
-        print(f"  cd {worktree_solver}")
-        print(f"  python -m venv --system-site-packages .venv")
-        print(f"  <activate> && pip install -e . && cd sts2-engine && maturin develop --release")
+        print(f"Re-run `sts2-experiment repair {args.name}` after fixing.")
         _sys.exit(1)
 
     # Delegate config creation to the worktree's own CLI (so paths resolve
-    # to the worktree's experiments/<name>/). The worktree's venv has the
-    # newly-built sts2_engine wheel installed.
-    import sys, subprocess
-    if sys.platform == "win32":
-        venv_python = worktree_solver / ".venv" / "Scripts" / "python.exe"
+    # to the worktree's experiments/<name>/). Skip if config already exists
+    # (resume case).
+    if exp_config.exists():
+        print(f"Config already exists at {exp_config} (skip write)")
     else:
-        venv_python = worktree_solver / ".venv" / "bin" / "python"
-    inner_args = [
-        str(venv_python), "-m", "sts2_solver.betaone.experiment_cli",
-        "create", args.name, "--template", args.template,
-        "--no-worktree",
-    ]
-    for ov in (args.override or []):
-        inner_args.extend(["--override", ov])
-    subprocess.run(inner_args, cwd=str(worktree_solver), check=True)
+        import sys, subprocess
+        if sys.platform == "win32":
+            venv_python = worktree_solver / ".venv" / "Scripts" / "python.exe"
+        else:
+            venv_python = worktree_solver / ".venv" / "bin" / "python"
+        inner_args = [
+            str(venv_python), "-m", "sts2_solver.betaone.experiment_cli",
+            "create", args.name, "--template", args.template,
+            "--no-worktree",
+        ]
+        for ov in (args.override or []):
+            inner_args.extend(["--override", ov])
+        subprocess.run(inner_args, cwd=str(worktree_solver), check=True)
 
     print()
     print(_activation_hint(worktree_solver))
@@ -203,60 +215,102 @@ def cmd_fork(args):
     # Outer call: worktree-aware fork.
     from .experiment import (
         _create_worktree, _setup_worktree_venv, _activation_hint,
-        _experiment_worktree_path, _experiment_branch,
+        _experiment_worktree_path, _experiment_branch, _is_our_worktree,
     )
     import subprocess
 
-    if _experiment_worktree_path(args.name).exists():
-        print(f"Error: worktree for '{args.name}' already exists at "
-              f"{_experiment_worktree_path(args.name)}. "
-              f"Use `sts2-experiment archive {args.name}` first.")
-        _sys.exit(1)
+    worktree_root = _experiment_worktree_path(args.name)
+    worktree_solver = worktree_root / "sts2-solver"
+    exp_config = worktree_solver / "experiments" / args.name / "config.yaml"
 
-    # Pick the base branch: if source has an experiment/<source> branch,
-    # fork off that (carries the source's code changes into the child).
-    # Otherwise fork off main.
-    source_branch = _experiment_branch(args.source)
-    from .experiment import REPO_ROOT, _run_git
-    try:
-        _run_git(["rev-parse", "--verify", source_branch], cwd=REPO_ROOT)
-        base = source_branch
-    except RuntimeError:
-        base = "main"
-    print(f"Forking '{args.name}' from '{args.source}' (base branch: {base})...")
+    if worktree_root.exists():
+        if not _is_our_worktree(worktree_root, args.name):
+            print(f"Error: {worktree_root} exists but isn't a git worktree "
+                  f"on branch 'experiment/{args.name}'.")
+            _sys.exit(1)
+        print(f"Resuming partial fork for '{args.name}'...")
+    else:
+        # Pick the base branch: if source has an experiment/<source> branch,
+        # fork off that (carries the source's code changes into the child).
+        source_branch = _experiment_branch(args.source)
+        from .experiment import REPO_ROOT, _run_git
+        try:
+            _run_git(["rev-parse", "--verify", source_branch], cwd=REPO_ROOT)
+            base = source_branch
+        except RuntimeError:
+            base = "main"
+        print(f"Forking '{args.name}' from '{args.source}' (base branch: {base})...")
+        try:
+            worktree_solver = _create_worktree(args.name, base_branch=base)
+        except (FileExistsError, RuntimeError) as e:
+            print(f"Error: {e}")
+            _sys.exit(1)
+        print(f"  worktree: {worktree_solver}")
 
-    try:
-        worktree_solver = _create_worktree(args.name, base_branch=base)
-    except (FileExistsError, RuntimeError) as e:
-        print(f"Error: {e}")
-        _sys.exit(1)
-    print(f"  worktree: {worktree_solver}")
-
-    print("Setting up worktree venv + sts2_engine (takes ~30-60s)...")
+    print("Setting up venv + sts2_engine (idempotent)...")
     try:
         _setup_worktree_venv(worktree_solver)
     except Exception as e:
         print(f"Venv setup failed: {e}")
+        print(f"Re-run `sts2-experiment repair {args.name}` after fixing.")
         _sys.exit(1)
 
     # Delegate the actual fork (config + checkpoint copy) to the worktree's
-    # CLI inside its venv, so paths resolve to the worktree's dirs.
-    import sys, subprocess
-    if sys.platform == "win32":
-        venv_python = worktree_solver / ".venv" / "Scripts" / "python.exe"
+    # CLI. Skip if the fork config already exists (resume case).
+    if exp_config.exists():
+        print(f"Config already exists at {exp_config} (skip fork)")
     else:
-        venv_python = worktree_solver / ".venv" / "bin" / "python"
-    inner_args = [
-        str(venv_python), "-m", "sts2_solver.betaone.experiment_cli",
-        "fork", args.name, "--from", args.source,
-        "--no-worktree",
-    ]
-    if args.checkpoint:
-        inner_args.extend(["--checkpoint", args.checkpoint])
-    for ov in (args.override or []):
-        inner_args.extend(["--override", ov])
-    subprocess.run(inner_args, cwd=str(worktree_solver), check=True)
+        import sys, subprocess
+        if sys.platform == "win32":
+            venv_python = worktree_solver / ".venv" / "Scripts" / "python.exe"
+        else:
+            venv_python = worktree_solver / ".venv" / "bin" / "python"
+        inner_args = [
+            str(venv_python), "-m", "sts2_solver.betaone.experiment_cli",
+            "fork", args.name, "--from", args.source,
+            "--no-worktree",
+        ]
+        if args.checkpoint:
+            inner_args.extend(["--checkpoint", args.checkpoint])
+        for ov in (args.override or []):
+            inner_args.extend(["--override", ov])
+        subprocess.run(inner_args, cwd=str(worktree_solver), check=True)
 
+    print()
+    print(_activation_hint(worktree_solver))
+
+
+def cmd_repair(args):
+    """Re-run venv + sts2_engine setup on an existing experiment worktree.
+
+    Use after an interrupted `create` or `fork`, or when the installed
+    sts2_engine wheel is out of sync with the worktree's Rust source (e.g.
+    you pulled new commits on experiment/<name> that touched sts2-engine/).
+    Idempotent: skips steps that are already done.
+    """
+    import sys as _sys
+    from .experiment import (
+        _setup_worktree_venv, _experiment_worktree_path, _is_our_worktree,
+        _activation_hint,
+    )
+
+    worktree_root = _experiment_worktree_path(args.name)
+    if not worktree_root.exists():
+        print(f"Error: no worktree for '{args.name}' at {worktree_root}. "
+              f"Use `sts2-experiment create {args.name}` instead.")
+        _sys.exit(1)
+    if not _is_our_worktree(worktree_root, args.name):
+        print(f"Error: {worktree_root} exists but isn't a git worktree on "
+              f"branch 'experiment/{args.name}'.")
+        _sys.exit(1)
+
+    worktree_solver = worktree_root / "sts2-solver"
+    print(f"Repairing setup for '{args.name}' at {worktree_solver}...")
+    try:
+        _setup_worktree_venv(worktree_solver, rebuild_engine=args.rebuild_engine)
+    except Exception as e:
+        print(f"Repair failed: {e}")
+        _sys.exit(1)
     print()
     print(_activation_hint(worktree_solver))
 
@@ -1101,6 +1155,18 @@ def main():
                          "working tree's experiments/. Internal use (the outer "
                          "call delegates here from inside the new worktree's venv).")
     p.set_defaults(func=cmd_fork)
+
+    # repair
+    p = sub.add_parser("repair",
+                        help="Re-run venv + sts2_engine setup on an existing "
+                             "experiment worktree (idempotent; use after an "
+                             "interrupted create/fork or when Rust source changed).")
+    p.add_argument("name", help="Experiment name")
+    p.add_argument("--no-rebuild-engine", dest="rebuild_engine",
+                    action="store_false", default=True,
+                    help="Skip the maturin develop step if sts2_engine is "
+                         "already importable. Default: always rebuild.")
+    p.set_defaults(func=cmd_repair)
 
     # eval
     p = sub.add_parser("eval", help="Run eval harness and save results")
