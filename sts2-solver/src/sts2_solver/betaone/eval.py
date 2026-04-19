@@ -2771,7 +2771,10 @@ def run_eval(checkpoint_path: str | None = None) -> dict:
 
         # Forward pass
         with torch.no_grad():
-            logits, value = net(state_t, action_t, mask_t, hand_ids, action_ids)
+            # Handle both 2-output nets (main trunk) and 3-output nets (HP-head
+            # variants) so this eval.py works when cherry-picked into HP-head
+            # worktrees without losing the new scenarios.
+            logits, value, *_ = net(state_t, action_t, mask_t, hand_ids, action_ids)
 
         n_actions = len(sc.actions)
         probs = torch.softmax(logits[0, :n_actions], dim=0).tolist()
@@ -3123,7 +3126,7 @@ def _eval_value(net, state_dict, card_vocab) -> float:
             hand_ids[0, i] = _card_id_lookup(card, card_vocab)
 
     with torch.no_grad():
-        _, value = net(state_t, action_t, mask_t, hand_ids, action_ids)
+        _logits, value, *_ = net(state_t, action_t, mask_t, hand_ids, action_ids)
 
     return value.item()
 
