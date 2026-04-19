@@ -244,13 +244,18 @@ def train_batch(
     #                → 1 means net values track search values; if corr stays
     #                < 1 but plateaus, net has a bias the critic can't close.
     with torch.no_grad():
-        pi_net = F.softmax(logits, dim=1)  # logits pre-masked to -1e9 on invalid
-        eps = 1e-8
-        log_pi_net = torch.log(pi_net + eps)
-        log_pi_mcts = torch.log(target_policies + eps)
-        kl_mcts_net = (
-            target_policies * (log_pi_mcts - log_pi_net)
-        ).nan_to_num(0.0).sum(dim=1).mean().item()
+        # KL(pi_mcts || pi_net) via F.kl_div: robust against target=0 (the torch
+        # impl zeroes those entries directly regardless of log input). The
+        # hand-rolled formula using `log(target + eps) - log(pi_net + eps)` was
+        # producing spurious negative KL because the symmetric eps floor on
+        # legal-but-unvisited actions leaked nonzero contributions — torch's
+        # implementation handles those precisely.
+        log_pi_net = F.log_softmax(logits, dim=1)
+        kl_mcts_net = F.kl_div(
+            log_pi_net, target_policies,
+            reduction='batchmean', log_target=False,
+        ).item()
+        pi_net = F.softmax(logits, dim=1)
         top1_net = pi_net.argmax(dim=1)
         top1_mcts = target_policies.argmax(dim=1)
         top1_agree = (top1_net == top1_mcts).float().mean().item()
