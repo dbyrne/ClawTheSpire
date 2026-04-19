@@ -144,7 +144,7 @@ fn run_selfplay_combat(
         let mut plays_this_turn = 0;
 
         while plays_this_turn < 15 {
-            if let Some(outcome) = combat::is_combat_over(&state) {
+            if let Some(outcome) = combat::check_combat_end(&mut state) {
                 final_outcome = outcome;
                 break 'outer;
             }
@@ -158,7 +158,7 @@ fn run_selfplay_combat(
                 combat::tick_enemy_powers(&mut state);
                 enemy::sync_enemy_ais(&state, &mut enemy_ais, &profiles);
 
-                if let Some(outcome) = combat::is_combat_over(&state) {
+                if let Some(outcome) = combat::check_combat_end(&mut state) {
                     final_outcome = outcome;
                     break 'outer;
                 }
@@ -215,7 +215,7 @@ fn run_selfplay_combat(
                     combat::tick_enemy_powers(&mut state);
                     enemy::sync_enemy_ais(&state, &mut enemy_ais, &profiles);
 
-                    if let Some(outcome) = combat::is_combat_over(&state) {
+                    if let Some(outcome) = combat::check_combat_end(&mut state) {
                         final_outcome = outcome;
                         break 'outer;
                     }
@@ -227,7 +227,7 @@ fn run_selfplay_combat(
                             &mut state, *card_idx, *target_idx, &card_db, &mut rng,
                         );
                     }
-                    if let Some(outcome) = combat::is_combat_over(&state) {
+                    if let Some(outcome) = combat::check_combat_end(&mut state) {
                         final_outcome = outcome;
                         break 'outer;
                     }
@@ -235,7 +235,7 @@ fn run_selfplay_combat(
                 }
                 Action::UsePotion { potion_idx } => {
                     combat::use_potion(&mut state, *potion_idx);
-                    if let Some(outcome) = combat::is_combat_over(&state) {
+                    if let Some(outcome) = combat::check_combat_end(&mut state) {
                         final_outcome = outcome;
                         break 'outer;
                     }

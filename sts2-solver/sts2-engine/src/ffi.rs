@@ -243,7 +243,7 @@ fn run_combat_nogil(
 
             let mut cards_this_turn = 0;
             while cards_this_turn < 12 {
-                outcome = combat::is_combat_over(&state);
+                outcome = combat::check_combat_end(&mut state);
                 if outcome.is_some() { break; }
 
                 let actions = enumerate_actions(&state);
@@ -279,7 +279,7 @@ fn run_combat_nogil(
                     }
                 }
 
-                outcome = combat::is_combat_over(&state);
+                outcome = combat::check_combat_end(&mut state);
                 if outcome.is_some() { break; }
             }
 
@@ -291,7 +291,7 @@ fn run_combat_nogil(
             combat::tick_enemy_powers(&mut state);
             enemy::sync_enemy_ais(&state, &mut enemy_ais, &profiles);
 
-            outcome = combat::is_combat_over(&state);
+            outcome = combat::check_combat_end(&mut state);
             if outcome.is_some() { break; }
         }
 
@@ -809,7 +809,7 @@ pub fn step(state_json: &str, action_json: &str, seed: u64) -> PyResult<String> 
             combat::end_turn(&mut state, &card_db, &mut rng);
             combat::resolve_enemy_intents(&mut state);
             combat::tick_enemy_powers(&mut state);
-            let outcome = combat::is_combat_over(&state);
+            let outcome = combat::check_combat_end(&mut state);
             if outcome.is_none() {
                 combat::start_turn(&mut state, &mut rng);
             }

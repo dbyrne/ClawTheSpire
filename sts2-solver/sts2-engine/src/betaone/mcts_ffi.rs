@@ -130,7 +130,7 @@ pub fn run_betaone_combat_core(
 
         let mut plays_this_turn = 0;
         while plays_this_turn < 15 {
-            if let Some(outcome) = combat::is_combat_over(&state) {
+            if let Some(outcome) = combat::check_combat_end(&mut state) {
                 final_outcome = outcome;
                 break 'outer;
             }
@@ -142,7 +142,7 @@ pub fn run_betaone_combat_core(
                 combat::resolve_enemy_intents(&mut state);
                 combat::tick_enemy_powers(&mut state);
                 enemy::sync_enemy_ais(&state, &mut enemy_ais, profiles);
-                if let Some(outcome) = combat::is_combat_over(&state) {
+                if let Some(outcome) = combat::check_combat_end(&mut state) {
                     final_outcome = outcome;
                     break 'outer;
                 }
@@ -187,7 +187,7 @@ pub fn run_betaone_combat_core(
                     combat::resolve_enemy_intents(&mut state);
                     combat::tick_enemy_powers(&mut state);
                     enemy::sync_enemy_ais(&state, &mut enemy_ais, profiles);
-                    if let Some(outcome) = combat::is_combat_over(&state) {
+                    if let Some(outcome) = combat::check_combat_end(&mut state) {
                         final_outcome = outcome;
                         break 'outer;
                     }
@@ -199,7 +199,7 @@ pub fn run_betaone_combat_core(
                             &mut state, *card_idx, *target_idx, &card_db, rng,
                         );
                     }
-                    if let Some(outcome) = combat::is_combat_over(&state) {
+                    if let Some(outcome) = combat::check_combat_end(&mut state) {
                         final_outcome = outcome;
                         break 'outer;
                     }
@@ -207,7 +207,7 @@ pub fn run_betaone_combat_core(
                 }
                 Action::UsePotion { potion_idx } => {
                     combat::use_potion(&mut state, *potion_idx);
-                    if let Some(outcome) = combat::is_combat_over(&state) {
+                    if let Some(outcome) = combat::check_combat_end(&mut state) {
                         final_outcome = outcome;
                         break 'outer;
                     }

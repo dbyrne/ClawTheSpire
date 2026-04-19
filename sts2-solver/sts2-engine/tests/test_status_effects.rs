@@ -317,6 +317,98 @@ fn test_draw_cards_counts_actual_not_requested_when_pile_empty() {
     assert_eq!(state.player.hand.len(), 0, "Hand should remain empty");
 }
 
+// ===========================================================================
+// Thorns + multi-hit: kill mid-attack stops further hits + fires on_death
+// ===========================================================================
+
+#[test]
+fn test_thorns_kill_mid_multi_hit_stops_remaining_hits() {
+    // Enemy has 4 HP, intends to attack player 3x for 1 each. Player has Thorns 5.
+    // Hit 1: player loses 1 HP, enemy takes 5 thorns -> dies (-1 HP). Remaining
+    // hits 2 & 3 should NOT fire.
+    let mut state = state_with_enemies(vec![EnemyState {
+        id: "TEST".into(),
+        name: "Test".into(),
+        hp: 4, max_hp: 4,
+        intent_type: Some("Attack".into()),
+        intent_damage: Some(1),
+        intent_hits: 3,
+        ..Default::default()
+    }]);
+    state.player.add_power("Thorns", 5);
+    let initial_player_hp = state.player.hp;
+    combat::resolve_enemy_intents(&mut state);
+    assert!(!state.enemies[0].is_alive(),
+        "Enemy should die from thorns reflection on hit 1");
+    assert_eq!(state.player.hp, initial_player_hp - 1,
+        "Player should only take 1 damage (hit 1); hits 2-3 should be skipped");
+}
+
+#[test]
+fn test_thorns_kill_triggers_on_enemy_death() {
+    // Infested enemy dies to thorns. on_enemy_death should spawn Wrigglers.
+    let mut state = state_with_enemies(vec![EnemyState {
+        id: "TEST".into(),
+        name: "Test".into(),
+        hp: 1, max_hp: 1,
+        intent_type: Some("Attack".into()),
+        intent_damage: Some(1),
+        intent_hits: 1,
+        powers: [("Infested".to_string(), 2)].iter().cloned().collect(),
+        ..Default::default()
+    }]);
+    state.player.add_power("Thorns", 5);
+    let pre_count = state.enemies.len();
+    combat::resolve_enemy_intents(&mut state);
+    assert_eq!(state.enemies.len(), pre_count + 2,
+        "2 Wrigglers should spawn from Infested enemy thorns-kill");
+}
+
+// ===========================================================================
+// End-of-combat relic heals — must fire on win
+// ===========================================================================
+
+#[test]
+fn test_burning_blood_fires_on_win() {
+    // Player at low HP, all enemies dead. Win check should trigger BURNING_BLOOD heal (+6).
+    let mut state = state_with_enemies(vec![enemy_with(0, vec![])]);  // already dead
+    state.enemies[0].hp = 0;
+    state.player.hp = 30;
+    state.player.max_hp = 70;
+    state.relics.insert("BURNING_BLOOD".to_string());
+    let outcome = combat::check_combat_end(&mut state);
+    assert_eq!(outcome, Some("win"), "All enemies dead -> win");
+    assert_eq!(state.player.hp, 36, "BURNING_BLOOD should heal +6 on win");
+}
+
+#[test]
+fn test_end_combat_heal_does_not_fire_on_lose() {
+    // Player dead. Heal should NOT fire (death is final).
+    let mut state = state_with_enemies(vec![enemy_with(30, vec![])]);
+    state.player.hp = 0;
+    state.player.max_hp = 70;
+    state.relics.insert("BURNING_BLOOD".to_string());
+    let outcome = combat::check_combat_end(&mut state);
+    assert_eq!(outcome, Some("lose"), "Player dead -> lose");
+    assert_eq!(state.player.hp, 0, "Heal must NOT fire on lose");
+}
+
+#[test]
+fn test_end_combat_heal_idempotent_at_max_hp() {
+    // Calling check_combat_end multiple times shouldn't over-heal.
+    let mut state = state_with_enemies(vec![enemy_with(0, vec![])]);
+    state.enemies[0].hp = 0;
+    state.player.hp = 60;
+    state.player.max_hp = 70;
+    state.relics.insert("BURNING_BLOOD".to_string());
+    combat::check_combat_end(&mut state);
+    assert_eq!(state.player.hp, 66, "First call: heal +6");
+    combat::check_combat_end(&mut state);
+    assert_eq!(state.player.hp, 70, "Second call: heal saturates at max_hp (capped, not +6 again past max)");
+    combat::check_combat_end(&mut state);
+    assert_eq!(state.player.hp, 70, "Third call: still capped at max_hp, no over-heal");
+}
+
 #[test]
 fn test_draw_cards_counts_actual_when_hand_caps() {
     // Hand starts at 9 cards (1 below MAX_HAND=10). Request 5 draws — only 1

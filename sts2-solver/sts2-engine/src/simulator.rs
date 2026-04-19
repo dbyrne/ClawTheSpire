@@ -1302,7 +1302,7 @@ fn run_combat_internal(
 
         let mut cards = 0;
         while cards < 12 {
-            outcome = combat::is_combat_over(&state);
+            outcome = combat::check_combat_end(&mut state);
             if outcome.is_some() { break; }
             let actions = crate::actions::enumerate_actions(&state);
             if actions.is_empty() { break; }
@@ -1333,7 +1333,7 @@ fn run_combat_internal(
                     cards += 1;
                 }
             }
-            outcome = combat::is_combat_over(&state);
+            outcome = combat::check_combat_end(&mut state);
             if outcome.is_some() { break; }
         }
         if outcome.is_some() { break; }
@@ -1342,7 +1342,7 @@ fn run_combat_internal(
         combat::resolve_enemy_intents(&mut state);
         combat::tick_enemy_powers(&mut state);
         enemy::sync_enemy_ais(&state, &mut enemy_ais, &game_data.profiles);
-        outcome = combat::is_combat_over(&state);
+        outcome = combat::check_combat_end(&mut state);
         if outcome.is_some() { break; }
     }
 
@@ -1384,7 +1384,7 @@ fn replay_single_turn(
 
     let mut cards = 0;
     while cards < 12 {
-        outcome = combat::is_combat_over(&state);
+        outcome = combat::check_combat_end(&mut state);
         if outcome.is_some() { break; }
         let actions = crate::actions::enumerate_actions(&state);
         if actions.is_empty() { break; }
@@ -1416,7 +1416,7 @@ fn replay_single_turn(
                 cards += 1;
             }
         }
-        outcome = combat::is_combat_over(&state);
+        outcome = combat::check_combat_end(&mut state);
         if outcome.is_some() { break; }
     }
 
@@ -1429,7 +1429,7 @@ fn replay_single_turn(
         combat::resolve_enemy_intents(&mut state);
         combat::tick_enemy_powers(&mut state);
 
-        match combat::is_combat_over(&state) {
+        match combat::check_combat_end(&mut state) {
             Some(oc) => if oc == "win" { 1.0 } else { -1.0 },
             None => {
                 let v = inference.value_only(&state);

@@ -192,7 +192,7 @@ fn run_single_combat(
         let mut plays_this_turn = 0;
 
         while plays_this_turn < 15 {
-            if let Some(outcome) = combat::is_combat_over(&state) {
+            if let Some(outcome) = combat::check_combat_end(&mut state) {
                 final_outcome = outcome;
                 if let Some(last) = steps.last_mut() {
                     last.reward += rewards::terminal_reward(outcome, &state);
@@ -219,7 +219,7 @@ fn run_single_combat(
                     &state, hp_before, &enemy_hp, energy_at_end, max_energy,
                 );
 
-                if let Some(outcome) = combat::is_combat_over(&state) {
+                if let Some(outcome) = combat::check_combat_end(&mut state) {
                     reward += rewards::terminal_reward(outcome, &state);
                     final_outcome = outcome;
                     if let Some(last) = steps.last_mut() {
@@ -269,7 +269,7 @@ fn run_single_combat(
                     );
                     let mut done = false;
 
-                    if let Some(outcome) = combat::is_combat_over(&state) {
+                    if let Some(outcome) = combat::check_combat_end(&mut state) {
                         reward += rewards::terminal_reward(outcome, &state);
                         done = true;
                         final_outcome = outcome;
@@ -304,7 +304,7 @@ fn run_single_combat(
                             &mut state, *card_idx, *target_idx, &card_db, &mut rng,
                         );
                     }
-                    if let Some(outcome) = combat::is_combat_over(&state) {
+                    if let Some(outcome) = combat::check_combat_end(&mut state) {
                         reward = rewards::terminal_reward(outcome, &state);
                         done = true;
                         final_outcome = outcome;
@@ -335,7 +335,7 @@ fn run_single_combat(
                     let mut done = false;
 
                     combat::use_potion(&mut state, *potion_idx);
-                    if let Some(outcome) = combat::is_combat_over(&state) {
+                    if let Some(outcome) = combat::check_combat_end(&mut state) {
                         reward = rewards::terminal_reward(outcome, &state);
                         done = true;
                         final_outcome = outcome;

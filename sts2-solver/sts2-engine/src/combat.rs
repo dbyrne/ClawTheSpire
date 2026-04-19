@@ -759,26 +759,43 @@ fn enemy_attacks_player(state: &mut CombatState, enemy_idx: usize) {
         // Thorns — respects enemy Intangible
         let thorns = state.player.get_power("Thorns");
         if thorns > 0 {
+            let was_alive = state.enemies[enemy_idx].is_alive();
             let t = if state.enemies[enemy_idx].get_power("Intangible") > 0 {
                 1
             } else {
                 thorns
             };
             state.enemies[enemy_idx].hp -= t;
+            if was_alive && state.enemies[enemy_idx].hp <= 0 {
+                state.enemies[enemy_idx].hp = 0;
+                crate::effects::on_enemy_death(state, enemy_idx, false);
+            }
         }
         // Flame Barrier — respects enemy Intangible
         let flame = state.player.get_power("Flame Barrier");
         if flame > 0 {
+            let was_alive = state.enemies[enemy_idx].is_alive();
             let f = if state.enemies[enemy_idx].get_power("Intangible") > 0 {
                 1
             } else {
                 flame
             };
             state.enemies[enemy_idx].hp -= f;
+            if was_alive && state.enemies[enemy_idx].hp <= 0 {
+                state.enemies[enemy_idx].hp = 0;
+                crate::effects::on_enemy_death(state, enemy_idx, false);
+            }
+        }
+
+        // If thorns/flame killed the enemy, no further hits resolve.
+        if !state.enemies[enemy_idx].is_alive() {
+            break;
         }
     }
 
-    state.enemies[enemy_idx].powers.remove("Vigor");
+    if state.enemies[enemy_idx].is_alive() {
+        state.enemies[enemy_idx].powers.remove("Vigor");
+    }
 }
 
 fn status_card_for_enemy(enemy_id: &str) -> Card {
@@ -888,6 +905,22 @@ pub fn is_combat_over(state: &CombatState) -> Option<&'static str> {
         return Some("win");
     }
     None
+}
+
+/// Like `is_combat_over`, but on a "win" outcome also fires
+/// `end_combat_relics` so post-combat heals (BURNING_BLOOD, BLACK_BLOOD,
+/// MEAT_ON_THE_BONE) actually apply to player HP. Idempotent in practice:
+/// heals saturate at max_hp and MEAT_ON_THE_BONE's HP <= max/2 guard means
+/// second-call is a no-op once it's fired.
+///
+/// Use this in combat-loop termination checks; reserve plain `is_combat_over`
+/// for read-only inspection (e.g., logging, MCTS leaf evaluation).
+pub fn check_combat_end(state: &mut CombatState) -> Option<&'static str> {
+    let outcome = is_combat_over(state)?;
+    if outcome == "win" {
+        end_combat_relics(state);
+    }
+    Some(outcome)
 }
 
 // ---------------------------------------------------------------------------
