@@ -719,6 +719,7 @@ def train(
             and gen % reanalyse_every == 0
             and len(replay) > 0
         ):
+            _update_phase(progress_path, "REANALYSING", gen)
             ra_t0 = time.time()
             n_refresh = max(1, int(len(replay) * reanalyse_frac))
             indices = replay.oldest_indices_with_state(n_refresh)
