@@ -273,6 +273,32 @@ fn test_slippery_caps_damage_before_block() {
 }
 
 // ===========================================================================
+// Velvet Choker: play cap actually engages (regression for dead-power-check bug)
+// ===========================================================================
+
+#[test]
+fn test_velvet_choker_caps_plays_at_six() {
+    let strike = Card {
+        id: "STRIKE_SILENT".into(),
+        cost: 1,
+        card_type: CardType::Attack,
+        target: TargetType::AnyEnemy,
+        damage: Some(6),
+        ..Default::default()
+    };
+    let mut state = state_with_enemies(vec![enemy_with(30, vec![])]);
+    state.relics.insert("VELVET_CHOKER".to_string());
+    state.player.hand = vec![strike];
+    state.player.energy = 6;
+    state.cards_played_this_turn = 5;
+    assert!(combat::can_play_card(&state, 0),
+        "5 cards played: 6th play should be allowed");
+    state.cards_played_this_turn = 6;
+    assert!(!combat::can_play_card(&state, 0),
+        "6 cards played: VELVET_CHOKER should cap further plays");
+}
+
+// ===========================================================================
 // Draw mechanics: cards_drawn_this_turn counts ACTUAL draws, not requested
 // ===========================================================================
 

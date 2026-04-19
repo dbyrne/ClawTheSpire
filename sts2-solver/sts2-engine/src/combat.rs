@@ -35,8 +35,10 @@ pub fn can_play_card(state: &CombatState, card_idx: usize) -> bool {
     if state.player.get_power("Ringing") > 0 && state.cards_played_this_turn >= 1 {
         return false;
     }
-    // Velvet Choker: 6 cards per turn
-    if state.player.get_power("Velvet Choker") > 0 && state.cards_played_this_turn >= 6 {
+    // Velvet Choker: 6 cards per turn (boss-relic tradeoff: +1 energy, capped plays).
+    // Was previously checking `get_power("Velvet Choker")` — but that power is never
+    // set anywhere, so the cap was dead code. Check the relic directly.
+    if state.relics.contains("VELVET_CHOKER") && state.cards_played_this_turn >= 6 {
         return false;
     }
     // Smoggy: 1 Skill per turn
