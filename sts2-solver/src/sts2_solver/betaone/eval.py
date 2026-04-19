@@ -2282,6 +2282,310 @@ def build_scenarios() -> list[Scenario]:
         pending_choice={"choice_type": "discard_from_hand"},
     ))
 
+    # ==========================================================================
+    # TIGHT-MARGIN SCENARIOS (2026-04-19)
+    #
+    # Intentionally narrow-margin decisions (1-3pt of damage/block/energy
+    # difference) so a skilled-but-fallible policy plausibly hedges.
+    # These target sub-threshold policy improvements — the kind of quality
+    # gains that tied 109-scenario P-Eval between gen 50 and gen 60 despite
+    # combat WR signaling gen 60 was slightly better.
+    #
+    # Human-authored ground truth (low axis-2 oracle uncertainty) + narrow
+    # margin (high axis-1 model uncertainty at current skill) = the right
+    # kind of discriminating scenario. Post-authoring validation: run on a
+    # mature checkpoint, keep scenarios where top-action probability is in
+    # the 35-65% band (model genuinely hedges).
+    # ==========================================================================
+
+    # ----- DAMAGE: tight arithmetic margins -----
+
+    scenarios.append(Scenario(
+        name="damage_dagger_strike_over_skewer_2",
+        category="damage",
+        description="2 energy — Dagger Throw (9) + Strike (6) = 15 dmg beats Skewer X=2 (14 dmg) by 1",
+        player={"hp": 50, "max_hp": 70, "energy": 2, "block": 0},
+        enemies=[enemy(40, 60, damage=8)],
+        hand=[skewer(), dagger_throw(), strike(), defend()],
+        actions=[
+            ActionSpec("play_card", skewer(), target_idx=0, label="Skewer X=2 (14 dmg, 1 card)"),
+            ActionSpec("play_card", dagger_throw(), target_idx=0, label="Dagger Throw (9 dmg)"),
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike (6 dmg)"),
+            ActionSpec("play_card", defend(), label="Defend"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[1, 2],    # Either attack first is fine — the two-card combo (DT + Strike) totals 15 vs Skewer's 14
+        bad_actions=[0, 4],     # Skewer is 1 dmg short; end turn wastes energy
+    ))
+
+    scenarios.append(Scenario(
+        name="damage_split_over_skewer_3_small_margin",
+        category="damage",
+        description="3 energy — DT (9) + Predator (15) = 24 dmg beats Skewer X=3 (21 dmg) by 3",
+        player={"hp": 55, "max_hp": 70, "energy": 3, "block": 0},
+        enemies=[enemy(60, 70, damage=10)],
+        hand=[skewer(), dagger_throw(), predator(), defend()],
+        actions=[
+            ActionSpec("play_card", skewer(), target_idx=0, label="Skewer X=3 (21 dmg, 1 card)"),
+            ActionSpec("play_card", dagger_throw(), target_idx=0, label="Dagger Throw (9) — then Predator"),
+            ActionSpec("play_card", predator(), target_idx=0, label="Predator (15) — then Dagger Throw"),
+            ActionSpec("play_card", defend(), label="Defend"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[1, 2],    # The DT+Predator combo totals 24 dmg vs Skewer's 21
+        bad_actions=[0, 4],     # Skewer is 3 dmg short; end turn wastes 3 energy
+    ))
+
+    scenarios.append(Scenario(
+        name="damage_predator_over_skewer_2_vulnerable",
+        category="damage",
+        description="Vulnerable enemy, 2 energy — Predator (15*1.5=22) beats Skewer X=2 (14*1.5=21) by 1",
+        player={"hp": 50, "max_hp": 70, "energy": 2, "block": 0},
+        enemies=[enemy(40, 60, damage=8, powers={"Vulnerable": 3})],
+        hand=[predator(), skewer(), defend()],
+        actions=[
+            ActionSpec("play_card", predator(), target_idx=0, label="Predator (15 * 1.5 = 22 dmg)"),
+            ActionSpec("play_card", skewer(), target_idx=0, label="Skewer X=2 (14 * 1.5 = 21 dmg)"),
+            ActionSpec("play_card", defend(), label="Defend"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # Vulnerable multiplier gives Predator the edge by exactly 1 dmg
+        bad_actions=[3],
+    ))
+
+    scenarios.append(Scenario(
+        name="damage_exact_lethal_predator_over_split",
+        category="damage",
+        description="Enemy at 15 HP — Predator (15=lethal, 1 card) preferred over DT+Strike (15=lethal, 2 cards)",
+        player={"hp": 40, "max_hp": 70, "energy": 2, "block": 0},
+        enemies=[enemy(15, 50, damage=12)],
+        hand=[predator(), dagger_throw(), strike(), defend()],
+        actions=[
+            ActionSpec("play_card", predator(), target_idx=0, label="Predator (15 = LETHAL, 1 card)"),
+            ActionSpec("play_card", dagger_throw(), target_idx=0, label="Dagger Throw (9, not lethal alone)"),
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike (6, not lethal alone)"),
+            ActionSpec("play_card", defend(), label="Defend"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0, 1, 2], # Predator alone OR DT-then-Strike are both lethal paths
+        bad_actions=[4],        # ending turn leaves enemy alive to deal 12 dmg
+    ))
+
+    scenarios.append(Scenario(
+        name="damage_dagger_strike_over_predator_at_3e",
+        category="damage",
+        description="3 energy, need both damage and a card — DT (9) + Strike (6) = 15 vs Predator (15) + Strike (6) = 21. 3-card path wins",
+        player={"hp": 50, "max_hp": 70, "energy": 3, "block": 0},
+        enemies=[enemy(30, 60, damage=10)],
+        hand=[predator(), dagger_throw(), strike(), strike()],
+        actions=[
+            ActionSpec("play_card", predator(), target_idx=0, label="Predator (15) — then 1 Strike (21 total)"),
+            ActionSpec("play_card", dagger_throw(), target_idx=0, label="Dagger Throw (9) — then 2 Strikes (21 total)"),
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike (6)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0, 1],    # Either opening hits 21 total damage across 3 energy
+        bad_actions=[3],        # end turn wastes full hand
+    ))
+
+    scenarios.append(Scenario(
+        name="damage_sucker_punch_over_strike_weak_worthless_dead",
+        category="damage",
+        description="Enemy at 7 HP — Sucker Punch (7 dmg = LETHAL, Weak wasted on dead) same as DT(9 lethal, overkill). Strike doesn't kill.",
+        player={"hp": 45, "max_hp": 70, "energy": 1, "block": 0},
+        enemies=[enemy(7, 50, damage=14)],
+        hand=[sucker_punch(), dagger_throw(), strike(), defend()],
+        actions=[
+            ActionSpec("play_card", sucker_punch(), target_idx=0, label="Sucker Punch (7 = LETHAL)"),
+            ActionSpec("play_card", dagger_throw(), target_idx=0, label="Dagger Throw (9 = LETHAL, 2 overkill)"),
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike (6, NOT lethal, eats 14 dmg)"),
+            ActionSpec("play_card", defend(), label="Defend (enemy lives)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0, 1],    # Either lethal play wins; SP's 7-dmg is enough and slightly cleaner than DT's overkill
+        bad_actions=[2, 4],     # non-lethal plays leave 14 incoming at 45 HP
+    ))
+
+    # ----- BLOCK: margin tests -----
+
+    scenarios.append(Scenario(
+        name="block_backflip_over_defend_on_thin_pile",
+        category="block_cards",
+        description="Draw pile is 2 cards — Backflip (5 block + draw 2) still beats Defend (5 block) by card advantage",
+        player={"hp": 45, "max_hp": 70, "energy": 1, "block": 0},
+        enemies=[enemy(30, 50, damage=5)],
+        hand=[backflip(), defend(), strike()],
+        draw_size=2,            # thin pile but still non-zero
+        actions=[
+            ActionSpec("play_card", backflip(), label="Backflip (5 block + draw 2)"),
+            ActionSpec("play_card", defend(), label="Defend (5 block)"),
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike (6 dmg, no block — take 5)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # same block as Defend plus 2 cards; exhaust-pile reshuffle takes care of small pile
+        bad_actions=[3],
+    ))
+
+    scenarios.append(Scenario(
+        name="block_defend_over_backflip_exhausted_pile",
+        category="block_cards",
+        description="Draw pile AND discard pile both empty — Backflip's draw 2 whiffs, Defend identical for raw block",
+        player={"hp": 45, "max_hp": 70, "energy": 1, "block": 0},
+        enemies=[enemy(30, 50, damage=6)],
+        hand=[backflip(), defend()],
+        draw_size=0,            # no cards to draw
+        discard_size=0,         # no cards to reshuffle either
+        actions=[
+            ActionSpec("play_card", backflip(), label="Backflip (5 block, draw 2 WHIFFS with empty pile)"),
+            ActionSpec("play_card", defend(), label="Defend (5 block)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0, 1],    # Both give 5 block; Backflip's draw simply does nothing when pile empty — still tied
+        bad_actions=[2],        # ending turn eats 6 dmg for free
+    ))
+
+    scenarios.append(Scenario(
+        name="block_two_defends_over_single_defend_at_damage_14",
+        category="block_cards",
+        description="Enemy hits for 14 — 2 Defends (10 block) is better than 1 (5 block), margin 5 HP preserved",
+        player={"hp": 30, "max_hp": 70, "energy": 2, "block": 0},
+        enemies=[enemy(40, 50, damage=14)],
+        hand=[defend(), defend(), strike()],
+        actions=[
+            ActionSpec("play_card", defend(), label="Defend (5 block) — first"),
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike (6 dmg, only 5 block)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # 2 Defends needed; playing just Strike leaves us at 14-5=9 dmg taken
+        bad_actions=[1, 2],     # Strike path means the 2nd Defend never plays (only 1 energy left) → 9 dmg taken
+    ))
+
+    scenarios.append(Scenario(
+        name="block_one_defend_enough_at_damage_5",
+        category="block_cards",
+        description="Enemy hits for 5 — 1 Defend (5 block) is sufficient; 2nd Defend is wasted, Strike wins tempo",
+        player={"hp": 50, "max_hp": 70, "energy": 2, "block": 0},
+        enemies=[enemy(30, 50, damage=5)],
+        hand=[defend(), defend(), strike()],
+        actions=[
+            ActionSpec("play_card", defend(), label="Defend (5 block) — matches incoming"),
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike (6 dmg) — use 2nd energy for offense"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        # Either: Defend+Strike (5 block, 6 dmg) OR Strike+Defend — same result.
+        # A second Defend (10 block vs 5 dmg) wastes 5 block on a dead enemy.
+        best_actions=[0, 1],
+        bad_actions=[2],        # end turn takes 5 dmg for no reason
+    ))
+
+    # ----- COMBO: tight sequencing margins -----
+
+    scenarios.append(Scenario(
+        name="combo_accuracy_before_blade_dance_single_turn",
+        category="combo",
+        description="Accuracy (shivs +4) then Blade Dance — 3*(3+4)=21 dmg vs Blade Dance first then Accuracy — 9 + 0 (Accuracy ineffective this turn, no more shiv plays) = 9. Margin 12",
+        player={"hp": 50, "max_hp": 70, "energy": 2, "block": 0},
+        enemies=[enemy(30, 60, damage=10)],
+        hand=[accuracy(), blade_dance(), strike()],
+        actions=[
+            ActionSpec("play_card", accuracy(), label="Accuracy FIRST — Blade Dance hits for 21"),
+            ActionSpec("play_card", blade_dance(), label="Blade Dance FIRST — 9 dmg, Accuracy wasted this turn"),
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # 21 dmg vs 9 dmg — ordering dominates
+        bad_actions=[1, 3],
+    ))
+
+    scenarios.append(Scenario(
+        name="combo_expose_before_predator_not_strike",
+        category="combo",
+        description="Expose (Vulnerable 3) affects ALL subsequent attacks — save for Predator (+7.5 dmg) rather than Strike (+3)",
+        player={"hp": 55, "max_hp": 70, "energy": 3, "block": 0},
+        enemies=[enemy(50, 70, damage=10)],
+        hand=[expose(), predator(), strike()],
+        actions=[
+            ActionSpec("play_card", expose(), target_idx=0, label="Expose first — Vulnerable scales both attacks"),
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike first (pre-Vulnerable, 6 dmg raw)"),
+            ActionSpec("play_card", predator(), target_idx=0, label="Predator first (pre-Vulnerable, 15 dmg raw)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # Expose first → Predator deals 22, Strike deals 9 = 31 total vs 21 raw or 25 if only 1 buffered
+        bad_actions=[3],
+    ))
+
+    scenarios.append(Scenario(
+        name="combo_burst_before_acrobatics_skill_double",
+        category="combo",
+        description="Burst doubles next Skill — play Burst BEFORE Acrobatics so it draws 6 instead of 3",
+        player={"hp": 60, "max_hp": 70, "energy": 2, "block": 0},
+        enemies=[enemy(45, 60, damage=8)],
+        hand=[burst(), acrobatics(), strike()],
+        actions=[
+            ActionSpec("play_card", burst(), label="Burst FIRST — next Skill doubled"),
+            ActionSpec("play_card", acrobatics(), label="Acrobatics FIRST (3 draw, Burst wasted)"),
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # Burst before Acrobatics doubles the draw — massive tempo
+        bad_actions=[1, 3],     # Acrobatics first leaves Burst stale; end turn stranded
+    ))
+
+    # ----- SYNERGY: margin-sensitive interactions -----
+
+    scenarios.append(Scenario(
+        name="synergy_accelerant_minimal_poison_skip",
+        category="synergy",
+        description="Enemy has only 2 Poison — doubling to 4 (+2 dmg) is less than Strike (6 dmg) this turn",
+        player={"hp": 50, "max_hp": 70, "energy": 1, "block": 0},
+        enemies=[enemy(40, 60, damage=8, powers={"Poison": 2})],
+        hand=[accelerant(), strike()],
+        actions=[
+            ActionSpec("play_card", accelerant(), label="Accelerant (doubles tick: 2→4, +2 over next turn)"),
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike (6 dmg NOW)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[1],       # 6 immediate > 2 deferred (and the 2 deferred might not matter if fight ends)
+        bad_actions=[0],        # Accelerant needs existing poison stacks to be worth it
+    ))
+
+    scenarios.append(Scenario(
+        name="synergy_accelerant_medium_poison_worth_it",
+        category="synergy",
+        description="Enemy has 5 Poison — doubling to 10 means +5 dmg next tick, beats Strike's 6 over fight duration",
+        player={"hp": 50, "max_hp": 70, "energy": 1, "block": 0},
+        enemies=[enemy(50, 60, damage=8, powers={"Poison": 5})],
+        hand=[accelerant(), strike()],
+        actions=[
+            ActionSpec("play_card", accelerant(), label="Accelerant (5 poison → 10, compounds)"),
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike (6 dmg now)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # doubled poison ticks compound over remaining turns → more than 6 total
+    ))
+
+    # ----- DISCARD: near-equal trash decisions -----
+
+    scenarios.append(Scenario(
+        name="discard_wound_over_slimed_both_status",
+        category="discard",
+        description="Forced discard with Wound + Slimed in hand — both status, but Wound blocks draws harder (unplayable) vs Slimed (end of turn dmg)",
+        player={"hp": 45, "max_hp": 70, "energy": 1, "block": 0},
+        enemies=[enemy(35, 50, damage=6)],
+        hand=[strike(), slimed(), lookup_card("WOUND"), defend()],
+        actions=[
+            ActionSpec("choose_card", strike(), label="discard Strike"),
+            ActionSpec("choose_card", slimed(), label="discard Slimed"),
+            ActionSpec("choose_card", lookup_card("WOUND"), label="discard Wound"),
+            ActionSpec("choose_card", defend(), label="discard Defend"),
+        ],
+        # Both Wound and Slimed are junk; but Slimed is playable (1 cost, does nothing but burns energy)
+        # while Wound is permanently dead. Either is correct to discard; playable cards are wrong.
+        best_actions=[1, 2],
+        bad_actions=[0, 3],
+        pending_choice={"choice_type": "discard_from_hand"},
+    ))
+
     return scenarios
 
 
