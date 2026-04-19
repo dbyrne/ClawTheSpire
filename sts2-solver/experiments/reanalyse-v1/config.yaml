@@ -6,18 +6,25 @@ description: |
   value) targets. Tests whether the post-gen-60 drift seen in tb-v2 is
   caused by the critic fitting increasingly stale bootstrap targets.
 
-  Trunk-v1 config otherwise (POMCP 1000 sims, pwfix, qtarget, mcts_bootstrap,
-  turn_boundary_eval), value_head_layers=3. Cold-start, 100 gens, save_every=1,
-  eval_every=1 for dense trajectory analysis.
+  Forked from trunk-baseline-v2 gen 60: tb-v2 showed no drift before gen 60,
+  so forking at that point gives a tight apples-to-apples A/B — same starting
+  weights, only variable is reanalyse. tb-v2's continued training past gen 60
+  is the negative control (monotonic WR decline 74.1% → 71.9% gen 60→90);
+  reanalyse-v1 training the same gen range is the intervention arm.
 
-  Ship criterion: benchmark WR at gen 80 holds vs gen 60 peak (no drift).
-  Kill criterion: WR drifts like tb-v2 despite reanalyse → stale-target
+  Trunk-v1 config (POMCP 1000 sims, pwfix, qtarget, mcts_bootstrap,
+  turn_boundary_eval), value_head_layers=3. save_every=1, eval_every=1 for
+  dense trajectory analysis. Target gen range: 61 -> 100.
+
+  Ship criterion: benchmark WR at gen 80/90 holds vs tb-v2 gen 60 peak (74.1%)
+  instead of drifting to tb-v2's 71.9% at gen 90.
+  Kill criterion: WR drifts like tb-v2 despite reanalyse -> stale-target
   hypothesis falsified, drift is inherent to T(V_θ) even with fresh targets.
 
   See PLAN.md for mechanism, signals, follow-up experiments.
 created: '2026-04-19T18:29:07+00:00'
-parent: null
-parent_checkpoint: null
+parent: trunk-baseline-v2
+parent_checkpoint: '60'
 network_type: betaone
 architecture:
   arch_version: 2
@@ -65,4 +72,4 @@ data:
 checkpoints:
   save_every: 1
   keep_best: true
-  cold_start: true
+  cold_start: false

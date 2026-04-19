@@ -20,6 +20,11 @@ on a fresh search of the same state.
 
 ## Intervention
 
+Forked from trunk-baseline-v2 gen 60 (the pre-drift checkpoint). tb-v2 then
+trained gens 60→90 without reanalyse and showed monotonic WR decline; this
+run uses the same starting weights and trains gens 61→100 WITH reanalyse.
+Direct apples-to-apples: only variable is the target-refresh intervention.
+
 Every 5 gens, take the oldest 25% of buffer entries and re-run MCTS on each
 with the current network. Overwrite the stored (policy, value) targets
 with the fresh search output. The rest of the buffer evicts naturally via
@@ -54,9 +59,10 @@ turn_boundary_eval=true, value_head_layers=3.
 
 ## Ship criteria
 
-Primary: benchmark combat WR on lean-decks-v1 at gen 80 holds vs gen 60
-peak. Specifically: gen 80 WR >= gen 60 WR − 0.5pp (no monotonic decline).
-This is the drift signal from tb-v2 inverted.
+Primary: benchmark combat WR on lean-decks-v1 at gen 80 and gen 90 holds vs
+tb-v2 gen 60 peak (74.1%), rather than tb-v2's drift to 72.2% / 71.9%.
+Specifically: reanalyse-v1 gen 80 WR >= 73.5% (tb-v2 peak minus half a pp).
+This is the drift signal from tb-v2 directly inverted.
 
 Secondary (supporting): P-Eval and V-Eval continue to climb or stabilize;
 `value_corr_mean` doesn't collapse to >0.97 while eval stalls (that pattern
