@@ -230,6 +230,44 @@ def train_batch(
         "value_loss": value_loss.item(),
     }
 
+    # Search/network agreement telemetry — echo-chamber diagnostic.
+    # Cheap (no extra passes) so compute every batch, not sampled.
+    #   kl_mcts_net : KL(π_mcts || π_net). "What MCTS found that net doesn't prefer."
+    #                 Equal to policy_loss - entropy(π_mcts). Shrinks toward 0
+    #                 as net matches search. If it hits 0 while eval scores are
+    #                 flat, search is rubber-stamping the net's priors — the
+    #                 classic echo-chamber signature.
+    #   top1_agree : fraction of states where argmax(π_net) == argmax(π_mcts).
+    #                High (>0.9) = net already picks what search picks → search
+    #                is low-information on this data.
+    #   value_corr : Pearson r between network value and MCTS target value.
+    #                → 1 means net values track search values; if corr stays
+    #                < 1 but plateaus, net has a bias the critic can't close.
+    with torch.no_grad():
+        pi_net = F.softmax(logits, dim=1)  # logits pre-masked to -1e9 on invalid
+        eps = 1e-8
+        log_pi_net = torch.log(pi_net + eps)
+        log_pi_mcts = torch.log(target_policies + eps)
+        kl_mcts_net = (
+            target_policies * (log_pi_mcts - log_pi_net)
+        ).nan_to_num(0.0).sum(dim=1).mean().item()
+        top1_net = pi_net.argmax(dim=1)
+        top1_mcts = target_policies.argmax(dim=1)
+        top1_agree = (top1_net == top1_mcts).float().mean().item()
+        v_net = values.squeeze(-1)
+        v_tgt = target_values
+        std_prod = v_net.std() * v_tgt.std()
+        if std_prod > 1e-8:
+            v_corr = (
+                ((v_net - v_net.mean()) * (v_tgt - v_tgt.mean())).mean() / std_prod
+            ).item()
+        else:
+            v_corr = 0.0
+
+    out["kl_mcts_net"] = kl_mcts_net
+    out["top1_agree"] = top1_agree
+    out["value_corr"] = v_corr
+
     if measure_grad_conflict:
         shared = _shared_trunk_params(network)
         g_P = torch.autograd.grad(policy_loss, shared, retain_graph=True)
@@ -537,6 +575,9 @@ def train(
         grad_cos_samples: list[float] = []
         grad_np_samples: list[float] = []
         grad_nv_samples: list[float] = []
+        kl_samples: list[float] = []
+        top1_samples: list[float] = []
+        vcorr_samples: list[float] = []
 
         buf_size = len(replay)
         updates_per_epoch = max(1, buf_size // batch_size)
@@ -564,6 +605,9 @@ def train(
                 )
                 total_ploss += metrics["policy_loss"]
                 total_vloss += metrics["value_loss"]
+                kl_samples.append(metrics["kl_mcts_net"])
+                top1_samples.append(metrics["top1_agree"])
+                vcorr_samples.append(metrics["value_corr"])
                 if measure:
                     grad_cos_samples.append(metrics["grad_cos_pv"])
                     grad_np_samples.append(metrics["grad_norm_p"])
@@ -613,6 +657,14 @@ def train(
             record["grad_norm_p_mean"] = round(statistics.fmean(grad_np_samples), 4)
             record["grad_norm_v_mean"] = round(statistics.fmean(grad_nv_samples), 4)
             record["grad_conflict_samples"] = len(grad_cos_samples)
+
+        # Search/network agreement — always logged (every batch sampled,
+        # no conditional cost).
+        if kl_samples:
+            import statistics as _stats
+            record["kl_mcts_net_mean"] = round(_stats.fmean(kl_samples), 4)
+            record["top1_agree_mean"] = round(_stats.fmean(top1_samples), 4)
+            record["value_corr_mean"] = round(_stats.fmean(vcorr_samples), 4)
         with open(history_path, "a") as f:
             f.write(json.dumps(record) + "\n")
         with open(progress_path, "w") as f:
