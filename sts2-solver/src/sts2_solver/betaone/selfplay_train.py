@@ -52,6 +52,37 @@ from .network import (
 
 
 # ---------------------------------------------------------------------------
+# Phase markers for TUI
+# ---------------------------------------------------------------------------
+#
+# Each gen passes through several long-running phases (selfplay 5+ min,
+# training 1-2 min, reanalyse 4+ min when enabled, eval 30-60s). Without
+# phase markers the TUI only sees the last-completed-gen timestamp and
+# flags "STALLED?" for anything >2 min old — false alarm for every healthy
+# 1000-POMCP gen. Writing a lightweight phase update at each boundary
+# gives the TUI enough signal to distinguish "in the middle of selfplay"
+# from "actually stopped." The next full progress write (end of gen)
+# overwrites the phase field, so between gens the marker clears.
+
+def _update_phase(progress_path: str, phase: str, gen: int) -> None:
+    try:
+        existing: dict = {}
+        if os.path.exists(progress_path):
+            with open(progress_path) as f:
+                existing = json.load(f)
+        existing.update({
+            "phase": phase,
+            "timestamp": time.time(),
+            "gen": gen,
+        })
+        with open(progress_path, "w") as f:
+            json.dump(existing, f, indent=2)
+    except Exception:
+        # Phase marker is cosmetic — never let it block training
+        pass
+
+
+# ---------------------------------------------------------------------------
 # Replay buffer
 # ---------------------------------------------------------------------------
 
@@ -455,6 +486,7 @@ def train(
         batches = sample_combat_batches(encounter_set, combats_per_gen, gen)
         seeds = [gen * 100_000 + i for i in range(combats_per_gen)]
 
+        _update_phase(progress_path, "SELFPLAY", gen)
         # Self-play: MCTS combats (one call per HP level)
         all_outcomes = []
         all_final_hps = []
@@ -574,6 +606,7 @@ def train(
         avg_hp = np.mean(win_hps) if win_hps else 0.0
 
         # Train from replay buffer
+        _update_phase(progress_path, "TRAINING", gen)
         network.train()
         total_ploss = 0.0
         total_vloss = 0.0
@@ -701,6 +734,7 @@ def train(
         # training, not just win rate. WR is compressed near the top of the
         # skill curve; eval pass rate moves earlier and at higher resolution.
         if eval_every > 0 and gen % eval_every == 0:
+            _update_phase(progress_path, "EVALUATING", gen)
             try:
                 from .eval import run_eval, run_value_eval
                 from .suite import compute_eval_suite, suite_id as _suite_id
