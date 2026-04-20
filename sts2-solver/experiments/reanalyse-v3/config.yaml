@@ -1,0 +1,77 @@
+name: reanalyse-v3
+method: mcts_selfplay
+description: |
+  MuZero-style reanalyse at maximum frac for cadence=5: every 5 gens,
+  refresh the FULL buffer (frac=1.0) with current network MCTS.
+
+  v1 ran frac=0.25 / every=5 (5%/gen refresh rate) — drift partially
+  mitigated. v2 ran frac=0.5 / every=5 (10%/gen) — drift halved vs tb-v2
+  but g80->g90 drop of 1.5pp showed staleness still leaks. v3 at
+  frac=1.0 / every=5 (20%/gen, every buffer entry refreshed exactly once
+  per 5 gens, max staleness = 5 gens) tests the theoretical ceiling of
+  pure reanalyse at current cadence.
+
+  Fork point: tb-v2 g60, same as v1/v2 (apples-to-apples). Merged main
+  in first so v3 trains against the fixed simulator (Dodge/Roll etc.)
+  and can eval against the expanded 128-scenario suite. This means
+  v3's absolute WR won't be directly comparable to v1/v2's (different
+  engine), but v3's internal drift trajectory (does g80 WR hold through
+  g90?) is still a clean test.
+
+  Ship criterion: g80 AND g90 both >= 74.1% (tb-v2 g60 peak). If true,
+  staleness WAS the dominant drift mechanism and frac=1.0 fully closes
+  it.
+  Kill criterion: g90 drifts from g80 peak by >=1pp despite frac=1.0.
+  Staleness alone isn't the bottleneck; need a different intervention
+  axis (value-head bias via ucb-reanalyse-v1 or similar).
+created: '2026-04-20T01:35:00+00:00'
+parent: trunk-baseline-v2
+parent_checkpoint: '60'
+network_type: betaone
+architecture:
+  arch_version: 2
+  hidden_dim: 128
+  action_hidden: 64
+  hand_proj_dim: 32
+  card_embed_dim: 16
+  card_stats_dim: 28
+  relic_dim: 27
+  hand_agg_dim: 3
+  action_dim: 35
+  max_hand: 10
+  max_actions: 30
+  value_head_layers: 3
+  num_cards: 578
+  total_params: 140761
+  base_state_dim: 156
+  state_dim: 446
+  trunk_input: 188
+training:
+  generations: 100
+  combats_per_gen: 256
+  lr: 0.0003
+  batch_size: 512
+  mcts:
+    num_sims: 1000
+    temperature: 1.0
+    replay_capacity: 50000
+    train_epochs: 4
+    value_coef: 1.0
+    c_puct: 1.5
+    pomcp: true
+    mcts_bootstrap: true
+    turn_boundary_eval: true
+    q_target_mix: 0.5
+    q_target_temp: 0.5
+    eval_every: 1
+    grad_conflict_sample_every: 10
+    reanalyse_every: 5
+    reanalyse_frac: 1.0
+    reanalyse_min_gen: 10
+data:
+  mode: encounter_set
+  encounter_set: lean-decks-v1
+checkpoints:
+  save_every: 1
+  keep_best: true
+  cold_start: false
