@@ -817,6 +817,11 @@ def build_dashboard(experiments: list[dict]) -> Group:
         # sparse (every eval_every gens) and step-to-step movement is what
         # actually tells us whether the last 10 gens helped.
         eh = exp.get("eval_history") or []
+        # Eval sparklines now use window-mean deltas (not point-to-point) since
+        # eval_every=1 has been the default since 2026-04-19 — per-gen eval
+        # data is dense enough that single-point movement is dominated by
+        # inherent gen-to-gen oscillation (V-Eval ±8pp, P-Eval ±3-5pp).
+        # Window mean smooths that and surfaces real trends.
         if len(eh) >= 3:
             scores = [r.get("score", 0.0) for r in eh]
             parts.append(_candle_line(
@@ -824,7 +829,6 @@ def build_dashboard(experiments: list[dict]) -> Group:
                 fmt_val=lambda v: f"{v:.1%}",
                 fmt_delta=lambda d: f"{d*100:.1f}%",
                 higher_is_better=True,
-                delta_mode="last",
             ))
         vh = exp.get("value_eval_history") or []
         if len(vh) >= 3:
@@ -834,7 +838,6 @@ def build_dashboard(experiments: list[dict]) -> Group:
                 fmt_val=lambda v: f"{v:.1%}",
                 fmt_delta=lambda d: f"{d*100:.1f}%",
                 higher_is_better=True,
-                delta_mode="last",
             ))
         mh = exp.get("mcts_eval_history") or []
         if len(mh) >= 3:
@@ -847,7 +850,6 @@ def build_dashboard(experiments: list[dict]) -> Group:
                 fmt_val=lambda v: f"{v:.0%}",
                 fmt_delta=lambda d: f"{d*100:.0f}%",
                 higher_is_better=True,
-                delta_mode="last",
             ))
 
     # === Footer ===
