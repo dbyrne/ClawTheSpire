@@ -259,12 +259,19 @@ def build_random_deck(
         elif defends:
             deck.pop(rng.choice(defends))
 
-    # Insert guaranteed core cards (if specified)
+    # Insert guaranteed core cards (if specified).
+    # Bypass the silent-only pool filter via lookup_card — callers explicitly
+    # passing core_cards may want to force colorless (e.g. OMNISLICE) or
+    # otherwise non-pool cards into decks for targeted training coverage.
     if core_cards:
         for cid in core_cards:
-            if cid in pool and cid not in deck_ids:
-                deck.append(dict(pool[cid]))
+            if cid in deck_ids:
+                continue
+            try:
+                deck.append(lookup_card(cid))
                 deck_ids.add(cid)
+            except KeyError:
+                pass  # unknown card id — skip silently
 
     # Fill to target with archetype-based additions
     arch_names = archetypes if archetypes else list(ARCHETYPES.keys())
