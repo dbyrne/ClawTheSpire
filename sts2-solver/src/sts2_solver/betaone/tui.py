@@ -170,7 +170,7 @@ def _collect_experiments() -> list[dict]:
         history = _load_jsonl_all(d / hist_name, tail=60)
         eval_all = _load_jsonl_all(d / "benchmarks" / "eval.jsonl", tail=200)
         value_eval_all = _load_jsonl_all(d / "benchmarks" / "value_eval.jsonl", tail=200)
-        hp_eval_all = _load_jsonl_all(d / "benchmarks" / "hp_eval.jsonl", tail=200)
+        mcts_eval_all = _load_jsonl_all(d / "benchmarks" / "mcts_eval.jsonl", tail=200)
 
         concluded_gen = config.get("concluded_gen")
         if concluded_gen is not None:
@@ -181,16 +181,16 @@ def _collect_experiments() -> list[dict]:
             eval_result = pinned[-1] if pinned else None
             pinned_v = [r for r in value_eval_all if r.get("gen") == concluded_gen]
             value_eval_result = pinned_v[-1] if pinned_v else None
-            pinned_h = [r for r in hp_eval_all if r.get("gen") == concluded_gen]
-            hp_eval_result = pinned_h[-1] if pinned_h else None
+            pinned_m = [r for r in mcts_eval_all if r.get("gen") == concluded_gen]
+            mcts_eval_result = pinned_m[-1] if pinned_m else None
         else:
             eval_result = eval_all[-1] if eval_all else None
             value_eval_result = value_eval_all[-1] if value_eval_all else None
-            hp_eval_result = hp_eval_all[-1] if hp_eval_all else None
+            mcts_eval_result = mcts_eval_all[-1] if mcts_eval_all else None
 
         eval_history = eval_all[-60:]
         value_eval_history = value_eval_all[-60:]
-        hp_eval_history = hp_eval_all[-60:]
+        mcts_eval_history = mcts_eval_all[-60:]
         benchmarks = _load_jsonl_all(d / "benchmarks" / "results.jsonl", tail=10)
 
         experiments.append({
@@ -207,10 +207,10 @@ def _collect_experiments() -> list[dict]:
             "history": history,
             "eval": eval_result,
             "value_eval": value_eval_result,
-            "hp_eval": hp_eval_result,
+            "mcts_eval": mcts_eval_result,
             "eval_history": eval_history,
             "value_eval_history": value_eval_history,
-            "hp_eval_history": hp_eval_history,
+            "mcts_eval_history": mcts_eval_history,
             "benchmarks": benchmarks,
             "concluded_gen": concluded_gen,
             "dir": d,
@@ -297,7 +297,7 @@ def build_dashboard(experiments: list[dict]) -> Group:
         overview.add_column("Best", justify="right", max_width=7)
         overview.add_column("P-Eval", justify="right", max_width=7)
         overview.add_column("V-Eval", justify="right", max_width=7)
-        overview.add_column("H-Eval", justify="right", max_width=7)
+        overview.add_column("Rescue", justify="right", max_width=7)
         overview.add_column("Suite", justify="right", max_width=12)
         overview.add_column("ET Avg", justify="right", max_width=7)
         overview.add_column("Buffer", justify="right", max_width=10)
@@ -309,7 +309,7 @@ def build_dashboard(experiments: list[dict]) -> Group:
             p = exp["progress"]
             ev = exp["eval"]
             vev = exp.get("value_eval")
-            hev = exp.get("hp_eval")
+            mev = exp.get("mcts_eval")
             arch = exp["arch"]
             concluded = exp.get("concluded_gen")
 
@@ -361,19 +361,18 @@ def build_dashboard(experiments: list[dict]) -> Group:
 
             eval_str = f"{ev['score']:.0%}" if ev and "score" in ev else "-"
             vev_str = f"{vev['score']:.0%}" if vev and "score" in vev else "-"
-            hev_str = f"{hev['score']:.0%}" if hev and "score" in hev else "-"
-            # Suite signature = "<P-total>/<V-total>/<H-total>" (scenario counts).
-            # Same signature across rows means scores were computed against
-            # the same number of scenarios — apples-to-apples check. H-total
-            # is "-" for experiments without an HP head (legacy + most pre-
-            # hploss-aux-v1 work). Stored suite_id hash historically only
-            # covered policy scenarios, so it could match while V-Eval / H-Eval
-            # silently drifted; showing raw totals exposes that.
+            # Rescue rate: FIXED / (FIXED + ECHO) from combat_eval_mcts per gen.
+            # Direct measure of value-head bias: higher = MCTS can correct
+            # policy errors (value-head leaves give orthogonal signal); lower =
+            # echo chamber (leaves confirm policy's biases).
+            mev_str = f"{mev['rescue_rate']:.0%}" if mev and "rescue_rate" in mev else "-"
+            # Suite signature = "<P-total>/<V-total>" scenario counts. Same
+            # signature across rows means scores were computed against the same
+            # number of scenarios — apples-to-apples check.
             p_total = ev.get("total") if ev else None
             v_total = vev.get("total") if vev else None
-            h_total = hev.get("total") if hev else None
-            if p_total or v_total or h_total:
-                suite_str = f"{p_total or '-'}/{v_total or '-'}/{h_total or '-'}"
+            if p_total or v_total:
+                suite_str = f"{p_total or '-'}/{v_total or '-'}"
             else:
                 suite_str = "-"
             et_str = f"{ev['end_turn_avg']:.0%}" if ev and ev.get("end_turn_avg") else "-"
@@ -410,7 +409,7 @@ def build_dashboard(experiments: list[dict]) -> Group:
             row_style = "dim" if concluded is not None else None
             overview.add_row(name_text, method, params_str, vhl_str, base_str,
                              status, start_str,
-                             gen_str, wr, best, eval_str, vev_str, hev_str,
+                             gen_str, wr, best, eval_str, vev_str, mev_str,
                              suite_str,
                              et_str, buf_str,
                              cpuct_str, noise_str, ts_str,
@@ -837,13 +836,16 @@ def build_dashboard(experiments: list[dict]) -> Group:
                 higher_is_better=True,
                 delta_mode="last",
             ))
-        hh = exp.get("hp_eval_history") or []
-        if len(hh) >= 3:
-            scores = [r.get("score", 0.0) for r in hh]
+        mh = exp.get("mcts_eval_history") or []
+        if len(mh) >= 3:
+            # Rescue rate: FIXED / (FIXED+ECHO) — core value-head-bias signal.
+            # Higher = MCTS corrects policy errors; declining rescue while
+            # P-Eval plateaus is the diversity-collapse early-warning.
+            scores = [r.get("rescue_rate", 0.0) for r in mh]
             parts.append(_candle_line(
-                "h-eval", scores, 0.0, 1.0,
-                fmt_val=lambda v: f"{v:.1%}",
-                fmt_delta=lambda d: f"{d*100:.1f}%",
+                "rescue", scores, 0.0, 1.0,
+                fmt_val=lambda v: f"{v:.0%}",
+                fmt_delta=lambda d: f"{d*100:.0f}%",
                 higher_is_better=True,
                 delta_mode="last",
             ))

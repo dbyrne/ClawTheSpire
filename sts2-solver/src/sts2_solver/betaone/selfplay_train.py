@@ -736,13 +736,16 @@ def train(
         if eval_every > 0 and gen % eval_every == 0:
             _update_phase(progress_path, "EVALUATING", gen)
             try:
-                from .eval import run_eval, run_value_eval
+                from .eval import run_eval, run_value_eval, run_mcts_eval
                 from .suite import compute_eval_suite, suite_id as _suite_id
                 bench_dir = os.path.join(output_dir, "benchmarks")
                 os.makedirs(bench_dir, exist_ok=True)
                 _sid = _suite_id(compute_eval_suite())
                 pol = run_eval(latest_path)
                 val = run_value_eval(latest_path)
+                # MCTS eval: policy-vs-MCTS classification. Rescue rate tracks
+                # value-head bias (how much corrective signal MCTS leaves provide).
+                mce = run_mcts_eval(latest_path)
                 # Mirror Experiment.save_eval / save_value_eval entry shape.
                 pol_entry = {
                     "suite": _sid, "timestamp": time.time(), "gen": gen,
@@ -761,13 +764,25 @@ def train(
                     "score": round(val["passed"] / max(val["total"], 1), 4),
                     "by_category": val.get("by_category", {}),
                 }
+                mce_entry = {
+                    "suite": _sid, "timestamp": time.time(), "gen": gen,
+                    "total": mce["total"],
+                    "clean": mce["clean"], "echo": mce["echo"],
+                    "fixed": mce["fixed"], "broke": mce["broke"],
+                    "mixed": mce["mixed"], "nomatch": mce["nomatch"],
+                    "rescue_rate": round(mce["rescue_rate"], 4),
+                }
                 with open(os.path.join(bench_dir, "eval.jsonl"), "a", encoding="utf-8") as f:
                     f.write(json.dumps(pol_entry) + "\n")
                 with open(os.path.join(bench_dir, "value_eval.jsonl"), "a", encoding="utf-8") as f:
                     f.write(json.dumps(val_entry) + "\n")
+                with open(os.path.join(bench_dir, "mcts_eval.jsonl"), "a", encoding="utf-8") as f:
+                    f.write(json.dumps(mce_entry) + "\n")
                 print(f"       eval: {pol['passed']}/{pol['total']} "
                       f"({pol_entry['score']:.0%}) | value: {val['passed']}/{val['total']} "
-                      f"({val_entry['score']:.0%})")
+                      f"({val_entry['score']:.0%}) | "
+                      f"mcts: CLEAN={mce['clean']} ECHO={mce['echo']} "
+                      f"FIXED={mce['fixed']} (rescue {mce['rescue_rate']:.0%})")
             except Exception as e:
                 print(f"       [eval_every] skipped gen {gen}: {e}")
 
