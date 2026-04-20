@@ -3355,12 +3355,20 @@ def _match_mcts_to_scenario(mcts_result: dict, sc: "Scenario") -> int | None:
     return None
 
 
-def run_mcts_eval(checkpoint_path: str, num_sims: int = 1000, seed: int = 42) -> dict:
+def run_mcts_eval(
+    checkpoint_path: str, num_sims: int = 1000, seed: int = 42,
+    onnx_dir: str | None = None,
+) -> dict:
     """Run combat_eval_mcts diagnostic and return CLEAN/ECHO/FIXED/BROKE/MIXED counts.
 
     Cheap (~3-5s at 1000 sims × 128 scenarios) so training can call it every
     gen. Rescue rate = FIXED / (FIXED + ECHO) tracks how much corrective
     signal the value head provides at MCTS leaves; core value-head-bias metric.
+
+    onnx_dir: override the ONNX export directory. Default reuses a shared
+    temp dir which is fine for training's one-call-per-gen usage. Backfill
+    scripts that call this in a tight loop should pass a unique per-call dir
+    to avoid Windows file-lock contention from retained ort::Session handles.
     """
     import tempfile
     import sts2_engine
@@ -3380,8 +3388,9 @@ def run_mcts_eval(checkpoint_path: str, num_sims: int = 1000, seed: int = 42) ->
     net.eval()
     gen = ckpt.get("gen", 0)
 
-    onnx_dir = Path(tempfile.gettempdir()) / "mcts_eval_onnx"
-    onnx_dir.mkdir(parents=True, exist_ok=True)
+    if onnx_dir is None:
+        onnx_dir = str(Path(tempfile.gettempdir()) / "mcts_eval_onnx")
+    Path(onnx_dir).mkdir(parents=True, exist_ok=True)
     onnx_path = export_onnx(net, str(onnx_dir))
 
     scenarios = build_scenarios()
@@ -3442,16 +3451,24 @@ def run_mcts_eval(checkpoint_path: str, num_sims: int = 1000, seed: int = 42) ->
             tally["MIXED"] += 1
 
     total = sum(tally.values())
+    # Net search contribution: (FIXED - BROKE) / (FIXED + ECHO + BROKE).
+    # Captures whether MCTS helps or hurts on scenarios where policy and MCTS
+    # disagree. Range [-1, 1]. Positive = value head gives corrective signal;
+    # negative = value head misleads search more than it helps; zero = neutral
+    # or search doesn't disagree with policy. Replaces the naive rescue rate
+    # FIXED / (FIXED + ECHO) which maxed at 100% when ECHO=0 regardless of
+    # how many BROKE cases existed — a misleading "perfect" reading when the
+    # policy has stopped picking decisively-wrong answers but hasn't gotten
+    # more decisive on right answers either.
+    disagree = tally["FIXED"] + tally["ECHO"] + tally["BROKE"]
+    contribution = (
+        (tally["FIXED"] - tally["BROKE"]) / disagree if disagree > 0 else 0.0
+    )
     return {
         "gen": gen,
         "total": total,
         **{k.lower(): v for k, v in tally.items()},
-        # Rescue rate = search-corrects-policy / (search-confirms-policy-error + search-corrects).
-        # Higher = value head gives corrective signal; lower = echo chamber.
-        "rescue_rate": (
-            tally["FIXED"] / (tally["FIXED"] + tally["ECHO"])
-            if (tally["FIXED"] + tally["ECHO"]) > 0 else 0.0
-        ),
+        "rescue_rate": contribution,
     }
 
 

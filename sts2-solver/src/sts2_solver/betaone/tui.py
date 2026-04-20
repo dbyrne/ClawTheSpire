@@ -297,7 +297,7 @@ def build_dashboard(experiments: list[dict]) -> Group:
         overview.add_column("Best", justify="right", max_width=7)
         overview.add_column("P-Eval", justify="right", max_width=7)
         overview.add_column("V-Eval", justify="right", max_width=7)
-        overview.add_column("Rescue", justify="right", max_width=7)
+        overview.add_column("Search", justify="right", max_width=7)
         overview.add_column("Suite", justify="right", max_width=12)
         overview.add_column("ET Avg", justify="right", max_width=7)
         overview.add_column("Buffer", justify="right", max_width=10)
@@ -361,11 +361,11 @@ def build_dashboard(experiments: list[dict]) -> Group:
 
             eval_str = f"{ev['score']:.0%}" if ev and "score" in ev else "-"
             vev_str = f"{vev['score']:.0%}" if vev and "score" in vev else "-"
-            # Rescue rate: FIXED / (FIXED + ECHO) from combat_eval_mcts per gen.
-            # Direct measure of value-head bias: higher = MCTS can correct
-            # policy errors (value-head leaves give orthogonal signal); lower =
-            # echo chamber (leaves confirm policy's biases).
-            mev_str = f"{mev['rescue_rate']:.0%}" if mev and "rescue_rate" in mev else "-"
+            # Net search contribution: (FIXED-BROKE)/(FIXED+ECHO+BROKE). Range
+            # [-1, 1]. Positive = MCTS helps policy; negative = MCTS hurts.
+            # Replaces prior rescue-rate metric that maxed at 100% when ECHO=0
+            # even though BROKE cases made net contribution negative.
+            mev_str = f"{mev['rescue_rate']*100:+.0f}%" if mev and "rescue_rate" in mev else "-"
             # Suite signature = "<P-total>/<V-total>" scenario counts. Same
             # signature across rows means scores were computed against the same
             # number of scenarios — apples-to-apples check.
@@ -841,14 +841,16 @@ def build_dashboard(experiments: list[dict]) -> Group:
             ))
         mh = exp.get("mcts_eval_history") or []
         if len(mh) >= 3:
-            # Rescue rate: FIXED / (FIXED+ECHO) — core value-head-bias signal.
-            # Higher = MCTS corrects policy errors; declining rescue while
-            # P-Eval plateaus is the diversity-collapse early-warning.
+            # Net search contribution: (FIXED-BROKE)/(FIXED+ECHO+BROKE).
+            # Range [-1, 1]. Positive = value head provides useful corrective
+            # signal at MCTS leaves; negative = MCTS breaks more correct picks
+            # than it rescues wrong ones. Scale -0.5..+0.5 covers the
+            # typical observed range cleanly.
             scores = [r.get("rescue_rate", 0.0) for r in mh]
             parts.append(_candle_line(
-                "rescue", scores, 0.0, 1.0,
-                fmt_val=lambda v: f"{v:.0%}",
-                fmt_delta=lambda d: f"{d*100:.0f}%",
+                "search", scores, -0.5, 0.5,
+                fmt_val=lambda v: f"{v*100:+.0f}%",
+                fmt_delta=lambda d: f"{d*100:+.0f}%",
                 higher_is_better=True,
             ))
 
