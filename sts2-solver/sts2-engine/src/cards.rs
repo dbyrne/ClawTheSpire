@@ -202,6 +202,15 @@ pub fn execute_card_effect(
             // "Next turn, Attacks deal double damage" — deferred to start_turn
             apply_power_to_player(state, "_double_damage_next_turn", 1);
         }
+        "DODGE_AND_ROLL" => {
+            // "Gain N Block. Next turn, gain N Block."
+            // Immediate block goes via gain_block (Dex/Unmovable apply).
+            // Next-turn block is queued; start_turn applies it with that
+            // turn's Dex/Unmovable context.
+            let block = card.block.unwrap_or(if upgraded { 6 } else { 4 });
+            gain_block(state, block);
+            apply_power_to_player(state, "_dodge_and_roll_pending", block);
+        }
         "EXPERTISE" => {
             let draw = (6 - state.player.hand.len() as i32).max(0);
             if draw > 0 {

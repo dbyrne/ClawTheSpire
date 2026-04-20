@@ -507,6 +507,14 @@ pub fn start_turn(state: &mut CombatState, rng: &mut impl Rng) {
         state.player.add_power("Double Damage", dd_next);
     }
 
+    // Dodge and Roll: deferred "next turn block" → apply now.
+    // Use gain_block so this turn's Dex/Unmovable modifiers apply (matches
+    // the STS rule that the second block gain is a fresh, Dex-scaled event).
+    let dar_next = state.player.remove_power("_dodge_and_roll_pending");
+    if dar_next > 0 {
+        crate::effects::gain_block(state, dar_next);
+    }
+
     // Clear turn-duration powers
     state.player.powers.remove("Rage");
     state.player.powers.remove("OneTwoPunch");

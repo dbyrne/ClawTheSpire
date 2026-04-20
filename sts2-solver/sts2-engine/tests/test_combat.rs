@@ -289,6 +289,43 @@ fn test_plating_removed_at_zero() {
     assert_eq!(state.enemies[0].get_power("Plating"), 0); // removed
 }
 
+#[test]
+fn test_dodge_and_roll_next_turn_block() {
+    // D&R queues block via _dodge_and_roll_pending; start_turn applies it
+    // fresh (after block clear) so the player gets 4 block at turn start.
+    let mut state = state_with(vec![], vec![enemy(30)]);
+    state.player.add_power("_dodge_and_roll_pending", 4);
+    for _ in 0..5 { state.player.draw_pile.push(strike()); }
+    combat::start_turn(&mut state, &mut rng());
+    assert_eq!(state.player.block, 4); // queued block applied
+    assert_eq!(state.player.get_power("_dodge_and_roll_pending"), 0); // consumed
+}
+
+#[test]
+fn test_dodge_and_roll_next_turn_block_scales_with_dex() {
+    // Dex at next turn start should scale the pending block, matching STS
+    // semantics (the second block gain is a fresh, Dex-scaled event).
+    let mut state = state_with(vec![], vec![enemy(30)]);
+    state.player.add_power("_dodge_and_roll_pending", 4);
+    state.player.add_power("Dexterity", 2);
+    for _ in 0..5 { state.player.draw_pile.push(strike()); }
+    combat::start_turn(&mut state, &mut rng());
+    assert_eq!(state.player.block, 6); // 4 + 2 Dex
+    assert_eq!(state.player.get_power("_dodge_and_roll_pending"), 0);
+}
+
+#[test]
+fn test_dodge_and_roll_pending_stacks_same_turn() {
+    // Two D&R plays in one turn → next turn gets 8 block (both pending values).
+    let mut state = state_with(vec![], vec![enemy(30)]);
+    state.player.add_power("_dodge_and_roll_pending", 4);
+    state.player.add_power("_dodge_and_roll_pending", 4); // second D&R adds
+    for _ in 0..5 { state.player.draw_pile.push(strike()); }
+    combat::start_turn(&mut state, &mut rng());
+    assert_eq!(state.player.block, 8);
+    assert_eq!(state.player.get_power("_dodge_and_roll_pending"), 0);
+}
+
 // ===================================================================
 // Card playability
 // ===================================================================
