@@ -1,49 +1,49 @@
 Coverage audit: uber-decks-v1.jsonl
-n = 676 encounters (post-extend)
+n = 795 encounters (post-extend)
 
 card                      |  count |    pct
 --------------------------------------------------
-ACCELERANT                |    111 |  16.4% ← GAP
-ACCURACY                  |    139 |  20.6%
-ACROBATICS                |    264 |  39.1%
-ADRENALINE                |    110 |  16.3% ← GAP
-BACKFLIP                  |     97 |  14.3% ← GAP
-BLADE_DANCE               |    177 |  26.2%
-BLUR                      |     94 |  13.9% ← GAP
-BULLET_TIME               |     97 |  14.3% ← GAP
-BURST                     |    173 |  25.6%
-CALCULATED_GAMBLE         |    134 |  19.8% ← GAP
-CLOAK_AND_DAGGER          |    107 |  15.8% ← GAP
-DAGGER_SPRAY              |     58 |   8.6% ← GAP
-DAGGER_THROW              |     94 |  13.9% ← GAP
-DEADLY_POISON             |     95 |  14.1% ← GAP
-DEFEND_SILENT             |    676 | 100.0%
-DODGE_AND_ROLL            |     48 |   7.1% ← GAP
-ESCAPE_PLAN               |    102 |  15.1% ← GAP
-EXPOSE                    |     98 |  14.5% ← GAP
-FINISHER                  |    115 |  17.0% ← GAP
-FOOTWORK                  |     80 |  11.8% ← GAP
-GRAND_FINALE              |     93 |  13.8% ← GAP
-HIDDEN_DAGGERS            |    109 |  16.1% ← GAP
+ACCELERANT                |    127 |  16.0% ← GAP
+ACCURACY                  |    155 |  19.5% ← GAP
+ACROBATICS                |    285 |  35.8%
+ADRENALINE                |    118 |  14.8% ← GAP
+BACKFLIP                  |    112 |  14.1% ← GAP
+BLADE_DANCE               |    191 |  24.0%
+BLUR                      |    100 |  12.6% ← GAP
+BULLET_TIME               |    111 |  14.0% ← GAP
+BURST                     |    186 |  23.4%
+CALCULATED_GAMBLE         |    143 |  18.0% ← GAP
+CLOAK_AND_DAGGER          |    120 |  15.1% ← GAP
+DAGGER_SPRAY              |    125 |  15.7% ← GAP
+DAGGER_THROW              |     97 |  12.2% ← GAP
+DEADLY_POISON             |    112 |  14.1% ← GAP
+DEFEND_SILENT             |    795 | 100.0%
+DODGE_AND_ROLL            |    103 |  13.0% ← GAP
+ESCAPE_PLAN               |    113 |  14.2% ← GAP
+EXPOSE                    |    113 |  14.2% ← GAP
+FINISHER                  |    126 |  15.8% ← GAP
+FOOTWORK                  |     85 |  10.7% ← GAP
+GRAND_FINALE              |     97 |  12.2% ← GAP
+HIDDEN_DAGGERS            |    123 |  15.5% ← GAP
 INFECTION                 |      0 |   0.0% ← GAP
-INFINITE_BLADES           |     83 |  12.3% ← GAP
-MALAISE                   |     88 |  13.0% ← GAP
-NEUTRALIZE                |    676 | 100.0%
-NOXIOUS_FUMES             |    100 |  14.8% ← GAP
-OMNISLICE                 |     83 |  12.3% ← GAP
-PIERCING_WAIL             |     82 |  12.1% ← GAP
-PREDATOR                  |    130 |  19.2% ← GAP
-PREPARED                  |    216 |  32.0%
-REFLEX                    |    168 |  24.9%
-SKEWER                    |     69 |  10.2% ← GAP
-STORM_OF_STEEL            |     82 |  12.1% ← GAP
-STRIKE_SILENT             |    657 |  97.2%
-SUCKER_PUNCH              |    104 |  15.4% ← GAP
-SURVIVOR                  |    672 |  99.4%
-TACTICIAN                 |    179 |  26.5%
-TOOLS_OF_THE_TRADE        |     92 |  13.6% ← GAP
-UNTOUCHABLE               |    152 |  22.5%
-WELL_LAID_PLANS           |     94 |  13.9% ← GAP
-WRAITH_FORM               |     77 |  11.4% ← GAP
+INFINITE_BLADES           |     99 |  12.5% ← GAP
+MALAISE                   |    103 |  13.0% ← GAP
+NEUTRALIZE                |    795 | 100.0%
+NOXIOUS_FUMES             |    113 |  14.2% ← GAP
+OMNISLICE                 |     83 |  10.4% ← GAP
+PIERCING_WAIL             |     93 |  11.7% ← GAP
+PREDATOR                  |    138 |  17.4% ← GAP
+PREPARED                  |    236 |  29.7%
+REFLEX                    |    194 |  24.4%
+SKEWER                    |     76 |   9.6% ← GAP
+STORM_OF_STEEL            |     95 |  11.9% ← GAP
+STRIKE_SILENT             |    776 |  97.6%
+SUCKER_PUNCH              |    121 |  15.2% ← GAP
+SURVIVOR                  |    791 |  99.5%
+TACTICIAN                 |    203 |  25.5%
+TOOLS_OF_THE_TRADE        |     99 |  12.5% ← GAP
+UNTOUCHABLE               |    177 |  22.3%
+WELL_LAID_PLANS           |    106 |  13.3% ← GAP
+WRAITH_FORM               |     88 |  11.1% ← GAP
 
-gaps (<20% coverage): 30 of 42
+gaps (<20% coverage): 31 of 42
