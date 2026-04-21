@@ -49,6 +49,10 @@ struct Sample {
     q_values: [f32; encode::MAX_ACTIONS],  // Q value per child action (mean backed-up value)
     num_actions: usize,
     mcts_value: f32,  // MCTS root value (search-backed average for bootstrap targets)
+    // Raw CombatState JSON so reanalyse can re-run MCTS on this decision point
+    // with a fresher network. Kept alongside the encoded features to avoid a
+    // second "what state was this" lookup path.
+    state_json: String,
 }
 
 struct SelfPlayResult {
@@ -170,6 +174,10 @@ fn run_selfplay_combat(
             let (act_feat, act_mask, _num_valid) = encode::encode_actions(&actions, &state);
             let hand_ids = encode::encode_hand_card_ids(&state, card_vocab);
             let action_ids = encode::encode_action_card_ids(&actions, &state, card_vocab);
+            // Snapshot the state BEFORE MCTS mutates/clones it internally; this
+            // is the exact state the encoded features describe and the one
+            // reanalyse needs to re-run MCTS against.
+            let state_json = serde_json::to_string(&state).unwrap_or_default();
 
             let result = mcts_engine.search_with_ais(
                 &state,
@@ -204,6 +212,7 @@ fn run_selfplay_combat(
                 q_values,
                 num_actions: actions.len().min(encode::MAX_ACTIONS),
                 mcts_value: result.root_value as f32,
+                state_json,
             });
 
             // Execute chosen action
@@ -402,6 +411,7 @@ fn build_selfplay_py(py: Python<'_>, results: &[Option<SelfPlayResult>]) -> PyRe
     let mut all_q_values: Vec<f32> = Vec::new();
     let mut all_num_actions: Vec<i64> = Vec::new();
     let mut all_mcts_values: Vec<f32> = Vec::new();
+    let mut all_state_jsons: Vec<String> = Vec::new();
     let mut combat_indices: Vec<i64> = Vec::new();
     let mut outcomes: Vec<String> = Vec::new();
     let mut final_hps: Vec<i32> = Vec::new();
@@ -426,6 +436,7 @@ fn build_selfplay_py(py: Python<'_>, results: &[Option<SelfPlayResult>]) -> PyRe
             all_q_values.extend_from_slice(&sample.q_values);
             all_num_actions.push(sample.num_actions as i64);
             all_mcts_values.push(sample.mcts_value);
+            all_state_jsons.push(sample.state_json.clone());
             combat_indices.push(combat_idx);
             total_steps += 1;
         }
@@ -442,10 +453,221 @@ fn build_selfplay_py(py: Python<'_>, results: &[Option<SelfPlayResult>]) -> PyRe
     dict.set_item("child_q_values", &all_q_values)?;
     dict.set_item("num_actions", &all_num_actions)?;
     dict.set_item("mcts_values", &all_mcts_values)?;
+    dict.set_item("state_jsons", all_state_jsons)?;
     dict.set_item("combat_indices", &combat_indices)?;
     dict.set_item("outcomes", outcomes)?;
     dict.set_item("final_hps", &final_hps)?;
     dict.set_item("total_steps", total_steps)?;
 
+    Ok(dict.into())
+}
+
+// ---------------------------------------------------------------------------
+// Reanalyse: re-run MCTS on a batch of stored states with the current net
+// ---------------------------------------------------------------------------
+//
+// MuZero-style reanalyse for combating stale-target drift. Self-play produces
+// (s, π_mcts, v_mcts) with whatever network existed at gen N. Those targets
+// get trained on for many gens before the buffer evicts them. If the network
+// keeps fitting those stale targets, the critic can drift toward a biased
+// fixed point that the newer policy would never produce on fresh search.
+//
+// Reanalyse: sample stored states, run MCTS with the *current* network, and
+// overwrite the stored targets. No Dirichlet noise (deterministic, training
+// targets — noise is only for self-play exploration). Returns per-state
+// policy, child visits, child Q, and root value; Python applies the same
+// q_target_mix / mcts_bootstrap logic the training loop uses.
+
+struct ReanalyseOutput {
+    policy: [f32; encode::MAX_ACTIONS],
+    visits: [u32; encode::MAX_ACTIONS],
+    q_values: [f32; encode::MAX_ACTIONS],
+    mcts_value: f32,
+    num_actions: usize,
+}
+
+fn run_reanalyse_one(
+    state_json: &str,
+    profiles: &HashMap<String, enemy::EnemyProfile>,
+    card_vocab: &CardVocab,
+    inference: &BetaOneInference,
+    num_sims: usize,
+    temperature: f32,
+    seed: u64,
+    turn_boundary_eval: bool,
+    c_puct: f32,
+    pomcp: bool,
+    pw_k: f32,
+) -> Option<ReanalyseOutput> {
+    let state: CombatState = match serde_json::from_str(state_json) {
+        Ok(s) => s,
+        Err(_) => return None,
+    };
+
+    // Rebuild enemy AIs from stored enemy IDs + profiles. move_index resets
+    // to 0 — a minor bias vs original self-play (where the ai may have been
+    // mid-cycle) but far smaller than the stale-target effect we're fixing.
+    let enemy_ais: Vec<enemy::EnemyAI> = state.enemies.iter()
+        .map(|e| enemy::create_enemy_ai(&e.id, profiles))
+        .collect();
+
+    let actions = crate::actions::enumerate_actions(&state);
+    if actions.is_empty() {
+        return None;
+    }
+
+    let adapter = BetaOneMCTSAdapter::new(inference, card_vocab);
+    let card_db = CardDB::default();
+    let mut rng = StdRng::seed_from_u64(seed);
+
+    let mut mcts_engine = MCTS::new(&card_db, &adapter);
+    mcts_engine.add_noise = false;
+    mcts_engine.turn_boundary_eval = turn_boundary_eval;
+    mcts_engine.c_puct = c_puct;
+    mcts_engine.pomcp = pomcp;
+    mcts_engine.pw_k = pw_k;
+
+    let sr = mcts_engine.search_with_ais(
+        &state, Some(&enemy_ais), num_sims, temperature, &mut rng,
+    );
+
+    let mut policy = [0.0f32; encode::MAX_ACTIONS];
+    for (i, &p) in sr.policy.iter().enumerate().take(encode::MAX_ACTIONS) {
+        policy[i] = p;
+    }
+    let mut visits = [0u32; encode::MAX_ACTIONS];
+    for (i, &v) in sr.child_visits.iter().enumerate().take(encode::MAX_ACTIONS) {
+        visits[i] = v;
+    }
+    let mut q_values = [0.0f32; encode::MAX_ACTIONS];
+    for (i, &q) in sr.child_values.iter().enumerate().take(encode::MAX_ACTIONS) {
+        q_values[i] = q;
+    }
+
+    Some(ReanalyseOutput {
+        policy,
+        visits,
+        q_values,
+        mcts_value: sr.root_value as f32,
+        num_actions: actions.len().min(encode::MAX_ACTIONS),
+    })
+}
+
+/// Run MCTS on a batch of stored states with the current network to refresh
+/// training targets (MuZero reanalyse).
+#[pyfunction]
+#[pyo3(signature = (
+    state_jsons,
+    enemy_profiles_json,
+    onnx_path,
+    card_vocab_json,
+    num_sims = 1000,
+    temperature = 1.0,
+    seeds = vec![],
+    gen_id = 0,
+    turn_boundary_eval = false,
+    c_puct = 1.5,
+    pomcp = true,
+    pw_k = 1.0,
+))]
+pub fn betaone_mcts_reanalyse(
+    py: Python<'_>,
+    state_jsons: Vec<String>,
+    enemy_profiles_json: &str,
+    onnx_path: &str,
+    card_vocab_json: &str,
+    num_sims: usize,
+    temperature: f32,
+    seeds: Vec<u64>,
+    gen_id: i64,
+    turn_boundary_eval: bool,
+    c_puct: f32,
+    pomcp: bool,
+    pw_k: f32,
+) -> PyResult<PyObject> {
+    let profiles: HashMap<String, enemy::EnemyProfile> =
+        serde_json::from_str(enemy_profiles_json).unwrap_or_default();
+    let card_vocab: CardVocab = serde_json::from_str(card_vocab_json).unwrap_or_default();
+    let onnx = onnx_path.to_string();
+    let cache_key = format!("reanalyse:{}:{}", onnx_path, gen_id);
+
+    let n = state_jsons.len();
+    // Expand seeds to match if underspecified
+    let seeds_full: Vec<u64> = (0..n).map(|i| {
+        seeds.get(i).copied().unwrap_or_else(|| (gen_id as u64).wrapping_mul(1_000_003) + i as u64)
+    }).collect();
+
+    let results = py.allow_threads(move || {
+        use rayon::prelude::*;
+
+        (0..n).into_par_iter().map(|i| {
+            SELFPLAY_CACHE.with(|cache| {
+                let mut cache = cache.borrow_mut();
+                let needs_reload = match &*cache {
+                    Some(c) => c.cache_key != cache_key,
+                    None => true,
+                };
+                if needs_reload {
+                    match BetaOneInference::new(&onnx) {
+                        Ok(inf) => {
+                            *cache = Some(CachedSelfPlay {
+                                cache_key: cache_key.clone(),
+                                inference: inf,
+                            });
+                        }
+                        Err(e) => {
+                            eprintln!("Reanalyse ONNX error: {e}");
+                            return None;
+                        }
+                    }
+                }
+                let inference = &cache.as_ref().unwrap().inference;
+                run_reanalyse_one(
+                    &state_jsons[i], &profiles, &card_vocab, inference,
+                    num_sims, temperature, seeds_full[i],
+                    turn_boundary_eval, c_puct, pomcp, pw_k,
+                )
+            })
+        }).collect::<Vec<_>>()
+    });
+
+    // Build Python output. Missing entries (failed deserialize / no actions)
+    // return zeros + num_actions=0 so Python can filter / keep old target.
+    let mut all_policies: Vec<f32> = Vec::with_capacity(n * encode::MAX_ACTIONS);
+    let mut all_visits: Vec<i64> = Vec::with_capacity(n * encode::MAX_ACTIONS);
+    let mut all_q_values: Vec<f32> = Vec::with_capacity(n * encode::MAX_ACTIONS);
+    let mut all_mcts_values: Vec<f32> = Vec::with_capacity(n);
+    let mut all_num_actions: Vec<i64> = Vec::with_capacity(n);
+    let mut all_ok: Vec<bool> = Vec::with_capacity(n);
+
+    for r in &results {
+        match r {
+            Some(out) => {
+                all_policies.extend_from_slice(&out.policy);
+                all_visits.extend(out.visits.iter().map(|&v| v as i64));
+                all_q_values.extend_from_slice(&out.q_values);
+                all_mcts_values.push(out.mcts_value);
+                all_num_actions.push(out.num_actions as i64);
+                all_ok.push(true);
+            }
+            None => {
+                all_policies.extend(std::iter::repeat(0.0f32).take(encode::MAX_ACTIONS));
+                all_visits.extend(std::iter::repeat(0i64).take(encode::MAX_ACTIONS));
+                all_q_values.extend(std::iter::repeat(0.0f32).take(encode::MAX_ACTIONS));
+                all_mcts_values.push(0.0);
+                all_num_actions.push(0);
+                all_ok.push(false);
+            }
+        }
+    }
+
+    let dict = PyDict::new(py);
+    dict.set_item("policies", &all_policies)?;
+    dict.set_item("child_visits", &all_visits)?;
+    dict.set_item("child_q_values", &all_q_values)?;
+    dict.set_item("mcts_values", &all_mcts_values)?;
+    dict.set_item("num_actions", &all_num_actions)?;
+    dict.set_item("ok", PyList::new(py, all_ok.iter().map(|&b| b))?)?;
+    dict.set_item("n", n as i64)?;
     Ok(dict.into())
 }

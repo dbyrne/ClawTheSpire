@@ -1,0 +1,85 @@
+name: reanalyse-v3
+method: mcts_selfplay
+description: |
+  MuZero-style reanalyse with cadence prioritized over single-pass frac:
+  frac=0.75, every=2. Tests whether minimizing MAX staleness (not just
+  average refresh rate) eliminates drift.
+
+  v1 (frac=0.25, every=5): max stale ~8 gens, 5%/gen refresh rate
+  v2 (frac=0.50, every=5): max stale ~6 gens, 10%/gen refresh rate
+  v3 (frac=0.75, every=2): max stale 2 gens, 37.5%/gen refresh rate
+
+  Rationale: initially we considered frac=1.0, every=5 (Option B) but
+  that has max staleness 4 gens — no matter how high you push frac at
+  cadence=5, some entries drift ~4 gens between refreshes. Cadence is
+  the stronger lever. At every=2, the newest 25% is already fresh
+  (just-added from current-ish net), so skipping it saves compute at
+  zero staleness cost, hence frac=0.75 instead of 1.0.
+
+  Fork point: tb-v2 g60, same as v1/v2. Merged main in first (simulator
+  fixes, expanded 128-scenario eval suite, phase markers). Absolute WR
+  won't be directly comparable to v1/v2's due to engine drift, but the
+  internal drift test (does g80 WR hold through g90 without drop?) is
+  still clean.
+
+  Ship criterion: g80 AND g90 both >= 74.1% (tb-v2 g60 peak). If true,
+  cadence-driven staleness reduction DID close the drift loop and this
+  is our drift-free config.
+  Kill criterion: g90 drifts from g80 peak by >=1pp despite max
+  staleness = 2 gens. Staleness alone isn't the bottleneck — the
+  remaining drift lives in the value-head bias, not the buffer.
+
+  Compute cost: ~3.75x v2 (37.5K states × 1/2 gens = 18.75K states/gen
+  refreshed vs v2's 25K × 1/5 = 5K). Expect ~16 min/gen, ~27 hours for
+  100 gens.
+created: '2026-04-20T01:35:00+00:00'
+parent: trunk-baseline-v2
+parent_checkpoint: '60'
+network_type: betaone
+architecture:
+  arch_version: 2
+  hidden_dim: 128
+  action_hidden: 64
+  hand_proj_dim: 32
+  card_embed_dim: 16
+  card_stats_dim: 28
+  relic_dim: 27
+  hand_agg_dim: 3
+  action_dim: 35
+  max_hand: 10
+  max_actions: 30
+  value_head_layers: 3
+  num_cards: 578
+  total_params: 140761
+  base_state_dim: 156
+  state_dim: 446
+  trunk_input: 188
+training:
+  generations: 100
+  combats_per_gen: 256
+  lr: 0.0003
+  batch_size: 512
+  mcts:
+    num_sims: 1000
+    temperature: 1.0
+    replay_capacity: 50000
+    train_epochs: 4
+    value_coef: 1.0
+    c_puct: 1.5
+    pomcp: true
+    mcts_bootstrap: true
+    turn_boundary_eval: true
+    q_target_mix: 0.5
+    q_target_temp: 0.5
+    eval_every: 1
+    grad_conflict_sample_every: 10
+    reanalyse_every: 2
+    reanalyse_frac: 0.75
+    reanalyse_min_gen: 10
+data:
+  mode: encounter_set
+  encounter_set: lean-decks-v1
+checkpoints:
+  save_every: 1
+  keep_best: true
+  cold_start: false
