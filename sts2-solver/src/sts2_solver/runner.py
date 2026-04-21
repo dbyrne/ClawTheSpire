@@ -286,7 +286,7 @@ class Runner:
         self.console.print("[bold cyan]━━━ REVIEW ━━━[/bold cyan]")
         self.console.print(summary)
         self.console.print(
-            "[dim]Space = apply   R = resume auto   Q = quit[/dim]"
+            "[dim]Space = apply   S = snapshot   R = resume auto   Q = quit[/dim]"
         )
 
         while True:
@@ -305,6 +305,14 @@ class Runner:
 
             if ch == b' ':
                 break
+            elif ch in (b's', b'S'):
+                # Live is already stopped; snapshot inline then re-print the
+                # prompt so the user can still choose Space/R/Q.
+                self._save_eval_snapshot_nolive()
+                self.console.print(summary)
+                self.console.print(
+                    "[dim]Space = apply   S = snapshot   R = resume auto   Q = quit[/dim]"
+                )
             elif ch in (b'r', b'R'):
                 self.review_mode = False
                 self.console.print("[cyan]Review mode OFF — resuming auto[/cyan]")
