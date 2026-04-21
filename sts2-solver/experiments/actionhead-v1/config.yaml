@@ -37,9 +37,9 @@ architecture:
   action_dim: 35
   max_hand: 10
   max_actions: 30
-  value_head_layers: 1
+  value_head_layers: 3
   num_cards: 578
-  total_params: 86426
+  total_params: 152346
   state_dim: 446
   trunk_input: 188
 training:
