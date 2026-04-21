@@ -988,6 +988,24 @@ def cmd_finalize(args):
         print(f"  Value eval:    {v['passed']}/{v['total']} ({v['passed']/max(v['total'],1):.1%})")
 
 
+def cmd_promote(args):
+    """Promote an experiment checkpoint to the production frontier.
+
+    Thin wrapper around scripts/promote_to_frontier.py so `sts2-experiment
+    promote <name> <gen>` works the same as running the script directly.
+    """
+    from pathlib import Path as _Path
+    import sys as _sys
+    script_dir = _Path(__file__).resolve().parents[3] / "scripts"
+    _sys.path.insert(0, str(script_dir))
+    try:
+        import promote_to_frontier
+    except ImportError as e:
+        print(f"Error: could not load promote_to_frontier module: {e}")
+        _sys.exit(1)
+    _sys.exit(promote_to_frontier.promote(args.name, args.gen, dry_run=args.dry_run))
+
+
 def cmd_session(args):
     """Spawn a new Claude Code session in an experiment's worktree.
 
@@ -1310,6 +1328,16 @@ def main():
                        help="Clear the finalized-gen marker on an experiment")
     p.add_argument("name", help="Experiment name")
     p.set_defaults(func=cmd_unfinalize)
+
+    # promote
+    p = sub.add_parser("promote",
+                       help="Promote an experiment gen to the production frontier "
+                            "(copies checkpoint into betaone_checkpoints/, writes FRONTIER.md)")
+    p.add_argument("name", help="Experiment name")
+    p.add_argument("gen", type=int, help="Generation to promote (must have betaone_genN.pt)")
+    p.add_argument("--dry-run", action="store_true",
+                   help="Print what would happen without modifying anything")
+    p.set_defaults(func=cmd_promote)
 
     # ship
     p = sub.add_parser("ship",

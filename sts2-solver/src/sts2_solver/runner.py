@@ -532,8 +532,37 @@ class Runner:
         )
         betaone_net.load_state_dict(betaone_ckpt["model_state_dict"])
         self._betaone_onnx_path = betaone_export_onnx(betaone_net, str(betaone_ckpt_dir / "onnx"))
-        self._checkpoint_name = f"betaone gen {betaone_ckpt.get('gen', '?')}"
-        self.console.print(f"[green]BetaOne combat MCTS active (gen {betaone_ckpt.get('gen', '?')})[/green]")
+
+        # Resolve the frontier experiment name from FRONTIER.md at repo root,
+        # so the runner logs "reanalyse-v3 gen 88" instead of bare "gen 88".
+        # Falls back to just-the-gen if FRONTIER.md is missing or its claimed
+        # gen doesn't match the actual checkpoint (stale pointer).
+        gen = betaone_ckpt.get("gen", "?")
+        frontier_md = _Path(__file__).resolve().parents[3] / "FRONTIER.md"
+        exp_name = None
+        if frontier_md.exists():
+            claimed_exp = None
+            claimed_gen = None
+            for line in frontier_md.read_text(encoding="utf-8").splitlines():
+                if line.startswith("---") and claimed_exp is not None:
+                    break
+                if line.startswith("experiment:"):
+                    claimed_exp = line.split(":", 1)[1].strip()
+                elif line.startswith("gen:"):
+                    try:
+                        claimed_gen = int(line.split(":", 1)[1].strip())
+                    except ValueError:
+                        pass
+            if claimed_exp and claimed_gen == gen:
+                exp_name = claimed_exp
+            elif claimed_exp:
+                self.console.print(
+                    f"[yellow]FRONTIER.md claims {claimed_exp} gen {claimed_gen} "
+                    f"but checkpoint is gen {gen}; run promote_to_frontier.py to sync[/yellow]"
+                )
+        label = f"{exp_name} gen {gen}" if exp_name else f"gen {gen}"
+        self._checkpoint_name = f"betaone {label}"
+        self.console.print(f"[green]BetaOne combat MCTS active ({label})[/green]")
 
         # Load DeckNet card-reward checkpoint (optional — falls back to
         # deterministic card picks if missing)
