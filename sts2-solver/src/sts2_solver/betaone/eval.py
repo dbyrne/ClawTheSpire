@@ -387,14 +387,14 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("choose_card", neutralize(), label="discard Neutralize"),
         ],
         best_actions=[3],       # discard Slimed
-        bad_actions=[4],        # don't discard Neutralize
+        bad_actions=[0, 1, 2, 4],        # don't discard Neutralize
         pending_choice={"choice_type": "discard_from_hand"},
     ))
 
     scenarios.append(Scenario(
         name="survivor_discard_keep_dodge_and_roll",
         category="discard",
-        description="Survivor just played (8 block applied), discard-from-hand triggered. Hand = Dodge and Roll + 2 Defends vs 12 incoming. Discarding a Defend keeps D&R playable: Survivor(8) + D&R(4) + Defend(5) = 17 block this turn (covers 12) PLUS 4 more block next turn from D&R's trigger = net 21 block over 2 turns. Discarding D&R gets 18 block this turn but 0 future — strictly worse because 6 block is wasted vs the enemy's 12 either way. NOTE: requires sim to implement D&R's next-turn block; currently broken (see known sim bugs).",
+        description="Survivor just played (8 block applied), discard-from-hand triggered. Hand = Dodge and Roll + 2 Defends vs 12 incoming. Discarding a Defend keeps D&R playable: Survivor(8) + D&R(4) + Defend(5) = 17 block this turn (covers 12) PLUS 4 more block next turn from D&R's trigger = net 21 block over 2 turns. Discarding D&R gets 18 block this turn but 0 future — strictly worse because 6 block is wasted vs the enemy's 12 either way.",
         player={"hp": 50, "max_hp": 70, "energy": 2, "block": 8},  # Survivor already applied 8 block
         enemies=[enemy(40, 50, damage=12)],
         hand=[lookup_card("DODGE_AND_ROLL"), defend(), defend()],
@@ -422,7 +422,8 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("choose_card", defend(), label="discard Defend"),
             ActionSpec("choose_card", tactician(), label="discard Tactician (Sly)"),
         ],
-        best_actions=[3],       # discard Tactician triggers +1 energy
+        best_actions=[3],
+        bad_actions=[0, 1, 2],       # discard Tactician triggers +1 energy
         pending_choice={"choice_type": "discard_from_hand"},
     ))
 
@@ -441,7 +442,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[0],       # play Strike (offense when block is cheap)
-        bad_actions=[2],        # don't end turn with 3 energy
+        bad_actions=[1, 2],        # don't end turn with 3 energy
     ))
 
     scenarios.append(Scenario(
@@ -473,7 +474,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[0],       # attack — no damage incoming
-        bad_actions=[1],        # blocking is waste when enemy defends
+        bad_actions=[1, 2],        # blocking is waste when enemy defends
     ))
 
     # ===== ENERGY / END TURN =====
@@ -547,16 +548,21 @@ def build_scenarios() -> list[Scenario]:
     scenarios.append(Scenario(
         name="let_poison_kill",
         category="lethal",
-        description="Enemy at 4 HP with 5 Poison — end turn, poison finishes it",
+        description="E1 at 4 HP / 5 Poison will die on its own; E2 at 6 HP needs killing. Strike E2 ends combat now (0 dmg). Strike E1 wastes the attack on a dying enemy.",
         player={"hp": 50, "max_hp": 70, "energy": 3, "block": 0},
-        enemies=[enemy(4, 50, damage=8, powers={"Poison": 5})],
+        enemies=[
+            enemy(4, 50, damage=8, powers={"Poison": 5}),
+            enemy(6, 50, damage=5),
+        ],
         hand=[strike(), strike(), defend()],
         actions=[
-            ActionSpec("play_card", strike(), target_idx=0, label="Strike (overkill)"),
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike E1 (overkill — dying to poison)"),
+            ActionSpec("play_card", strike(), target_idx=1, label="Strike E2 (kills it, ends combat)"),
             ActionSpec("play_card", defend(), label="Defend"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[1, 2],    # Defend or end turn (poison handles it)
+        best_actions=[1],          # Strike E2 kills it; E1 dies to poison tick → both dead, combat over
+        bad_actions=[0, 2, 3],           # Strike E1 wastes the attack on an already-dying enemy; E2 survives and hits
     ))
 
     # ===== TARGET SELECTION =====
@@ -573,7 +579,8 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("play_card", strike(), target_idx=1, label="Strike Vulnerable enemy"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[1],       # 9 damage vs 6 — always hit Vulnerable
+        best_actions=[1],
+        bad_actions=[0, 2],       # 9 damage vs 6 — always hit Vulnerable
     ))
 
     scenarios.append(Scenario(
@@ -588,7 +595,8 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("play_card", strike(), target_idx=1, label="Strike 30hp"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[0],       # kill the low-HP one to remove its damage
+        best_actions=[0],
+        bad_actions=[1, 2],       # kill the low-HP one to remove its damage
     ))
 
     scenarios.append(Scenario(
@@ -603,7 +611,8 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("play_card", neutralize(), target_idx=1, label="Neutralize non-Artifact enemy (Weak lands)"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[1],       # Artifact eats the Weak on target 0
+        best_actions=[1],
+        bad_actions=[0, 2],       # Artifact eats the Weak on target 0
     ))
 
     scenarios.append(Scenario(
@@ -618,7 +627,8 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("play_card", dagger_throw(), target_idx=1, label="Dagger Throw non-Intangible (9 dmg)"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[1],       # 9 damage vs 1 damage
+        best_actions=[1],
+        bad_actions=[0, 2],       # 9 damage vs 1 damage
     ))
 
     scenarios.append(Scenario(
@@ -636,7 +646,8 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("play_card", strike(), target_idx=1, label="Strike non-Plating (6 dmg)"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[1],       # 6 damage vs 0 HP (block absorbs)
+        best_actions=[1],
+        bad_actions=[0, 2],       # 6 damage vs 0 HP (block absorbs)
     ))
 
     # ===== SYNERGY RECOGNITION =====
@@ -653,7 +664,8 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("play_card", defend(), label="Defend"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[0],       # poison will tick for 16 instead of 8 next turn
+        best_actions=[0],
+        bad_actions=[1, 2],       # poison will tick for 16 instead of 8 next turn
     ))
 
     scenarios.append(Scenario(
@@ -669,7 +681,8 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("play_card", defend(), label="Defend"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[0, 1],    # Footwork or Strike both good turn 1
+        best_actions=[0, 1],
+        bad_actions=[2, 3],    # Footwork or Strike both good turn 1
         turn=1,
     ))
 
@@ -686,7 +699,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[1],       # Strike does actual damage
-        bad_actions=[0],        # Accelerant with no poison = wasted Power
+        bad_actions=[0, 2],        # Accelerant with no poison = wasted Power
     ))
 
     scenarios.append(Scenario(
@@ -702,7 +715,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[0],       # apply poison first so Accelerant has something to amplify
-        bad_actions=[1],        # Accelerant first = wasted turn when poison applied later anyway
+        bad_actions=[1, 2],        # Accelerant first = wasted turn when poison applied later anyway
     ))
 
     # ===== POISON STRATEGY =====
@@ -719,7 +732,8 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("play_card", strike(), target_idx=0, label="Strike (6 dmg)"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[0],       # poison scales better on high HP enemy
+        best_actions=[0],
+        bad_actions=[1, 2],       # poison scales better on high HP enemy
     ))
 
     scenarios.append(Scenario(
@@ -735,7 +749,8 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("play_card", defend(), label="Defend"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[0],       # power on turn 1 = investment, massive value over 5+ turns
+        best_actions=[0],
+        bad_actions=[1, 2, 3],       # power on turn 1 = investment, massive value over 5+ turns
         turn=1,
     ))
 
@@ -751,7 +766,8 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("play_card", defend(), label="Defend (5 block)"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[0],       # 24 poison damage = kills enemy fast, Defend only delays
+        best_actions=[0],
+        bad_actions=[1, 2],       # 24 poison damage = kills enemy fast, Defend only delays
     ))
 
     scenarios.append(Scenario(
@@ -766,7 +782,8 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("play_card", defend(), label="Defend (5 block vs 15 incoming)"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[1],       # 15 incoming at 30 HP = must block, Accelerant can wait
+        best_actions=[1],
+        bad_actions=[0, 2],       # 15 incoming at 30 HP = must block, Accelerant can wait
     ))
 
     scenarios.append(Scenario(
@@ -782,7 +799,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[0],       # no damage incoming, use the turn for offense
-        bad_actions=[1],
+        bad_actions=[1, 2],
     ))
 
     scenarios.append(Scenario(
@@ -797,7 +814,8 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("play_card", strike(), target_idx=0, label="Strike (overkill)"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[0, 2],    # block or end turn, poison handles the kill
+        best_actions=[0, 2],
+        bad_actions=[1],    # block or end turn, poison handles the kill
     ))
 
     scenarios.append(Scenario(
@@ -814,7 +832,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("choose_card", defend(), label="discard Defend"),
         ],
         best_actions=[2],       # always discard the Status junk
-        bad_actions=[0],        # never discard the poison card
+        bad_actions=[0, 1, 3],        # never discard the poison card
         pending_choice={"choice_type": "discard_from_hand"},
     ))
 
@@ -832,7 +850,8 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("play_card", strike(), target_idx=0, label="Strike (6 dmg)"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[0],       # 24 damage vs 6
+        best_actions=[0],
+        bad_actions=[1, 2],       # 24 damage vs 6
     ))
 
     scenarios.append(Scenario(
@@ -849,7 +868,8 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("play_card", strike(), target_idx=0, label="Strike"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[0],       # power first, then shivs benefit every future turn
+        best_actions=[0],
+        bad_actions=[1, 2, 3, 4],       # power first, then shivs benefit every future turn
         turn=1,
     ))
 
@@ -866,7 +886,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[0],
-        bad_actions=[1],
+        bad_actions=[1, 2],
     ))
 
     scenarios.append(Scenario(
@@ -887,7 +907,8 @@ def build_scenarios() -> list[Scenario]:
                        target_idx=1, label="Shiv 25hp enemy"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[0],       # kill the 3hp enemy to remove its damage
+        best_actions=[0],
+        bad_actions=[1, 2],       # kill the 3hp enemy to remove its damage
     ))
 
     scenarios.append(Scenario(
@@ -902,7 +923,8 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("play_card", defend(), label="Defend (block 5 of 8)"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[0],       # 12 dmg vs 20hp enemy, HP is comfortable at 50
+        best_actions=[0],
+        bad_actions=[1, 2],       # 12 dmg vs 20hp enemy, HP is comfortable at 50
     ))
 
     # ===== SLY MECHANICS =====
@@ -919,7 +941,8 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("choose_card", tactician(), label="discard Tactician (Sly -> energy)"),
             ActionSpec("choose_card", defend(), label="discard Defend"),
         ],
-        best_actions=[1],       # Tactician has Sly — discarding it triggers free energy
+        best_actions=[1],
+        bad_actions=[0, 2],       # Tactician has Sly — discarding it triggers free energy
         pending_choice={"choice_type": "discard_from_hand"},
     ))
 
@@ -935,7 +958,8 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("choose_card", reflex(), label="discard Reflex (Sly -> draw 3)"),
             ActionSpec("choose_card", defend(), label="discard Defend"),
         ],
-        best_actions=[1],       # Reflex Sly trigger = draw 3 cards for free
+        best_actions=[1],
+        bad_actions=[0, 2],       # Reflex Sly trigger = draw 3 cards for free
         pending_choice={"choice_type": "discard_from_hand"},
     ))
 
@@ -953,7 +977,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("choose_card", strike(), label="discard Strike"),
         ],
         best_actions=[0],       # Sly discard gives free energy, better than just removing junk
-        bad_actions=[2, 3],     # don't discard useful cards
+        bad_actions=[1, 2, 3],     # don't discard useful cards
         pending_choice={"choice_type": "discard_from_hand"},
     ))
 
@@ -969,7 +993,8 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("play_card", defend(), label="Defend (5 block)"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[0],       # Acrobatics draws 3 AND creates a discard opportunity for Tactician
+        best_actions=[0],
+        bad_actions=[1, 2],       # Acrobatics draws 3 AND creates a discard opportunity for Tactician
     ))
 
     scenarios.append(Scenario(
@@ -984,7 +1009,8 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("play_card", defend(), label="Defend (5 block)"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[0],       # more block than Defend AND Sly energy from discarding Tactician
+        best_actions=[0],
+        bad_actions=[1, 2],       # more block than Defend AND Sly energy from discarding Tactician
     ))
 
     # ===== DEBUFF APPLICATION =====
@@ -1002,7 +1028,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[0],       # Weak saves 6 damage (3 hits × 2 reduction) vs Defend saves 5
-        bad_actions=[2],
+        bad_actions=[1, 2],
     ))
 
     scenarios.append(Scenario(
@@ -1018,7 +1044,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[0],       # kill the enemy, remove the damage source entirely
-        bad_actions=[2],
+        bad_actions=[1, 2],
     ))
 
     # ===== DRAW VALUE =====
@@ -1036,7 +1062,8 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("play_card", strike(), target_idx=0, label="Strike"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[0],       # same block as Defend plus 2 card draw = strictly better
+        best_actions=[0],
+        bad_actions=[1, 2, 3],       # same block as Defend plus 2 card draw = strictly better
     ))
 
     scenarios.append(Scenario(
@@ -1053,7 +1080,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[0],       # free card draw and energy, always play first
-        bad_actions=[3],
+        bad_actions=[1, 2, 3],
     ))
 
     # ===== MULTI-ENEMY =====
@@ -1071,7 +1098,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[0],       # AoE deals far more total damage with 3 targets
-        bad_actions=[2],
+        bad_actions=[1, 2],
     ))
 
     scenarios.append(Scenario(
@@ -1087,7 +1114,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[0],       # kills 3 enemies, removes 15 incoming damage
-        bad_actions=[2],
+        bad_actions=[1, 2],
     ))
 
     # ===== COMBO SEQUENCING =====
@@ -1106,7 +1133,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[0],       # Burst then Blade Dance = 6 shivs, massive damage
-        bad_actions=[3],
+        bad_actions=[1, 2, 3],
     ))
 
     scenarios.append(Scenario(
@@ -1167,7 +1194,7 @@ def build_scenarios() -> list[Scenario]:
         # Weak this turn — you lose the damage reduction precisely when you were
         # about to cycle and also wanted more protection.
         best_actions=[0],
-        bad_actions=[1, 4],
+        bad_actions=[1, 2, 3, 4],
     ))
 
     scenarios.append(Scenario(
@@ -1183,7 +1210,8 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("play_card", defend(), label="Defend"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[0],       # power scales over combat — early play compounds
+        best_actions=[0],
+        bad_actions=[1, 2, 3],       # power scales over combat — early play compounds
         turn=1,
     ))
 
@@ -1200,7 +1228,8 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("play_card", defend(), label="Defend"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[0],       # power preserves setup across turns — compound value
+        best_actions=[0],
+        bad_actions=[1, 2, 3],       # power preserves setup across turns — compound value
         turn=1,
     ))
 
@@ -1237,7 +1266,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[0],       # 50% more damage at same cost
-        bad_actions=[1],
+        bad_actions=[1, 2],
     ))
 
     scenarios.append(Scenario(
@@ -1253,7 +1282,8 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("play_card", defend(), label="Defend"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[0],       # 15 dmg is huge, and still have energy for Defend after
+        best_actions=[0],
+        bad_actions=[1, 2, 3],       # 15 dmg is huge, and still have energy for Defend after
     ))
 
     scenarios.append(Scenario(
@@ -1268,7 +1298,8 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("play_card", strike(), target_idx=0, label="Strike (6 dmg)"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[0],       # 21 damage in one action, enemy defending so no need to block
+        best_actions=[0],
+        bad_actions=[1, 2],       # 21 damage in one action, enemy defending so no need to block
     ))
 
     scenarios.append(Scenario(
@@ -1316,7 +1347,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[0],       # more block AND generates a shiv
-        bad_actions=[1],
+        bad_actions=[1, 2],
     ))
 
     scenarios.append(Scenario(
@@ -1331,7 +1362,8 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("play_card", defend(), label="Defend (5 block, lost next turn)"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[0],       # both give 5 block but Blur's persists, huge advantage
+        best_actions=[0],
+        bad_actions=[1, 2],       # both give 5 block but Blur's persists, huge advantage
     ))
 
     scenarios.append(Scenario(
@@ -1347,7 +1379,8 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("play_card", defend(), label="Defend"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[0],       # Intangible reduces ALL damage to 1 for 2 turns, at full HP cost is fine
+        best_actions=[0],
+        bad_actions=[1, 2, 3],       # Intangible reduces ALL damage to 1 for 2 turns, at full HP cost is fine
         turn=1,
     ))
 
@@ -1366,7 +1399,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[0],       # more damage AND applies Weak reducing future incoming damage
-        bad_actions=[1],
+        bad_actions=[1, 2],
     ))
 
     scenarios.append(Scenario(
@@ -1382,7 +1415,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[0],       # reduces damage from all 3 enemies every turn, far more value than 5 block
-        bad_actions=[2],
+        bad_actions=[1, 2],
     ))
 
     scenarios.append(Scenario(
@@ -1397,7 +1430,8 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("play_card", defend(), label="Defend (5 block vs 15)"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[0],       # 3 turns of reduced damage from a 15-damage enemy saves way more than 5 block
+        best_actions=[0],
+        bad_actions=[1, 2],       # 3 turns of reduced damage from a 15-damage enemy saves way more than 5 block
     ))
 
     # ===== DRAW/CYCLE CARDS =====
@@ -1416,7 +1450,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[0],       # free cycle sees more cards, may find better options
-        bad_actions=[3],
+        bad_actions=[1, 2, 3],
     ))
 
     scenarios.append(Scenario(
@@ -1431,7 +1465,8 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("play_card", strike(), target_idx=0, label="Strike"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[0],       # Prepared creates discard opportunity for Tactician's Sly trigger
+        best_actions=[0],
+        bad_actions=[1, 2],       # Prepared creates discard opportunity for Tactician's Sly trigger
     ))
 
     scenarios.append(Scenario(
@@ -1447,7 +1482,8 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("play_card", defend(), label="Defend"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[0],       # power on turn 1 = card selection engine for rest of combat
+        best_actions=[0],
+        bad_actions=[1, 2, 3],       # power on turn 1 = card selection engine for rest of combat
         turn=1,
     ))
 
@@ -1508,7 +1544,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[0],       # Adrenaline first → play both damage cards next; Strike/Throw first → only one
-        bad_actions=[3],
+        bad_actions=[1, 2, 3],
     ))
 
     scenarios.append(Scenario(
@@ -1528,7 +1564,7 @@ def build_scenarios() -> list[Scenario]:
         # Strike is 6 dmg (barely helps), Defend is 5 block vs 15 (dies to 10 net dmg).
         # Gamble costs 0, gets fresh cards — best chance to find real answers.
         best_actions=[0],
-        bad_actions=[3],
+        bad_actions=[1, 2, 3],
     ))
 
     # ===== DISCARD SYNERGY =====
@@ -1549,7 +1585,8 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("play_card", strike(), target_idx=0, label="Strike (6 dmg, no Sly trigger)"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[0],       # Gamble triggers Tactician's Sly (+1 energy) AND cycles hand
+        best_actions=[0],
+        bad_actions=[1, 2],       # Gamble triggers Tactician's Sly (+1 energy) AND cycles hand
     ))
 
     scenarios.append(Scenario(
@@ -1564,7 +1601,8 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("play_card", strike(), target_idx=0, label="Strike (6 dmg, Slimed stuck in hand)"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[0],       # Prepared is 0-cost; discarding Slimed removes a dead card
+        best_actions=[0],
+        bad_actions=[1, 2],       # Prepared is 0-cost; discarding Slimed removes a dead card
     ))
 
     # ===== POISON JUDGMENT =====
@@ -1574,18 +1612,21 @@ def build_scenarios() -> list[Scenario]:
     scenarios.append(Scenario(
         name="dont_overstack_dying_poison",
         category="poison",
-        description="Enemy at 4 HP with 5 poison — will die to poison tick next turn. Don't add more.",
+        description="E1 at 4 HP / 5 Poison will die to the next poison tick; E2 at 30 HP has no poison. Apply Deadly Poison to E2 (productive) — don't overstack a dying enemy.",
         player={"hp": 50, "max_hp": 70, "energy": 1, "block": 0},
-        enemies=[enemy(4, 50, damage=12,
-                       powers={"Poison": 5})],
+        enemies=[
+            enemy(4, 50, damage=8, powers={"Poison": 5}),
+            enemy(30, 50, damage=8),
+        ],
         hand=[deadly_poison(), defend()],
         actions=[
-            ActionSpec("play_card", deadly_poison(), target_idx=0, label="Deadly Poison (+5 poison, overkill)"),
-            ActionSpec("play_card", defend(), label="Defend (5 block vs 12 — saves HP)"),
+            ActionSpec("play_card", deadly_poison(), target_idx=0, label="Deadly Poison on E1 (overstack, E1 dying)"),
+            ActionSpec("play_card", deadly_poison(), target_idx=1, label="Deadly Poison on E2 (productive)"),
+            ActionSpec("play_card", defend(), label="Defend (blocks E2's 8)"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[1],       # 5 poison kills 4 HP enemy; focus on surviving the 12-damage hit
-        bad_actions=[0, 2],     # more poison is waste; end turn takes 12 unblocked
+        best_actions=[1],       # poison the enemy that actually needs it; E1 dies to its own tick
+        bad_actions=[0, 2, 3],        # overstacking a dying enemy wastes the card AND misses E2
     ))
 
     # ===== SURVIVAL / TEMPO JUDGMENT =====
@@ -1603,7 +1644,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[0],       # Strike makes progress; 4 damage into 70 HP is nothing
-        bad_actions=[2],
+        bad_actions=[1, 2],
     ))
 
     scenarios.append(Scenario(
@@ -1620,7 +1661,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[0],       # 20 damage → 1 with Intangible; block is wasted energy
-        bad_actions=[1],        # Defend is strictly wasteful with Intangible up
+        bad_actions=[1, 2],        # Defend is strictly wasteful with Intangible up
     ))
 
     # ===== POWER-CONDITIONAL DECISIONS =====
@@ -1645,7 +1686,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[0],       # Double Damage amplifies the bigger base damage more
-        bad_actions=[2],
+        bad_actions=[1, 2],
     ))
 
     scenarios.append(Scenario(
@@ -1685,7 +1726,7 @@ def build_scenarios() -> list[Scenario]:
         # Under Weak, Strike barely damages; Footwork compounds block long-term.
         # Defend is OK but Footwork's permanent Dex is better value at 2 energy.
         best_actions=[0],
-        bad_actions=[3],
+        bad_actions=[1, 2, 3],
     ))
 
     scenarios.append(Scenario(
@@ -1703,7 +1744,8 @@ def build_scenarios() -> list[Scenario]:
                        label="Deadly Poison (+5 poison, redundant with Fumes + no immediate impact)"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[0],       # Fumes stacks poison automatically; spend energy on damage
+        best_actions=[0],
+        bad_actions=[1, 2],       # Fumes stacks poison automatically; spend energy on damage
     ))
 
     scenarios.append(Scenario(
@@ -1721,7 +1763,8 @@ def build_scenarios() -> list[Scenario]:
                        label="Strike (6 dmg, no Accuracy benefit — Strike isn't a Shiv)"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[0],       # Accuracy triples Shiv value; ignoring it wastes the power
+        best_actions=[0],
+        bad_actions=[1, 2],       # Accuracy triples Shiv value; ignoring it wastes the power
     ))
 
     # ===== RELIC-AWARE DECISIONS =====
@@ -1741,7 +1784,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[0],       # Strike — Orichalcum gives 6 block for free
-        bad_actions=[1],        # Defend wastes energy and disables Orichalcum
+        bad_actions=[1, 2],        # Defend wastes energy and disables Orichalcum
         relics={"ORICHALCUM"},
     ))
 
@@ -1759,7 +1802,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[1],       # Must Defend — no Orichalcum, can't tank 6
-        bad_actions=[2],        # End turn = take 6 to face at 8 HP
+        bad_actions=[0, 2],        # End turn = take 6 to face at 8 HP
     ))
 
     # Anchor: +10 block at start of combat.
@@ -1777,7 +1820,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[0],       # Strike — already have 10 block from Anchor
-        bad_actions=[1],        # Defend wastes the Anchor block
+        bad_actions=[1, 2],        # Defend wastes the Anchor block
         relics={"ANCHOR"},
         turn=1,
     ))
@@ -1799,7 +1842,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[0],       # With block already high, squeeze out last strike
-        bad_actions=[1],        # More block is wasted (already at 15 vs 10 damage)
+        bad_actions=[1, 2],        # More block is wasted (already at 15 vs 10 damage)
         relics={"VELVET_CHOKER"},
     ))
 
@@ -1817,7 +1860,8 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("play_card", defend(), label="Defend"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[0],       # Strike — working toward Kunai trigger
+        best_actions=[0],
+        bad_actions=[1, 2],       # Strike — working toward Kunai trigger
         relics={"KUNAI"},
     ))
 
@@ -1836,7 +1880,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[0],       # Use the extra energy from Lantern
-        bad_actions=[2],        # Don't waste Lantern energy
+        bad_actions=[1, 2],        # Don't waste Lantern energy
         relics={"LANTERN"},
         turn=1,
     ))
@@ -1856,7 +1900,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[0],       # Strike is lethal (6 dmg vs 8 HP) — heal 6 after
-        bad_actions=[2],        # End turn = take 12 damage
+        bad_actions=[1, 2],        # End turn = take 12 damage
         relics={"BURNING_BLOOD"},
     ))
 
@@ -1906,7 +1950,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[0],       # hand is low-value; Acrobatics trades 1 weak card for 3 fresh
-        bad_actions=[2],        # ending turn with energy and a draw card is wasted tempo
+        bad_actions=[1, 2],        # ending turn with energy and a draw card is wasted tempo
     ))
 
     scenarios.append(Scenario(
@@ -1923,7 +1967,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[0],       # 0-cost + free energy + new cards: play first to maximize turn
-        bad_actions=[3],        # ending turn wastes 3 energy plus Adrenaline value
+        bad_actions=[1, 2, 3],        # ending turn wastes 3 energy plus Adrenaline value
     ))
 
     scenarios.append(Scenario(
@@ -1938,7 +1982,8 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("play_card", defend(), label="Defend (block the 8 dmg)"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[0],       # 3 Slimed in hand is a dead turn; cycling them is high-value
+        best_actions=[0],
+        bad_actions=[1, 2],       # 3 Slimed in hand is a dead turn; cycling them is high-value
     ))
 
     scenarios.append(Scenario(
@@ -1973,7 +2018,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[0],       # Backflip == Defend in block, plus 2 card draw
-        bad_actions=[3],        # ending turn unblocked = eat 11 damage
+        bad_actions=[1, 2, 3],        # ending turn unblocked = eat 11 damage
     ))
 
     scenarios.append(Scenario(
@@ -1990,7 +2035,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[0],       # 0-cost draw chain — playing first lets drawn card use energy
-        bad_actions=[3],
+        bad_actions=[1, 2, 3],
     ))
 
     # ----- DRAW_CYCLE (expanded) -----
@@ -2008,7 +2053,8 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("play_card", defend(), label="Defend"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[0],       # Prepared cycles the dead Wound for a fresh card; effectively free
+        best_actions=[0],
+        bad_actions=[1, 2, 3],       # Prepared cycles the dead Wound for a fresh card; effectively free
         pending_choice=None,    # The forced-discard choice will pop after Prepared resolves
     ))
 
@@ -2027,7 +2073,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[1],       # play the Power; Gamble first would discard it instead
-        bad_actions=[0],        # Gamble trashes a critical card
+        bad_actions=[0, 2, 3, 4],        # Gamble trashes a critical card
     ))
 
     scenarios.append(Scenario(
@@ -2044,27 +2090,10 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[1],       # just kill the enemy; the rest of the hand doesn't matter
-        bad_actions=[0, 3],     # Gamble away lethal or end turn eating 12 dmg at 40 HP
+        bad_actions=[0, 2, 3],     # Gamble away lethal or end turn eating 12 dmg at 40 HP
     ))
 
     # ----- COMBO (expanded) -----
-
-    scenarios.append(Scenario(
-        name="accuracy_before_blade_dance",
-        category="combo",
-        description="Accuracy (Power: shivs +4 dmg) — play BEFORE Blade Dance so the 3 shivs each hit harder",
-        player={"hp": 55, "max_hp": 70, "energy": 2, "block": 0},
-        enemies=[enemy(40, 60, damage=8)],
-        hand=[accuracy(), blade_dance(), defend()],
-        actions=[
-            ActionSpec("play_card", accuracy(), label="Accuracy (Power — shivs +4)"),
-            ActionSpec("play_card", blade_dance(), label="Blade Dance FIRST (shivs unboosted)"),
-            ActionSpec("play_card", defend(), label="Defend"),
-            ActionSpec("end_turn", label="End turn"),
-        ],
-        best_actions=[0],       # Accuracy first means the 3 shivs this turn all benefit
-        bad_actions=[1, 3],     # Blade Dance first gets no Accuracy bonus; end turn wastes combo
-    ))
 
     scenarios.append(Scenario(
         name="expose_before_predator",
@@ -2080,7 +2109,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[0],       # Expose first means Predator's 15 becomes ~22 dmg
-        bad_actions=[3],        # ending turn wastes 3 energy combo
+        bad_actions=[1, 2, 3],        # ending turn wastes 3 energy combo
     ))
 
     scenarios.append(Scenario(
@@ -2096,7 +2125,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[0],       # Footwork first → each subsequent Defend gains +2 block
-        bad_actions=[2],        # ending turn at 40 HP vs 14 dmg is risky without block
+        bad_actions=[1, 2],        # ending turn at 40 HP vs 14 dmg is risky without block
     ))
 
     scenarios.append(Scenario(
@@ -2114,7 +2143,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[1, 2],    # play damage; Burst stacks are already live and only consumed on Skills
-        bad_actions=[3],        # ending turn leaves 15 potential damage undealt
+        bad_actions=[0, 3],        # ending turn leaves 15 potential damage undealt
     ))
 
     scenarios.append(Scenario(
@@ -2131,7 +2160,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[1],       # just kill the enemy; power for future turns wasted
-        bad_actions=[0, 3],     # power is wasted on a near-dead enemy; end turn takes 10 dmg
+        bad_actions=[0, 2, 3],     # power is wasted on a near-dead enemy; end turn takes 10 dmg
     ))
 
     # ----- SYNERGY (expanded) -----
@@ -2148,7 +2177,8 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("play_card", strike(), target_idx=0, label="Strike (6 dmg one-shot)"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[0],       # 12 poison * 2 ticks > Strike's 6
+        best_actions=[0],
+        bad_actions=[1, 2],       # 12 poison * 2 ticks > Strike's 6
     ))
 
     scenarios.append(Scenario(
@@ -2165,7 +2195,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[1, 2],    # just finish the damage this turn; Fumes is for long fights
-        bad_actions=[0],        # Fumes wasted — compound value needs many turns
+        bad_actions=[0, 3],        # Fumes wasted — compound value needs many turns
     ))
 
     scenarios.append(Scenario(
@@ -2180,7 +2210,8 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("play_card", strike(), target_idx=0, label="Strike (6 dmg, no debuff)"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[0],       # 7 dmg slightly better than 6, AND Weak reduces next 20 → 15
+        best_actions=[0],
+        bad_actions=[1, 2],       # 7 dmg slightly better than 6, AND Weak reduces next 20 → 15
     ))
 
     scenarios.append(Scenario(
@@ -2197,7 +2228,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[0],       # 36 incoming dmg → 2 dmg is life-saving; Defend alone isn't enough
-        bad_actions=[3],        # ending at 35 HP vs 36 damage = death
+        bad_actions=[1, 2, 3],        # ending at 35 HP vs 36 damage = death
     ))
 
     # ----- DAMAGE (expanded) -----
@@ -2215,7 +2246,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[0],       # 1 more dmg AND a defensive debuff
-        bad_actions=[1],
+        bad_actions=[1, 2],
     ))
 
     scenarios.append(Scenario(
@@ -2248,7 +2279,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[0],       # Predator + Defend = 15 dmg + 5 block survives; 3x Strike = 18 dmg but 12 damage taken
-        bad_actions=[3],        # ending turn at 35 HP vs 12 dmg without block eats into HP unnecessarily
+        bad_actions=[1, 2, 3],        # ending turn at 35 HP vs 12 dmg without block eats into HP unnecessarily
     ))
 
     scenarios.append(Scenario(
@@ -2265,7 +2296,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[0],       # 21 dmg in one card beats splitting across 3 cheap cards (18 dmg, still dmg taken)
-        bad_actions=[3],
+        bad_actions=[1, 2, 3],
     ))
 
     # ----- DISCARD (expanded) -----
@@ -2301,7 +2332,8 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("choose_card", tactician(), label="discard Tactician (+1 energy)"),
             ActionSpec("choose_card", neutralize(), label="discard Neutralize"),
         ],
-        best_actions=[2],       # Tactician's Sly trigger is +1 energy this turn
+        best_actions=[2],
+        bad_actions=[0, 1, 3],       # Tactician's Sly trigger is +1 energy this turn
         pending_choice={"choice_type": "discard_from_hand"},
     ))
 
@@ -2337,7 +2369,8 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("choose_card", defend(), label="discard Defend (already blocked)"),
             ActionSpec("choose_card", neutralize(), label="discard Neutralize"),
         ],
-        best_actions=[2],       # 15 block already exceeds 10 damage; Defend is the dead card
+        best_actions=[2],
+        bad_actions=[0, 1, 3],       # 15 block already exceeds 10 damage; Defend is the dead card
         pending_choice={"choice_type": "discard_from_hand"},
     ))
 
@@ -2374,7 +2407,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[1, 2],    # Either attack first is fine — the two-card combo (DT + Strike) totals 15 vs Skewer's 14
-        bad_actions=[0, 4],     # Skewer is 1 dmg short; end turn wastes energy
+        bad_actions=[0, 3, 4],     # Skewer is 1 dmg short; end turn wastes energy
     ))
 
     scenarios.append(Scenario(
@@ -2392,7 +2425,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[1, 2],    # The DT+Predator combo totals 24 dmg vs Skewer's 21
-        bad_actions=[0, 4],     # Skewer is 3 dmg short; end turn wastes 3 energy
+        bad_actions=[0, 3, 4],     # Skewer is 3 dmg short; end turn wastes 3 energy
     ))
 
     scenarios.append(Scenario(
@@ -2409,7 +2442,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[0],       # Vulnerable multiplier gives Predator the edge by exactly 1 dmg
-        bad_actions=[3],
+        bad_actions=[1, 2, 3],
     ))
 
     scenarios.append(Scenario(
@@ -2427,7 +2460,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[0, 1, 2], # Predator alone OR DT-then-Strike are both lethal paths
-        bad_actions=[4],        # ending turn leaves enemy alive to deal 12 dmg
+        bad_actions=[3, 4],        # ending turn leaves enemy alive to deal 12 dmg
     ))
 
     scenarios.append(Scenario(
@@ -2444,7 +2477,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[0, 1],    # Either opening hits 21 total damage across 3 energy
-        bad_actions=[3],        # end turn wastes full hand
+        bad_actions=[2, 3],        # end turn wastes full hand
     ))
 
     scenarios.append(Scenario(
@@ -2462,7 +2495,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[0, 1],    # Either lethal play wins; SP's 7-dmg is enough and slightly cleaner than DT's overkill
-        bad_actions=[2, 4],     # non-lethal plays leave 14 incoming at 45 HP
+        bad_actions=[2, 3, 4],     # non-lethal plays leave 14 incoming at 45 HP
     ))
 
     # ----- BLOCK: margin tests -----
@@ -2482,7 +2515,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[0],       # same block as Defend plus 2 cards; exhaust-pile reshuffle takes care of small pile
-        bad_actions=[3],
+        bad_actions=[1, 2, 3],
     ))
 
     scenarios.append(Scenario(
@@ -2553,7 +2586,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[0],       # 21 dmg vs 9 dmg — ordering dominates
-        bad_actions=[1, 3],
+        bad_actions=[1, 2, 3],
     ))
 
     scenarios.append(Scenario(
@@ -2570,24 +2603,24 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[0],       # Expose first → Predator deals 22, Strike deals 9 = 31 total vs 21 raw or 25 if only 1 buffered
-        bad_actions=[3],
+        bad_actions=[1, 2, 3],
     ))
 
     scenarios.append(Scenario(
-        name="combo_burst_before_acrobatics_skill_double",
+        name="combo_burst_before_survivor_skill_double",
         category="combo",
-        description="Burst doubles next Skill — play Burst BEFORE Acrobatics so it draws 6 instead of 3",
-        player={"hp": 60, "max_hp": 70, "energy": 2, "block": 0},
-        enemies=[enemy(45, 60, damage=8)],
-        hand=[burst(), acrobatics(), strike()],
+        description="Burst doubles next Skill — play Burst BEFORE Survivor so it gives 16 block + 2 discards (vs 8 block + 1 discard). At 40/70 HP vs 20 incoming, the 8 HP saved beats the 6 dmg forgone from Strike.",
+        player={"hp": 40, "max_hp": 70, "energy": 2, "block": 0},
+        enemies=[enemy(40, 60, damage=20)],
+        hand=[burst(), survivor(), strike()],
         actions=[
             ActionSpec("play_card", burst(), label="Burst FIRST — next Skill doubled"),
-            ActionSpec("play_card", acrobatics(), label="Acrobatics FIRST (3 draw, Burst wasted)"),
-            ActionSpec("play_card", strike(), target_idx=0, label="Strike"),
-            ActionSpec("end_turn", label="End turn"),
+            ActionSpec("play_card", survivor(), label="Survivor FIRST (8 block + Strike for 6 dmg; takes 12)"),
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike FIRST (6 dmg + Survivor 8 block; Burst stranded)"),
+            ActionSpec("end_turn", label="End turn (take full 20)"),
         ],
-        best_actions=[0],       # Burst before Acrobatics doubles the draw — massive tempo
-        bad_actions=[1, 3],     # Acrobatics first leaves Burst stale; end turn stranded
+        best_actions=[0],       # Burst+Survivor(doubled) = 16 block + 2 discards → take 4 damage
+        bad_actions=[1, 2, 3],        # end turn takes 20 unblocked
     ))
 
     # ----- SYNERGY: margin-sensitive interactions -----
@@ -2605,7 +2638,7 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("end_turn", label="End turn"),
         ],
         best_actions=[1],       # 6 immediate > 2 deferred (and the 2 deferred might not matter if fight ends)
-        bad_actions=[0],        # Accelerant needs existing poison stacks to be worth it
+        bad_actions=[0, 2],        # Accelerant needs existing poison stacks to be worth it
     ))
 
     scenarios.append(Scenario(
@@ -2620,7 +2653,8 @@ def build_scenarios() -> list[Scenario]:
             ActionSpec("play_card", strike(), target_idx=0, label="Strike (6 dmg now)"),
             ActionSpec("end_turn", label="End turn"),
         ],
-        best_actions=[0],       # doubled poison ticks compound over remaining turns → more than 6 total
+        best_actions=[0],
+        bad_actions=[1, 2],       # doubled poison ticks compound over remaining turns → more than 6 total
     ))
 
     # ----- DISCARD: near-equal trash decisions -----
