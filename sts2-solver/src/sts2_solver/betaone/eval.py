@@ -3267,6 +3267,212 @@ def run_value_eval(checkpoint_path: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# MCTS eval — search/policy-head agreement diagnostic
+# ---------------------------------------------------------------------------
+#
+# For every P-Eval scenario, compare policy-head pick vs MCTS-1000 pick and
+# classify into CLEAN / ECHO / FIXED / BROKE / MIXED. The per-gen version
+# of this runs during training (eval_every gated) to track rescue-rate over
+# time — the primary value-head-bias signal. Logic mirrors
+# scripts/combat_eval_mcts.py; kept in sync.
+
+
+def _scenario_to_state_json(sc: "Scenario") -> str:
+    """Serialize a Scenario into CombatState JSON for betaone_mcts_search FFI.
+
+    Draw/discard/exhaust piles are padded with dummy Strikes since MCTS
+    may simulate end-of-turn transitions and need pile contents.
+    """
+    dummy = lookup_card("STRIKE_SILENT")
+    pending = None
+    if sc.pending_choice is not None:
+        pending = {
+            "choice_type": sc.pending_choice.get("choice_type", "discard_from_hand"),
+            "num_choices": sc.pending_choice.get("num_choices", 1),
+            "source_card_id": sc.pending_choice.get("source_card_id", ""),
+            "valid_indices": sc.pending_choice.get("valid_indices"),
+            "chosen_so_far": sc.pending_choice.get("chosen_so_far", []),
+        }
+    player = {
+        "hp": sc.player.get("hp", 70),
+        "max_hp": sc.player.get("max_hp", 70),
+        "block": sc.player.get("block", 0),
+        "energy": sc.player.get("energy", 3),
+        "max_energy": sc.player.get("max_energy", 3),
+        "powers": sc.player.get("powers", {}),
+        "hand": list(sc.hand),
+        "draw_pile": [dict(dummy) for _ in range(sc.draw_size)],
+        "discard_pile": [dict(dummy) for _ in range(sc.discard_size)],
+        "exhaust_pile": [dict(dummy) for _ in range(sc.exhaust_size)],
+        "potions": [],
+    }
+    enemies = []
+    for i, e in enumerate(sc.enemies):
+        enemies.append({
+            "id": e.get("id", f"TEST_ENEMY_{i}"),
+            "name": e.get("name", "Test"),
+            "hp": e.get("hp", 30),
+            "max_hp": e.get("max_hp", e.get("hp", 30)),
+            "block": e.get("block", 0),
+            "powers": e.get("powers", {}),
+            "intent_type": e.get("intent_type", "Attack"),
+            "intent_damage": e.get("intent_damage", 10),
+            "intent_hits": e.get("intent_hits", 1),
+        })
+    state = {
+        "player": player, "enemies": enemies, "turn": sc.turn,
+        "cards_played_this_turn": 0, "attacks_played_this_turn": 0,
+        "cards_drawn_this_turn": 0, "discards_this_turn": 0, "last_x_cost": 0,
+        "relics": list(sc.relics), "floor": 1, "gold": 0,
+        "pending_choice": pending, "act_id": "", "boss_id": "", "map_path": [],
+    }
+    return json.dumps(state)
+
+
+def _match_mcts_to_scenario(mcts_result: dict, sc: "Scenario") -> int | None:
+    """Map MCTS's chosen action back to a scenario.actions index."""
+    a_type = mcts_result.get("action_type")
+    card_idx = mcts_result.get("card_idx")
+    target = mcts_result.get("target_idx")
+    choice = mcts_result.get("choice_idx")
+    picked_card_id = None
+    if card_idx is not None and card_idx < len(sc.hand):
+        picked_card_id = sc.hand[card_idx].get("id", "")
+    picked_choice_id = None
+    if choice is not None and choice < len(sc.hand):
+        picked_choice_id = sc.hand[choice].get("id", "")
+    for i, a in enumerate(sc.actions):
+        if a.action_type != a_type:
+            continue
+        if a_type == "end_turn":
+            return i
+        if a_type == "play_card" and a.card is not None:
+            if a.card.get("id", "") == picked_card_id and a.target_idx == target:
+                return i
+        if a_type == "choose_card" and a.card is not None:
+            if a.card.get("id", "") == picked_choice_id:
+                return i
+    return None
+
+
+def run_mcts_eval(
+    checkpoint_path: str, num_sims: int = 1000, seed: int = 42,
+    onnx_dir: str | None = None,
+) -> dict:
+    """Run combat_eval_mcts diagnostic and return CLEAN/ECHO/FIXED/BROKE/MIXED counts.
+
+    Cheap (~3-5s at 1000 sims × 128 scenarios) so training can call it every
+    gen. Rescue rate = FIXED / (FIXED + ECHO) tracks how much corrective
+    signal the value head provides at MCTS leaves; core value-head-bias metric.
+
+    onnx_dir: override the ONNX export directory. Default reuses a shared
+    temp dir which is fine for training's one-call-per-gen usage. Backfill
+    scripts that call this in a tight loop should pass a unique per-call dir
+    to avoid Windows file-lock contention from retained ort::Session handles.
+    """
+    import tempfile
+    import sts2_engine
+    from .network import network_kwargs_from_meta, export_onnx
+
+    card_vocab = _load_card_vocab(checkpoint_path)
+    vocab_json = json.dumps(card_vocab)
+
+    ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    kwargs = network_kwargs_from_meta(ckpt.get("arch_meta"))
+    net = BetaOneNetwork(num_cards=len(card_vocab), **kwargs)
+    if "model_state_dict" in ckpt:
+        try:
+            net.load_state_dict(ckpt["model_state_dict"])
+        except RuntimeError:
+            _warm_load_state_dict(net, ckpt["model_state_dict"])
+    net.eval()
+    gen = ckpt.get("gen", 0)
+
+    if onnx_dir is None:
+        onnx_dir = str(Path(tempfile.gettempdir()) / "mcts_eval_onnx")
+    Path(onnx_dir).mkdir(parents=True, exist_ok=True)
+    onnx_path = export_onnx(net, str(onnx_dir))
+
+    scenarios = build_scenarios()
+    tally = {"CLEAN": 0, "ECHO": 0, "FIXED": 0, "BROKE": 0, "MIXED": 0, "NOMATCH": 0}
+
+    for sc in scenarios:
+        # Policy pick
+        sv = encode_state(sc)
+        st = torch.tensor([sv], dtype=torch.float32)
+        af = torch.zeros(1, MAX_ACTIONS, ACTION_DIM)
+        am = torch.ones(1, MAX_ACTIONS, dtype=torch.bool)
+        hi = torch.zeros(1, MAX_HAND, dtype=torch.long)
+        ai = torch.zeros(1, MAX_ACTIONS, dtype=torch.long)
+        for i, c in enumerate(sc.hand[:MAX_HAND]):
+            cid = c.get("id", "") + ("+" if c.get("upgraded") else "")
+            hi[0, i] = card_vocab.get(cid, 0)
+        for i, a in enumerate(sc.actions[:MAX_ACTIONS]):
+            for j, v in enumerate(encode_action(a, sc.enemies)):
+                af[0, i, j] = v
+            am[0, i] = False
+            if a.card is not None:
+                cid = a.card.get("id", "") + ("+" if a.card.get("upgraded") else "")
+                ai[0, i] = card_vocab.get(cid, 0)
+        with torch.no_grad():
+            out = net(st, af, am, hi, ai)
+        logits = out[0][0].numpy()
+        n = len(sc.actions)
+        policy_idx = int(logits[:n].argmax())
+
+        # MCTS pick
+        try:
+            mcts_raw = sts2_engine.betaone_mcts_search(
+                state_json=_scenario_to_state_json(sc),
+                onnx_path=onnx_path, card_vocab_json=vocab_json,
+                num_sims=num_sims, temperature=0.0, seed=seed, gen_id=0,
+            )
+            mcts_idx = _match_mcts_to_scenario(mcts_raw, sc)
+        except Exception:
+            mcts_idx = None
+
+        # Classify
+        p_ok = policy_idx in sc.best_actions or policy_idx in getattr(sc, "acceptable_idx", [])
+        p_bad = policy_idx in sc.bad_actions
+        if mcts_idx is None:
+            tally["NOMATCH"] += 1
+            continue
+        m_ok = mcts_idx in sc.best_actions or mcts_idx in getattr(sc, "acceptable_idx", [])
+        m_bad = mcts_idx in sc.bad_actions
+        if p_bad and m_bad:
+            tally["ECHO"] += 1
+        elif p_bad and m_ok:
+            tally["FIXED"] += 1
+        elif p_ok and m_bad:
+            tally["BROKE"] += 1
+        elif p_ok and m_ok:
+            tally["CLEAN"] += 1
+        else:
+            tally["MIXED"] += 1
+
+    total = sum(tally.values())
+    # Net search contribution: (FIXED - BROKE) / (FIXED + ECHO + BROKE).
+    # Captures whether MCTS helps or hurts on scenarios where policy and MCTS
+    # disagree. Range [-1, 1]. Positive = value head gives corrective signal;
+    # negative = value head misleads search more than it helps; zero = neutral
+    # or search doesn't disagree with policy. Replaces the naive rescue rate
+    # FIXED / (FIXED + ECHO) which maxed at 100% when ECHO=0 regardless of
+    # how many BROKE cases existed — a misleading "perfect" reading when the
+    # policy has stopped picking decisively-wrong answers but hasn't gotten
+    # more decisive on right answers either.
+    disagree = tally["FIXED"] + tally["ECHO"] + tally["BROKE"]
+    contribution = (
+        (tally["FIXED"] - tally["BROKE"]) / disagree if disagree > 0 else 0.0
+    )
+    return {
+        "gen": gen,
+        "total": total,
+        **{k.lower(): v for k, v in tally.items()},
+        "rescue_rate": contribution,
+    }
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 

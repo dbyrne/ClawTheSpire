@@ -1,0 +1,31 @@
+encounter_set_id: es-7bc962d6c86f
+name: uber-decks-v1
+encounter_count: 795
+avg_hp: 36.6
+source:
+  description: |
+    Union of lean-decks-v1 and draw-synergy-v1 plus generated gap-filler decks
+    targeting all cards referenced in P-Eval / V-Eval / H-Eval scenarios that
+    were under-covered in the base sets. Calibrated to ~50% WR against
+    reanalyse-v3 g88 via MCTS-50 binary search on HP. All eval-referenced
+    cards now represented at >=10% deck coverage (lean-decks had DODGE_AND_ROLL
+    at 0.5%, WRAITH_FORM at 4%, OMNISLICE at 15%).
+  based_on: lean-decks-v1 + draw-synergy-v1
+  calibrated_with:
+    checkpoint: reanalyse-v3 g88
+    method: betaone_mcts_selfplay sims=50 combats=32 target_wr=0.50
+  gap_filler_specs:
+    - SURVIVOR + DODGE_AND_ROLL (80 attempts)
+    - WRAITH_FORM solo (40)
+    - EXPOSE solo (40)
+    - PIERCING_WAIL + MALAISE (40)
+    - OMNISLICE solo (80)
+    - PREDATOR solo (100)
+    - BURST + ACROBATICS (40, combo-pair)
+    - NEUTRALIZE + CALCULATED_GAMBLE (40, combo-pair)
+    - BURST + BLADE_DANCE (40, combo-pair)
+    - FINISHER + ACCURACY (40, combo-pair)
+    - GRAND_FINALE + FINISHER (40, combo-pair)
+    - ESCAPE_PLAN + BLUR (40, combo-pair)
+    - DODGE_AND_ROLL solo topup (80)
+    - DAGGER_SPRAY solo topup (80)
