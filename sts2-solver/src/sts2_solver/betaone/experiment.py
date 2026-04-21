@@ -425,9 +425,11 @@ MCTS_DEFAULTS = {
     "adv_coef": 0.5,
     # actionhead-v1: lambda for MCTS UCB additive A-term (option β).
     "lambda_adv": 0.5,
-    # actionhead-v1: warmup window. A-head is trained from gen 1 but only
-    # fed to MCTS UCB starting at this gen. Avoids random-init noise.
-    "adv_use_min_gen": 5,
+    # actionhead-v1: warmup window for MCTS UCB use of A. Default 1 = no
+    # warmup (A used from gen 1). Increase if random-init A noise becomes
+    # an issue — first attempt showed A trains fast enough that warmup is
+    # unnecessary.
+    "adv_use_min_gen": 1,
 }
 
 

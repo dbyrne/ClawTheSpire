@@ -599,10 +599,12 @@ def train(
         combat_offset = 0
         seed_idx = 0
 
-        # actionhead-v1 warmup: gate UCB's use of A until the head has had a
-        # few gens of training. A is still trained from gen 1 (the auxiliary
-        # loss runs regardless), so by adv_use_min_gen its weights have
-        # settled on real targets instead of random init.
+        # actionhead-v1: A is trained AND used by MCTS from gen 1. We
+        # initially gated this behind `adv_use_min_gen` thinking random-init A
+        # would perturb early MCTS, but gen-1 telemetry showed adv_pred_mag
+        # was 81% of target after a single training step — A trains fast
+        # enough that the warmup is overkill. Keeping `adv_use_min_gen` in
+        # the API for future tuning; default 1 = no warmup.
         effective_lambda_adv = lambda_adv if gen >= adv_use_min_gen else 0.0
 
         for b_enc, b_dks, b_rels, b_hp, b_count in batches:
