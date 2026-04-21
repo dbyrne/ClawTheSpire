@@ -93,6 +93,8 @@ def network_kwargs_from_meta(arch_meta: dict | None) -> dict:
         "trunk_hidden": meta.get("trunk_hidden", HIDDEN_DIM),
         "policy_head_type": meta.get("policy_head_type", POLICY_HEAD_TYPE_DEFAULT),
         "policy_mlp_hidden": meta.get("policy_mlp_hidden", POLICY_MLP_HIDDEN_DEFAULT),
+        "use_spr": meta.get("use_spr", False),
+        "spr_hidden": meta.get("spr_hidden", 64),
     }
 
 
@@ -108,6 +110,8 @@ def network_stats(
     trunk_hidden: int | None = None,
     policy_head_type: str | None = None,
     policy_mlp_hidden: int | None = None,
+    use_spr: bool = False,
+    spr_hidden: int | None = None,
 ) -> dict:
     """Return architecture stats: param count, layer shapes, input/output dims."""
     net = BetaOneNetwork(
@@ -117,6 +121,8 @@ def network_stats(
         trunk_hidden=trunk_hidden,
         policy_head_type=policy_head_type,
         policy_mlp_hidden=policy_mlp_hidden,
+        use_spr=use_spr,
+        spr_hidden=spr_hidden,
     )
     layers = {}
     for name, param in net.named_parameters():
@@ -132,8 +138,36 @@ def network_stats(
         "value_head_layers": net.value_head_layers,
         "policy_head_type": net.policy_head_type,
         "policy_mlp_hidden": net.policy_mlp_hidden,
+        "use_spr": net.use_spr,
+        "spr_hidden": net.spr_hidden,
         "layers": layers,
     }
+
+
+SPR_HIDDEN_DEFAULT = 64  # Hidden dim for DynamicsHead (SPR auxiliary)
+
+
+class DynamicsHead(nn.Module):
+    """Self-Predictive Representation head.
+
+    Given current trunk features h and the MCTS policy distribution π, predict
+    the trunk features of the next state: ĥ' ≈ trunk(s').
+
+    Used at training time only — forces the trunk to encode planning-aware
+    features. Output is compared against stop_gradient(trunk(s')) from actual
+    sim transitions. Not used at inference.
+    """
+
+    def __init__(self, trunk_hidden: int, n_actions: int, spr_hidden: int = SPR_HIDDEN_DEFAULT):
+        super().__init__()
+        self.fc1 = nn.Linear(trunk_hidden + n_actions, spr_hidden)
+        self.fc2 = nn.Linear(spr_hidden, trunk_hidden)
+
+    def forward(self, h: torch.Tensor, policy: torch.Tensor) -> torch.Tensor:
+        # h: (B, trunk_hidden), policy: (B, MAX_ACTIONS)
+        x = torch.cat([h, policy], dim=-1)
+        x = F.relu(self.fc1(x))
+        return self.fc2(x)
 
 
 class BetaOneNetwork(nn.Module):
@@ -145,6 +179,8 @@ class BetaOneNetwork(nn.Module):
         trunk_hidden: int | None = None,
         policy_head_type: str | None = None,
         policy_mlp_hidden: int | None = None,
+        use_spr: bool = False,
+        spr_hidden: int | None = None,
     ):
         super().__init__()
 
@@ -163,6 +199,8 @@ class BetaOneNetwork(nn.Module):
         self.policy_mlp_hidden = (
             policy_mlp_hidden if policy_mlp_hidden is not None else POLICY_MLP_HIDDEN_DEFAULT
         )
+        self.use_spr = use_spr
+        self.spr_hidden = spr_hidden if spr_hidden is not None else SPR_HIDDEN_DEFAULT
 
         # Learned card embedding (shared between hand and actions)
         self.card_embed = nn.Embedding(num_cards, CARD_EMBED_DIM, padding_idx=0)
@@ -198,6 +236,16 @@ class BetaOneNetwork(nn.Module):
         self.value_head = self._build_value_head(
             self.value_head_layers, self.trunk_hidden
         )
+
+        # SPR auxiliary dynamics head (training-time only).
+        if self.use_spr:
+            self.dynamics_head = DynamicsHead(
+                trunk_hidden=self.trunk_hidden,
+                n_actions=MAX_ACTIONS,
+                spr_hidden=self.spr_hidden,
+            )
+        else:
+            self.dynamics_head = None
 
     @staticmethod
     def _build_trunk(layers: int, hidden: int) -> nn.Sequential:
@@ -257,16 +305,18 @@ class BetaOneNetwork(nn.Module):
             "trunk_hidden": self.trunk_hidden,
             "policy_head_type": self.policy_head_type,
             "policy_mlp_hidden": self.policy_mlp_hidden,
+            "use_spr": self.use_spr,
+            "spr_hidden": self.spr_hidden,
         }
 
-    def forward(
-        self,
-        state: torch.Tensor,
-        action_features: torch.Tensor,
-        action_mask: torch.Tensor,
-        hand_card_ids: torch.Tensor,
-        action_card_ids: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    def compute_trunk(
+        self, state: torch.Tensor, hand_card_ids: torch.Tensor
+    ) -> torch.Tensor:
+        """Run hand-attention + trunk MLP. Returns trunk features h (B, trunk_hidden).
+
+        Broken out of forward() so SPR can compute trunk features for the
+        next state without re-running policy/value heads.
+        """
         B = state.shape[0]
 
         # Split state into components
@@ -298,8 +348,16 @@ class BetaOneNetwork(nn.Module):
 
         # Trunk
         combined = torch.cat([base, hand_pooled], dim=1)
-        h = self.trunk(combined)
+        return self.trunk(combined)
 
+    def heads_from_trunk(
+        self,
+        h: torch.Tensor,
+        action_features: torch.Tensor,
+        action_mask: torch.Tensor,
+        action_card_ids: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Given trunk features h, run policy + value heads."""
         # Policy: two configurations
         action_embeds = self.card_embed(action_card_ids.long())  # (B, 30, 16)
         action_input = torch.cat([action_embeds, action_features], dim=-1)  # (B, 30, 51)
@@ -317,6 +375,17 @@ class BetaOneNetwork(nn.Module):
 
         value = self.value_head(h)  # (B, 1)
         return logits, value
+
+    def forward(
+        self,
+        state: torch.Tensor,
+        action_features: torch.Tensor,
+        action_mask: torch.Tensor,
+        hand_card_ids: torch.Tensor,
+        action_card_ids: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        h = self.compute_trunk(state, hand_card_ids)
+        return self.heads_from_trunk(h, action_features, action_mask, action_card_ids)
 
     def param_count(self) -> int:
         return sum(p.numel() for p in self.parameters())

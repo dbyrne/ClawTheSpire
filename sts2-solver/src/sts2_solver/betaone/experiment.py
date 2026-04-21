@@ -601,6 +601,9 @@ class ExperimentConfig:
                 "reanalyse_frac": _float(mcts.get("reanalyse_frac"), 0.25),
                 "reanalyse_min_gen": mcts.get("reanalyse_min_gen", 10),
                 "reanalyse_sims": mcts.get("reanalyse_sims"),
+                "use_spr": bool(arch.get("use_spr", False)),
+                "spr_coef": _float(mcts.get("spr_coef"), 0.0),
+                "spr_hidden": int(arch.get("spr_hidden", 64)),
             }
         else:  # ppo
             ppo = t.get("ppo", {})
@@ -736,6 +739,8 @@ class Experiment:
                 trunk_hidden=int(arch.get("trunk_hidden", 128)),
                 policy_head_type=str(arch.get("policy_head_type", "dot_product")),
                 policy_mlp_hidden=int(arch.get("policy_mlp_hidden", 64)),
+                use_spr=bool(arch.get("use_spr", False)),
+                spr_hidden=int(arch.get("spr_hidden", 64)),
             )
             arch["total_params"] = stats["total_params"]
             arch["state_dim"] = stats["state_dim"]

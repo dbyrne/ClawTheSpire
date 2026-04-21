@@ -108,6 +108,12 @@ class ReplayBuffer:
         self.policies: list[np.ndarray] = []
         self.values: list[np.ndarray] = []
         self.state_jsons: list[str] = []
+        # Next-state info for SPR auxiliary training (optional, only when
+        # self-play supplies them). For terminal steps, next_states has zeros
+        # and is_terminal=1.
+        self.next_states: list[np.ndarray] = []
+        self.next_hand_ids: list[np.ndarray] = []
+        self.is_terminal: list[np.int8] = []
         # Track generation boundaries for FIFO eviction
         self._gen_sizes: deque[int] = deque()
 
@@ -124,8 +130,15 @@ class ReplayBuffer:
         policies: np.ndarray,
         values: np.ndarray,
         state_jsons: list[str] | None = None,
+        combat_indices: np.ndarray | None = None,
     ) -> None:
-        """Add one generation's samples. Evicts oldest gens if over capacity."""
+        """Add one generation's samples. Evicts oldest gens if over capacity.
+
+        If combat_indices is provided, computes (next_state, next_hand_ids,
+        is_terminal) per step for SPR: consecutive entries in the same
+        combat form (s, s') pairs; last step of each combat is terminal
+        with zeros for next_state.
+        """
         n = len(states)
         self._gen_sizes.append(n)
         self.states.extend(states)
@@ -141,6 +154,25 @@ class ReplayBuffer:
             state_jsons = [""] * n
         self.state_jsons.extend(state_jsons)
 
+        # Build next-state info from combat trajectory order. For step i in
+        # combat c: if step i+1 exists and is in combat c, that's the next
+        # state; otherwise step i is terminal.
+        states_arr = np.asarray(states)
+        hand_ids_arr = np.asarray(hand_ids)
+        next_states_gen = np.zeros_like(states_arr)
+        next_hand_ids_gen = np.zeros_like(hand_ids_arr)
+        is_terminal_gen = np.ones(n, dtype=np.int8)
+        if combat_indices is not None and n > 0:
+            ci = np.asarray(combat_indices)
+            for i in range(n - 1):
+                if ci[i] == ci[i + 1]:
+                    next_states_gen[i] = states_arr[i + 1]
+                    next_hand_ids_gen[i] = hand_ids_arr[i + 1]
+                    is_terminal_gen[i] = 0
+        self.next_states.extend(next_states_gen)
+        self.next_hand_ids.extend(next_hand_ids_gen)
+        self.is_terminal.extend(is_terminal_gen)
+
         # Evict oldest generations until under capacity
         while len(self.states) > self.max_steps and len(self._gen_sizes) > 1:
             drop = self._gen_sizes.popleft()
@@ -152,12 +184,20 @@ class ReplayBuffer:
             del self.policies[:drop]
             del self.values[:drop]
             del self.state_jsons[:drop]
+            del self.next_states[:drop]
+            del self.next_hand_ids[:drop]
+            del self.is_terminal[:drop]
 
     def sample_tensors(self, batch_size: int) -> tuple[
         torch.Tensor, torch.Tensor, torch.Tensor,
         torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
+        torch.Tensor, torch.Tensor, torch.Tensor,
     ]:
-        """Sample a random batch from the buffer, returns tensors."""
+        """Sample a random batch from the buffer, returns tensors.
+
+        Returns: (states, act_feat, act_masks, hand_ids, action_ids,
+                  policies, values, next_states, next_hand_ids, is_terminal)
+        """
         n = len(self.states)
         indices = np.random.choice(n, size=min(batch_size, n), replace=False)
         return (
@@ -168,6 +208,9 @@ class ReplayBuffer:
             torch.tensor(np.array([self.action_ids[i] for i in indices]), dtype=torch.long),
             torch.tensor(np.array([self.policies[i] for i in indices]), dtype=torch.float32),
             torch.tensor(np.array([self.values[i] for i in indices]), dtype=torch.float32),
+            torch.tensor(np.array([self.next_states[i] for i in indices]), dtype=torch.float32),
+            torch.tensor(np.array([self.next_hand_ids[i] for i in indices]), dtype=torch.long),
+            torch.tensor(np.array([self.is_terminal[i] for i in indices]), dtype=torch.float32),
         )
 
     def oldest_indices_with_state(self, n: int) -> list[int]:
@@ -276,6 +319,10 @@ def train_batch(
     target_values: torch.Tensor,
     value_coef: float = 1.0,
     measure_grad_conflict: bool = False,
+    next_states: torch.Tensor | None = None,
+    next_hand_ids: torch.Tensor | None = None,
+    is_terminal: torch.Tensor | None = None,
+    spr_coef: float = 0.0,
 ) -> dict[str, float]:
     """Single training step: cross-entropy policy + MSE value.
 
@@ -283,9 +330,19 @@ def train_batch(
     policy-loss and value-loss gradients on the shared trunk, plus their
     individual L2 norms. Adds 2 extra backward passes (~2-3x step cost when
     enabled) — sample at a rate in the caller, don't enable per-step.
+
+    If `network.use_spr` is True and `spr_coef > 0`, also computes
+    self-predictive-representation loss: given current trunk features h and
+    MCTS policy π, predict next trunk features ĥ' via `network.dynamics_head`
+    and MSE against stop_gradient(trunk(next_state)). Terminal steps (no
+    next state) are masked out. See project_v_eval_mcts_tradeoff memory for
+    motivation.
     """
-    logits, values = network(states, action_features, action_masks,
-                             hand_card_ids, action_card_ids)
+    # Factor the forward so SPR can reuse h without re-computing.
+    h = network.compute_trunk(states, hand_card_ids)
+    logits, values = network.heads_from_trunk(
+        h, action_features, action_masks, action_card_ids
+    )
 
     # Policy loss: cross-entropy against MCTS visit distribution
     log_probs = F.log_softmax(logits, dim=1)
@@ -298,6 +355,25 @@ def train_batch(
         "policy_loss": policy_loss.item(),
         "value_loss": value_loss.item(),
     }
+
+    # SPR: predicted next-trunk vs actual next-trunk. Only when enabled and
+    # at least one non-terminal step is present in the batch.
+    spr_loss = None
+    if (network.use_spr and spr_coef > 0
+            and next_states is not None and next_hand_ids is not None
+            and is_terminal is not None):
+        non_terminal_mask = (1.0 - is_terminal)
+        if non_terminal_mask.sum() > 0:
+            # Target: stop-grad trunk features of the actual next state.
+            with torch.no_grad():
+                h_next_target = network.compute_trunk(next_states, next_hand_ids)
+            h_next_pred = network.dynamics_head(h, target_policies)
+            # Per-sample MSE; zero out terminal samples via mask.
+            per_sample = ((h_next_pred - h_next_target) ** 2).mean(dim=-1)
+            spr_loss = (per_sample * non_terminal_mask).sum() / non_terminal_mask.sum()
+            out["spr_loss"] = spr_loss.item()
+        else:
+            out["spr_loss"] = 0.0
 
     # Search/network agreement telemetry — echo-chamber diagnostic.
     # Cheap (no extra passes) so compute every batch, not sampled.
@@ -355,6 +431,8 @@ def train_batch(
         out["grad_norm_v"] = g_V_flat.norm().item()
 
     loss = policy_loss + value_coef * value_loss
+    if spr_loss is not None:
+        loss = loss + spr_coef * spr_loss
 
     optimizer.zero_grad()
     loss.backward()
@@ -408,6 +486,12 @@ def train(
     reanalyse_frac: float = 0.25,          # fraction of buffer refreshed per pass
     reanalyse_min_gen: int = 10,           # start reanalysing only after buffer is seeded
     reanalyse_sims: int | None = None,     # defaults to num_sims
+    # SPR (Self-Predictive Representation) aux loss: force trunk features to
+    # be planning-aware by predicting next-state trunk features from MCTS π.
+    # See project_v_eval_mcts_tradeoff memory for motivation.
+    use_spr: bool = False,
+    spr_coef: float = 0.0,
+    spr_hidden: int = 64,
 ):
     os.makedirs(output_dir, exist_ok=True)
     onnx_dir = os.path.join(output_dir, "onnx")
@@ -429,12 +513,14 @@ def train(
         trunk_hidden=trunk_hidden,
         policy_head_type=policy_head_type,
         policy_mlp_hidden=policy_mlp_hidden,
+        use_spr=use_spr,
+        spr_hidden=spr_hidden,
     )
     optimizer = torch.optim.Adam(network.parameters(), lr=lr)
     print(
         f"BetaOne self-play: {network.param_count():,} params, {num_cards} card vocab "
         f"(vhl={value_head_layers}, trunk={trunk_layers}x{trunk_hidden}, "
-        f"policy={policy_head_type})"
+        f"policy={policy_head_type}, use_spr={use_spr}, spr_coef={spr_coef})"
     )
 
     # Cosine LR schedule with warmup. `lr_schedule='constant'` = legacy behavior.
@@ -674,7 +760,7 @@ def train(
             )
             gen_policies = list(mixed)
 
-        # Add to replay buffer
+        # Add to replay buffer. combat_indices used for SPR next-state linkage.
         replay.add_generation(
             states=gen_states,
             act_feat=gen_act_feat,
@@ -684,6 +770,7 @@ def train(
             policies=gen_policies,
             values=gen_values,
             state_jsons=gen_state_jsons,
+            combat_indices=np.array(gen_combat_indices, dtype=np.int64),
         )
 
         # Stats
@@ -698,6 +785,8 @@ def train(
         network.train()
         total_ploss = 0.0
         total_vloss = 0.0
+        total_sprloss = 0.0
+        n_spr_updates = 0
         n_updates = 0
         grad_cos_samples: list[float] = []
         grad_np_samples: list[float] = []
@@ -713,7 +802,8 @@ def train(
             for _ in range(updates_per_epoch):
                 (b_states, b_act_feat, b_act_masks,
                  b_hand_ids, b_action_ids,
-                 b_policies, b_values) = replay.sample_tensors(batch_size)
+                 b_policies, b_values,
+                 b_next_states, b_next_hand_ids, b_is_terminal) = replay.sample_tensors(batch_size)
 
                 # Reshape action features from flat to (B, MAX_ACTIONS, ACTION_DIM)
                 b_act_feat = b_act_feat.reshape(-1, MAX_ACTIONS, ACTION_DIM)
@@ -729,9 +819,16 @@ def train(
                     b_policies, b_values,
                     value_coef=value_coef,
                     measure_grad_conflict=measure,
+                    next_states=b_next_states,
+                    next_hand_ids=b_next_hand_ids,
+                    is_terminal=b_is_terminal,
+                    spr_coef=spr_coef,
                 )
                 total_ploss += metrics["policy_loss"]
                 total_vloss += metrics["value_loss"]
+                if "spr_loss" in metrics:
+                    total_sprloss += metrics["spr_loss"]
+                    n_spr_updates += 1
                 kl_samples.append(metrics["kl_mcts_net"])
                 top1_samples.append(metrics["top1_agree"])
                 vcorr_samples.append(metrics["value_corr"])
@@ -744,6 +841,7 @@ def train(
         n = max(n_updates, 1)
         avg_ploss = total_ploss / n
         avg_vloss = total_vloss / n
+        avg_sprloss = (total_sprloss / max(n_spr_updates, 1)) if n_spr_updates > 0 else None
 
         # ------------------------------------------------------------------
         # Reanalyse: refresh stale targets for oldest buffer entries with the
@@ -865,6 +963,7 @@ def train(
             "encounter_set": encounter_set_id,
             "policy_loss": round(avg_ploss, 5),
             "value_loss": round(avg_vloss, 5),
+            **({"spr_loss": round(avg_sprloss, 5)} if avg_sprloss is not None else {}),
             "num_sims": num_sims,
             "gen_time": round(elapsed, 2),
             "timestamp": time.time(),
