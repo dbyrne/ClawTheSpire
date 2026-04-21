@@ -353,6 +353,13 @@ def train(
     q_target_temp: float = 0.5,
     eval_every: int = 0,
     value_head_layers: int = 1,
+    trunk_layers: int = 2,
+    trunk_hidden: int = 128,
+    policy_head_type: str = "dot_product",
+    policy_mlp_hidden: int = 64,
+    lr_schedule: str = "constant",
+    lr_warmup_frac: float = 0.05,
+    lr_min_frac: float = 0.1,
     grad_conflict_sample_every: int = 10,
     save_every: int = 10,
 ):
@@ -369,9 +376,35 @@ def train(
     num_cards = len(card_vocab)
 
     # Network + optimizer
-    network = BetaOneNetwork(num_cards=num_cards, value_head_layers=value_head_layers)
+    network = BetaOneNetwork(
+        num_cards=num_cards,
+        value_head_layers=value_head_layers,
+        trunk_layers=trunk_layers,
+        trunk_hidden=trunk_hidden,
+        policy_head_type=policy_head_type,
+        policy_mlp_hidden=policy_mlp_hidden,
+    )
     optimizer = torch.optim.Adam(network.parameters(), lr=lr)
-    print(f"BetaOne self-play: {network.param_count():,} params, {num_cards} card vocab")
+    print(
+        f"BetaOne self-play: {network.param_count():,} params, {num_cards} card vocab "
+        f"(vhl={value_head_layers}, trunk={trunk_layers}x{trunk_hidden}, "
+        f"policy={policy_head_type})"
+    )
+
+    # Cosine LR schedule with warmup. `lr_schedule='constant'` = legacy behavior.
+    # `lr_schedule='cosine_warmup'` = warmup for lr_warmup_frac of num_generations,
+    # then cosine decay to lr * lr_min_frac.
+    def _lr_at_gen(g: int) -> float:
+        if lr_schedule == "constant":
+            return lr
+        warmup_gens = max(1, int(num_generations * lr_warmup_frac))
+        if g <= warmup_gens:
+            return lr * (g / warmup_gens)
+        # Cosine decay from gen warmup_gens+1 to num_generations
+        progress = (g - warmup_gens) / max(1, num_generations - warmup_gens)
+        import math
+        lr_min = lr * lr_min_frac
+        return lr_min + 0.5 * (lr - lr_min) * (1 + math.cos(math.pi * progress))
 
     # Load the frozen encounter set
     td = setup_training_data(encounter_set_id=encounter_set_id)
@@ -478,6 +511,11 @@ def train(
 
     for gen in range(start_gen, num_generations + 1):
         t0 = time.time()
+
+        # Apply LR schedule (constant or cosine with warmup).
+        current_lr = _lr_at_gen(gen)
+        for param_group in optimizer.param_groups:
+            param_group["lr"] = current_lr
 
         # Export ONNX
         onnx_path = export_onnx(network, onnx_dir)

@@ -557,6 +557,10 @@ class ExperimentConfig:
 
         arch = self.architecture or {}
         value_head_layers = int(arch.get("value_head_layers", 1))
+        trunk_layers = int(arch.get("trunk_layers", 2))
+        trunk_hidden = int(arch.get("trunk_hidden", 128))
+        policy_head_type = str(arch.get("policy_head_type", "dot_product"))
+        policy_mlp_hidden = int(arch.get("policy_mlp_hidden", 64))
 
         if self.method == "mcts_selfplay":
             mcts = t.get("mcts", {})
@@ -565,6 +569,9 @@ class ExperimentConfig:
                 "combats_per_gen": t.get("combats_per_gen", 256),
                 "num_sims": mcts.get("num_sims", 400),
                 "lr": _float(t.get("lr"), 3e-4),
+                "lr_schedule": t.get("lr_schedule", "constant"),
+                "lr_warmup_frac": _float(t.get("lr_warmup_frac"), 0.05),
+                "lr_min_frac": _float(t.get("lr_min_frac"), 0.1),
                 "value_coef": _float(mcts.get("value_coef"), 1.0),
                 "train_epochs": mcts.get("train_epochs", 4),
                 "batch_size": t.get("batch_size", 512),
@@ -582,6 +589,10 @@ class ExperimentConfig:
                 "q_target_temp": _float(mcts.get("q_target_temp"), 0.5),
                 "eval_every": mcts.get("eval_every", 0),
                 "value_head_layers": value_head_layers,
+                "trunk_layers": trunk_layers,
+                "trunk_hidden": trunk_hidden,
+                "policy_head_type": policy_head_type,
+                "policy_mlp_hidden": policy_mlp_hidden,
                 "grad_conflict_sample_every": mcts.get(
                     "grad_conflict_sample_every", 10
                 ),
@@ -711,13 +722,16 @@ class Experiment:
             _apply_overrides(config, overrides)
 
         # Recompute params/stats from the FINAL architecture (overrides may
-        # have changed value_head_layers, which affects total_params).
+        # have changed value_head_layers / trunk config, which affects total_params).
         if config.network_type != "decknet":
             arch = config.architecture
-            value_head_layers = int(arch.get("value_head_layers", 1))
             stats = network_stats(
                 num_cards=int(arch.get("num_cards", 120)),
-                value_head_layers=value_head_layers,
+                value_head_layers=int(arch.get("value_head_layers", 1)),
+                trunk_layers=int(arch.get("trunk_layers", 2)),
+                trunk_hidden=int(arch.get("trunk_hidden", 128)),
+                policy_head_type=str(arch.get("policy_head_type", "dot_product")),
+                policy_mlp_hidden=int(arch.get("policy_mlp_hidden", 64)),
             )
             arch["total_params"] = stats["total_params"]
             arch["state_dim"] = stats["state_dim"]

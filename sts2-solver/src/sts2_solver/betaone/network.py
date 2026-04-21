@@ -38,7 +38,21 @@ CARD_EMBED_DIM = 16
 # experiments can override via `architecture.value_head_layers` in their config.
 # This is a per-experiment knob, not a version-bumping change — legacy
 # checkpoints without the field default to 1 and load cleanly.
+#   0 = tiny head (128 → 32 → 1, ~4K params) — rebalanced arch
+#   1 = legacy head (128 → 64 → 1, ~8K params) — v2 baseline
+#   3 = deeper head (128 → 256 → 128 → 64 → 1, ~74K params) — v3 default
 VALUE_HEAD_LAYERS = 1
+# Default trunk configuration. Experiments can override via config.architecture.
+#   trunk_layers: number of Linear+ReLU blocks after LayerNorm (default 2 = v3)
+#   trunk_hidden: hidden dim of each trunk layer (default 128 = v3)
+# Rebalanced arch uses 3 layers at width 192 to absorb params freed from the
+# shrunken value head.
+TRUNK_LAYERS_DEFAULT = 2
+# Default policy head type. "dot_product" is v3's query·key form (linear).
+# "mlp" replaces it with per-action Linear(trunk+action_input → 64) → ReLU →
+# Linear(64 → 1), enabling nonlinear state×action interactions.
+POLICY_HEAD_TYPE_DEFAULT = "dot_product"
+POLICY_MLP_HIDDEN_DEFAULT = 64
 
 # Architecture versioning — bump ARCH_VERSION on any change that breaks
 # checkpoint compatibility (any dimension constant above).
@@ -58,6 +72,10 @@ ARCH_META = {
     "max_hand": MAX_HAND,
     "max_actions": MAX_ACTIONS,
     "value_head_layers": VALUE_HEAD_LAYERS,
+    "trunk_layers": TRUNK_LAYERS_DEFAULT,
+    "trunk_hidden": HIDDEN_DIM,
+    "policy_head_type": POLICY_HEAD_TYPE_DEFAULT,
+    "policy_mlp_hidden": POLICY_MLP_HIDDEN_DEFAULT,
 }
 
 
@@ -65,11 +83,16 @@ def network_kwargs_from_meta(arch_meta: dict | None) -> dict:
     """Extract BetaOneNetwork() constructor kwargs from a checkpoint's arch_meta.
 
     Legacy checkpoints may not have `value_head_layers` — default to 1 so
-    v2-era weights load cleanly.
+    v2-era weights load cleanly. Newer arch knobs (`trunk_layers`, etc.)
+    also default to v3-compatible values for backward compat.
     """
     meta = arch_meta or {}
     return {
         "value_head_layers": meta.get("value_head_layers", 1),
+        "trunk_layers": meta.get("trunk_layers", TRUNK_LAYERS_DEFAULT),
+        "trunk_hidden": meta.get("trunk_hidden", HIDDEN_DIM),
+        "policy_head_type": meta.get("policy_head_type", POLICY_HEAD_TYPE_DEFAULT),
+        "policy_mlp_hidden": meta.get("policy_mlp_hidden", POLICY_MLP_HIDDEN_DEFAULT),
     }
 
 
@@ -78,9 +101,23 @@ class ArchitectureMismatchError(RuntimeError):
     pass
 
 
-def network_stats(num_cards: int = 120, value_head_layers: int | None = None) -> dict:
+def network_stats(
+    num_cards: int = 120,
+    value_head_layers: int | None = None,
+    trunk_layers: int | None = None,
+    trunk_hidden: int | None = None,
+    policy_head_type: str | None = None,
+    policy_mlp_hidden: int | None = None,
+) -> dict:
     """Return architecture stats: param count, layer shapes, input/output dims."""
-    net = BetaOneNetwork(num_cards=num_cards, value_head_layers=value_head_layers)
+    net = BetaOneNetwork(
+        num_cards=num_cards,
+        value_head_layers=value_head_layers,
+        trunk_layers=trunk_layers,
+        trunk_hidden=trunk_hidden,
+        policy_head_type=policy_head_type,
+        policy_mlp_hidden=policy_mlp_hidden,
+    )
     layers = {}
     for name, param in net.named_parameters():
         layers[name] = list(param.shape)
@@ -89,19 +126,42 @@ def network_stats(num_cards: int = 120, value_head_layers: int | None = None) ->
         "num_cards": num_cards,
         "state_dim": STATE_DIM,
         "trunk_input": BASE_STATE_DIM + HAND_PROJ_DIM,
-        "trunk_hidden": HIDDEN_DIM,
+        "trunk_hidden": net.trunk_hidden,
+        "trunk_layers": net.trunk_layers,
         "policy_hidden": ACTION_HIDDEN,
         "value_head_layers": net.value_head_layers,
+        "policy_head_type": net.policy_head_type,
+        "policy_mlp_hidden": net.policy_mlp_hidden,
         "layers": layers,
     }
 
 
 class BetaOneNetwork(nn.Module):
-    def __init__(self, num_cards: int = 120, value_head_layers: int | None = None):
+    def __init__(
+        self,
+        num_cards: int = 120,
+        value_head_layers: int | None = None,
+        trunk_layers: int | None = None,
+        trunk_hidden: int | None = None,
+        policy_head_type: str | None = None,
+        policy_mlp_hidden: int | None = None,
+    ):
         super().__init__()
 
         self.value_head_layers = (
             value_head_layers if value_head_layers is not None else VALUE_HEAD_LAYERS
+        )
+        self.trunk_layers = (
+            trunk_layers if trunk_layers is not None else TRUNK_LAYERS_DEFAULT
+        )
+        self.trunk_hidden = (
+            trunk_hidden if trunk_hidden is not None else HIDDEN_DIM
+        )
+        self.policy_head_type = (
+            policy_head_type if policy_head_type is not None else POLICY_HEAD_TYPE_DEFAULT
+        )
+        self.policy_mlp_hidden = (
+            policy_mlp_hidden if policy_mlp_hidden is not None else POLICY_MLP_HIDDEN_DEFAULT
         )
 
         # Learned card embedding (shared between hand and actions)
@@ -113,36 +173,69 @@ class BetaOneNetwork(nn.Module):
         self.attn_k = nn.Linear(HAND_PROJ_DIM, HAND_PROJ_DIM)
         self.attn_v = nn.Linear(HAND_PROJ_DIM, HAND_PROJ_DIM)
 
-        # Shared trunk: (base_state + hand_pooled) → hidden
-        self.trunk = nn.Sequential(
-            nn.LayerNorm(BASE_STATE_DIM + HAND_PROJ_DIM),
-            nn.Linear(BASE_STATE_DIM + HAND_PROJ_DIM, HIDDEN_DIM),
-            nn.ReLU(),
-            nn.Linear(HIDDEN_DIM, HIDDEN_DIM),
-            nn.ReLU(),
+        # Shared trunk: (base_state + hand_pooled) → hidden. Configurable depth/width.
+        self.trunk = self._build_trunk(self.trunk_layers, self.trunk_hidden)
+
+        # Policy head. "dot_product" = v3 query·key form (linear). "mlp" = per-action MLP.
+        if self.policy_head_type == "dot_product":
+            self.policy_query = nn.Linear(self.trunk_hidden, ACTION_HIDDEN)
+            self.action_encoder = nn.Linear(CARD_EMBED_DIM + ACTION_DIM, ACTION_HIDDEN)
+        elif self.policy_head_type == "mlp":
+            # MLP over concat(trunk_out, action_input). Enables nonlinear
+            # state×action interactions that dot-product can't represent.
+            self.policy_mlp_fc1 = nn.Linear(
+                self.trunk_hidden + CARD_EMBED_DIM + ACTION_DIM,
+                self.policy_mlp_hidden,
+            )
+            self.policy_mlp_fc2 = nn.Linear(self.policy_mlp_hidden, 1)
+        else:
+            raise ValueError(
+                f"unsupported policy_head_type={self.policy_head_type!r}; "
+                "expected 'dot_product' or 'mlp'."
+            )
+
+        # Value: state → scalar. Depth configurable.
+        self.value_head = self._build_value_head(
+            self.value_head_layers, self.trunk_hidden
         )
 
-        # Policy: score = dot(query(state), encode(action))
-        self.policy_query = nn.Linear(HIDDEN_DIM, ACTION_HIDDEN)
-        self.action_encoder = nn.Linear(CARD_EMBED_DIM + ACTION_DIM, ACTION_HIDDEN)
+    @staticmethod
+    def _build_trunk(layers: int, hidden: int) -> nn.Sequential:
+        """Configurable trunk: LayerNorm → (Linear + ReLU) * layers.
 
-        # Value: state → scalar (clamped to [-1, 1.3] at inference in Rust).
-        # Depth is configurable to test whether a deeper head can represent
-        # compound/conditional logic that the 1-layer legacy head misses.
-        self.value_head = self._build_value_head(self.value_head_layers)
+        layers=2: v3 default (188 → hidden → hidden).
+        layers=3: rebalanced arch (188 → hidden → hidden → hidden).
+        """
+        trunk_input = BASE_STATE_DIM + HAND_PROJ_DIM
+        modules: list[nn.Module] = [nn.LayerNorm(trunk_input)]
+        prev = trunk_input
+        for _ in range(layers):
+            modules.append(nn.Linear(prev, hidden))
+            modules.append(nn.ReLU())
+            prev = hidden
+        return nn.Sequential(*modules)
 
     @staticmethod
-    def _build_value_head(layers: int) -> nn.Sequential:
-        if layers == 1:
-            # Legacy v2 head: 128 -> 64 -> 1
+    def _build_value_head(layers: int, hidden: int) -> nn.Sequential:
+        """Configurable value head.
+
+        layers=0: tiny head (hidden → 32 → 1, ~4K params at hidden=128) — rebalanced.
+        layers=1: legacy v2 head (hidden → 64 → 1, ~8K params).
+        layers=3: deeper head (hidden → 256 → 128 → 64 → 1, ~74K params at hidden=128) — v3.
+        """
+        if layers == 0:
             return nn.Sequential(
-                nn.Linear(HIDDEN_DIM, 64), nn.ReLU(),
+                nn.Linear(hidden, 32), nn.ReLU(),
+                nn.Linear(32, 1),
+            )
+        if layers == 1:
+            return nn.Sequential(
+                nn.Linear(hidden, 64), nn.ReLU(),
                 nn.Linear(64, 1),
             )
         if layers == 3:
-            # Deeper head: 128 -> 256 -> 128 -> 64 -> 1
             return nn.Sequential(
-                nn.Linear(HIDDEN_DIM, 256), nn.ReLU(),
+                nn.Linear(hidden, 256), nn.ReLU(),
                 nn.Linear(256, 128), nn.ReLU(),
                 nn.Linear(128, 64), nn.ReLU(),
                 nn.Linear(64, 1),
@@ -157,7 +250,14 @@ class BetaOneNetwork(nn.Module):
         Callers embed this in checkpoints so loaders can reconstruct the
         matching architecture — module-level ARCH_META is a *default* not a
         *fact* about any given network (e.g. value_head_layers varies)."""
-        return {**ARCH_META, "value_head_layers": self.value_head_layers}
+        return {
+            **ARCH_META,
+            "value_head_layers": self.value_head_layers,
+            "trunk_layers": self.trunk_layers,
+            "trunk_hidden": self.trunk_hidden,
+            "policy_head_type": self.policy_head_type,
+            "policy_mlp_hidden": self.policy_mlp_hidden,
+        }
 
     def forward(
         self,
@@ -200,12 +300,19 @@ class BetaOneNetwork(nn.Module):
         combined = torch.cat([base, hand_pooled], dim=1)
         h = self.trunk(combined)
 
-        # Policy: embed action cards + concat with action features, then dot-product
+        # Policy: two configurations
         action_embeds = self.card_embed(action_card_ids.long())  # (B, 30, 16)
         action_input = torch.cat([action_embeds, action_features], dim=-1)  # (B, 30, 51)
-        query = self.policy_query(h)  # (B, 64)
-        keys = self.action_encoder(action_input)  # (B, 30, 64)
-        logits = torch.bmm(keys, query.unsqueeze(-1)).squeeze(-1) / (ACTION_HIDDEN ** 0.5)  # (B, 30)
+        if self.policy_head_type == "dot_product":
+            query = self.policy_query(h)  # (B, 64)
+            keys = self.action_encoder(action_input)  # (B, 30, 64)
+            logits = torch.bmm(keys, query.unsqueeze(-1)).squeeze(-1) / (ACTION_HIDDEN ** 0.5)  # (B, 30)
+        else:  # "mlp": per-action MLP over concat(h, action_input)
+            n_actions = action_input.shape[1]
+            h_b = h.unsqueeze(1).expand(-1, n_actions, -1)  # (B, 30, hidden)
+            x = torch.cat([h_b, action_input], dim=-1)  # (B, 30, hidden + 51)
+            x = F.relu(self.policy_mlp_fc1(x))
+            logits = self.policy_mlp_fc2(x).squeeze(-1)  # (B, 30)
         logits = logits.masked_fill(action_mask, -1e9)
 
         value = self.value_head(h)  # (B, 1)
