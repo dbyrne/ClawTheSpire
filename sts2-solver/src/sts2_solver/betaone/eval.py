@@ -613,6 +613,42 @@ def build_scenarios() -> list[Scenario]:
 
     # ===== TARGET SELECTION =====
 
+    # Live-repro (2026-04-21, Silent, 4 Phantasmal Gardeners). E3 at 3 HP with
+    # Poison 3 dies for certain to the next poison tick (3 dmg on 3 HP).
+    # Attacking or re-poisoning E3 is pure waste — one fewer productive card
+    # against 3 still-lethal enemies. Gen 88 top-1'd Deadly Poison on E3 at
+    # 39% and put 55% of total mass on E3-targeted actions. Player has
+    # Noxious Fumes so fresh poison on non-E3 targets is high-value too.
+    scenarios.append(Scenario(
+        name="dont_attack_poison_lethal_target",
+        category="targeting",
+        description="4 enemies; E3 at 3 HP with Poison 3 — will die to end-of-turn poison tick. Any attack or extra poison on E3 is wasted. Player runs Noxious Fumes, so Deadly Poison on non-E3 targets amplifies ongoing ticks.",
+        player={"hp": 40, "max_hp": 70, "energy": 3, "max_energy": 3, "block": 0,
+                "powers": {"Noxious Fumes": 2}},
+        enemies=[
+            enemy(28, 28, damage=7, hits=1, powers={"Poison": 2, "Strength": 2}),
+            enemy(30, 30, damage=1, hits=3, powers={"Poison": 2}),
+            enemy(29, 29, damage=0, hits=0, intent="Buff", powers={"Poison": 2}),
+            enemy(3, 26, damage=9, hits=1, powers={"Poison": 3, "Strength": 2}),  # DIES
+        ],
+        hand=[strike(), deadly_poison(), defend(), strike()],
+        turn=3, draw_size=1, discard_size=8, exhaust_size=1,
+        actions=[
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike E0"),
+            ActionSpec("play_card", strike(), target_idx=1, label="Strike E1"),
+            ActionSpec("play_card", strike(), target_idx=2, label="Strike E2"),
+            ActionSpec("play_card", strike(), target_idx=3, label="Strike E3 (dies to poison)"),
+            ActionSpec("play_card", deadly_poison(), target_idx=0, label="Deadly Poison E0"),
+            ActionSpec("play_card", deadly_poison(), target_idx=1, label="Deadly Poison E1"),
+            ActionSpec("play_card", deadly_poison(), target_idx=2, label="Deadly Poison E2"),
+            ActionSpec("play_card", deadly_poison(), target_idx=3, label="Deadly Poison E3 (wasted on dying)"),
+            ActionSpec("play_card", defend(), label="Defend"),
+            ActionSpec("end_turn", label="End Turn"),
+        ],
+        best_actions=[0, 1, 2, 4, 5, 6],    # any non-E3 attack or poison
+        bad_actions=[3, 7, 9],               # any E3-targeted action; ending turn wastes 3 energy
+    ))
+
     scenarios.append(Scenario(
         name="target_vulnerable_enemy",
         category="targeting",
