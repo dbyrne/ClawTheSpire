@@ -1,0 +1,9 @@
+; Engine configuration file.
+; Minimal Godot project used only for headless PCK packing.
+
+config_version=5
+
+[application]
+
+config/name="STS2AIAgentPckBuilder"
+run/main_scene=""

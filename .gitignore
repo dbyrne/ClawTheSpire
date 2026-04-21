@@ -1,5 +1,4 @@
 .mcp.json
-STS2-Agent/
 logs/
 __pycache__/
 *.pyc
