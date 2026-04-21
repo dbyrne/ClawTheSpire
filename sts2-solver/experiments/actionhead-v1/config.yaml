@@ -39,7 +39,7 @@ architecture:
   max_actions: 30
   value_head_layers: 1
   num_cards: 578
-  total_params: 74841
+  total_params: 86426
   state_dim: 446
   trunk_input: 188
 training:
