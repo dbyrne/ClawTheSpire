@@ -192,7 +192,7 @@ class Runner:
         self._log.append(msg)
 
     def _check_review_toggle(self) -> None:
-        """Non-blocking check for 'R' keypress to toggle review mode."""
+        """Non-blocking hotkey check: R toggles review mode, S snapshots state."""
         try:
             import msvcrt
             while msvcrt.kbhit():
@@ -205,6 +205,8 @@ class Runner:
                         f" (press R to toggle)"
                     )
                     self._refresh()
+                elif ch in (b's', b'S'):
+                    self._save_eval_snapshot()
         except ImportError:
             import sys
             import select as _sel
@@ -219,8 +221,55 @@ class Runner:
                             f" (press R to toggle)"
                         )
                         self._refresh()
+                    elif ch in ('s', 'S'):
+                        self._save_eval_snapshot()
             except Exception:
                 pass
+
+    def _save_eval_snapshot(self) -> None:
+        """Dump the current game state + user comment to eval_snapshots/ for later
+        translation into an eval scenario. Triggered by pressing 'S' during
+        auto-play — manages Live so input() can read the comment cleanly."""
+        was_live = self._live is not None
+        if was_live:
+            self._live.stop()
+        try:
+            self._save_eval_snapshot_nolive()
+        finally:
+            if was_live:
+                self._live.start()
+
+    def _save_eval_snapshot_nolive(self) -> None:
+        """Core snapshot logic. Caller must ensure Live is stopped (or absent).
+        Used by the step-mode prompt path where Live is already stopped."""
+        import re as _re
+        from datetime import datetime
+
+        gs = getattr(self, "game_state", None)
+        if not gs:
+            self._log_action("[yellow]No game state to snapshot yet[/yellow]")
+            return
+
+        try:
+            comment = input("Snapshot comment (Enter to skip): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            comment = ""
+
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        slug = _re.sub(r"[^a-z0-9]+", "_", comment.lower()).strip("_")[:40] or "snap"
+        out_dir = Path("eval_snapshots")
+        out_dir.mkdir(exist_ok=True)
+        path = out_dir / f"{ts}_{slug}.json"
+
+        snap = {
+            "timestamp": ts,
+            "comment": comment,
+            "checkpoint": getattr(self, "_checkpoint_name", None),
+            "game_state": gs,
+        }
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(snap, f, indent=2, ensure_ascii=False, default=str)
+        self._log_action(f"[green]Snapshot saved:[/green] {path}")
 
     def _review_pause(self, summary: str) -> None:
         """Block until user approves a decision. Only active in review mode.
@@ -650,7 +699,15 @@ class Runner:
                     if self.step_mode:
                         # Drop out of Live temporarily for input
                         live.stop()
-                        resp = input("[step] Enter=next, q=quit: ").strip().lower()
+                        resp = input("[step] Enter=next, s=snapshot, q=quit: ").strip().lower()
+                        if resp == "s":
+                            # Live is already stopped; snapshot takes its own
+                            # input. Re-start Live and re-prompt rather than
+                            # advancing — the user presumably wants to keep
+                            # inspecting this state.
+                            self._save_eval_snapshot_nolive()
+                            live.start()
+                            continue
                         if resp == "q":
                             break
                         live.start()
