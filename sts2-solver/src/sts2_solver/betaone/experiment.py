@@ -430,6 +430,9 @@ MCTS_DEFAULTS = {
     # an issue — first attempt showed A trains fast enough that warmup is
     # unnecessary.
     "adv_use_min_gen": 1,
+    # actionhead-v1: UCB integration mode. False = option β. True = option α
+    # (A only as initial Q estimate for unvisited children).
+    "adv_alpha_mode": False,
 }
 
 
@@ -592,6 +595,7 @@ class ExperimentConfig:
                 "adv_coef": _float(mcts.get("adv_coef"), 0.5),
                 "lambda_adv": _float(mcts.get("lambda_adv"), 0.5),
                 "adv_use_min_gen": int(mcts.get("adv_use_min_gen", 5)),
+                "adv_alpha_mode": bool(mcts.get("adv_alpha_mode", False)),
                 "eval_every": mcts.get("eval_every", 0),
                 "value_head_layers": value_head_layers,
                 "grad_conflict_sample_every": mcts.get(

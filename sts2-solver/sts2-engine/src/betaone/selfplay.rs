@@ -87,6 +87,7 @@ fn run_selfplay_combat(
     noise_frac: f32,
     pw_k: f32,
     lambda_adv: f32,
+    adv_alpha_mode: bool,
 ) -> SelfPlayResult {
     let card_db = CardDB::default();
     let mut rng = StdRng::seed_from_u64(seed);
@@ -139,6 +140,7 @@ fn run_selfplay_combat(
     mcts_engine.noise_frac = noise_frac;
     mcts_engine.pw_k = pw_k;
     mcts_engine.lambda_adv = lambda_adv;
+    mcts_engine.adv_alpha_mode = adv_alpha_mode;
 
     let mut samples: Vec<Sample> = Vec::new();
     let mut final_outcome = "lose";
@@ -294,7 +296,8 @@ fn run_selfplay_combat(
     pomcp = false,
     noise_frac = 0.25,
     pw_k = 1.0,
-    lambda_adv = 0.0
+    lambda_adv = 0.0,
+    adv_alpha_mode = false
 ))]
 pub fn betaone_mcts_selfplay(
     py: Python<'_>,
@@ -320,6 +323,7 @@ pub fn betaone_mcts_selfplay(
     noise_frac: f32,
     pw_k: f32,
     lambda_adv: f32,
+    adv_alpha_mode: bool,
 ) -> PyResult<PyObject> {
     let decks: Vec<Vec<Card>> = serde_json::from_str(decks_json)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("decks: {e}")))?;
@@ -393,6 +397,7 @@ pub fn betaone_mcts_selfplay(
                         noise_frac,
                         pw_k,
                         lambda_adv,
+                        adv_alpha_mode,
                     ))
                 })
             })
@@ -504,6 +509,7 @@ fn run_reanalyse_one(
     pomcp: bool,
     pw_k: f32,
     lambda_adv: f32,
+    adv_alpha_mode: bool,
 ) -> Option<ReanalyseOutput> {
     let state: CombatState = match serde_json::from_str(state_json) {
         Ok(s) => s,
@@ -533,6 +539,7 @@ fn run_reanalyse_one(
     mcts_engine.pomcp = pomcp;
     mcts_engine.pw_k = pw_k;
     mcts_engine.lambda_adv = lambda_adv;
+    mcts_engine.adv_alpha_mode = adv_alpha_mode;
 
     let sr = mcts_engine.search_with_ais(
         &state, Some(&enemy_ais), num_sims, temperature, &mut rng,
@@ -577,6 +584,7 @@ fn run_reanalyse_one(
     pomcp = true,
     pw_k = 1.0,
     lambda_adv = 0.0,
+    adv_alpha_mode = false,
 ))]
 pub fn betaone_mcts_reanalyse(
     py: Python<'_>,
@@ -593,6 +601,7 @@ pub fn betaone_mcts_reanalyse(
     pomcp: bool,
     pw_k: f32,
     lambda_adv: f32,
+    adv_alpha_mode: bool,
 ) -> PyResult<PyObject> {
     let profiles: HashMap<String, enemy::EnemyProfile> =
         serde_json::from_str(enemy_profiles_json).unwrap_or_default();
@@ -634,7 +643,7 @@ pub fn betaone_mcts_reanalyse(
                 run_reanalyse_one(
                     &state_jsons[i], &profiles, &card_vocab, inference,
                     num_sims, temperature, seeds_full[i],
-                    turn_boundary_eval, c_puct, pomcp, pw_k, lambda_adv,
+                    turn_boundary_eval, c_puct, pomcp, pw_k, lambda_adv, adv_alpha_mode,
                 )
             })
         }).collect::<Vec<_>>()

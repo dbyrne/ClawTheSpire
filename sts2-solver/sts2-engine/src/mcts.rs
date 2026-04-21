@@ -73,15 +73,35 @@ impl Node {
         if self.visit_count == 0 { 0.0 } else { self.value_sum / self.visit_count as f64 }
     }
 
-    fn ucb_score(&self, parent_visits: u32, c_puct: f32, lambda_adv: f32) -> f32 {
-        let exploitation = self.value() as f32;
+    fn ucb_score(
+        &self,
+        parent_visits: u32,
+        c_puct: f32,
+        lambda_adv: f32,
+        adv_alpha_mode: bool,
+    ) -> f32 {
         let exploration = c_puct * self.prior
             * (parent_visits as f32).sqrt() / (1.0 + self.visit_count as f32);
-        // actionhead-v1 (option β): permanent additive A-term in UCB. A_pred
-        // is the parent network's per-action advantage estimate — pulls
-        // selection toward high-A actions even when policy prior is small.
-        let adv_term = lambda_adv * self.advantage;
-        exploitation + exploration + adv_term
+        if adv_alpha_mode {
+            // Option α: A used only as initial Q estimate for unvisited
+            // children. Once real Q-backup starts, A is out of the picture.
+            // Safer than β when A might be miscalibrated — errors self-correct
+            // after first visit instead of permanently biasing selection.
+            let exploitation = if self.visit_count == 0 {
+                lambda_adv * self.advantage
+            } else {
+                self.value() as f32
+            };
+            exploitation + exploration
+        } else {
+            // Option β: permanent additive A-term in UCB. A_pred is the parent
+            // network's per-action advantage estimate — pulls selection toward
+            // high-A actions even when policy prior is small. Can over-correct
+            // if A is wrong (see lambda1 experiment: ECHO went UP with λ=1.0).
+            let exploitation = self.value() as f32;
+            let adv_term = lambda_adv * self.advantage;
+            exploitation + exploration + adv_term
+        }
     }
 }
 
@@ -193,6 +213,10 @@ pub struct MCTS<'a> {
     /// configs). Set to ~0.5 for actionhead-v1 to roughly match c_puct's
     /// scale at moderate visit counts.
     pub lambda_adv: f32,
+    /// actionhead-v1: when true, use option α (A only as initial Q estimate
+    /// for unvisited children). When false, use option β (A as permanent UCB
+    /// additive). α is safer when A might be miscalibrated.
+    pub adv_alpha_mode: bool,
 }
 
 impl<'a> MCTS<'a> {
@@ -201,6 +225,7 @@ impl<'a> MCTS<'a> {
             card_db, inference, add_noise: false, turn_boundary_eval: false,
             c_puct: DEFAULT_C_PUCT, terminal_scale: (1.0, 0.3, -1.0),
             pomcp: false, noise_frac: 0.25, pw_k: 1.0, lambda_adv: 0.0,
+            adv_alpha_mode: false,
         }
     }
 
@@ -375,8 +400,8 @@ impl<'a> MCTS<'a> {
             let parent_visits = node.visit_count;
             let best_child = node.children.iter()
                 .max_by(|&&(_, a), &&(_, b)| {
-                    let score_a = arena.nodes[a].ucb_score(parent_visits, self.c_puct, self.lambda_adv);
-                    let score_b = arena.nodes[b].ucb_score(parent_visits, self.c_puct, self.lambda_adv);
+                    let score_a = arena.nodes[a].ucb_score(parent_visits, self.c_puct, self.lambda_adv, self.adv_alpha_mode);
+                    let score_b = arena.nodes[b].ucb_score(parent_visits, self.c_puct, self.lambda_adv, self.adv_alpha_mode);
                     score_a.partial_cmp(&score_b).unwrap_or(std::cmp::Ordering::Equal)
                 })
                 .map(|&(_, idx)| idx)

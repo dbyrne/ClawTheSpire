@@ -429,6 +429,11 @@ def train(
     # selection. Default 5 = MCTS uses cold-zero A for gens 1-4, switches
     # to trained A at gen 5.
     adv_use_min_gen: int = 5,
+    # actionhead-v1: UCB integration mode. False = option β (permanent A
+    # additive in UCB — current default). True = option α (A used only as
+    # initial Q estimate for unvisited children; Q-backup replaces it on
+    # first visit). α is safer against A miscalibration.
+    adv_alpha_mode: bool = False,
     train_epochs: int = 4,
     batch_size: int = 512,
     temperature: float = 1.0,
@@ -636,6 +641,7 @@ def train(
                 pomcp=pomcp,
                 noise_frac=noise_frac,
                 lambda_adv=effective_lambda_adv,
+                adv_alpha_mode=adv_alpha_mode,
                 pw_k=pw_k,
             )
 
@@ -826,6 +832,7 @@ def train(
                     pomcp=pomcp,
                     pw_k=pw_k,
                     lambda_adv=effective_lambda_adv,
+                    adv_alpha_mode=adv_alpha_mode,
                 )
                 ra_ok = list(ra_out["ok"])
                 ra_policies = np.array(ra_out["policies"], dtype=np.float32).reshape(-1, MAX_ACTIONS)
