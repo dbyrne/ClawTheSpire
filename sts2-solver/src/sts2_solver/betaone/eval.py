@@ -2277,6 +2277,30 @@ def build_scenarios() -> list[Scenario]:
         bad_actions=[1, 2, 3],        # ending at 35 HP vs 36 damage = death
     ))
 
+    # Live-repro (2026-04-21, Silent floor 5 turn 3, Seapunk 24 HP incoming
+    # Bubble Burp = debuff, not attack). Card data: Leading Strike is damage=7
+    # plus spawns SHIV — strictly better than Strike (damage=6, no spawn) at
+    # the same 1 energy cost. Gen 88 split Strike A/B at 31%/31% vs Leading
+    # Strike 27%: two Strike copies divide the policy mass and edge LS out.
+    # Pure playstyle failure — the net isn't weighting spawns_cards.
+    scenarios.append(Scenario(
+        name="leading_strike_over_strike_with_shiv_spawn",
+        category="synergy",
+        description="Leading Strike (7 dmg + spawns Shiv) vs two copies of Strike (6 dmg) at 1 energy. LS is strictly higher damage AND adds a 0-cost 4-dmg card to hand.",
+        player={"hp": 55, "max_hp": 70, "energy": 1, "max_energy": 3, "block": 0},
+        enemies=[enemy(24, 45, damage=0, hits=0, intent="Debuff")],
+        hand=[lookup_card("LEADING_STRIKE"), strike(), strike()],
+        turn=3, draw_size=6, discard_size=2,
+        actions=[
+            ActionSpec("play_card", lookup_card("LEADING_STRIKE"), target_idx=0, label="Leading Strike"),
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike A"),
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike B"),
+            ActionSpec("end_turn", label="End Turn"),
+        ],
+        best_actions=[0],           # strictly better card at same cost
+        bad_actions=[1, 2, 3],      # either Strike loses 1 dmg + a free Shiv; ending turn wastes energy
+    ))
+
     # ----- DAMAGE (expanded) -----
 
     scenarios.append(Scenario(
