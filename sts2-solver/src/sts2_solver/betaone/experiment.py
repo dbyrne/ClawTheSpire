@@ -684,7 +684,17 @@ class Experiment:
                 "total_params": _net.param_count(),
             }
         else:
-            config.architecture = dict(ARCH_META)
+            # Merge defaults UNDER the existing architecture instead of
+            # overwriting it. Fresh `create` calls have config.architecture
+            # = dict(ARCH_META) from the dataclass default, so the merge is
+            # idempotent. Fork calls have config.architecture = parent's
+            # architecture (potentially with per-experiment overrides like
+            # value_head_layers=3) — those overrides survive the merge,
+            # newly-added defaults from ARCH_META get filled in for missing
+            # keys. This fixes the silent vhl-reset bug where forks from a
+            # vhl=3 baseline silently downgraded to vhl=1, then warm-load
+            # would reset value_head to random init due to shape mismatch.
+            config.architecture = {**ARCH_META, **(config.architecture or {})}
             vocab_path = BENCHMARK_DIR / "card_vocab.json"
             if vocab_path.exists():
                 import json as _json
