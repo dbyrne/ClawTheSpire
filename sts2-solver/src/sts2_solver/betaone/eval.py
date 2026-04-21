@@ -535,6 +535,27 @@ def build_scenarios() -> list[Scenario]:
         bad_actions=[1],        # wasting a free Neutralize
     ))
 
+    # Live-repro companion: same lesson as play_zero_cost_before_end but with
+    # Shiv (0-cost, exhausts) mid-turn. In the live seapunk state (2026-04-21)
+    # the runner ended turn rather than play a free Shiv — raw policy split
+    # ~2.5% Shiv vs ~3.4% end turn (near-tied), so MCTS exploration flips
+    # easily. Exhaust may be under-valued by the net.
+    scenarios.append(Scenario(
+        name="play_free_shiv_before_end",
+        category="energy",
+        description="0 energy, Shiv (0-cost, exhausts) in hand, enemy still alive at 30 HP. Free 4 damage — exhaust doesn't change the calculus when the card is playable NOW.",
+        player={"hp": 55, "max_hp": 70, "energy": 0, "max_energy": 3, "block": 28},
+        enemies=[enemy(30, 45, damage=2, hits=5)],
+        hand=[defend(), lookup_card("SHIV")],
+        turn=2, draw_size=4, discard_size=12,
+        actions=[
+            ActionSpec("play_card", lookup_card("SHIV"), target_idx=0, label="Shiv (free 4 dmg)"),
+            ActionSpec("end_turn", label="End turn"),
+        ],
+        best_actions=[0],       # free damage is free damage
+        bad_actions=[1],        # ending turn wastes the Shiv entirely
+    ))
+
     # ===== LETHAL DETECTION =====
 
     scenarios.append(Scenario(
