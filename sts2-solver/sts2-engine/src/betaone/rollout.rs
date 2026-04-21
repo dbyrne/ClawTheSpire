@@ -236,7 +236,10 @@ fn run_single_combat(
             let (act_feat, act_mask, num_valid) = encode::encode_actions(&actions, &state);
             let hand_ids = encode::encode_hand_card_ids(&state, card_vocab);
             let action_ids = encode::encode_action_card_ids(&actions, &state, card_vocab);
-            let (logits, value) = inference.evaluate(
+            // actionhead-v1: rollout (PPO-style data collection) doesn't use
+            // advantages from inference — the A-head's role is in MCTS UCB.
+            // Discard with `_`.
+            let (logits, value, _adv) = inference.evaluate(
                 &state_enc, &act_feat, &act_mask, &hand_ids, &action_ids, num_valid,
             );
             let (chosen_idx, log_prob) =

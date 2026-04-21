@@ -35,7 +35,10 @@ impl BetaOneInference {
         })
     }
 
-    /// Forward pass: state + actions + card IDs → (logits[num_valid], value).
+    /// Forward pass: state + actions + card IDs → (logits[num_valid], value, advantages[num_valid]).
+    /// actionhead-v1: ONNX model with 3 outputs (logits, value, advantage).
+    /// Backward-compat: if "advantage" output is missing (pre-actionhead ONNX),
+    /// returns zeros for advantages so UCB ignores the A term.
     pub fn evaluate(
         &self,
         state: &[f32; STATE_DIM],
@@ -44,7 +47,7 @@ impl BetaOneInference {
         hand_card_ids: &[i64; MAX_HAND],
         action_card_ids: &[i64; MAX_ACTIONS],
         num_valid: usize,
-    ) -> (Vec<f32>, f32) {
+    ) -> (Vec<f32>, f32, Vec<f32>) {
         // Build ONNX input tensors
         let state_arr =
             Array::from_shape_vec((1, STATE_DIM), state.to_vec()).unwrap();
@@ -93,11 +96,31 @@ impl BetaOneInference {
 
                 let logits: Vec<f32> = logits_data.iter().take(num_valid).copied().collect();
                 let value = value_data[0];
-                (logits, value)
+
+                // actionhead-v1: extract advantage if the ONNX model has it.
+                // Pre-actionhead checkpoints exported without this output —
+                // return zeros and let UCB ignore the A term.
+                let advantages: Vec<f32> = match outputs.get("advantage") {
+                    Some(adv_dyn) => {
+                        match adv_dyn.downcast_ref::<ort::value::DynTensorValueType>() {
+                            Ok(adv_t) => {
+                                match adv_t.try_extract_tensor::<f32>() {
+                                    Ok((_, adv_data)) => {
+                                        adv_data.iter().take(num_valid).copied().collect::<Vec<f32>>()
+                                    }
+                                    Err(_) => vec![0.0; num_valid],
+                                }
+                            }
+                            Err(_) => vec![0.0; num_valid],
+                        }
+                    }
+                    None => vec![0.0; num_valid],
+                };
+                (logits, value, advantages)
             }
             Err(e) => {
                 eprintln!("BetaOne ONNX error: {e}");
-                (vec![0.0; num_valid], 0.0)
+                (vec![0.0; num_valid], 0.0, vec![0.0; num_valid])
             }
         }
     }

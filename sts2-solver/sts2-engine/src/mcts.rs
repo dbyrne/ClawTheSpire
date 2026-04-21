@@ -22,6 +22,11 @@ struct Node {
     visit_count: u32,
     value_sum: f64,
     prior: f32,
+    /// actionhead-v1: A_pred(parent_state, action_to_this_node), set during
+    /// parent's expansion. Used in UCB as additive `lambda_adv * advantage`
+    /// term so search can disagree with the policy prior on per-action grounds.
+    /// 0.0 by default (StubInference / OnnxInference / unset).
+    advantage: f32,
     children: Vec<(usize, usize)>,  // (action_idx, child_node_idx)
     legal_actions: Vec<Action>,
     is_expanded: bool,
@@ -50,6 +55,7 @@ impl Node {
             visit_count: 0,
             value_sum: 0.0,
             prior: 0.0,
+            advantage: 0.0,
             children: Vec::new(),
             legal_actions: Vec::new(),
             is_expanded: false,
@@ -67,11 +73,15 @@ impl Node {
         if self.visit_count == 0 { 0.0 } else { self.value_sum / self.visit_count as f64 }
     }
 
-    fn ucb_score(&self, parent_visits: u32, c_puct: f32) -> f32 {
+    fn ucb_score(&self, parent_visits: u32, c_puct: f32, lambda_adv: f32) -> f32 {
         let exploitation = self.value() as f32;
         let exploration = c_puct * self.prior
             * (parent_visits as f32).sqrt() / (1.0 + self.visit_count as f32);
-        exploitation + exploration
+        // actionhead-v1 (option β): permanent additive A-term in UCB. A_pred
+        // is the parent network's per-action advantage estimate — pulls
+        // selection toward high-A actions even when policy prior is small.
+        let adv_term = lambda_adv * self.advantage;
+        exploitation + exploration + adv_term
     }
 }
 
@@ -115,6 +125,10 @@ enum LeafOutcome {
         value: f32,
         actions: Vec<Action>,
         cached_logits: Option<Vec<f32>>,
+        /// actionhead-v1: per-action A_pred cached from a prior NN call (e.g.
+        /// turn-boundary playout's first step). When present, expand can skip
+        /// re-evaluating the same state. None means we need a fresh NN call.
+        cached_advantages: Option<Vec<f32>>,
     },
 }
 
@@ -124,9 +138,12 @@ enum LeafOutcome {
 
 /// Trait for neural network inference. Implemented by ONNX wrapper.
 pub trait Inference {
-    /// Encode state + actions → (logits, value).
+    /// Encode state + actions → (logits, value, advantages).
     /// logits has one entry per legal action (raw, pre-softmax).
-    fn evaluate(&self, state: &CombatState, actions: &[Action]) -> (Vec<f32>, f32);
+    /// advantages has one entry per legal action; A(s, a) ≈ Q_mcts(s, a) - V_mcts(s).
+    /// Implementations without an A-head should return zeros for advantages
+    /// (length matching `actions`) — UCB will then ignore the A term.
+    fn evaluate(&self, state: &CombatState, actions: &[Action]) -> (Vec<f32>, f32, Vec<f32>);
 
     /// Encode state → value only (combat head, for leaf estimation).
     fn value_only(&self, state: &CombatState) -> f32;
@@ -171,6 +188,11 @@ pub struct MCTS<'a> {
     /// faster, letting more rare draws into the tree at the cost of fewer
     /// visits per child.
     pub pw_k: f32,
+    /// actionhead-v1 (option β): weight on the additive A-term in UCB.
+    /// 0.0 disables A's influence on selection (default for non-actionhead
+    /// configs). Set to ~0.5 for actionhead-v1 to roughly match c_puct's
+    /// scale at moderate visit counts.
+    pub lambda_adv: f32,
 }
 
 impl<'a> MCTS<'a> {
@@ -178,7 +200,7 @@ impl<'a> MCTS<'a> {
         MCTS {
             card_db, inference, add_noise: false, turn_boundary_eval: false,
             c_puct: DEFAULT_C_PUCT, terminal_scale: (1.0, 0.3, -1.0),
-            pomcp: false, noise_frac: 0.25, pw_k: 1.0,
+            pomcp: false, noise_frac: 0.25, pw_k: 1.0, lambda_adv: 0.0,
         }
     }
 
@@ -353,8 +375,8 @@ impl<'a> MCTS<'a> {
             let parent_visits = node.visit_count;
             let best_child = node.children.iter()
                 .max_by(|&&(_, a), &&(_, b)| {
-                    let score_a = arena.nodes[a].ucb_score(parent_visits, self.c_puct);
-                    let score_b = arena.nodes[b].ucb_score(parent_visits, self.c_puct);
+                    let score_a = arena.nodes[a].ucb_score(parent_visits, self.c_puct, self.lambda_adv);
+                    let score_b = arena.nodes[b].ucb_score(parent_visits, self.c_puct, self.lambda_adv);
                     score_a.partial_cmp(&score_b).unwrap_or(std::cmp::Ordering::Equal)
                 })
                 .map(|&(_, idx)| idx)
@@ -377,13 +399,16 @@ impl<'a> MCTS<'a> {
     fn expand(&self, arena: &mut Arena, node_idx: usize, rng: &mut impl Rng) -> f32 {
         match self.prepare_for_priors(arena, node_idx, rng) {
             LeafOutcome::Done(value) => value,
-            LeafOutcome::NeedPriors { value, actions, cached_logits } => {
-                let logits = cached_logits.unwrap_or_else(|| {
-                    let state = arena.nodes[node_idx].state.as_ref().unwrap();
-                    let (l, _) = self.inference.evaluate(state, &actions);
-                    l
-                });
-                self.finalize_with_priors(arena, node_idx, actions, &logits);
+            LeafOutcome::NeedPriors { value, actions, cached_logits, cached_advantages } => {
+                let (logits, advantages) = match (cached_logits, cached_advantages) {
+                    (Some(l), Some(a)) => (l, a),
+                    _ => {
+                        let state = arena.nodes[node_idx].state.as_ref().unwrap();
+                        let (l, _, a) = self.inference.evaluate(state, &actions);
+                        (l, a)
+                    }
+                };
+                self.finalize_with_priors(arena, node_idx, actions, &logits, &advantages);
                 value
             }
         }
@@ -448,13 +473,14 @@ impl<'a> MCTS<'a> {
         // default: evaluate V(state) directly (pre-resolution).
         // The optional cached_logits come from the playout's first step
         // (same state as priors-eval below) so we can skip one forward pass.
-        let (value, cached_logits): (f32, Option<Vec<f32>>) = if self.turn_boundary_eval {
+        let (value, cached_logits, cached_advantages):
+            (f32, Option<Vec<f32>>, Option<Vec<f32>>) = if self.turn_boundary_eval {
             let state = arena.nodes[node_idx].state.as_ref().unwrap();
             let ais = arena.nodes[node_idx].enemy_ais.clone();
             self.estimate_leaf_value_turn_boundary(state, &ais, rng)
         } else {
             let state = arena.nodes[node_idx].state.as_ref().unwrap();
-            (self.estimate_leaf_value(state), None)
+            (self.estimate_leaf_value(state), None, None)
         };
 
         // For EndTurn nodes: resolve end-of-turn effects NOW so children
@@ -544,25 +570,31 @@ impl<'a> MCTS<'a> {
         // turn_ended and no forced-EoT fired. The action-count check is a
         // belt-and-suspenders guard for edge cases (e.g. enumerate_actions
         // returning a different list due to hand mutations during playout).
-        let usable_cached = match &cached_logits {
-            Some(l) if !turn_ended && !forced_eot_happened && l.len() == actions.len() => true,
+        // actionhead-v1: cached_advantages travels with cached_logits — they
+        // come from the same evaluate() call, so reuse them together.
+        let usable_cached = match (&cached_logits, &cached_advantages) {
+            (Some(l), Some(a))
+                if !turn_ended && !forced_eot_happened
+                    && l.len() == actions.len() && a.len() == actions.len() => true,
             _ => false,
         };
         LeafOutcome::NeedPriors {
             value,
             actions,
             cached_logits: if usable_cached { cached_logits } else { None },
+            cached_advantages: if usable_cached { cached_advantages } else { None },
         }
     }
 
-    /// Phase-B: apply priors to a prepared leaf and create its children.
-    /// Called after the priors NN call (batched or serial) completes.
+    /// Phase-B: apply priors + advantages to a prepared leaf and create its
+    /// children. Called after the priors NN call (batched or serial) completes.
     fn finalize_with_priors(
         &self,
         arena: &mut Arena,
         node_idx: usize,
         actions: Vec<Action>,
         logits: &[f32],
+        advantages: &[f32],
     ) {
         let priors = if !actions.is_empty() { softmax(logits) } else { vec![] };
 
@@ -570,7 +602,9 @@ impl<'a> MCTS<'a> {
         for (i, _action) in actions.iter().enumerate() {
             let child_idx = arena.alloc(Node::new(None, Some(node_idx), i));
             let prior = if i < priors.len() { priors[i] } else { 0.0 };
+            let advantage = if i < advantages.len() { advantages[i] } else { 0.0 };
             arena.nodes[child_idx].prior = prior;
+            arena.nodes[child_idx].advantage = advantage;
             children.push((i, child_idx));
         }
 
@@ -606,25 +640,27 @@ impl<'a> MCTS<'a> {
     /// This gives the value function a clean turn-boundary state where all
     /// within-turn effects (damage, block, poison ticks, draw) are resolved.
     ///
-    /// Returns `(leaf_value, first_step_logits)`. `first_step_logits` is
-    /// `Some` when the playout's first iteration evaluated the entry state
-    /// (i.e. turn wasn't already ended and there were legal actions). The
-    /// caller uses this to skip a redundant `evaluate()` call when computing
-    /// children priors on the same state.
+    /// Returns `(leaf_value, first_step_logits, first_step_advantages)`.
+    /// `first_step_logits` and `first_step_advantages` are `Some` when the
+    /// playout's first iteration evaluated the entry state (i.e. turn wasn't
+    /// already ended and there were legal actions). The caller uses these to
+    /// skip a redundant `evaluate()` call when computing children priors on
+    /// the same state.
     fn estimate_leaf_value_turn_boundary(
         &self,
         state: &CombatState,
         enemy_ais: &Option<Vec<crate::enemy::EnemyAI>>,
         rng: &mut impl Rng,
-    ) -> (f32, Option<Vec<f32>>) {
+    ) -> (f32, Option<Vec<f32>>, Option<Vec<f32>>) {
         if let Some(outcome) = is_combat_over(state) {
-            return (terminal_value_scaled(outcome, state, self.terminal_scale), None);
+            return (terminal_value_scaled(outcome, state, self.terminal_scale), None, None);
         }
 
         // If turn already ended (EndTurn node), skip the playout — we just
         // need to resolve and evaluate at the next turn start.
         let mut sim = state.clone();
         let mut first_step_logits: Option<Vec<f32>> = None;
+        let mut first_step_advantages: Option<Vec<f32>> = None;
 
         if !sim.turn_ended {
             // Play out remaining card plays using greedy policy
@@ -639,14 +675,15 @@ impl<'a> MCTS<'a> {
                 }
 
                 // Get greedy action from policy network
-                let (logits, _) = self.inference.evaluate(&sim, &actions);
+                let (logits, _, advantages) = self.inference.evaluate(&sim, &actions);
 
                 // On step 0, sim is still bit-identical to the entry state
-                // (no mutation yet). These logits are reusable as the entry
-                // state's policy priors — captured here so expand() can skip
-                // a redundant evaluate() call on the same state.
+                // (no mutation yet). These logits/advantages are reusable as
+                // the entry state's priors — captured so expand() can skip a
+                // redundant evaluate() call on the same state.
                 if step == 0 {
                     first_step_logits = Some(logits.clone());
+                    first_step_advantages = Some(advantages.clone());
                 }
 
                 let chosen = logits.iter().enumerate()
@@ -681,6 +718,7 @@ impl<'a> MCTS<'a> {
             return (
                 terminal_value_scaled(outcome, &sim, self.terminal_scale),
                 first_step_logits,
+                first_step_advantages,
             );
         }
 
@@ -694,7 +732,7 @@ impl<'a> MCTS<'a> {
 
         let v = self.inference.value_only(&sim);
         let v = if v.is_finite() { v } else { 0.0 };
-        (v, first_step_logits)
+        (v, first_step_logits, first_step_advantages)
     }
 
     /// Apply an action to the state. Returns chance-node info when POMCP is

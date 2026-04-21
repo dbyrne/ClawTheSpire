@@ -39,6 +39,9 @@ CARD_EMBED_DIM = 16
 # This is a per-experiment knob, not a version-bumping change — legacy
 # checkpoints without the field default to 1 and load cleanly.
 VALUE_HEAD_LAYERS = 1
+# actionhead-v1: per-action advantage head. Predicts A(s,a) ≈ Q_mcts(s,a) - V_mcts(s).
+# Consumed by Rust MCTS UCB (option β: λ * A added to selection score per action).
+ADVANTAGE_HIDDEN = 64
 
 # Architecture versioning — bump ARCH_VERSION on any change that breaks
 # checkpoint compatibility (any dimension constant above).
@@ -96,6 +99,41 @@ def network_stats(num_cards: int = 120, value_head_layers: int | None = None) ->
     }
 
 
+class AdvantageHead(nn.Module):
+    """Per-action advantage head: A(s, a) ≈ Q_mcts(s, a) - V_mcts(s).
+
+    Architecture: takes the trunk output h and per-action input (card embedding
+    + action features), broadcasts h across actions, runs a small MLP to
+    produce one advantage scalar per action. Illegal actions are zeroed out.
+
+    Inputs:
+      h:            (B, hidden_dim)        — trunk output, shared across actions
+      action_input: (B, MAX_ACTIONS, action_input_dim)  — card_embed ⊕ action_features
+      action_mask:  (B, MAX_ACTIONS) bool  — True for ILLEGAL actions
+
+    Output:
+      advantage:    (B, MAX_ACTIONS) — A(s, a) per action, 0 for illegal
+    """
+
+    def __init__(self, hidden_dim: int, action_input_dim: int, advantage_hidden: int = 64):
+        super().__init__()
+        self.fc1 = nn.Linear(hidden_dim + action_input_dim, advantage_hidden)
+        self.fc2 = nn.Linear(advantage_hidden, 1)
+
+    def forward(
+        self,
+        h: torch.Tensor,
+        action_input: torch.Tensor,
+        action_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        B, N, _ = action_input.shape
+        h_b = h.unsqueeze(1).expand(-1, N, -1)  # (B, N, hidden_dim)
+        x = torch.cat([h_b, action_input], dim=-1)  # (B, N, hidden + action_input_dim)
+        a = F.relu(self.fc1(x))
+        a = self.fc2(a).squeeze(-1)  # (B, N)
+        return a.masked_fill(action_mask, 0.0)
+
+
 class BetaOneNetwork(nn.Module):
     def __init__(self, num_cards: int = 120, value_head_layers: int | None = None):
         super().__init__()
@@ -130,6 +168,16 @@ class BetaOneNetwork(nn.Module):
         # Depth is configurable to test whether a deeper head can represent
         # compound/conditional logic that the 1-layer legacy head misses.
         self.value_head = self._build_value_head(self.value_head_layers)
+
+        # actionhead-v1: per-action advantage head A(s, a). Trained on
+        # Q_mcts(s, a) - V_mcts(s) per legal action. Consumed by Rust MCTS
+        # as additive UCB term (λ * A_pred). Cold-init at fork; old checkpoints
+        # without this head load via strict=False (see load_checkpoint).
+        self.advantage_head = AdvantageHead(
+            hidden_dim=HIDDEN_DIM,
+            action_input_dim=CARD_EMBED_DIM + ACTION_DIM,
+            advantage_hidden=ADVANTAGE_HIDDEN,
+        )
 
     @staticmethod
     def _build_value_head(layers: int) -> nn.Sequential:
@@ -209,7 +257,8 @@ class BetaOneNetwork(nn.Module):
         logits = logits.masked_fill(action_mask, -1e9)
 
         value = self.value_head(h)  # (B, 1)
-        return logits, value
+        advantage = self.advantage_head(h, action_input, action_mask)  # (B, 30)
+        return logits, value, advantage
 
     def param_count(self) -> int:
         return sum(p.numel() for p in self.parameters())
@@ -238,7 +287,7 @@ def export_onnx(network: BetaOneNetwork, output_dir: str) -> str:
         (dummy_state, dummy_actions, dummy_mask, dummy_hand_ids, dummy_action_ids),
         path,
         input_names=["state", "action_features", "action_mask", "hand_card_ids", "action_card_ids"],
-        output_names=["logits", "value"],
+        output_names=["logits", "value", "advantage"],
         dynamic_axes={
             "state": {0: "batch"},
             "action_features": {0: "batch"},
@@ -247,6 +296,7 @@ def export_onnx(network: BetaOneNetwork, output_dir: str) -> str:
             "action_card_ids": {0: "batch"},
             "logits": {0: "batch"},
             "value": {0: "batch"},
+            "advantage": {0: "batch"},
         },
         opset_version=17,
     )
@@ -313,7 +363,20 @@ def load_checkpoint(
             )
 
     if network is not None:
-        network.load_state_dict(ckpt["model_state_dict"])
+        # actionhead-v1: strict=False so warm-loading from pre-A-head checkpoints
+        # leaves advantage_head at random init (intentional cold-start of new head).
+        # In return for safety, we explicitly inspect what's missing/unexpected.
+        result = network.load_state_dict(ckpt["model_state_dict"], strict=False)
+        unexpected = list(result.unexpected_keys)
+        missing = [k for k in result.missing_keys if not k.startswith("advantage_head.")]
+        if unexpected:
+            raise ArchitectureMismatchError(
+                f"Checkpoint {os.path.basename(path)} has unexpected keys: {unexpected}"
+            )
+        if missing:
+            raise ArchitectureMismatchError(
+                f"Checkpoint {os.path.basename(path)} is missing keys (other than advantage_head): {missing}"
+            )
 
     if optimizer is not None:
         try:

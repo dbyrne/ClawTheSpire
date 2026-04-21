@@ -17,9 +17,9 @@ use crate::types::*;
 pub struct StubInference;
 
 impl Inference for StubInference {
-    fn evaluate(&self, _state: &CombatState, actions: &[Action]) -> (Vec<f32>, f32) {
+    fn evaluate(&self, _state: &CombatState, actions: &[Action]) -> (Vec<f32>, f32, Vec<f32>) {
         let n = actions.len();
-        (vec![0.0; n], 0.0)
+        (vec![0.0; n], 0.0, vec![0.0; n])
     }
     fn value_only(&self, _state: &CombatState) -> f32 { 0.0 }
     fn run_value(&self, _state: &CombatState) -> f32 { 0.0 }
@@ -100,7 +100,7 @@ impl OnnxInference {
 }
 
 impl Inference for OnnxInference {
-    fn evaluate(&self, state: &CombatState, actions: &[Action]) -> (Vec<f32>, f32) {
+    fn evaluate(&self, state: &CombatState, actions: &[Action]) -> (Vec<f32>, f32, Vec<f32>) {
         let enc = encode_state(state, &self.vocabs);
         let enc_act = encode_actions(actions, state, &self.vocabs);
 
@@ -121,12 +121,14 @@ impl Inference for OnnxInference {
                 // Pad with 0.0 if actions exceed MAX_ACTIONS (30) — overflow
                 // actions get uniform prior after softmax.
                 logits.resize(actions.len(), 0.0);
-                (logits, value)
+                // Legacy ONNX has no advantage head; return zeros so UCB
+                // ignores the A term (unless the new actionhead model is loaded).
+                (logits, value, vec![0.0; actions.len()])
             }
             Err(e) => {
                 eprintln!("ONNX error: {e}");
                 let n = actions.len();
-                (vec![0.0; n], 0.0)
+                (vec![0.0; n], 0.0, vec![0.0; n])
             }
         }
     }

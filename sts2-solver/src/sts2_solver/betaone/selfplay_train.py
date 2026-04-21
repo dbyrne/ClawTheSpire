@@ -107,6 +107,11 @@ class ReplayBuffer:
         self.action_ids: list[np.ndarray] = []
         self.policies: list[np.ndarray] = []
         self.values: list[np.ndarray] = []
+        # actionhead-v1: per-state advantage targets for the A-head.
+        # Shape (MAX_ACTIONS,) per state. A_target[a] = Q_mcts(s,a) - V_mcts(s)
+        # for legal actions, 0 for illegal. Computed once at self-play time
+        # and refreshed at reanalyse time alongside policy/value targets.
+        self.adv_targets: list[np.ndarray] = []
         self.state_jsons: list[str] = []
         # Track generation boundaries for FIFO eviction
         self._gen_sizes: deque[int] = deque()
@@ -123,6 +128,7 @@ class ReplayBuffer:
         action_ids: np.ndarray,
         policies: np.ndarray,
         values: np.ndarray,
+        adv_targets: np.ndarray,
         state_jsons: list[str] | None = None,
     ) -> None:
         """Add one generation's samples. Evicts oldest gens if over capacity."""
@@ -135,6 +141,7 @@ class ReplayBuffer:
         self.action_ids.extend(action_ids)
         self.policies.extend(policies)
         self.values.extend(values)
+        self.adv_targets.extend(adv_targets)
         # state_jsons optional for backwards-compat callers that don't do
         # reanalyse; fill with empty strings so list indices stay aligned.
         if state_jsons is None:
@@ -151,13 +158,18 @@ class ReplayBuffer:
             del self.action_ids[:drop]
             del self.policies[:drop]
             del self.values[:drop]
+            del self.adv_targets[:drop]
             del self.state_jsons[:drop]
 
     def sample_tensors(self, batch_size: int) -> tuple[
         torch.Tensor, torch.Tensor, torch.Tensor,
-        torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
+        torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
     ]:
-        """Sample a random batch from the buffer, returns tensors."""
+        """Sample a random batch from the buffer, returns tensors.
+
+        Returns: (states, act_feat, act_masks, hand_ids, action_ids,
+                  policies, values, adv_targets)
+        """
         n = len(self.states)
         indices = np.random.choice(n, size=min(batch_size, n), replace=False)
         return (
@@ -168,6 +180,7 @@ class ReplayBuffer:
             torch.tensor(np.array([self.action_ids[i] for i in indices]), dtype=torch.long),
             torch.tensor(np.array([self.policies[i] for i in indices]), dtype=torch.float32),
             torch.tensor(np.array([self.values[i] for i in indices]), dtype=torch.float32),
+            torch.tensor(np.array([self.adv_targets[i] for i in indices]), dtype=torch.float32),
         )
 
     def oldest_indices_with_state(self, n: int) -> list[int]:
@@ -187,14 +200,17 @@ class ReplayBuffer:
         indices: list[int] | np.ndarray,
         new_policies: np.ndarray,
         new_values: np.ndarray,
+        new_adv_targets: np.ndarray,
     ) -> None:
-        """Overwrite stored policy + value targets in-place for the given
-        indices. Caller must ensure shapes align: new_policies is
-        (len(indices), MAX_ACTIONS), new_values is (len(indices),).
+        """Overwrite stored (policy, value, advantage) targets in-place for the
+        given indices. Caller must ensure shapes align: new_policies and
+        new_adv_targets are (len(indices), MAX_ACTIONS), new_values is
+        (len(indices),).
         """
         for j, idx in enumerate(indices):
             self.policies[idx] = new_policies[j]
             self.values[idx] = new_values[j]
+            self.adv_targets[idx] = new_adv_targets[j]
 
 
 # ---------------------------------------------------------------------------
@@ -274,18 +290,25 @@ def train_batch(
     action_card_ids: torch.Tensor,
     target_policies: torch.Tensor,
     target_values: torch.Tensor,
+    target_advantages: torch.Tensor,
     value_coef: float = 1.0,
+    adv_coef: float = 0.5,
     measure_grad_conflict: bool = False,
 ) -> dict[str, float]:
-    """Single training step: cross-entropy policy + MSE value.
+    """Single training step: cross-entropy policy + MSE value + masked MSE advantage.
+
+    actionhead-v1: A-head trained on Q_mcts(s,a) - V_mcts(s) per legal action,
+    masked over illegal actions. adv_coef weights it as auxiliary signal.
 
     If `measure_grad_conflict` is True, also compute cosine similarity between
     policy-loss and value-loss gradients on the shared trunk, plus their
     individual L2 norms. Adds 2 extra backward passes (~2-3x step cost when
     enabled) — sample at a rate in the caller, don't enable per-step.
     """
-    logits, values = network(states, action_features, action_masks,
-                             hand_card_ids, action_card_ids)
+    logits, values, advantages = network(
+        states, action_features, action_masks,
+        hand_card_ids, action_card_ids,
+    )
 
     # Policy loss: cross-entropy against MCTS visit distribution
     log_probs = F.log_softmax(logits, dim=1)
@@ -294,10 +317,27 @@ def train_batch(
     # Value loss: MSE against game outcome
     value_loss = F.mse_loss(values.squeeze(-1), target_values)
 
+    # Advantage loss: masked MSE on legal actions only.
+    # action_masks is True for ILLEGAL actions; legal_mask is the inverse.
+    legal_mask = (~action_masks).float()
+    n_legal = legal_mask.sum().clamp(min=1.0)
+    adv_diff_sq = (advantages - target_advantages) ** 2 * legal_mask
+    adv_loss = adv_diff_sq.sum() / n_legal
+
     out = {
         "policy_loss": policy_loss.item(),
         "value_loss": value_loss.item(),
+        "adv_loss": adv_loss.item(),
     }
+
+    # actionhead-v1 telemetry: magnitudes diagnose collapse vs healthy fit.
+    # adv_pred_mag near zero = head collapsed (not learning). Large gap
+    # between pred and target magnitudes = mis-fit.
+    with torch.no_grad():
+        adv_pred_abs = (advantages.abs() * legal_mask).sum() / n_legal
+        adv_target_abs = (target_advantages.abs() * legal_mask).sum() / n_legal
+        out["adv_pred_mag"] = adv_pred_abs.item()
+        out["adv_target_mag"] = adv_target_abs.item()
 
     # Search/network agreement telemetry — echo-chamber diagnostic.
     # Cheap (no extra passes) so compute every batch, not sampled.
@@ -354,7 +394,7 @@ def train_batch(
         out["grad_norm_p"] = g_P_flat.norm().item()
         out["grad_norm_v"] = g_V_flat.norm().item()
 
-    loss = policy_loss + value_coef * value_loss
+    loss = policy_loss + value_coef * value_loss + adv_coef * adv_loss
 
     optimizer.zero_grad()
     loss.backward()
@@ -375,6 +415,14 @@ def train(
     num_sims: int = 150,
     lr: float = 3e-4,
     value_coef: float = 1.0,
+    # actionhead-v1: weight on the advantage-head MSE loss (auxiliary).
+    # 0.0 disables A-head training (head exists but receives no gradient).
+    adv_coef: float = 0.5,
+    # actionhead-v1: weight of the additive A-term in MCTS UCB (option β).
+    # 0.0 means A is computed/trained but never enters search selection;
+    # 0.5 means A's contribution to UCB roughly matches c_puct's at moderate
+    # visit counts. Tunable.
+    lambda_adv: float = 0.5,
     train_epochs: int = 4,
     batch_size: int = 512,
     temperature: float = 1.0,
@@ -573,6 +621,7 @@ def train(
                 c_puct=c_puct,
                 pomcp=pomcp,
                 noise_frac=noise_frac,
+                lambda_adv=lambda_adv,
                 pw_k=pw_k,
             )
 
@@ -636,6 +685,15 @@ def train(
             )
             gen_policies = list(mixed)
 
+        # actionhead-v1: compute per-state advantage targets.
+        # A_target[s, a] = Q_mcts(s, a) - V_mcts(s) for legal actions (mask=False),
+        # 0 for illegal (mask=True). The A-head loss masks illegals out anyway,
+        # but we zero them here for clean storage / reanalyse symmetry.
+        gen_q_arr = np.array(gen_q_values, dtype=np.float32)              # (T, MAX_ACTIONS)
+        gen_v_arr = np.array(gen_mcts_values, dtype=np.float32)            # (T,)
+        gen_mask_arr = np.array(gen_act_masks, dtype=bool)                 # (T, MAX_ACTIONS) True=illegal
+        gen_adv_targets = (gen_q_arr - gen_v_arr[:, None]) * (~gen_mask_arr)
+
         # Add to replay buffer
         replay.add_generation(
             states=gen_states,
@@ -645,6 +703,7 @@ def train(
             action_ids=gen_action_ids,
             policies=gen_policies,
             values=gen_values,
+            adv_targets=list(gen_adv_targets),
             state_jsons=gen_state_jsons,
         )
 
@@ -660,6 +719,7 @@ def train(
         network.train()
         total_ploss = 0.0
         total_vloss = 0.0
+        total_aloss = 0.0
         n_updates = 0
         grad_cos_samples: list[float] = []
         grad_np_samples: list[float] = []
@@ -667,6 +727,8 @@ def train(
         kl_samples: list[float] = []
         top1_samples: list[float] = []
         vcorr_samples: list[float] = []
+        adv_pred_mag_samples: list[float] = []
+        adv_target_mag_samples: list[float] = []
 
         buf_size = len(replay)
         updates_per_epoch = max(1, buf_size // batch_size)
@@ -675,7 +737,7 @@ def train(
             for _ in range(updates_per_epoch):
                 (b_states, b_act_feat, b_act_masks,
                  b_hand_ids, b_action_ids,
-                 b_policies, b_values) = replay.sample_tensors(batch_size)
+                 b_policies, b_values, b_adv_targets) = replay.sample_tensors(batch_size)
 
                 # Reshape action features from flat to (B, MAX_ACTIONS, ACTION_DIM)
                 b_act_feat = b_act_feat.reshape(-1, MAX_ACTIONS, ACTION_DIM)
@@ -688,12 +750,16 @@ def train(
                     network, optimizer,
                     b_states, b_act_feat, b_act_masks,
                     b_hand_ids, b_action_ids,
-                    b_policies, b_values,
+                    b_policies, b_values, b_adv_targets,
                     value_coef=value_coef,
+                    adv_coef=adv_coef,
                     measure_grad_conflict=measure,
                 )
                 total_ploss += metrics["policy_loss"]
                 total_vloss += metrics["value_loss"]
+                total_aloss += metrics["adv_loss"]
+                adv_pred_mag_samples.append(metrics["adv_pred_mag"])
+                adv_target_mag_samples.append(metrics["adv_target_mag"])
                 kl_samples.append(metrics["kl_mcts_net"])
                 top1_samples.append(metrics["top1_agree"])
                 vcorr_samples.append(metrics["value_corr"])
@@ -706,6 +772,9 @@ def train(
         n = max(n_updates, 1)
         avg_ploss = total_ploss / n
         avg_vloss = total_vloss / n
+        avg_aloss = total_aloss / n
+        adv_pred_mag = float(np.mean(adv_pred_mag_samples)) if adv_pred_mag_samples else 0.0
+        adv_target_mag = float(np.mean(adv_target_mag_samples)) if adv_target_mag_samples else 0.0
 
         # ------------------------------------------------------------------
         # Reanalyse: refresh stale targets for oldest buffer entries with the
@@ -742,6 +811,7 @@ def train(
                     c_puct=c_puct,
                     pomcp=pomcp,
                     pw_k=pw_k,
+                    lambda_adv=lambda_adv,
                 )
                 ra_ok = list(ra_out["ok"])
                 ra_policies = np.array(ra_out["policies"], dtype=np.float32).reshape(-1, MAX_ACTIONS)
@@ -782,7 +852,17 @@ def train(
                         # Under pure-outcome targets, value is ground-truth win/loss:
                         # reanalyse can't and shouldn't change it.
                         sel_values = old_values[valid_idx]
-                    replay.update_targets(sel_indices, sel_policies, sel_values)
+                    # actionhead-v1: refresh advantage targets too. New A_target
+                    # uses the refreshed Q and V from this reanalyse pass —
+                    # consistent with what the policy/value targets see.
+                    ra_masks_full = np.array(
+                        [replay.act_masks[i] for i in indices], dtype=bool,
+                    )
+                    ra_adv_targets = (ra_q - ra_mvals[:, None]) * (~ra_masks_full)
+                    sel_adv_targets = ra_adv_targets[valid_idx]
+                    replay.update_targets(
+                        sel_indices, sel_policies, sel_values, sel_adv_targets,
+                    )
 
                 reanalyse_stats = {
                     "n_refreshed": int(len(valid_idx)),
@@ -805,6 +885,7 @@ def train(
             f"buf {buf_size:6d} | "
             f"pi {avg_ploss:.3f} | "
             f"v {avg_vloss:.3f} | "
+            f"a {avg_aloss:.4f} (pred {adv_pred_mag:.3f}/tgt {adv_target_mag:.3f}) | "
             f"sims {num_sims} | "
             f"{elapsed:.1f}s"
             + (
@@ -827,6 +908,9 @@ def train(
             "encounter_set": encounter_set_id,
             "policy_loss": round(avg_ploss, 5),
             "value_loss": round(avg_vloss, 5),
+            "adv_loss": round(avg_aloss, 5),
+            "adv_pred_mag": round(adv_pred_mag, 4),
+            "adv_target_mag": round(adv_target_mag, 4),
             "num_sims": num_sims,
             "gen_time": round(elapsed, 2),
             "timestamp": time.time(),

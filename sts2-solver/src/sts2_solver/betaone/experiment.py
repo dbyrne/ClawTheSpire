@@ -421,6 +421,10 @@ MCTS_DEFAULTS = {
     "q_target_mix": 0.0,
     "q_target_temp": 0.5,
     "eval_every": 0,
+    # actionhead-v1: weight on the auxiliary advantage-head MSE loss.
+    "adv_coef": 0.5,
+    # actionhead-v1: lambda for MCTS UCB additive A-term (option β).
+    "lambda_adv": 0.5,
 }
 
 
@@ -580,6 +584,8 @@ class ExperimentConfig:
                 "pw_k": _float(mcts.get("pw_k"), 1.0),
                 "q_target_mix": _float(mcts.get("q_target_mix"), 0.0),
                 "q_target_temp": _float(mcts.get("q_target_temp"), 0.5),
+                "adv_coef": _float(mcts.get("adv_coef"), 0.5),
+                "lambda_adv": _float(mcts.get("lambda_adv"), 0.5),
                 "eval_every": mcts.get("eval_every", 0),
                 "value_head_layers": value_head_layers,
                 "grad_conflict_sample_every": mcts.get(

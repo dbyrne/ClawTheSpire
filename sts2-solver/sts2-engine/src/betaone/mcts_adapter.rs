@@ -22,7 +22,7 @@ impl<'a> BetaOneMCTSAdapter<'a> {
 }
 
 impl<'a> Inference for BetaOneMCTSAdapter<'a> {
-    fn evaluate(&self, state: &CombatState, actions: &[Action]) -> (Vec<f32>, f32) {
+    fn evaluate(&self, state: &CombatState, actions: &[Action]) -> (Vec<f32>, f32, Vec<f32>) {
         let state_enc = encode::encode_state(state);
         let (act_feat, act_mask, num_valid) = encode::encode_actions(actions, state);
         let hand_ids = encode::encode_hand_card_ids(state, self.card_vocab);
@@ -40,7 +40,7 @@ impl<'a> Inference for BetaOneMCTSAdapter<'a> {
         let act_mask = [true; encode::MAX_ACTIONS];
         let hand_ids = encode::encode_hand_card_ids(state, self.card_vocab);
         let action_ids = [0i64; encode::MAX_ACTIONS];
-        let (_, value) = self.inference.evaluate(
+        let (_, value, _) = self.inference.evaluate(
             &state_enc, &act_feat, &act_mask, &hand_ids, &action_ids, 0,
         );
         // Clamp to valid range: the value head has no tanh and can overshoot,
