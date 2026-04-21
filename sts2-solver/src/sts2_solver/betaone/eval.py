@@ -256,6 +256,17 @@ def encode_action(action: "ActionSpec", enemies: list[dict]) -> list[float]:
                 v[_TARGET_OFFSET + 3] = 1.0
     elif action.action_type == "end_turn":
         v[_FLAG_END_TURN] = 1.0
+    elif action.action_type == "use_potion":
+        # Mirrors Rust betaone/encode.rs Action::UsePotion branch.
+        pot = action.potion or {}
+        v[CS.DAMAGE] = pot.get("damage_all", 0) / 30.0
+        v[CS.BLOCK] = pot.get("block", 0) / 30.0
+        v[CS.HP_LOSS] = -pot.get("heal", 0) / 10.0
+        if pot.get("strength", 0) > 0:
+            v[CS.DAMAGE] = pot["strength"] / 5.0
+        if pot.get("enemy_weak", 0) > 0:
+            v[CS.WEAK_AMT] = pot["enemy_weak"] / 3.0
+        v[_FLAG_USE_POTION] = 1.0
     elif action.action_type == "choose_card":
         if action.card:
             stats = encode_card_stats(action.card)
@@ -275,6 +286,7 @@ class ActionSpec:
     card: dict | None = None            # card data (for play_card / choose_card)
     target_idx: int | None = None       # enemy target
     label: str = ""                     # human-readable label
+    potion: dict | None = None          # potion data (for use_potion) — fields mirror Rust Potion struct: heal/block/strength/damage_all/enemy_weak
 
     def __str__(self):
         return self.label or self.action_type
@@ -349,6 +361,19 @@ def expose():        return lookup_card("EXPOSE")
 def well_laid_plans(): return lookup_card("WELL_LAID_PLANS")
 def hidden_daggers(): return lookup_card("HIDDEN_DAGGERS")
 def bullet_time():   return lookup_card("BULLET_TIME")
+
+
+# ---------------------------------------------------------------------------
+# Potion shorthand — fields match sts2-engine types.rs Potion
+# ---------------------------------------------------------------------------
+
+def block_potion():      return {"name": "Block Potion", "block": 12}
+def fire_potion():       return {"name": "Fire Potion", "damage_all": 20}
+def explosive_ampoule(): return {"name": "Explosive Ampoule", "damage_all": 10}
+def strength_potion():   return {"name": "Strength Potion", "strength": 2}
+def flex_potion():       return {"name": "Flex Potion", "strength": 5}
+def blood_potion():      return {"name": "Blood Potion", "heal": 14}
+def weak_potion():       return {"name": "Weak Potion", "enemy_weak": 3}
 
 
 # ---------------------------------------------------------------------------
@@ -2677,6 +2702,96 @@ def build_scenarios() -> list[Scenario]:
         best_actions=[1, 2],
         bad_actions=[0, 3],
         pending_choice={"choice_type": "discard_from_hand"},
+    ))
+
+    # ===== POTION USAGE =====
+
+    # Live-game repro: player already has enough block to cover the incoming
+    # attack without spending anything. Using Block Potion is pure overflow —
+    # block resets at end of turn so the extra 12 is wasted.
+    scenarios.append(Scenario(
+        name="dont_use_block_potion_when_already_blocked",
+        category="potion",
+        description="Player has 20 existing block vs 15 incoming — block potion is pure waste. Play productive cards or end turn.",
+        player={"hp": 40, "max_hp": 70, "energy": 2, "block": 20},
+        enemies=[enemy(30, 50, damage=15, hits=1)],
+        hand=[strike(), strike(), defend(), neutralize()],
+        actions=[
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike E0"),
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike E0"),
+            ActionSpec("play_card", defend(), label="Defend"),
+            ActionSpec("play_card", neutralize(), target_idx=0, label="Neutralize E0"),
+            ActionSpec("use_potion", potion=block_potion(), label="Use Block Potion"),
+            ActionSpec("end_turn", label="End Turn"),
+        ],
+        best_actions=[0, 1, 3],   # productive attacks; Neutralize also adds weak to reduce future turns
+        bad_actions=[2, 4, 5],    # Defend = wasted block stack; Block Potion = wasted consumable; ending with 2 unspent energy is waste
+    ))
+
+    # Hand already has enough block cards to cover the incoming hit with
+    # energy to spare. Block Potion is a waste — save it for a turn we can't
+    # cover with cards.
+    scenarios.append(Scenario(
+        name="dont_use_block_potion_when_hand_covers",
+        category="potion",
+        description="Block-only hand with 3 Defends vs 10 incoming. Player has 3 energy — playing 2 Defends covers it. Block potion is a waste of a consumable.",
+        player={"hp": 50, "max_hp": 70, "energy": 3, "block": 0},
+        enemies=[enemy(40, 50, damage=10, hits=1)],
+        hand=[defend(), defend(), defend()],
+        actions=[
+            ActionSpec("play_card", defend(), label="Defend"),
+            ActionSpec("play_card", defend(), label="Defend"),
+            ActionSpec("play_card", defend(), label="Defend"),
+            ActionSpec("use_potion", potion=block_potion(), label="Use Block Potion"),
+            ActionSpec("end_turn", label="End Turn"),
+        ],
+        best_actions=[0, 1, 2],   # any Defend — all equivalent; hand trivially covers 10
+        bad_actions=[3, 4],       # potion wastes consumable; ending turn eats 10 damage when we can block
+    ))
+
+    # Live reproduction (2026-04-21, Silent floor 5 turn 2, gen 88):
+    # Net top-1'd Fortifier at 68.6% here — confident wrong call on a 16-block
+    # player vs a ~10 damage Spinning Kick. Free 4-damage Shiv sat at 4.1%.
+    # Block Potion variant retained for the eval (Fortifier's triple-block
+    # isn't a field on the Rust Potion struct, so it would re-encode as flat
+    # block of a guessed magnitude — not worth the ambiguity).
+    scenarios.append(Scenario(
+        name="dont_use_block_potion_live_seapunk_repro",
+        category="potion",
+        description="Silent mid-turn with 16 block vs Seapunk Spinning Kick (~10 dmg, fully covered). 0 energy left, only Shiv playable (free 4 damage, exhausts). Block Potion would overflow; Shiv is the one productive action.",
+        player={"hp": 55, "max_hp": 70, "energy": 0, "max_energy": 3, "block": 16},
+        enemies=[enemy(30, 45, damage=2, hits=5)],
+        hand=[defend(), lookup_card("SHIV")],
+        turn=2, draw_size=4, discard_size=11,
+        relics={"RING_OF_THE_SNAKE"},
+        actions=[
+            ActionSpec("play_card", lookup_card("SHIV"), target_idx=0, label="Shiv E0"),
+            ActionSpec("use_potion", potion=block_potion(), label="Use Block Potion"),
+            ActionSpec("end_turn", label="End Turn"),
+        ],
+        best_actions=[0],         # free 4 damage, enemy already blocked
+        bad_actions=[1, 2],       # Block Potion = waste; end turn = waste the free Shiv
+    ))
+
+    # Attack potion should not be burned when existing hand has lethal for
+    # 1-2 energy. Strike alone kills the 6-HP enemy; Fire Potion is 20
+    # single-use damage — fine on a chunky boss, terrible on a sliver.
+    scenarios.append(Scenario(
+        name="dont_use_fire_potion_when_lethal_in_hand",
+        category="potion",
+        description="Enemy at 6 HP. Strike (6 damage) in hand with energy to play it. Fire Potion is 20 damage AoE — burns a consumable to solve what one Strike already solves.",
+        player={"hp": 50, "max_hp": 70, "energy": 2, "block": 0},
+        enemies=[enemy(6, 50, damage=8, hits=1)],
+        hand=[strike(), strike(), defend()],
+        actions=[
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike E0"),
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike E0"),
+            ActionSpec("play_card", defend(), label="Defend"),
+            ActionSpec("use_potion", potion=fire_potion(), label="Use Fire Potion"),
+            ActionSpec("end_turn", label="End Turn"),
+        ],
+        best_actions=[0, 1],      # either Strike kills — cheap, consumable preserved
+        bad_actions=[2, 3, 4],    # Defend skips lethal; Fire Potion wastes a consumable; end-turn eats 8
     ))
 
     return scenarios
