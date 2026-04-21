@@ -644,6 +644,67 @@ internal static class GameStateService
         };
     }
 
+    public static object[] BuildAllCardsPayload()
+    {
+        var results = new List<object>();
+        foreach (var card in ModelDb.AllCards)
+        {
+            try
+            {
+                var dynVars = new Dictionary<string, int>();
+                foreach (var kv in card.DynamicVars)
+                {
+                    try { dynVars[kv.Key] = (int)kv.Value.BaseValue; }
+                    catch { /* skip vars that aren't ints */ }
+                }
+
+                var keywords = new List<string>();
+                try { foreach (var k in card.Keywords) keywords.Add(k.ToString()); } catch { }
+
+                var tags = new List<string>();
+                try { foreach (var t in card.Tags) tags.Add(t.ToString()); } catch { }
+
+                int? baseCost = null;
+                bool costsX = false;
+                try
+                {
+                    baseCost = card.EnergyCost.GetWithModifiers(CostModifiers.None);
+                    costsX = card.EnergyCost.CostsX;
+                }
+                catch { }
+
+                results.Add(new
+                {
+                    id = card.Id.Entry,
+                    name = card.Title,
+                    description = GetCardRulesText(card),
+                    type = card.Type.ToString(),
+                    rarity = card.Rarity.ToString(),
+                    target = card.TargetType.ToString(),
+                    cost = baseCost,
+                    costs_x = costsX,
+                    max_upgrade_level = card.MaxUpgradeLevel,
+                    keywords = keywords.ToArray(),
+                    tags = tags.ToArray(),
+                    dynamic_vars = dynVars,
+                    damage = dynVars.TryGetValue("Damage", out var dmg) ? (int?)dmg : null,
+                    block = dynVars.TryGetValue("Block", out var blk) ? (int?)blk : null,
+                    hit_count = dynVars.TryGetValue("HitCount", out var hc) ? (int?)hc : null,
+                });
+            }
+            catch (Exception ex)
+            {
+                // Skip cards that throw during serialization — better to emit the rest than fail.
+                results.Add(new
+                {
+                    id = card.Id.Entry,
+                    error = ex.Message,
+                });
+            }
+        }
+        return results.ToArray();
+    }
+
     public static string ResolveScreen(IScreenContext? currentScreen)
     {
         if (GetOpenModal() != null)

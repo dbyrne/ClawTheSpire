@@ -80,6 +80,20 @@ private const string ModVersion = "0.5.4";
             }
 
             if (request.HttpMethod.Equals("GET", StringComparison.OrdinalIgnoreCase) &&
+                request.Url?.AbsolutePath == "/cards/all")
+            {
+                var payload = await GameThread.InvokeAsync(GameStateService.BuildAllCardsPayload);
+                await WriteJsonAsync(response, 200, new
+                {
+                    ok = true,
+                    request_id = requestId,
+                    data = payload
+                });
+                statusCode = 200;
+                return;
+            }
+
+            if (request.HttpMethod.Equals("GET", StringComparison.OrdinalIgnoreCase) &&
                 request.Url?.AbsolutePath == "/events/stream")
             {
                 statusCode = await HandleEventStreamAsync(response, cancellationToken);
