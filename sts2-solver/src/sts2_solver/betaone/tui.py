@@ -853,6 +853,21 @@ def build_dashboard(experiments: list[dict]) -> Group:
                 fmt_delta=lambda d: f"{d*100:+.0f}%",
                 higher_is_better=True,
             ))
+        # Confident-BAD rate: fraction of wrong picks where policy was
+        # decisive (top1>=0.60). Rising = policy locking in wrong answers
+        # (structural concern). Falling = close-calls resolving toward
+        # correct (healthy maturation). Only shows on eval entries with
+        # the confidence metrics (post 2026-04-21, commit adding conf_*).
+        eh_conf = [r for r in (exp.get("eval_history") or [])
+                   if r.get("conf_bad") is not None and r.get("bad_count")]
+        if len(eh_conf) >= 3:
+            rates = [r["conf_bad"] / max(r["bad_count"], 1) for r in eh_conf]
+            parts.append(_candle_line(
+                "conf_bad", rates, 0.0, 1.0,
+                fmt_val=lambda v: f"{v:.0%}",
+                fmt_delta=lambda d: f"{d*100:+.0f}%",
+                higher_is_better=False,
+            ))
 
     # === Footer ===
     footer = Text(f"  showing last {len(experiments)} experiments (max {MAX_EXPERIMENTS}) | {len(all_sets)} encounter sets | refresh 2s | Ctrl+C to exit", style="dim")

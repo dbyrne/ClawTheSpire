@@ -1095,6 +1095,11 @@ class Experiment:
             "score": round(result["passed"] / max(result["total"], 1), 4),
             "end_turn_avg": result.get("end_turn_avg"),
             "end_turn_high": result.get("end_turn_high", 0),
+            # Confidence profile (added 2026-04-21 per project_binary_eval_suite)
+            "bad_count": result.get("bad_count"),
+            "conf_bad": result.get("conf_bad"),
+            "close_bad": result.get("close_bad"),
+            "conf_clean": result.get("conf_clean"),
             "by_category": {
                 cat: {
                     "passed": sum(1 for r in results if r["passed"]),

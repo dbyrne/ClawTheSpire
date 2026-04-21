@@ -2871,7 +2871,11 @@ def run_eval(checkpoint_path: str | None = None) -> dict:
 
         n_actions = len(sc.actions)
         probs = torch.softmax(logits[0, :n_actions], dim=0).tolist()
-        chosen_idx = max(range(n_actions), key=lambda i: probs[i])
+        ranked = sorted(range(n_actions), key=lambda i: -probs[i])
+        chosen_idx = ranked[0]
+        top1_prob = probs[chosen_idx]
+        top2_prob = probs[ranked[1]] if n_actions > 1 else 0.0
+        top_margin = top1_prob - top2_prob
 
         # Check pass/fail
         passed = chosen_idx in sc.best_actions
@@ -2889,6 +2893,7 @@ def run_eval(checkpoint_path: str | None = None) -> dict:
             "chosen": str(sc.actions[chosen_idx]),
             "chosen_idx": chosen_idx,
             "chosen_prob": probs[chosen_idx],
+            "top_margin": round(top_margin, 3),
             "best_prob": max(probs[i] for i in sc.best_actions),
             "probs": {str(sc.actions[i]): round(probs[i], 3) for i in range(n_actions)},
             "value": round(value.item(), 3),
@@ -2939,6 +2944,32 @@ def run_eval(checkpoint_path: str | None = None) -> dict:
                 print(f"    {name}: {prob:.0%}")
         print()
 
+    # Confidence metrics: distinguish "close-call" mistakes from "decisive" ones.
+    # Thresholds: conf_*_prob=0.60 (confident pick), close_margin=0.05 (near-tie).
+    CONF_THRESHOLD = 0.60
+    CLOSE_MARGIN = 0.05
+    conf_bad = 0
+    close_bad = 0
+    conf_clean = 0
+    bad_count = 0
+    for results in results_by_category.values():
+        for r in results:
+            if r["passed"]:
+                if r["chosen_prob"] >= CONF_THRESHOLD:
+                    conf_clean += 1
+            elif r["is_bad"]:
+                bad_count += 1
+                if r["chosen_prob"] >= CONF_THRESHOLD:
+                    conf_bad += 1
+                if r.get("top_margin", 1.0) < CLOSE_MARGIN:
+                    close_bad += 1
+
+    print(f"Confidence profile:")
+    print(f"  conf_clean (top1>={CONF_THRESHOLD:.2f} on PASS): {conf_clean}/{total_pass}")
+    print(f"  conf_bad   (top1>={CONF_THRESHOLD:.2f} on BAD):  {conf_bad}/{bad_count}")
+    print(f"  close_bad  (top1-top2<{CLOSE_MARGIN:.2f} on BAD): {close_bad}/{bad_count}")
+    print()
+
     return {
         "gen": gen,
         "passed": total_pass,
@@ -2947,6 +2978,10 @@ def run_eval(checkpoint_path: str | None = None) -> dict:
         "by_category": results_by_category,
         "end_turn_avg": round(avg_et, 4) if et_scenarios else None,
         "end_turn_high": len(high_et) if et_scenarios else 0,
+        "bad_count": bad_count,
+        "conf_bad": conf_bad,
+        "close_bad": close_bad,
+        "conf_clean": conf_clean,
     }
 
 
