@@ -649,6 +649,48 @@ def build_scenarios() -> list[Scenario]:
         bad_actions=[3, 7, 9],               # any E3-targeted action; ending turn wastes 3 energy
     ))
 
+    # Live-repro (2026-04-21, Silent, 3 Gardeners turn 6). Three bad targets
+    # to distinguish: E0 clean 19 HP, E1 dying (2 HP / Poison 10), E2 blocked
+    # (14 HP / 6 block / Poison 8). Only 1 energy — one card, one target.
+    # Correct target is E0. Gen 88 top-1'd Strike+ on E1 (14.9%), put 38.8%
+    # mass on E1, 30.9% on E2, only 27.9% on E0. Two independent policy
+    # failures: attacks dying enemy AND prefers blocked enemy to clean one.
+    scenarios.append(Scenario(
+        name="target_clean_over_dying_and_blocked",
+        category="targeting",
+        description="3 enemies. E0: 19 HP clean. E1: 2 HP / 10 Poison (dies to tick). E2: 14 HP / 6 block. With 1 energy and Strike+ in hand, E0 is the only productive target.",
+        player={"hp": 23, "max_hp": 70, "energy": 1, "max_energy": 3, "block": 5,
+                "powers": {"Noxious Fumes": 2}},
+        enemies=[
+            enemy(19, 28, damage=0, hits=0, intent="Buff", powers={"Poison": 5, "Strength": 2}),
+            enemy(2, 30, damage=9, hits=1, powers={"Poison": 10, "Strength": 2}),     # dies
+            enemy(14, 29, block=6, damage=3, hits=3, powers={"Poison": 8, "Strength": 2}),  # blocked
+        ],
+        hand=[
+            {**strike(), "upgraded": True, "damage": 9, "name": "Strike+"},
+            strike(),
+            deadly_poison(),
+        ],
+        turn=6, draw_size=2, discard_size=7, exhaust_size=1,
+        actions=[
+            ActionSpec("play_card", {**strike(), "upgraded": True, "damage": 9, "name": "Strike+"},
+                       target_idx=0, label="Strike+ E0 (9 dmg)"),
+            ActionSpec("play_card", {**strike(), "upgraded": True, "damage": 9, "name": "Strike+"},
+                       target_idx=1, label="Strike+ E1 (wasted, E1 dies)"),
+            ActionSpec("play_card", {**strike(), "upgraded": True, "damage": 9, "name": "Strike+"},
+                       target_idx=2, label="Strike+ E2 (3 through block)"),
+            ActionSpec("play_card", strike(), target_idx=0, label="Strike E0 (6)"),
+            ActionSpec("play_card", strike(), target_idx=1, label="Strike E1 (wasted)"),
+            ActionSpec("play_card", strike(), target_idx=2, label="Strike E2 (0 through block)"),
+            ActionSpec("play_card", deadly_poison(), target_idx=0, label="Deadly Poison E0"),
+            ActionSpec("play_card", deadly_poison(), target_idx=1, label="Deadly Poison E1 (wasted)"),
+            ActionSpec("play_card", deadly_poison(), target_idx=2, label="Deadly Poison E2"),
+            ActionSpec("end_turn", label="End Turn"),
+        ],
+        best_actions=[0, 3, 6],         # any card on E0
+        bad_actions=[1, 4, 7, 9],       # any attack/poison on E1; ending turn wastes energy
+    ))
+
     scenarios.append(Scenario(
         name="target_vulnerable_enemy",
         category="targeting",
