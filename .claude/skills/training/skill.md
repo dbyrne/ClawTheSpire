@@ -98,6 +98,10 @@ sts2-experiment archive <name> [--force]      # keep config/PLAN/benchmarks/hist
                                               # in experiments/_archive/<name>/; worktree removed
                                               # (branch retained). Requires finalize unless --force.
 sts2-experiment unfinalize <name>             # clear concluded marker
+sts2-experiment promote <name> <gen>          # promote experiment gen to production frontier
+                                              # (copies .pt + vocab into betaone_checkpoints/,
+                                              # writes FRONTIER.md; runner then logs the named
+                                              # experiment/gen on startup). --dry-run supported.
 
 # Action commands (run from INSIDE the worktree's venv — cd ../sts2-<name>/sts2-solver first)
 sts2-experiment train <name>                  # cold_start advisory; resumes if ckpt exists
@@ -112,10 +116,11 @@ sts2-experiment encounter-sets
 
 Key concepts:
 - **Encounter sets** are immutable frozen JSONL lists of combat encounters (enemies, deck, HP, relics).
-- **Benchmarks accumulate** via dedup key `(suite, mode, mcts_sims, pw_k, c_puct, pomcp, turn_boundary_eval)`. Different config → new row. Runs with same config add wins/games.
+- **Benchmarks accumulate** via dedup key `(suite, mode, mcts_sims, pw_k, c_puct, pomcp, turn_boundary_eval, gen)`. Different config or different gen → new row. Runs with same config+gen add wins/games.
 - **Eval harness** is separate from encounter-set benchmarks — curated decision scenarios.
 - **Finalize** pins a gen as the canonical conclusion. Scores surfaced for a finalized experiment come from that gen, not latest.
 - **--checkpoint auto** resolves to concluded_gen's .pt (or latest.pt if gen-specific rotated out) for finalized experiments; plain latest for unfinalized. Default for both `eval` and `benchmark`.
+- **Frontier checkpoint** is the runner's production model at `betaone_checkpoints/betaone_latest.pt`. `FRONTIER.md` at repo root records which experiment+gen is there (runner reads the YAML frontmatter and logs `"reanalyse-v3 gen 88"` at startup). Use `sts2-experiment promote` rather than copying files by hand — the command also records scores-at-promotion and backs up the previous frontier.
 
 ## Steps
 
@@ -286,6 +291,8 @@ Give ONE concrete next step, framed by the strategic context:
 - If finalized and benchmarks/evals are stale vs current suite: re-run against current suite to get comparable numbers.
 
 **Finalize heuristic (updated 2026-04-19):** Don't just pick the gen with highest P-Eval + V-Eval sum. Check whether narrow-set combat WR agrees. When eval totals are tied between two candidate gens but one has higher narrow-set WR, that gen is probably the better model. Conversely, if eval totals favor gen X but narrow-set WR favors gen X+10, be honest that the call is marginal. See `feedback_eval_vs_wr.md` for the full interpretation.
+
+**Promote heuristic:** After finalizing, a finalized gen becomes a *promotion candidate* when it beats the current `FRONTIER.md` on the primary axes (combined P+V, narrow-set combat WR on lean-decks-v1). Promotion is separate from finalize — finalize is "this is the canonical output of *this experiment*"; promote is "this is now the frontier for the runner." Don't auto-promote every finalize. A finalize with lower combined eval than current frontier but a useful Pareto trade (e.g., higher V at the cost of P) usually isn't promotion-worthy. Only promote when the new gen is the clear default. Run `sts2-experiment promote <name> <gen>` — it backs up the previous frontier and writes the scores-at-promotion into `FRONTIER.md`.
 
 **"60 gens is often too short for trunk-arch experiments" (2026-04-19):** trunk-baseline-v2 extending past gen 60 showed P-Eval +3-4 scenarios (specifically in `draw` category, which had been noise-dominated at n=4 before suite expansion). But V-Eval can regress past gen 60 as the net drifts into echo-chamber basins. Net gain over `gen 60` finalize is NOT guaranteed. Consider: does this architecture plateau by gen 30 (hploss-aux), by gen 60 (trunk-v1-ish), or still climbing past gen 60? Differs by arch — instrument first, don't assume.
 

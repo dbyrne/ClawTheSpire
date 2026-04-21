@@ -27,7 +27,7 @@ runs.db-wal
 runs.db-shm
 onnx_models/
 sts2-solver/tests/_test_onnx/
-betaone_checkpoints/
+betaone_checkpoints/*
 betaone_checkpoints_*/
 betaone_checkpoint_*.pt
 betaone_train.log
@@ -35,6 +35,12 @@ betaone_ppo_*/
 betaone_v2.*/
 *.onnx
 *.pt
+# Production frontier checkpoint + vocab — kept in git so the runner works
+# from a fresh clone without anyone re-running promote_to_frontier.py. The
+# `!` rules must come AFTER the broad `*.pt` exclusion above (later gitignore
+# patterns override earlier ones). Swap via `sts2-experiment promote <name> <gen>`.
+!betaone_checkpoints/betaone_latest.pt
+!betaone_checkpoints/card_vocab.json
 
 # Experiments: track configs and templates, ignore data
 !sts2-solver/experiments/_benchmark/**
