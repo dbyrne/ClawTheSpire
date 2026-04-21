@@ -43,7 +43,7 @@ architecture:
   state_dim: 446
   trunk_input: 188
 training:
-  generations: 100
+  generations: 128
   combats_per_gen: 256
   lr: 0.0003
   batch_size: 512
