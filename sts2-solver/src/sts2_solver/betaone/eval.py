@@ -611,6 +611,35 @@ def build_scenarios() -> list[Scenario]:
         bad_actions=[0, 2, 3],           # Strike E1 wastes the attack on an already-dying enemy; E2 survives and hits
     ))
 
+    # Live diagnostic (2026-04-21 snapshot, Silent gen 88). Sludge Spinner at
+    # 5 HP vs a hand of [Survivor, Blade Dance, Neutralize] with 3 energy.
+    # Blade Dance → 3 Shivs (12 damage) is trivial lethal; Neutralize is a
+    # free 3-damage setup. Survivor (8 block) is pure waste against a single
+    # 5-HP enemy that's one Blade Dance away from dead.
+    #
+    # Raw policy PASSES (Neutralize 52%, Blade Dance 22%, Survivor 19%, ET 6%)
+    # but MCTS live-flipped to Survivor — the 19% Survivor prior is enough
+    # exploration mass that rollout noise can tip it to top visit count.
+    # Keeping as a tight-margin diagnostic: if a future gen drops the Survivor
+    # prior below ~5%, live Survivor-misplays should disappear.
+    scenarios.append(Scenario(
+        name="survivor_vs_blade_dance_lethal",
+        category="lethal",
+        description="Single 5-HP enemy with Blade Dance in hand = trivial lethal via 3 Shivs. Survivor is defensive waste.",
+        player={"hp": 59, "max_hp": 70, "energy": 3, "max_energy": 3, "block": 0},
+        enemies=[enemy(5, 39, damage=6, hits=1)],
+        hand=[survivor(), blade_dance(), neutralize()],
+        turn=3, draw_size=4, discard_size=2,
+        actions=[
+            ActionSpec("play_card", survivor(), label="Survivor (8 block + discard 1)"),
+            ActionSpec("play_card", blade_dance(), label="Blade Dance (3 Shivs → lethal)"),
+            ActionSpec("play_card", neutralize(), target_idx=0, label="Neutralize E0 (free 3 dmg)"),
+            ActionSpec("end_turn", label="End Turn"),
+        ],
+        best_actions=[1, 2],         # Blade Dance sets up lethal; Neutralize is free damage
+        bad_actions=[0, 3],          # Survivor is defensive when offense kills; ET wastes 3 energy
+    ))
+
     # ===== TARGET SELECTION =====
 
     # Live-repro (2026-04-21, Silent, 4 Phantasmal Gardeners). E3 at 3 HP with
