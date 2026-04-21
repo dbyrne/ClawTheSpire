@@ -425,6 +425,9 @@ MCTS_DEFAULTS = {
     "adv_coef": 0.5,
     # actionhead-v1: lambda for MCTS UCB additive A-term (option β).
     "lambda_adv": 0.5,
+    # actionhead-v1: warmup window. A-head is trained from gen 1 but only
+    # fed to MCTS UCB starting at this gen. Avoids random-init noise.
+    "adv_use_min_gen": 5,
 }
 
 
@@ -586,6 +589,7 @@ class ExperimentConfig:
                 "q_target_temp": _float(mcts.get("q_target_temp"), 0.5),
                 "adv_coef": _float(mcts.get("adv_coef"), 0.5),
                 "lambda_adv": _float(mcts.get("lambda_adv"), 0.5),
+                "adv_use_min_gen": int(mcts.get("adv_use_min_gen", 5)),
                 "eval_every": mcts.get("eval_every", 0),
                 "value_head_layers": value_head_layers,
                 "grad_conflict_sample_every": mcts.get(

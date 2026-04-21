@@ -423,6 +423,12 @@ def train(
     # 0.5 means A's contribution to UCB roughly matches c_puct's at moderate
     # visit counts. Tunable.
     lambda_adv: float = 0.5,
+    # actionhead-v1: warmup window. A-head is trained from gen 1 (so its
+    # weights settle on real targets) but only fed to MCTS UCB starting at
+    # this gen. Avoids gen 1-N self-play running with random A perturbing
+    # selection. Default 5 = MCTS uses cold-zero A for gens 1-4, switches
+    # to trained A at gen 5.
+    adv_use_min_gen: int = 5,
     train_epochs: int = 4,
     batch_size: int = 512,
     temperature: float = 1.0,
@@ -593,6 +599,12 @@ def train(
         combat_offset = 0
         seed_idx = 0
 
+        # actionhead-v1 warmup: gate UCB's use of A until the head has had a
+        # few gens of training. A is still trained from gen 1 (the auxiliary
+        # loss runs regardless), so by adv_use_min_gen its weights have
+        # settled on real targets instead of random init.
+        effective_lambda_adv = lambda_adv if gen >= adv_use_min_gen else 0.0
+
         for b_enc, b_dks, b_rels, b_hp, b_count in batches:
             if not b_enc:
                 continue
@@ -621,7 +633,7 @@ def train(
                 c_puct=c_puct,
                 pomcp=pomcp,
                 noise_frac=noise_frac,
-                lambda_adv=lambda_adv,
+                lambda_adv=effective_lambda_adv,
                 pw_k=pw_k,
             )
 
@@ -811,7 +823,7 @@ def train(
                     c_puct=c_puct,
                     pomcp=pomcp,
                     pw_k=pw_k,
-                    lambda_adv=lambda_adv,
+                    lambda_adv=effective_lambda_adv,
                 )
                 ra_ok = list(ra_out["ok"])
                 ra_policies = np.array(ra_out["policies"], dtype=np.float32).reshape(-1, MAX_ACTIONS)
