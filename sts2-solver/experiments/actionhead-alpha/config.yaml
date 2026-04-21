@@ -1,0 +1,85 @@
+name: actionhead-alpha
+method: mcts_selfplay
+description: "MuZero-style reanalyse with cadence prioritized over single-pass frac:\n\
+  frac=0.75, every=2. Tests whether minimizing MAX staleness (not just\naverage refresh\
+  \ rate) eliminates drift.\n\nv1 (frac=0.25, every=5): max stale ~8 gens, 5%/gen\
+  \ refresh rate\nv2 (frac=0.50, every=5): max stale ~6 gens, 10%/gen refresh rate\n\
+  v3 (frac=0.75, every=2): max stale 2 gens, 37.5%/gen refresh rate\n\nRationale:\
+  \ initially we considered frac=1.0, every=5 (Option B) but\nthat has max staleness\
+  \ 4 gens \u2014 no matter how high you push frac at\ncadence=5, some entries drift\
+  \ ~4 gens between refreshes. Cadence is\nthe stronger lever. At every=2, the newest\
+  \ 25% is already fresh\n(just-added from current-ish net), so skipping it saves\
+  \ compute at\nzero staleness cost, hence frac=0.75 instead of 1.0.\n\nFork point:\
+  \ tb-v2 g60, same as v1/v2. Merged main in first (simulator\nfixes, expanded 128-scenario\
+  \ eval suite, phase markers). Absolute WR\nwon't be directly comparable to v1/v2's\
+  \ due to engine drift, but the\ninternal drift test (does g80 WR hold through g90\
+  \ without drop?) is\nstill clean.\n\nShip criterion: g80 AND g90 both >= 74.1% (tb-v2\
+  \ g60 peak). If true,\ncadence-driven staleness reduction DID close the drift loop\
+  \ and this\nis our drift-free config.\nKill criterion: g90 drifts from g80 peak\
+  \ by >=1pp despite max\nstaleness = 2 gens. Staleness alone isn't the bottleneck\
+  \ \u2014 the\nremaining drift lives in the value-head bias, not the buffer.\n\n\
+  Compute cost: ~3.75x v2 (37.5K states \xD7 1/2 gens = 18.75K states/gen\nrefreshed\
+  \ vs v2's 25K \xD7 1/5 = 5K). Expect ~16 min/gen, ~27 hours for\n100 gens.\n"
+created: '2026-04-21T08:12:06+00:00'
+parent: actionhead-v1
+parent_checkpoint: latest
+network_type: betaone
+architecture:
+  arch_version: 2
+  base_state_dim: 156
+  hidden_dim: 128
+  action_hidden: 64
+  hand_proj_dim: 32
+  card_embed_dim: 16
+  card_stats_dim: 28
+  relic_dim: 27
+  hand_agg_dim: 3
+  action_dim: 35
+  max_hand: 10
+  max_actions: 30
+  value_head_layers: 3
+  num_cards: 578
+  total_params: 152346
+  state_dim: 446
+  trunk_input: 188
+training:
+  generations: 128
+  combats_per_gen: 256
+  lr: 0.0003
+  batch_size: 512
+  mcts:
+    num_sims: 1000
+    temperature: 1.0
+    replay_capacity: 50000
+    train_epochs: 4
+    value_coef: 1.0
+    c_puct: 1.5
+    pomcp: true
+    mcts_bootstrap: true
+    turn_boundary_eval: true
+    q_target_mix: 0.5
+    q_target_temp: 0.5
+    eval_every: 1
+    grad_conflict_sample_every: 10
+    reanalyse_every: 2
+    reanalyse_frac: 0.75
+    reanalyse_min_gen: 10
+    adv_alpha_mode: true
+data:
+  mode: encounter_set
+  encounter_set: lean-decks-v1
+checkpoints:
+  save_every: 1
+  keep_best: true
+  cold_start: false
+concluded_gen: 47
+concluded_reason: 'Plateaued. Alpha mode (advantage head, option A integration, lambda=0.5)
+  finalized at gen 47 on 128/127-scenario suites. Binary suite: P 106 CLEAN / 21 BAD,
+  V 98, MCTS CLEAN 99 / ECHO 15 / FIXED 6 / BROKE 5 / rescue +0.04. Old 128 suite:
+  P 108 (tied peak with gens 41, 46). WR last-10 mean 65.7%, flat in 62-68 range across
+  gens 38-48. Pareto-similar to v3 g88 (P 112, V 100, MCTS CLEAN 104, rescue -0.10)
+  but trades ~6 P-Eval for positive rescue_rate. Not strictly dominated, not a clear
+  replacement for v3. Cross-session finding: on binary suite, alpha''s rescue_rate
+  +0.04 is much more modest than the +0.40 we initially saw on the pre-binary suite
+  (MIXED inflation). Compute freed for v25 and future experiments.'
+concluded_at: '2026-04-21T17:57:00+00:00'
