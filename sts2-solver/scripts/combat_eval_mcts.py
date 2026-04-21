@@ -243,7 +243,7 @@ def load_net(ckpt_path: Path, device: str = "cpu") -> tuple[BetaOneNetwork, dict
     card_vocab = json.loads(cv_path.read_text())
     kwargs = network_kwargs_from_meta(ckpt.get("arch_meta"))
     net = BetaOneNetwork(num_cards=len(card_vocab), **kwargs)
-    net.load_state_dict(ckpt["model_state_dict"])
+    net.load_state_dict(ckpt["model_state_dict"], strict=False)
     net.eval()
     onnx_dir = Path(tempfile.gettempdir()) / "combat_eval_mcts_onnx"
     onnx_dir.mkdir(parents=True, exist_ok=True)

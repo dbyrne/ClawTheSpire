@@ -557,6 +557,10 @@ class ExperimentConfig:
 
         arch = self.architecture or {}
         value_head_layers = int(arch.get("value_head_layers", 1))
+        trunk_layers = int(arch.get("trunk_layers", 2))
+        trunk_hidden = int(arch.get("trunk_hidden", 128))
+        policy_head_type = str(arch.get("policy_head_type", "dot_product"))
+        policy_mlp_hidden = int(arch.get("policy_mlp_hidden", 64))
 
         if self.method == "mcts_selfplay":
             mcts = t.get("mcts", {})
@@ -565,6 +569,9 @@ class ExperimentConfig:
                 "combats_per_gen": t.get("combats_per_gen", 256),
                 "num_sims": mcts.get("num_sims", 400),
                 "lr": _float(t.get("lr"), 3e-4),
+                "lr_schedule": t.get("lr_schedule", "constant"),
+                "lr_warmup_frac": _float(t.get("lr_warmup_frac"), 0.05),
+                "lr_min_frac": _float(t.get("lr_min_frac"), 0.1),
                 "value_coef": _float(mcts.get("value_coef"), 1.0),
                 "train_epochs": mcts.get("train_epochs", 4),
                 "batch_size": t.get("batch_size", 512),
@@ -582,6 +589,10 @@ class ExperimentConfig:
                 "q_target_temp": _float(mcts.get("q_target_temp"), 0.5),
                 "eval_every": mcts.get("eval_every", 0),
                 "value_head_layers": value_head_layers,
+                "trunk_layers": trunk_layers,
+                "trunk_hidden": trunk_hidden,
+                "policy_head_type": policy_head_type,
+                "policy_mlp_hidden": policy_mlp_hidden,
                 "grad_conflict_sample_every": mcts.get(
                     "grad_conflict_sample_every", 10
                 ),
@@ -688,7 +699,17 @@ class Experiment:
                 "total_params": _net.param_count(),
             }
         else:
-            config.architecture = dict(ARCH_META)
+            # Merge defaults UNDER the existing architecture instead of
+            # overwriting it. Fresh `create` calls have config.architecture
+            # = dict(ARCH_META) from the dataclass default, so the merge is
+            # idempotent. Fork calls have config.architecture = parent's
+            # architecture (potentially with per-experiment overrides like
+            # value_head_layers=3) — those overrides survive the merge,
+            # newly-added defaults from ARCH_META get filled in for missing
+            # keys. This fixes the silent vhl-reset bug where forks from a
+            # vhl=3 baseline silently downgraded to vhl=1, then warm-load
+            # would reset value_head to random init due to shape mismatch.
+            config.architecture = {**ARCH_META, **(config.architecture or {})}
             vocab_path = BENCHMARK_DIR / "card_vocab.json"
             if vocab_path.exists():
                 import json as _json
@@ -705,13 +726,16 @@ class Experiment:
             _apply_overrides(config, overrides)
 
         # Recompute params/stats from the FINAL architecture (overrides may
-        # have changed value_head_layers, which affects total_params).
+        # have changed value_head_layers / trunk config, which affects total_params).
         if config.network_type != "decknet":
             arch = config.architecture
-            value_head_layers = int(arch.get("value_head_layers", 1))
             stats = network_stats(
                 num_cards=int(arch.get("num_cards", 120)),
-                value_head_layers=value_head_layers,
+                value_head_layers=int(arch.get("value_head_layers", 1)),
+                trunk_layers=int(arch.get("trunk_layers", 2)),
+                trunk_hidden=int(arch.get("trunk_hidden", 128)),
+                policy_head_type=str(arch.get("policy_head_type", "dot_product")),
+                policy_mlp_hidden=int(arch.get("policy_mlp_hidden", 64)),
             )
             arch["total_params"] = stats["total_params"]
             arch["state_dim"] = stats["state_dim"]
@@ -1075,6 +1099,11 @@ class Experiment:
             "score": round(result["passed"] / max(result["total"], 1), 4),
             "end_turn_avg": result.get("end_turn_avg"),
             "end_turn_high": result.get("end_turn_high", 0),
+            # Confidence profile (added 2026-04-21 per project_binary_eval_suite)
+            "bad_count": result.get("bad_count"),
+            "conf_bad": result.get("conf_bad"),
+            "close_bad": result.get("close_bad"),
+            "conf_clean": result.get("conf_clean"),
             "by_category": {
                 cat: {
                     "passed": sum(1 for r in results if r["passed"]),

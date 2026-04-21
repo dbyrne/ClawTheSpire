@@ -506,6 +506,9 @@ def cmd_compare(args):
             "v_eval": (value_eval_result["passed"] / max(value_eval_result["total"], 1)
                        if value_eval_result else None),
             "suite": suite_short,
+            "conf_bad": eval_result.get("conf_bad") if eval_result else None,
+            "close_bad": eval_result.get("close_bad") if eval_result else None,
+            "bad_count": eval_result.get("bad_count") if eval_result else None,
         })
 
     if not rows:
@@ -513,9 +516,13 @@ def cmd_compare(args):
         return
 
     # Print comparison table
-    print(f"\n{'Experiment':<28s} {'Method':<12s} {'Params':>8s} {'Gen':>5s} "
-          f"{'WR':>7s} {'Best':>7s} {'P-Eval':>7s} {'V-Eval':>7s} {'Suite':>9s}")
-    print("-" * 99)
+    has_conf = any(r.get("conf_bad") is not None for r in rows)
+    header = (f"\n{'Experiment':<28s} {'Method':<12s} {'Params':>8s} {'Gen':>5s} "
+              f"{'WR':>7s} {'Best':>7s} {'P-Eval':>7s} {'V-Eval':>7s} {'Suite':>9s}")
+    if has_conf:
+        header += f" {'CBad':>5s} {'Close':>6s}"
+    print(header)
+    print("-" * (99 + (13 if has_conf else 0)))
     for r in rows:
         wr = f"{r['wr']:.1%}" if isinstance(r["wr"], float) else str(r["wr"])
         best = f"{r['best']:.1%}" if isinstance(r["best"], float) else str(r["best"])
@@ -523,8 +530,16 @@ def cmd_compare(args):
         params = f"{r['params']:,}" if isinstance(r["params"], int) else str(r["params"])
         pev = f"{r['p_eval']:.1%}" if r["p_eval"] is not None else "  -"
         vev = f"{r['v_eval']:.1%}" if r["v_eval"] is not None else "  -"
-        print(f"  {r['name']:<26s} {r['method']:<12s} {params:>8s} {gen:>5s} "
-              f"{wr:>7s} {best:>7s} {pev:>7s} {vev:>7s} {r['suite']:>9s}")
+        line = (f"  {r['name']:<26s} {r['method']:<12s} {params:>8s} {gen:>5s} "
+                f"{wr:>7s} {best:>7s} {pev:>7s} {vev:>7s} {r['suite']:>9s}")
+        if has_conf:
+            cb = r.get("conf_bad")
+            xb = r.get("close_bad")
+            bc = r.get("bad_count")
+            cb_str = f"{cb}/{bc}" if cb is not None and bc is not None else "  -"
+            xb_str = f"{xb}/{bc}" if xb is not None and bc is not None else "  -"
+            line += f" {cb_str:>5s} {xb_str:>6s}"
+        print(line)
     if any("*" in r["gen"] for r in rows):
         print("  (* = finalized at concluded_gen; scores shown are at that gen)")
     # The Suite column shows P-total/V-total. Distinct signatures mean the
@@ -624,6 +639,20 @@ def cmd_info(args):
         gen = eval_result.get("gen", "?")
         label = "Eval at concluded gen" if info["is_concluded"] else "Latest eval"
         print(f"\n{label} (gen {gen}): {passed}/{total} ({score:.1%})")
+        # Confidence profile (present on eval.jsonl entries written after 2026-04-21).
+        conf_clean = eval_result.get("conf_clean")
+        conf_bad = eval_result.get("conf_bad")
+        close_bad = eval_result.get("close_bad")
+        bad_count = eval_result.get("bad_count")
+        if conf_clean is not None or conf_bad is not None:
+            parts = []
+            if conf_clean is not None:
+                parts.append(f"conf_clean {conf_clean}/{passed}")
+            if conf_bad is not None and bad_count is not None:
+                parts.append(f"conf_bad {conf_bad}/{bad_count}")
+            if close_bad is not None and bad_count is not None:
+                parts.append(f"close_bad {close_bad}/{bad_count}")
+            print(f"  confidence: {'  '.join(parts)}")
         by_cat = eval_result.get("by_category", {})
         if by_cat:
             for cat, counts in sorted(by_cat.items()):

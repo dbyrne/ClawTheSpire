@@ -170,7 +170,7 @@ def _collect_experiments() -> list[dict]:
         history = _load_jsonl_all(d / hist_name, tail=60)
         eval_all = _load_jsonl_all(d / "benchmarks" / "eval.jsonl", tail=200)
         value_eval_all = _load_jsonl_all(d / "benchmarks" / "value_eval.jsonl", tail=200)
-        hp_eval_all = _load_jsonl_all(d / "benchmarks" / "hp_eval.jsonl", tail=200)
+        mcts_eval_all = _load_jsonl_all(d / "benchmarks" / "mcts_eval.jsonl", tail=200)
 
         concluded_gen = config.get("concluded_gen")
         if concluded_gen is not None:
@@ -181,16 +181,16 @@ def _collect_experiments() -> list[dict]:
             eval_result = pinned[-1] if pinned else None
             pinned_v = [r for r in value_eval_all if r.get("gen") == concluded_gen]
             value_eval_result = pinned_v[-1] if pinned_v else None
-            pinned_h = [r for r in hp_eval_all if r.get("gen") == concluded_gen]
-            hp_eval_result = pinned_h[-1] if pinned_h else None
+            pinned_m = [r for r in mcts_eval_all if r.get("gen") == concluded_gen]
+            mcts_eval_result = pinned_m[-1] if pinned_m else None
         else:
             eval_result = eval_all[-1] if eval_all else None
             value_eval_result = value_eval_all[-1] if value_eval_all else None
-            hp_eval_result = hp_eval_all[-1] if hp_eval_all else None
+            mcts_eval_result = mcts_eval_all[-1] if mcts_eval_all else None
 
         eval_history = eval_all[-60:]
         value_eval_history = value_eval_all[-60:]
-        hp_eval_history = hp_eval_all[-60:]
+        mcts_eval_history = mcts_eval_all[-60:]
         benchmarks = _load_jsonl_all(d / "benchmarks" / "results.jsonl", tail=10)
 
         experiments.append({
@@ -207,10 +207,10 @@ def _collect_experiments() -> list[dict]:
             "history": history,
             "eval": eval_result,
             "value_eval": value_eval_result,
-            "hp_eval": hp_eval_result,
+            "mcts_eval": mcts_eval_result,
             "eval_history": eval_history,
             "value_eval_history": value_eval_history,
-            "hp_eval_history": hp_eval_history,
+            "mcts_eval_history": mcts_eval_history,
             "benchmarks": benchmarks,
             "concluded_gen": concluded_gen,
             "dir": d,
@@ -297,7 +297,7 @@ def build_dashboard(experiments: list[dict]) -> Group:
         overview.add_column("Best", justify="right", max_width=7)
         overview.add_column("P-Eval", justify="right", max_width=7)
         overview.add_column("V-Eval", justify="right", max_width=7)
-        overview.add_column("H-Eval", justify="right", max_width=7)
+        overview.add_column("Search", justify="right", max_width=7)
         overview.add_column("Suite", justify="right", max_width=12)
         overview.add_column("ET Avg", justify="right", max_width=7)
         overview.add_column("Buffer", justify="right", max_width=10)
@@ -309,7 +309,7 @@ def build_dashboard(experiments: list[dict]) -> Group:
             p = exp["progress"]
             ev = exp["eval"]
             vev = exp.get("value_eval")
-            hev = exp.get("hp_eval")
+            mev = exp.get("mcts_eval")
             arch = exp["arch"]
             concluded = exp.get("concluded_gen")
 
@@ -361,19 +361,18 @@ def build_dashboard(experiments: list[dict]) -> Group:
 
             eval_str = f"{ev['score']:.0%}" if ev and "score" in ev else "-"
             vev_str = f"{vev['score']:.0%}" if vev and "score" in vev else "-"
-            hev_str = f"{hev['score']:.0%}" if hev and "score" in hev else "-"
-            # Suite signature = "<P-total>/<V-total>/<H-total>" (scenario counts).
-            # Same signature across rows means scores were computed against
-            # the same number of scenarios — apples-to-apples check. H-total
-            # is "-" for experiments without an HP head (legacy + most pre-
-            # hploss-aux-v1 work). Stored suite_id hash historically only
-            # covered policy scenarios, so it could match while V-Eval / H-Eval
-            # silently drifted; showing raw totals exposes that.
+            # Net search contribution: (FIXED-BROKE)/(FIXED+ECHO+BROKE). Range
+            # [-1, 1]. Positive = MCTS helps policy; negative = MCTS hurts.
+            # Replaces prior rescue-rate metric that maxed at 100% when ECHO=0
+            # even though BROKE cases made net contribution negative.
+            mev_str = f"{mev['rescue_rate']*100:+.0f}%" if mev and "rescue_rate" in mev else "-"
+            # Suite signature = "<P-total>/<V-total>" scenario counts. Same
+            # signature across rows means scores were computed against the same
+            # number of scenarios — apples-to-apples check.
             p_total = ev.get("total") if ev else None
             v_total = vev.get("total") if vev else None
-            h_total = hev.get("total") if hev else None
-            if p_total or v_total or h_total:
-                suite_str = f"{p_total or '-'}/{v_total or '-'}/{h_total or '-'}"
+            if p_total or v_total:
+                suite_str = f"{p_total or '-'}/{v_total or '-'}"
             else:
                 suite_str = "-"
             et_str = f"{ev['end_turn_avg']:.0%}" if ev and ev.get("end_turn_avg") else "-"
@@ -410,7 +409,7 @@ def build_dashboard(experiments: list[dict]) -> Group:
             row_style = "dim" if concluded is not None else None
             overview.add_row(name_text, method, params_str, vhl_str, base_str,
                              status, start_str,
-                             gen_str, wr, best, eval_str, vev_str, hev_str,
+                             gen_str, wr, best, eval_str, vev_str, mev_str,
                              suite_str,
                              et_str, buf_str,
                              cpuct_str, noise_str, ts_str,
@@ -818,6 +817,11 @@ def build_dashboard(experiments: list[dict]) -> Group:
         # sparse (every eval_every gens) and step-to-step movement is what
         # actually tells us whether the last 10 gens helped.
         eh = exp.get("eval_history") or []
+        # Eval sparklines now use window-mean deltas (not point-to-point) since
+        # eval_every=1 has been the default since 2026-04-19 — per-gen eval
+        # data is dense enough that single-point movement is dominated by
+        # inherent gen-to-gen oscillation (V-Eval ±8pp, P-Eval ±3-5pp).
+        # Window mean smooths that and surfaces real trends.
         if len(eh) >= 3:
             scores = [r.get("score", 0.0) for r in eh]
             parts.append(_candle_line(
@@ -825,7 +829,6 @@ def build_dashboard(experiments: list[dict]) -> Group:
                 fmt_val=lambda v: f"{v:.1%}",
                 fmt_delta=lambda d: f"{d*100:.1f}%",
                 higher_is_better=True,
-                delta_mode="last",
             ))
         vh = exp.get("value_eval_history") or []
         if len(vh) >= 3:
@@ -835,17 +838,35 @@ def build_dashboard(experiments: list[dict]) -> Group:
                 fmt_val=lambda v: f"{v:.1%}",
                 fmt_delta=lambda d: f"{d*100:.1f}%",
                 higher_is_better=True,
-                delta_mode="last",
             ))
-        hh = exp.get("hp_eval_history") or []
-        if len(hh) >= 3:
-            scores = [r.get("score", 0.0) for r in hh]
+        mh = exp.get("mcts_eval_history") or []
+        if len(mh) >= 3:
+            # Net search contribution: (FIXED-BROKE)/(FIXED+ECHO+BROKE).
+            # Range [-1, 1]. Positive = value head provides useful corrective
+            # signal at MCTS leaves; negative = MCTS breaks more correct picks
+            # than it rescues wrong ones. Scale -0.5..+0.5 covers the
+            # typical observed range cleanly.
+            scores = [r.get("rescue_rate", 0.0) for r in mh]
             parts.append(_candle_line(
-                "h-eval", scores, 0.0, 1.0,
-                fmt_val=lambda v: f"{v:.1%}",
-                fmt_delta=lambda d: f"{d*100:.1f}%",
+                "search", scores, -0.5, 0.5,
+                fmt_val=lambda v: f"{v*100:+.0f}%",
+                fmt_delta=lambda d: f"{d*100:+.0f}%",
                 higher_is_better=True,
-                delta_mode="last",
+            ))
+        # Confident-BAD rate: fraction of wrong picks where policy was
+        # decisive (top1>=0.60). Rising = policy locking in wrong answers
+        # (structural concern). Falling = close-calls resolving toward
+        # correct (healthy maturation). Only shows on eval entries with
+        # the confidence metrics (post 2026-04-21, commit adding conf_*).
+        eh_conf = [r for r in (exp.get("eval_history") or [])
+                   if r.get("conf_bad") is not None and r.get("bad_count")]
+        if len(eh_conf) >= 3:
+            rates = [r["conf_bad"] / max(r["bad_count"], 1) for r in eh_conf]
+            parts.append(_candle_line(
+                "conf_bad", rates, 0.0, 1.0,
+                fmt_val=lambda v: f"{v:.0%}",
+                fmt_delta=lambda d: f"{d*100:+.0f}%",
+                higher_is_better=False,
             ))
 
     # === Footer ===

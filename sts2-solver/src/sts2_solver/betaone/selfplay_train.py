@@ -391,6 +391,13 @@ def train(
     q_target_temp: float = 0.5,
     eval_every: int = 0,
     value_head_layers: int = 1,
+    trunk_layers: int = 2,
+    trunk_hidden: int = 128,
+    policy_head_type: str = "dot_product",
+    policy_mlp_hidden: int = 64,
+    lr_schedule: str = "constant",
+    lr_warmup_frac: float = 0.05,
+    lr_min_frac: float = 0.1,
     grad_conflict_sample_every: int = 10,
     save_every: int = 10,
     # MuZero-style reanalyse: periodically re-run MCTS on stored states with
@@ -415,9 +422,35 @@ def train(
     num_cards = len(card_vocab)
 
     # Network + optimizer
-    network = BetaOneNetwork(num_cards=num_cards, value_head_layers=value_head_layers)
+    network = BetaOneNetwork(
+        num_cards=num_cards,
+        value_head_layers=value_head_layers,
+        trunk_layers=trunk_layers,
+        trunk_hidden=trunk_hidden,
+        policy_head_type=policy_head_type,
+        policy_mlp_hidden=policy_mlp_hidden,
+    )
     optimizer = torch.optim.Adam(network.parameters(), lr=lr)
-    print(f"BetaOne self-play: {network.param_count():,} params, {num_cards} card vocab")
+    print(
+        f"BetaOne self-play: {network.param_count():,} params, {num_cards} card vocab "
+        f"(vhl={value_head_layers}, trunk={trunk_layers}x{trunk_hidden}, "
+        f"policy={policy_head_type})"
+    )
+
+    # Cosine LR schedule with warmup. `lr_schedule='constant'` = legacy behavior.
+    # `lr_schedule='cosine_warmup'` = warmup for lr_warmup_frac of num_generations,
+    # then cosine decay to lr * lr_min_frac.
+    def _lr_at_gen(g: int) -> float:
+        if lr_schedule == "constant":
+            return lr
+        warmup_gens = max(1, int(num_generations * lr_warmup_frac))
+        if g <= warmup_gens:
+            return lr * (g / warmup_gens)
+        # Cosine decay from gen warmup_gens+1 to num_generations
+        progress = (g - warmup_gens) / max(1, num_generations - warmup_gens)
+        import math
+        lr_min = lr * lr_min_frac
+        return lr_min + 0.5 * (lr - lr_min) * (1 + math.cos(math.pi * progress))
 
     # Load the frozen encounter set
     td = setup_training_data(encounter_set_id=encounter_set_id)
@@ -524,6 +557,11 @@ def train(
 
     for gen in range(start_gen, num_generations + 1):
         t0 = time.time()
+
+        # Apply LR schedule (constant or cosine with warmup).
+        current_lr = _lr_at_gen(gen)
+        for param_group in optimizer.param_groups:
+            param_group["lr"] = current_lr
 
         # Export ONNX
         onnx_path = export_onnx(network, onnx_dir)
@@ -886,13 +924,16 @@ def train(
         if eval_every > 0 and gen % eval_every == 0:
             _update_phase(progress_path, "EVALUATING", gen)
             try:
-                from .eval import run_eval, run_value_eval
+                from .eval import run_eval, run_value_eval, run_mcts_eval
                 from .suite import compute_eval_suite, suite_id as _suite_id
                 bench_dir = os.path.join(output_dir, "benchmarks")
                 os.makedirs(bench_dir, exist_ok=True)
                 _sid = _suite_id(compute_eval_suite())
                 pol = run_eval(latest_path)
                 val = run_value_eval(latest_path)
+                # MCTS eval: policy-vs-MCTS classification. Rescue rate tracks
+                # value-head bias (how much corrective signal MCTS leaves provide).
+                mce = run_mcts_eval(latest_path)
                 # Mirror Experiment.save_eval / save_value_eval entry shape.
                 pol_entry = {
                     "suite": _sid, "timestamp": time.time(), "gen": gen,
@@ -911,13 +952,25 @@ def train(
                     "score": round(val["passed"] / max(val["total"], 1), 4),
                     "by_category": val.get("by_category", {}),
                 }
+                mce_entry = {
+                    "suite": _sid, "timestamp": time.time(), "gen": gen,
+                    "total": mce["total"],
+                    "clean": mce["clean"], "echo": mce["echo"],
+                    "fixed": mce["fixed"], "broke": mce["broke"],
+                    "mixed": mce["mixed"], "nomatch": mce["nomatch"],
+                    "rescue_rate": round(mce["rescue_rate"], 4),
+                }
                 with open(os.path.join(bench_dir, "eval.jsonl"), "a", encoding="utf-8") as f:
                     f.write(json.dumps(pol_entry) + "\n")
                 with open(os.path.join(bench_dir, "value_eval.jsonl"), "a", encoding="utf-8") as f:
                     f.write(json.dumps(val_entry) + "\n")
+                with open(os.path.join(bench_dir, "mcts_eval.jsonl"), "a", encoding="utf-8") as f:
+                    f.write(json.dumps(mce_entry) + "\n")
                 print(f"       eval: {pol['passed']}/{pol['total']} "
                       f"({pol_entry['score']:.0%}) | value: {val['passed']}/{val['total']} "
-                      f"({val_entry['score']:.0%})")
+                      f"({val_entry['score']:.0%}) | "
+                      f"mcts: CLEAN={mce['clean']} ECHO={mce['echo']} "
+                      f"FIXED={mce['fixed']} (rescue {mce['rescue_rate']:.0%})")
             except Exception as e:
                 print(f"       [eval_every] skipped gen {gen}: {e}")
 
