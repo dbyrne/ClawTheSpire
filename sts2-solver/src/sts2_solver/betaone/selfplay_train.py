@@ -791,6 +791,11 @@ def train(
                     "score": round(pol["passed"] / max(pol["total"], 1), 4),
                     "end_turn_avg": pol.get("end_turn_avg"),
                     "end_turn_high": pol.get("end_turn_high", 0),
+                    # Confidence profile (mirror experiment.save_eval).
+                    "bad_count": pol.get("bad_count"),
+                    "conf_bad": pol.get("conf_bad"),
+                    "close_bad": pol.get("close_bad"),
+                    "conf_clean": pol.get("conf_clean"),
                     "by_category": {
                         cat: {"passed": sum(1 for r in rs if r["passed"]), "total": len(rs)}
                         for cat, rs in pol.get("by_category", {}).items()
