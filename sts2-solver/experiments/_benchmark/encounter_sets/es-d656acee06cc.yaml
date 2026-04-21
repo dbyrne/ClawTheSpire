@@ -1,0 +1,29 @@
+encounter_set_id: es-d656acee06cc
+name: lean-decks-v2
+encounter_count: 238
+avg_hp: 27.6
+source:
+  description: |
+    lean-decks-v1 with HP scaled x0.81 cumulative (two passes of x0.9)
+    plus gap-filler encounters for mechanics underrepresented in v1 and
+    flagged by v3 g88's 15 BAD P-Eval scenarios (2026-04-21 analysis).
+
+    Gap-filler yields (candidates -> kept after HP calibration):
+      - DODGE_AND_ROLL  30 -> 22  (v1: 0.5%, v2: 9.7% - 20x exposure bump)
+      - WRAITH_FORM     20 -> 13  (v1: 3.7%, v2: 9.2% - 2.5x exposure bump)
+      - ACCELERANT+DP   20 -> 14  (engineered poison-Accelerant decision states)
+
+    HP scaled x0.81 from v1 baseline - 20% lower absolute HP to raise
+    difficulty and make skill margin more observable.
+  based_on: lean-decks-v1
+  modifications: |
+    - HP x0.81 across all base encounters (two x0.9 passes)
+    - +49 new encounters with DODGE_AND_ROLL, WRAITH_FORM, ACCELERANT+DP cores
+  calibrated_with:
+    checkpoint: reanalyse-v3 g88
+    method: betaone_mcts_selfplay sims=50 combats=32 target_wr=0.50
+    hp_scale_applied: 0.81
+  gap_filler_specs:
+    - DODGE_AND_ROLL solo (30 attempts, 22 kept)
+    - WRAITH_FORM solo (20 attempts, 13 kept)
+    - ACCELERANT + DEADLY_POISON (20 attempts, 14 kept)
