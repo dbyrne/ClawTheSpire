@@ -576,14 +576,32 @@ def train_batch_muzero(
     nn.utils.clip_grad_norm_(network.parameters(), 1.0)
     optimizer.step()
 
-    # Per-step diagnostic: collect L_p at step 0 vs step K to see if unroll is constraining
+    # Per-step diagnostic: RAW (unweighted) policy/reward losses at step 0 vs
+    # step K. Useful to check whether unroll is actually constraining the
+    # latent — if L_p_stepK is orders of magnitude larger than L_p_step0,
+    # the dynamics head's latents are non-informative for the prediction head.
+    # Undo the `w[:, k]` weighting here by dividing by the active mask only.
+    def _raw(step_loss, mask_at_step):
+        denom = mask_at_step.sum().item()
+        return (step_loss / (weights[0] if True else 1.0)).sum().item() / max(denom, 1)
+
+    # L_p_terms[0] was p_loss_0 * w[:, 0] where w = step_mask * step_weight_k
+    # For step k, unweight by dividing by step_weight_k (the scalar decay)
+    step_w = [step_decay ** k for k in range(K1)]
+    p_step0_raw = (L_p_terms[0] / step_w[0]).sum().item() / max(step_mask[:, 0].sum().item(), 1)
+    p_stepK_raw = (L_p_terms[-1] / step_w[K]).sum().item() / max(step_mask[:, K].sum().item(), 1)
+    r_step1_raw = (
+        (L_r_terms[0] / step_w[1]).sum().item() / max(step_mask[:, 1].sum().item(), 1)
+        if L_r_terms else 0.0
+    )
+
     out = {
         "policy_loss": L_policy.item(),
         "value_loss": L_value.item(),
         "reward_loss": L_reward.item(),
-        "policy_loss_step0": L_p_terms[0].sum().item() / max(step_mask[:, 0].sum().item(), 1),
-        "policy_loss_stepK": L_p_terms[-1].sum().item() / max(step_mask[:, -1].sum().item(), 1),
-        "reward_loss_step1": L_r_terms[0].sum().item() / max(step_mask[:, 1].sum().item(), 1) if L_r_terms else 0.0,
+        "policy_loss_step0": p_step0_raw,
+        "policy_loss_stepK": p_stepK_raw,
+        "reward_loss_step1": r_step1_raw,
         "kl_mcts_net": 0.0,   # legacy fields not computed in muzero path
         "top1_agree": 0.0,
         "value_corr": 0.0,
