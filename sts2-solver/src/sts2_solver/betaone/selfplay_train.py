@@ -108,6 +108,12 @@ class ReplayBuffer:
         self.policies: list[np.ndarray] = []
         self.values: list[np.ndarray] = []
         self.state_jsons: list[str] = []
+        # MuZero-style: per-step action taken (int idx into MAX_ACTIONS), reward
+        # (float scalar), and combat_index (so trajectory sub-sequences can be
+        # sampled without crossing combat boundaries).
+        self.action_taken: list[int] = []
+        self.rewards: list[float] = []
+        self.combat_ids: list[int] = []
         # Track generation boundaries for FIFO eviction
         self._gen_sizes: deque[int] = deque()
 
@@ -124,8 +130,16 @@ class ReplayBuffer:
         policies: np.ndarray,
         values: np.ndarray,
         state_jsons: list[str] | None = None,
+        action_taken: np.ndarray | None = None,
+        rewards: np.ndarray | None = None,
+        combat_ids: np.ndarray | None = None,
     ) -> None:
-        """Add one generation's samples. Evicts oldest gens if over capacity."""
+        """Add one generation's samples. Evicts oldest gens if over capacity.
+
+        `action_taken`, `rewards`, `combat_ids` are new for MuZero-style
+        trajectory sampling. Callers that don't need them pass None — they'll
+        be filled with zeros / "all same combat" sentinels.
+        """
         n = len(states)
         self._gen_sizes.append(n)
         self.states.extend(states)
@@ -140,6 +154,18 @@ class ReplayBuffer:
         if state_jsons is None:
             state_jsons = [""] * n
         self.state_jsons.extend(state_jsons)
+        # MuZero fields — default to placeholder values so buffer stays aligned
+        if action_taken is None:
+            action_taken = np.zeros(n, dtype=np.int64)
+        if rewards is None:
+            rewards = np.zeros(n, dtype=np.float32)
+        if combat_ids is None:
+            # If no combat info, treat each step as its own combat (no valid
+            # sub-trajectory possible). Use indices so sampling doesn't cross.
+            combat_ids = np.arange(n, dtype=np.int64)
+        self.action_taken.extend(int(a) for a in action_taken)
+        self.rewards.extend(float(r) for r in rewards)
+        self.combat_ids.extend(int(c) for c in combat_ids)
 
         # Evict oldest generations until under capacity
         while len(self.states) > self.max_steps and len(self._gen_sizes) > 1:
@@ -152,6 +178,9 @@ class ReplayBuffer:
             del self.policies[:drop]
             del self.values[:drop]
             del self.state_jsons[:drop]
+            del self.action_taken[:drop]
+            del self.rewards[:drop]
+            del self.combat_ids[:drop]
 
     def sample_tensors(self, batch_size: int) -> tuple[
         torch.Tensor, torch.Tensor, torch.Tensor,
@@ -168,6 +197,80 @@ class ReplayBuffer:
             torch.tensor(np.array([self.action_ids[i] for i in indices]), dtype=torch.long),
             torch.tensor(np.array([self.policies[i] for i in indices]), dtype=torch.float32),
             torch.tensor(np.array([self.values[i] for i in indices]), dtype=torch.float32),
+        )
+
+    def sample_trajectories(
+        self, batch_size: int, K: int
+    ) -> tuple[torch.Tensor, ...]:
+        """Sample K-step sub-trajectories for MuZero-style training.
+
+        For each sample, returns a run of K+1 consecutive steps belonging to
+        the same combat. If the randomly-picked start index i doesn't have K
+        further steps in the same combat, pad the tail with zeros and mask.
+
+        Returns tensors (all shape (B, K+1, ...) except the per-sample scalars):
+            states, act_feat, act_masks, hand_ids, action_ids,
+            target_policies, target_values,   # supervised targets at each step
+            action_taken,                     # (B, K) — used by dynamics_head
+            rewards,                          # (B, K+1) — rewards[0] is placeholder (no prior transition)
+            step_mask,                        # (B, K+1) — 1 where step exists in trajectory, 0 for padding
+        """
+        n = len(self.states)
+        if n == 0 or K < 1:
+            raise ValueError(f"buffer empty or K<1 (K={K})")
+        # Sample random starting indices (no requirement they be valid K-step
+        # starts — we mask the pad tail per-sample).
+        start_indices = np.random.randint(0, n, size=min(batch_size, n))
+        B = len(start_indices)
+        K1 = K + 1
+
+        # Pre-allocate output arrays. Use the per-step shape from existing
+        # entries to get the right trailing dims.
+        def _like(arr_list, extra_shape=()):
+            shape = (B, K1) + tuple(arr_list[0].shape if arr_list[0].ndim > 0 else ()) + tuple(extra_shape)
+            return np.zeros(shape, dtype=arr_list[0].dtype if hasattr(arr_list[0], 'dtype') else np.float32)
+
+        states_out   = _like(self.states)
+        act_feat_out = _like(self.act_feat)
+        act_masks_out = _like(self.act_masks)
+        hand_ids_out = _like(self.hand_ids)
+        action_ids_out = _like(self.action_ids)
+        policies_out = _like(self.policies)
+        values_out   = np.zeros((B, K1), dtype=np.float32)
+        action_taken_out = np.zeros((B, K), dtype=np.int64)
+        rewards_out  = np.zeros((B, K1), dtype=np.float32)
+        step_mask    = np.zeros((B, K1), dtype=np.float32)
+
+        for bi, start in enumerate(start_indices):
+            combat_id = self.combat_ids[start]
+            for k in range(K1):
+                idx = start + k
+                if idx >= n or self.combat_ids[idx] != combat_id:
+                    # Out of buffer OR crossed combat boundary → pad
+                    break
+                states_out[bi, k]     = self.states[idx]
+                act_feat_out[bi, k]   = self.act_feat[idx]
+                act_masks_out[bi, k]  = self.act_masks[idx]
+                hand_ids_out[bi, k]   = self.hand_ids[idx]
+                action_ids_out[bi, k] = self.action_ids[idx]
+                policies_out[bi, k]   = self.policies[idx]
+                values_out[bi, k]     = self.values[idx]
+                rewards_out[bi, k]    = self.rewards[idx]
+                step_mask[bi, k] = 1.0
+                if k < K:
+                    action_taken_out[bi, k] = self.action_taken[idx]
+
+        return (
+            torch.tensor(states_out, dtype=torch.float32),
+            torch.tensor(act_feat_out, dtype=torch.float32),
+            torch.tensor(act_masks_out, dtype=torch.bool),
+            torch.tensor(hand_ids_out, dtype=torch.long),
+            torch.tensor(action_ids_out, dtype=torch.long),
+            torch.tensor(policies_out, dtype=torch.float32),
+            torch.tensor(values_out, dtype=torch.float32),
+            torch.tensor(action_taken_out, dtype=torch.long),
+            torch.tensor(rewards_out, dtype=torch.float32),
+            torch.tensor(step_mask, dtype=torch.float32),
         )
 
     def oldest_indices_with_state(self, n: int) -> list[int]:
@@ -364,6 +467,130 @@ def train_batch(
     return out
 
 
+def train_batch_muzero(
+    network: BetaOneNetwork,
+    optimizer: torch.optim.Optimizer,
+    # Per-step arrays, shape (B, K+1, ...) for most; (B, K) for action_taken; (B, K+1) for scalars.
+    states: torch.Tensor,
+    action_features: torch.Tensor,   # (B, K+1, MAX_ACTIONS, ACTION_DIM)
+    action_masks: torch.Tensor,      # (B, K+1, MAX_ACTIONS)
+    hand_card_ids: torch.Tensor,     # (B, K+1, MAX_HAND)
+    action_card_ids: torch.Tensor,   # (B, K+1, MAX_ACTIONS)
+    target_policies: torch.Tensor,   # (B, K+1, MAX_ACTIONS)
+    target_values: torch.Tensor,     # (B, K+1)
+    action_taken: torch.Tensor,      # (B, K) — int, index into MAX_ACTIONS
+    rewards: torch.Tensor,           # (B, K+1) — reward at each step (rewards[:,0] usually 0, terminal reward at last valid step)
+    step_mask: torch.Tensor,         # (B, K+1) — 1 where step exists, 0 for padding
+    value_coef: float = 1.0,
+    reward_coef: float = 0.1,
+    step_decay: float = 0.5,  # per-step weight decay; later unroll steps matter less
+) -> dict[str, float]:
+    """MuZero-style training step: encode start state, unroll K times via
+    dynamics head, apply policy / value / reward losses at each unrolled step.
+
+    Losses are masked by step_mask so padded steps (post-combat-end) don't
+    contribute. Per-step weights decay by `step_decay^k` so early-unroll
+    losses dominate.
+    """
+    B, K1 = states.shape[0], states.shape[1]
+    K = K1 - 1  # unroll depth
+
+    # Precompute step weights
+    weights = torch.tensor(
+        [step_decay ** k for k in range(K1)], dtype=torch.float32, device=states.device
+    )  # (K+1,)
+    # Mask + weight per step (B, K+1)
+    w = step_mask * weights.unsqueeze(0)
+
+    # Encode initial state
+    s = network.compute_trunk(states[:, 0], hand_card_ids[:, 0])
+
+    # Accumulate losses per step (we need 0..K for policy/value, 1..K for reward)
+    L_p_terms = []
+    L_v_terms = []
+    L_r_terms = []
+
+    # Root (step 0)
+    logits_0, v_0 = network.heads_from_trunk(
+        s, action_features[:, 0], action_masks[:, 0], action_card_ids[:, 0]
+    )
+    log_probs_0 = F.log_softmax(logits_0, dim=1)
+    p_loss_0 = -(target_policies[:, 0] * log_probs_0).nan_to_num(0.0).sum(dim=1)  # (B,)
+    v_loss_0 = (v_0.squeeze(-1) - target_values[:, 0]) ** 2  # (B,)
+    L_p_terms.append(p_loss_0 * w[:, 0])
+    L_v_terms.append(v_loss_0 * w[:, 0])
+
+    # Unroll K steps
+    for k in range(K):
+        # Pick action_feat + action_id at the taken action's index, for each batch item.
+        # action_taken[:, k] has shape (B,)
+        bs = torch.arange(B, device=states.device)
+        a_idx = action_taken[:, k]  # (B,)
+        # action_features is (B, K+1, MAX_ACTIONS, ACTION_DIM); pick step k and index a
+        af_at_taken = action_features[bs, k, a_idx]  # (B, ACTION_DIM)
+        aid_at_taken = action_card_ids[bs, k, a_idx]  # (B,)
+
+        # Apply dynamics
+        s_next, r_hat = network.apply_dynamics(s, af_at_taken, aid_at_taken)
+
+        # Reward loss: predicted r_hat vs actual reward at step k+1
+        r_loss = (r_hat - rewards[:, k + 1]) ** 2  # (B,)
+
+        # Predict policy + value at unrolled latent s_next
+        logits_k, v_k = network.heads_from_trunk(
+            s_next,
+            action_features[:, k + 1],
+            action_masks[:, k + 1],
+            action_card_ids[:, k + 1],
+        )
+        log_probs_k = F.log_softmax(logits_k, dim=1)
+        p_loss_k = -(target_policies[:, k + 1] * log_probs_k).nan_to_num(0.0).sum(dim=1)
+        v_loss_k = (v_k.squeeze(-1) - target_values[:, k + 1]) ** 2
+
+        w_k = w[:, k + 1]  # (B,)
+        L_p_terms.append(p_loss_k * w_k)
+        L_v_terms.append(v_loss_k * w_k)
+        L_r_terms.append(r_loss * w_k)
+
+        s = s_next
+
+    # Sum-and-normalize by effective weight mass
+    w_sum = w.sum(dim=1).clamp(min=1e-6)  # (B,)
+    L_policy = torch.stack(L_p_terms, dim=1).sum(dim=1) / w_sum
+    L_value = torch.stack(L_v_terms, dim=1).sum(dim=1) / w_sum
+    # reward loss uses only K valid terms (no root); normalize by their weight sum
+    w_sum_r = w[:, 1:].sum(dim=1).clamp(min=1e-6) if L_r_terms else torch.ones(B, device=states.device)
+    L_reward = (
+        torch.stack(L_r_terms, dim=1).sum(dim=1) / w_sum_r
+        if L_r_terms else torch.zeros(B, device=states.device)
+    )
+
+    L_policy = L_policy.mean()
+    L_value = L_value.mean()
+    L_reward = L_reward.mean()
+
+    loss = L_policy + value_coef * L_value + reward_coef * L_reward
+
+    optimizer.zero_grad()
+    loss.backward()
+    nn.utils.clip_grad_norm_(network.parameters(), 1.0)
+    optimizer.step()
+
+    # Per-step diagnostic: collect L_p at step 0 vs step K to see if unroll is constraining
+    out = {
+        "policy_loss": L_policy.item(),
+        "value_loss": L_value.item(),
+        "reward_loss": L_reward.item(),
+        "policy_loss_step0": L_p_terms[0].sum().item() / max(step_mask[:, 0].sum().item(), 1),
+        "policy_loss_stepK": L_p_terms[-1].sum().item() / max(step_mask[:, -1].sum().item(), 1),
+        "reward_loss_step1": L_r_terms[0].sum().item() / max(step_mask[:, 1].sum().item(), 1) if L_r_terms else 0.0,
+        "kl_mcts_net": 0.0,   # legacy fields not computed in muzero path
+        "top1_agree": 0.0,
+        "value_corr": 0.0,
+    }
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Main training loop
 # ---------------------------------------------------------------------------
@@ -408,6 +635,13 @@ def train(
     reanalyse_frac: float = 0.25,          # fraction of buffer refreshed per pass
     reanalyse_min_gen: int = 10,           # start reanalysing only after buffer is seeded
     reanalyse_sims: int | None = None,     # defaults to num_sims
+    # MuZero-style joint rep+dyn+pred training with k-step unrolling.
+    # See sts2-solver/docs/muzero_v1_plan.md for design.
+    use_muzero: bool = False,
+    muzero_k: int = 3,                     # unroll depth
+    muzero_dynamics_hidden: int = 128,
+    muzero_reward_coef: float = 0.1,
+    muzero_step_decay: float = 0.5,
 ):
     os.makedirs(output_dir, exist_ok=True)
     onnx_dir = os.path.join(output_dir, "onnx")
@@ -429,12 +663,15 @@ def train(
         trunk_hidden=trunk_hidden,
         policy_head_type=policy_head_type,
         policy_mlp_hidden=policy_mlp_hidden,
+        use_muzero=use_muzero,
+        muzero_dynamics_hidden=muzero_dynamics_hidden,
     )
     optimizer = torch.optim.Adam(network.parameters(), lr=lr)
+    muzero_tag = f", muzero=True (K={muzero_k})" if use_muzero else ""
     print(
         f"BetaOne self-play: {network.param_count():,} params, {num_cards} card vocab "
         f"(vhl={value_head_layers}, trunk={trunk_layers}x{trunk_hidden}, "
-        f"policy={policy_head_type})"
+        f"policy={policy_head_type}{muzero_tag})"
     )
 
     # Cosine LR schedule with warmup. `lr_schedule='constant'` = legacy behavior.
@@ -674,6 +911,30 @@ def train(
             )
             gen_policies = list(mixed)
 
+        # MuZero-style per-step fields: action_taken (approximated as argmax
+        # of MCTS visits — see muzero_v1_plan.md notes on this approximation),
+        # rewards (sparse terminal: emit HP-scaled win/loss at last step of
+        # each combat, 0 elsewhere), combat_ids (already built).
+        gen_policies_arr = np.array(gen_policies, dtype=np.float32)
+        gen_action_taken = gen_policies_arr.argmax(axis=1).astype(np.int64)
+
+        gen_rewards = np.zeros(T, dtype=np.float32)
+        # Find last index of each combat and write terminal reward there
+        combat_ids_arr = np.array(gen_combat_indices, dtype=np.int64)
+        last_idx_per_combat = {}
+        for i, c in enumerate(combat_ids_arr):
+            last_idx_per_combat[int(c)] = i
+        for ci, outcome in enumerate(all_outcomes):
+            ci_global = ci + (combat_offset - len(all_outcomes))
+            if ci_global not in last_idx_per_combat:
+                continue
+            last_i = last_idx_per_combat[ci_global]
+            if outcome == "win":
+                hp_frac = max(all_final_hps[ci], 0) / max(player_max_hp, 1)
+                gen_rewards[last_i] = 1.0 + 0.3 * hp_frac
+            else:
+                gen_rewards[last_i] = -1.0
+
         # Add to replay buffer
         replay.add_generation(
             states=gen_states,
@@ -684,6 +945,9 @@ def train(
             policies=gen_policies,
             values=gen_values,
             state_jsons=gen_state_jsons,
+            action_taken=gen_action_taken,
+            rewards=gen_rewards,
+            combat_ids=combat_ids_arr,
         )
 
         # Stats
@@ -709,27 +973,55 @@ def train(
         buf_size = len(replay)
         updates_per_epoch = max(1, buf_size // batch_size)
 
+        # MuZero-specific tracking
+        total_rloss = 0.0
+        total_ploss_step0 = 0.0
+        total_ploss_stepK = 0.0
+
         for _epoch in range(train_epochs):
             for _ in range(updates_per_epoch):
-                (b_states, b_act_feat, b_act_masks,
-                 b_hand_ids, b_action_ids,
-                 b_policies, b_values) = replay.sample_tensors(batch_size)
+                if use_muzero:
+                    # Sample K-step sub-trajectories and train via dynamics-head unroll.
+                    (b_states, b_act_feat, b_act_masks, b_hand_ids, b_action_ids,
+                     b_policies, b_values, b_action_taken, b_rewards, b_step_mask
+                    ) = replay.sample_trajectories(batch_size, muzero_k)
+                    # b_act_feat is (B, K+1, MAX_ACTIONS*ACTION_DIM); reshape
+                    B_sz, K1 = b_act_feat.shape[0], b_act_feat.shape[1]
+                    b_act_feat = b_act_feat.reshape(B_sz, K1, MAX_ACTIONS, ACTION_DIM)
+                    metrics = train_batch_muzero(
+                        network, optimizer,
+                        b_states, b_act_feat, b_act_masks,
+                        b_hand_ids, b_action_ids,
+                        b_policies, b_values,
+                        b_action_taken, b_rewards, b_step_mask,
+                        value_coef=value_coef,
+                        reward_coef=muzero_reward_coef,
+                        step_decay=muzero_step_decay,
+                    )
+                    total_rloss += metrics.get("reward_loss", 0.0)
+                    total_ploss_step0 += metrics.get("policy_loss_step0", 0.0)
+                    total_ploss_stepK += metrics.get("policy_loss_stepK", 0.0)
+                    measure = False  # grad-conflict measurement not wired for muzero
+                else:
+                    (b_states, b_act_feat, b_act_masks,
+                     b_hand_ids, b_action_ids,
+                     b_policies, b_values) = replay.sample_tensors(batch_size)
 
-                # Reshape action features from flat to (B, MAX_ACTIONS, ACTION_DIM)
-                b_act_feat = b_act_feat.reshape(-1, MAX_ACTIONS, ACTION_DIM)
+                    # Reshape action features from flat to (B, MAX_ACTIONS, ACTION_DIM)
+                    b_act_feat = b_act_feat.reshape(-1, MAX_ACTIONS, ACTION_DIM)
 
-                measure = (
-                    grad_conflict_sample_every > 0
-                    and n_updates % grad_conflict_sample_every == 0
-                )
-                metrics = train_batch(
-                    network, optimizer,
-                    b_states, b_act_feat, b_act_masks,
-                    b_hand_ids, b_action_ids,
-                    b_policies, b_values,
-                    value_coef=value_coef,
-                    measure_grad_conflict=measure,
-                )
+                    measure = (
+                        grad_conflict_sample_every > 0
+                        and n_updates % grad_conflict_sample_every == 0
+                    )
+                    metrics = train_batch(
+                        network, optimizer,
+                        b_states, b_act_feat, b_act_masks,
+                        b_hand_ids, b_action_ids,
+                        b_policies, b_values,
+                        value_coef=value_coef,
+                        measure_grad_conflict=measure,
+                    )
                 total_ploss += metrics["policy_loss"]
                 total_vloss += metrics["value_loss"]
                 kl_samples.append(metrics["kl_mcts_net"])
@@ -744,6 +1036,9 @@ def train(
         n = max(n_updates, 1)
         avg_ploss = total_ploss / n
         avg_vloss = total_vloss / n
+        avg_rloss = total_rloss / n if use_muzero else None
+        avg_ploss_step0 = total_ploss_step0 / n if use_muzero else None
+        avg_ploss_stepK = total_ploss_stepK / n if use_muzero else None
 
         # ------------------------------------------------------------------
         # Reanalyse: refresh stale targets for oldest buffer entries with the
@@ -868,6 +1163,14 @@ def train(
             "num_sims": num_sims,
             "gen_time": round(elapsed, 2),
             "timestamp": time.time(),
+            **(
+                {
+                    "reward_loss": round(avg_rloss, 5),
+                    "policy_loss_step0": round(avg_ploss_step0, 5),
+                    "policy_loss_stepK": round(avg_ploss_stepK, 5),
+                }
+                if use_muzero else {}
+            ),
         }
         if grad_cos_samples:
             import statistics

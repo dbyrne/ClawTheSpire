@@ -601,6 +601,12 @@ class ExperimentConfig:
                 "reanalyse_frac": _float(mcts.get("reanalyse_frac"), 0.25),
                 "reanalyse_min_gen": mcts.get("reanalyse_min_gen", 10),
                 "reanalyse_sims": mcts.get("reanalyse_sims"),
+                # MuZero-style joint rep+dyn+pred training
+                "use_muzero": bool(arch.get("use_muzero", False)),
+                "muzero_k": int(mcts.get("muzero_k", 3)),
+                "muzero_dynamics_hidden": int(arch.get("muzero_dynamics_hidden", 128)),
+                "muzero_reward_coef": _float(mcts.get("muzero_reward_coef"), 0.1),
+                "muzero_step_decay": _float(mcts.get("muzero_step_decay"), 0.5),
             }
         else:  # ppo
             ppo = t.get("ppo", {})
@@ -736,6 +742,8 @@ class Experiment:
                 trunk_hidden=int(arch.get("trunk_hidden", 128)),
                 policy_head_type=str(arch.get("policy_head_type", "dot_product")),
                 policy_mlp_hidden=int(arch.get("policy_mlp_hidden", 64)),
+                use_muzero=bool(arch.get("use_muzero", False)),
+                muzero_dynamics_hidden=int(arch.get("muzero_dynamics_hidden", 128)),
             )
             arch["total_params"] = stats["total_params"]
             arch["state_dim"] = stats["state_dim"]

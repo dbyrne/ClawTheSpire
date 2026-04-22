@@ -54,6 +54,11 @@ TRUNK_LAYERS_DEFAULT = 2
 POLICY_HEAD_TYPE_DEFAULT = "dot_product"
 POLICY_MLP_HIDDEN_DEFAULT = 64
 
+# MuZero-style dynamics head — predicts (next_latent, reward) from
+# (latent, action_embed). Training-only (inference still uses Rust sim
+# for state transitions). See muzero_v1_plan.md.
+MUZERO_DYNAMICS_HIDDEN_DEFAULT = 128
+
 # Architecture versioning — bump ARCH_VERSION on any change that breaks
 # checkpoint compatibility (any dimension constant above).
 ARCH_VERSION = 2
@@ -93,6 +98,10 @@ def network_kwargs_from_meta(arch_meta: dict | None) -> dict:
         "trunk_hidden": meta.get("trunk_hidden", HIDDEN_DIM),
         "policy_head_type": meta.get("policy_head_type", POLICY_HEAD_TYPE_DEFAULT),
         "policy_mlp_hidden": meta.get("policy_mlp_hidden", POLICY_MLP_HIDDEN_DEFAULT),
+        "use_muzero": meta.get("use_muzero", False),
+        "muzero_dynamics_hidden": meta.get(
+            "muzero_dynamics_hidden", MUZERO_DYNAMICS_HIDDEN_DEFAULT
+        ),
     }
 
 
@@ -108,6 +117,8 @@ def network_stats(
     trunk_hidden: int | None = None,
     policy_head_type: str | None = None,
     policy_mlp_hidden: int | None = None,
+    use_muzero: bool = False,
+    muzero_dynamics_hidden: int | None = None,
 ) -> dict:
     """Return architecture stats: param count, layer shapes, input/output dims."""
     net = BetaOneNetwork(
@@ -117,6 +128,8 @@ def network_stats(
         trunk_hidden=trunk_hidden,
         policy_head_type=policy_head_type,
         policy_mlp_hidden=policy_mlp_hidden,
+        use_muzero=use_muzero,
+        muzero_dynamics_hidden=muzero_dynamics_hidden,
     )
     layers = {}
     for name, param in net.named_parameters():
@@ -136,6 +149,41 @@ def network_stats(
     }
 
 
+class DynamicsHead(nn.Module):
+    """MuZero-style dynamics head.
+
+    Maps (latent, action_embed) -> (next_latent, reward_scalar). LayerNorm on
+    the next-latent output is the paper's fix for representation collapse —
+    without it, the joint loss can push latents toward trivially-predictable
+    values that don't carry useful info.
+
+    Used at training time only. Inference uses the Rust sim for state
+    transitions.
+    """
+
+    def __init__(self, trunk_hidden: int, hidden: int = MUZERO_DYNAMICS_HIDDEN_DEFAULT):
+        super().__init__()
+        # Input: latent + action_features (ACTION_DIM) + card_embed (CARD_EMBED_DIM)
+        # action_features and card_embed are picked out of the per-step action
+        # arrays at the taken action's index.
+        self.fc1 = nn.Linear(trunk_hidden + ACTION_DIM + CARD_EMBED_DIM, hidden)
+        self.fc_next = nn.Linear(hidden, trunk_hidden)
+        self.fc_reward = nn.Linear(hidden, 1)
+        self.ln_next = nn.LayerNorm(trunk_hidden)
+
+    def forward(
+        self,
+        latent: torch.Tensor,
+        action_feat_at_taken: torch.Tensor,
+        card_embed_at_taken: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        x = torch.cat([latent, action_feat_at_taken, card_embed_at_taken], dim=-1)
+        h = F.relu(self.fc1(x))
+        next_latent = self.ln_next(self.fc_next(h))
+        reward = self.fc_reward(h).squeeze(-1)
+        return next_latent, reward
+
+
 class BetaOneNetwork(nn.Module):
     def __init__(
         self,
@@ -145,6 +193,8 @@ class BetaOneNetwork(nn.Module):
         trunk_hidden: int | None = None,
         policy_head_type: str | None = None,
         policy_mlp_hidden: int | None = None,
+        use_muzero: bool = False,
+        muzero_dynamics_hidden: int | None = None,
     ):
         super().__init__()
 
@@ -162,6 +212,11 @@ class BetaOneNetwork(nn.Module):
         )
         self.policy_mlp_hidden = (
             policy_mlp_hidden if policy_mlp_hidden is not None else POLICY_MLP_HIDDEN_DEFAULT
+        )
+        self.use_muzero = use_muzero
+        self.muzero_dynamics_hidden = (
+            muzero_dynamics_hidden if muzero_dynamics_hidden is not None
+            else MUZERO_DYNAMICS_HIDDEN_DEFAULT
         )
 
         # Learned card embedding (shared between hand and actions)
@@ -198,6 +253,15 @@ class BetaOneNetwork(nn.Module):
         self.value_head = self._build_value_head(
             self.value_head_layers, self.trunk_hidden
         )
+
+        # MuZero dynamics head (training-time only; inference uses Rust sim).
+        if self.use_muzero:
+            self.dynamics_head = DynamicsHead(
+                trunk_hidden=self.trunk_hidden,
+                hidden=self.muzero_dynamics_hidden,
+            )
+        else:
+            self.dynamics_head = None
 
     @staticmethod
     def _build_trunk(layers: int, hidden: int) -> nn.Sequential:
@@ -257,16 +321,18 @@ class BetaOneNetwork(nn.Module):
             "trunk_hidden": self.trunk_hidden,
             "policy_head_type": self.policy_head_type,
             "policy_mlp_hidden": self.policy_mlp_hidden,
+            "use_muzero": self.use_muzero,
+            "muzero_dynamics_hidden": self.muzero_dynamics_hidden,
         }
 
-    def forward(
-        self,
-        state: torch.Tensor,
-        action_features: torch.Tensor,
-        action_mask: torch.Tensor,
-        hand_card_ids: torch.Tensor,
-        action_card_ids: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    def compute_trunk(
+        self, state: torch.Tensor, hand_card_ids: torch.Tensor
+    ) -> torch.Tensor:
+        """Hand-attention + trunk MLP. Returns (B, trunk_hidden) features.
+
+        Exposed separately so MuZero's dynamics-head unroll can operate on
+        latents without re-encoding from observations.
+        """
         B = state.shape[0]
 
         # Split state into components
@@ -298,9 +364,16 @@ class BetaOneNetwork(nn.Module):
 
         # Trunk
         combined = torch.cat([base, hand_pooled], dim=1)
-        h = self.trunk(combined)
+        return self.trunk(combined)
 
-        # Policy: two configurations
+    def heads_from_trunk(
+        self,
+        h: torch.Tensor,
+        action_features: torch.Tensor,
+        action_mask: torch.Tensor,
+        action_card_ids: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Given trunk latent h, apply policy + value heads."""
         action_embeds = self.card_embed(action_card_ids.long())  # (B, 30, 16)
         action_input = torch.cat([action_embeds, action_features], dim=-1)  # (B, 30, 51)
         if self.policy_head_type == "dot_product":
@@ -317,6 +390,33 @@ class BetaOneNetwork(nn.Module):
 
         value = self.value_head(h)  # (B, 1)
         return logits, value
+
+    def forward(
+        self,
+        state: torch.Tensor,
+        action_features: torch.Tensor,
+        action_mask: torch.Tensor,
+        hand_card_ids: torch.Tensor,
+        action_card_ids: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        h = self.compute_trunk(state, hand_card_ids)
+        return self.heads_from_trunk(h, action_features, action_mask, action_card_ids)
+
+    def apply_dynamics(
+        self,
+        latent: torch.Tensor,
+        action_features_at_taken: torch.Tensor,
+        action_card_ids_at_taken: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Apply MuZero dynamics head: (latent, taken-action info) -> (next_latent, reward).
+
+        Expects per-sample the action-features and card-id at the taken action
+        index (shape (B, ACTION_DIM) and (B,) respectively).
+        """
+        if self.dynamics_head is None:
+            raise RuntimeError("dynamics_head is not enabled (use_muzero=False)")
+        card_embed_at_taken = self.card_embed(action_card_ids_at_taken.long())  # (B, 16)
+        return self.dynamics_head(latent, action_features_at_taken, card_embed_at_taken)
 
     def param_count(self) -> int:
         return sum(p.numel() for p in self.parameters())

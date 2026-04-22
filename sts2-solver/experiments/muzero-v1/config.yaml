@@ -1,0 +1,102 @@
+name: muzero-v1
+method: mcts_selfplay
+description: |
+  MuZero-style joint rep+dyn+pred training, Rust-sim hybrid MCTS.
+
+  Adds a DynamicsHead on top of v3's architecture. Training samples
+  K-step sub-trajectories; network unrolls via dynamics to predict
+  policy/value/reward at each step. At inference, MCTS still uses the
+  Rust sim — dynamics head is purely a training-time representation
+  regularizer (stronger version of SPR).
+
+  Key differences from spr-v1 (which was null):
+  - K-step unrolling vs 1-step (compositional constraint on g)
+  - Per-action dynamics vs policy-weighted
+  - Reward prediction supervision (new)
+  - Policy/value heads trained at UNROLLED latent states, not just root
+
+  Fork: reanalyse-v3 g88 (warm-start from strongest baseline, vhl=3).
+  Same training config as v3 otherwise (frac=0.75, every=2,
+  mcts_bootstrap, q_target_mix=0.5).
+
+  MuZero hyperparameters (pilot):
+    muzero_k = 3               # unroll depth
+    muzero_reward_coef = 0.1   # keeps reward loss sub-dominant
+    muzero_step_decay = 0.5    # per-step weight (later steps matter less)
+    muzero_dynamics_hidden = 128
+
+  Ship criterion (on 136-scenario suite, sustained 10+ gens): ANY of
+    - P-Eval >= 117 (v3 baseline 115, +2)
+    - V-Eval >= 103 (v3 baseline 100, +3)
+    - MCTS CLEAN >= 111 (v3 baseline 109, +2)
+    - policy-only benchmark WR >= 58% at n=9450 (v3's 56.68% [55.68, 57.68])
+  AND no regression beyond noise on the others (V-Eval >= 99, MCTS CLEAN >= 105).
+
+  Kill criterion:
+    - Gen 10 early abort: reward loss degenerate AND no multi-step policy
+      consistency (policy_loss_stepK > 2x policy_loss_step0)
+    - Gen 40 mid abort: primary metrics all tied with v3 at their
+      respective CIs, no upward trajectory
+    - Gen 80 late abort: none of ship criteria hit
+
+  See sts2-solver/docs/muzero_v1_plan.md for full design.
+
+  Compute cost: ~3-4x v3 per training batch (K=3 unroll), so roughly
+  ~25 min/gen, ~42 hours for 100 gens. Keep Rust sim for MCTS to avoid
+  real slowdown.
+created: '2026-04-22T00:21:02+00:00'
+parent: reanalyse-v3
+parent_checkpoint: gen88
+network_type: betaone
+architecture:
+  arch_version: 2
+  base_state_dim: 156
+  hidden_dim: 128
+  action_hidden: 64
+  hand_proj_dim: 32
+  card_embed_dim: 16
+  card_stats_dim: 28
+  relic_dim: 27
+  hand_agg_dim: 3
+  action_dim: 35
+  max_hand: 10
+  max_actions: 30
+  value_head_layers: 3
+  use_muzero: true
+  muzero_dynamics_hidden: 128
+  num_cards: 578
+  total_params: 180698
+  state_dim: 446
+  trunk_input: 188
+training:
+  generations: 100
+  combats_per_gen: 256
+  lr: 0.0003
+  batch_size: 512
+  mcts:
+    num_sims: 1000
+    temperature: 1.0
+    replay_capacity: 50000
+    train_epochs: 4
+    value_coef: 1.0
+    c_puct: 1.5
+    pomcp: true
+    mcts_bootstrap: true
+    turn_boundary_eval: true
+    q_target_mix: 0.5
+    q_target_temp: 0.5
+    eval_every: 1
+    grad_conflict_sample_every: 10
+    reanalyse_every: 2
+    reanalyse_frac: 0.75
+    reanalyse_min_gen: 10
+    muzero_k: 3
+    muzero_reward_coef: 0.1
+    muzero_step_decay: 0.5
+data:
+  mode: encounter_set
+  encounter_set: lean-decks-v1
+checkpoints:
+  save_every: 1
+  keep_best: true
+  cold_start: false
