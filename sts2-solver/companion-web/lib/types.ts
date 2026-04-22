@@ -27,6 +27,7 @@ export interface Progress {
 
 export interface ExperimentSummary {
   name: string;
+  kind: "betaone" | "decknet" | "distill";
   method: string;
   finalized: boolean;
   concluded_gen: number | null;
@@ -86,4 +87,30 @@ export interface Leaderboard {
     overall_top: LeaderboardEntry[];
     by_category: Record<string, LeaderboardEntry[]>;
   };
+}
+
+export interface DistillSummary {
+  name: string;
+  kind: "distill";
+  method: string;
+  finalized: boolean;
+  concluded_epoch: number | null;
+  epochs_total: number | null;
+  params: number | null;
+  description: string | null;
+  parent: string | null;
+  dataset: string | null;
+  status: Status;
+  current_epoch: number | null;
+  val_top1_last: number | null;
+  val_top1_best: number | null;
+  val_top1_last10: number | null;
+  val_pol_loss_last10: number | null;
+  val_val_loss_last10: number | null;
+  train_top1_last10: number | null;
+  epoch_time_last: number | null;
+  policy_only_wr: number | null;
+  latest_eval: { passed?: number; total?: number; gen?: number } | null;
+  latest_value_eval: { passed?: number; total?: number; gen?: number } | null;
+  latest_mcts_eval: { rescue_rate?: number; gen?: number } | null;
 }

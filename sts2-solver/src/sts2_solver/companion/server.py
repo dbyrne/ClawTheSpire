@@ -34,6 +34,10 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
     def experiments_list():
         return data.list_experiments()
 
+    @app.get("/api/distill")
+    def distill_list():
+        return data.list_distill()
+
     @app.get("/api/experiments/{name}")
     def experiment_detail(name: str):
         exp = data.get_experiment(name)

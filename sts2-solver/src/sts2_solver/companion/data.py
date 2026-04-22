@@ -31,7 +31,19 @@ def _read_jsonl(path: Path) -> list[dict]:
     return rows
 
 
+def _kind(cfg) -> str:
+    """Classify experiment by surface area, mirroring the TUI's table split."""
+    if (cfg.method or "").startswith("distill_"):
+        return "distill"
+    if getattr(cfg, "network_type", None) == "decknet":
+        return "decknet"
+    return "betaone"
+
+
 def _method_string(cfg) -> str:
+    if (cfg.method or "").startswith("distill_"):
+        # e.g. "distill_c51" -> "d_c51", matching the TUI shorthand
+        return cfg.method.replace("distill_", "d_")
     if getattr(cfg, "network_type", None) == "decknet":
         dn = cfg.training.get("decknet", {})
         return f"DeckNet-{dn.get('mcts_sims', '?')}"
@@ -54,13 +66,21 @@ def _history_path(d: Path, cfg) -> Path:
     return d / "betaone_history.jsonl"
 
 
-def list_experiments() -> list[dict]:
-    """Every experiment with a summary + liveness state."""
+def list_experiments(*, include_kinds: tuple[str, ...] | None = None) -> list[dict]:
+    """Every experiment with a summary + liveness state.
+
+    If `include_kinds` is given, restrict to those kinds. Default returns
+    everything except distill (distill is its own tab — see list_distill()).
+    """
+    if include_kinds is None:
+        include_kinds = ("betaone", "decknet")
     out: list[dict] = []
     for name, d in exp_mod._all_experiment_sources():
         try:
             cfg = exp_mod.ExperimentConfig.from_yaml(d / "config.yaml")
         except Exception:
+            continue
+        if _kind(cfg) not in include_kinds:
             continue
         progress = exp_mod._read_progress(_progress_path(d, cfg))
         history = _read_jsonl(_history_path(d, cfg))
@@ -87,6 +107,7 @@ def list_experiments() -> list[dict]:
 
         out.append({
             "name": name,
+            "kind": _kind(cfg),
             "method": _method_string(cfg),
             "finalized": cfg.concluded_gen is not None,
             "concluded_gen": cfg.concluded_gen,
@@ -206,8 +227,19 @@ def leaderboard() -> dict:
         cat_rows: dict[str, list[dict]] = {}
         for r in rows:
             for cat, v in (r.get("by_category") or {}).items():
-                passed = v.get("passed")
-                total = v.get("total") or 0
+                # New format: {passed: int, total: int}.
+                # Legacy format (distill-*): list of per-scenario records,
+                # each {name, passed: bool, ...}.
+                if isinstance(v, dict):
+                    passed = v.get("passed")
+                    total = v.get("total") or 0
+                elif isinstance(v, list):
+                    total = len(v)
+                    passed = sum(
+                        1 for s in v if isinstance(s, dict) and s.get("passed")
+                    )
+                else:
+                    continue
                 if total <= 0 or passed is None:
                     continue
                 cat_rows.setdefault(cat, []).append({
@@ -253,3 +285,113 @@ def leaderboard() -> dict:
             "by_category": by_category(v_rows),
         },
     }
+
+
+def list_distill() -> list[dict]:
+    """Distillation experiments with epoch-indexed metrics + dataset.
+
+    Distillation is supervised: it iterates epochs (not gens) over a teacher
+    dataset and writes distill_history.jsonl with {epoch, train/val pol+val
+    losses, val_top1, time_s}. Liveness uses the same status.classify
+    helper, fed the recent epoch durations from distill_history.
+    """
+    out: list[dict] = []
+    for name, d in exp_mod._all_experiment_sources():
+        try:
+            cfg = exp_mod.ExperimentConfig.from_yaml(d / "config.yaml")
+        except Exception:
+            continue
+        if _kind(cfg) != "distill":
+            continue
+
+        dhist = _read_jsonl(d / "distill_history.jsonl")
+        last = dhist[-1] if dhist else {}
+        recent_times = [float(r.get("time_s") or 0.0) for r in dhist[-5:]]
+
+        # Synthesize a progress dict so status.classify can do its job —
+        # uses the most recent epoch row's timestamp.
+        synthetic_progress = {
+            "timestamp": last.get("timestamp")
+            or (d / "distill_history.jsonl").stat().st_mtime
+            if (d / "distill_history.jsonl").exists()
+            else None,
+        } if last or (d / "distill_history.jsonl").exists() else None
+        st = status_mod.classify(synthetic_progress, recent_times)
+
+        # Recent metric averages over last 10 epochs
+        window = dhist[-10:]
+
+        def _mean(key: str):
+            vals = [r.get(key) for r in window if r.get(key) is not None]
+            return statistics.mean(vals) if vals else None
+
+        epochs_total = (cfg.training or {}).get("epochs")
+        data_cfg = getattr(cfg, "data", {}) or {}
+        # Some configs nest 'data' inside training; fallback when needed.
+        if not data_cfg and isinstance(cfg.training, dict):
+            data_cfg = cfg.training.get("data", {}) or {}
+
+        # Best val_top1 across all logged epochs (gives a "peak")
+        top1_vals = [r.get("val_top1") for r in dhist if r.get("val_top1") is not None]
+        best_top1 = max(top1_vals) if top1_vals else None
+
+        # Policy-only WR benchmark, if present
+        bench = _read_jsonl(d / "benchmarks" / "results.jsonl")
+        pol_benches = [b for b in bench if b.get("mode") == "policy"]
+        policy_wr = pol_benches[-1].get("win_rate") if pol_benches else None
+
+        # Latest evals (mirror what the live tab surfaces)
+        evals = _read_jsonl(d / "benchmarks" / "eval.jsonl")
+        value_evals = _read_jsonl(d / "benchmarks" / "value_eval.jsonl")
+        mcts_evals = _read_jsonl(d / "benchmarks" / "mcts_eval.jsonl")
+
+        def _latest_pinned(rows: list[dict]) -> dict | None:
+            if not rows:
+                return None
+            if cfg.concluded_gen is not None:
+                pinned = [r for r in rows if r.get("gen") == cfg.concluded_gen]
+                if pinned:
+                    return pinned[-1]
+            return rows[-1]
+
+        latest_eval = _latest_pinned(evals)
+        latest_value_eval = _latest_pinned(value_evals)
+        latest_mcts_eval = _latest_pinned(mcts_evals)
+
+        out.append({
+            "name": name,
+            "kind": "distill",
+            "method": _method_string(cfg),
+            "finalized": cfg.concluded_gen is not None,
+            "concluded_epoch": cfg.concluded_gen,
+            "epochs_total": epochs_total,
+            "params": getattr(cfg, "total_params", None),
+            "description": cfg.description,
+            "parent": getattr(cfg, "parent", None),
+            "dataset": (
+                data_cfg.get("dataset")
+                or data_cfg.get("teacher")
+                or data_cfg.get("mode")
+            ),
+            "status": st,
+            "current_epoch": last.get("epoch"),
+            "val_top1_last": last.get("val_top1"),
+            "val_top1_best": best_top1,
+            "val_top1_last10": _mean("val_top1"),
+            "val_pol_loss_last10": _mean("val_pol_loss"),
+            "val_val_loss_last10": _mean("val_val_loss"),
+            "train_top1_last10": _mean("train_top1"),
+            "epoch_time_last": last.get("time_s"),
+            "policy_only_wr": policy_wr,
+            "latest_eval": latest_eval,
+            "latest_value_eval": latest_value_eval,
+            "latest_mcts_eval": latest_mcts_eval,
+        })
+
+    state_order = {"RUNNING": 0, "STALLED": 1, "STOPPED": 2, "UNKNOWN": 3}
+    out.sort(key=lambda e: (
+        state_order.get(e["status"]["state"], 9),
+        e["finalized"],
+        e["name"],
+    ))
+    return out
