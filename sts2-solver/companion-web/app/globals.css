@@ -1,0 +1,31 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html, body {
+  background-color: #0b0e13;
+  color: #e6e8ed;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+body {
+  /* Reserve space for the fixed bottom tab bar */
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 68px);
+}
+
+/* Mono stack for numeric / telemetry values */
+.mono {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Pull-to-refresh feels natural on iOS if we disable overscroll */
+html {
+  overscroll-behavior-y: contain;
+}

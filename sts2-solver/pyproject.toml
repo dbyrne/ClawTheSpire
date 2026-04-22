@@ -8,10 +8,12 @@ version = "0.1.0"
 description = "Combat simulator and solver for Slay the Spire 2"
 requires-python = ">=3.11"
 dependencies = [
+    "fastapi>=0.115.0",
     "fastmcp>=3.1.0,<4.0.0",
     "openai>=1.30.0,<2.0.0",
     "rich>=13.0",
     "supabase>=2.0.0",
+    "uvicorn>=0.30.0",
     "websockets>=14.0",
 ]
 
@@ -19,6 +21,7 @@ dependencies = [
 sts2-solver-mcp = "sts2_solver.mcp_server:main"
 sts2-run = "sts2_solver.runner:main"
 sts2-experiment = "sts2_solver.betaone.experiment_cli:main"
+sts2-companion = "sts2_solver.companion:main"
 
 [dependency-groups]
 dev = ["pytest>=8.0"]
