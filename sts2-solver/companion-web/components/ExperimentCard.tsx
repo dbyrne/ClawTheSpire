@@ -53,6 +53,9 @@ export default function ExperimentCard({ exp }: { exp: ExperimentSummary }) {
           </div>
           <div className="text-xs text-muted mono">
             {exp.method}
+            {exp.params != null
+              ? ` · ${Math.round(exp.params / 1000)}K params`
+              : ""}
             {exp.parent ? ` · from ${exp.parent}` : ""}
             {exp.encounter_set ? ` · ${exp.encounter_set}` : ""}
           </div>
@@ -98,8 +101,10 @@ export default function ExperimentCard({ exp }: { exp: ExperimentSummary }) {
               : "-"
           }
           hint={
-            ev?.passed != null && ev?.total
-              ? `${formatPct(ev.passed / ev.total)}${ev.gen != null ? ` · g${ev.gen}` : ""}`
+            exp.peak_eval?.passed != null && exp.peak_eval?.total
+              ? `peak ${exp.peak_eval.passed}/${exp.peak_eval.total}${
+                  exp.peak_eval.gen != null ? ` · g${exp.peak_eval.gen}` : ""
+                }`
               : undefined
           }
         />
@@ -111,8 +116,12 @@ export default function ExperimentCard({ exp }: { exp: ExperimentSummary }) {
               : "-"
           }
           hint={
-            vev?.passed != null && vev?.total
-              ? `${formatPct(vev.passed / vev.total)}${vev.gen != null ? ` · g${vev.gen}` : ""}`
+            exp.peak_value_eval?.passed != null && exp.peak_value_eval?.total
+              ? `peak ${exp.peak_value_eval.passed}/${exp.peak_value_eval.total}${
+                  exp.peak_value_eval.gen != null
+                    ? ` · g${exp.peak_value_eval.gen}`
+                    : ""
+                }`
               : undefined
           }
         />

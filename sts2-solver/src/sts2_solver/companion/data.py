@@ -81,6 +81,39 @@ def _latest_pinned(rows: list[dict], concluded_gen: int | None) -> dict | None:
     return rows[-1]
 
 
+def _peak_eval(rows: list[dict]) -> dict | None:
+    """Row with the highest pass rate across all eval runs.
+
+    Suites expand over time (e.g. 127 -> 128 scenarios), so pass rate is
+    the right axis rather than absolute passed count. Ties broken by
+    higher total (denser eval), then later gen.
+    """
+    scored = [
+        (r, r["passed"] / r["total"])
+        for r in rows
+        if r.get("total") and r.get("passed") is not None
+    ]
+    if not scored:
+        return None
+    scored.sort(
+        key=lambda x: (x[1], x[0].get("total", 0), x[0].get("gen", 0)),
+        reverse=True,
+    )
+    top = scored[0][0]
+    return {
+        "passed": top.get("passed"),
+        "total": top.get("total"),
+        "gen": top.get("gen"),
+        "score": scored[0][1],
+    }
+
+
+def _arch_params(cfg) -> int | None:
+    arch = getattr(cfg, "architecture", None) or {}
+    tp = arch.get("total_params") if isinstance(arch, dict) else None
+    return tp if isinstance(tp, int) else None
+
+
 def list_experiments(*, include_kinds: tuple[str, ...] | None = None) -> list[dict]:
     """Every experiment with a summary + liveness state.
 
@@ -126,6 +159,8 @@ def list_experiments(*, include_kinds: tuple[str, ...] | None = None) -> list[di
         latest_eval = _latest_pinned(evals, cfg.concluded_gen)
         latest_value_eval = _latest_pinned(value_evals, cfg.concluded_gen)
         latest_mcts_eval = _latest_pinned(mcts_evals, cfg.concluded_gen)
+        peak_eval = _peak_eval(evals)
+        peak_value_eval = _peak_eval(value_evals)
 
         out.append({
             "name": name,
@@ -139,7 +174,7 @@ def list_experiments(*, include_kinds: tuple[str, ...] | None = None) -> list[di
                 or cfg.training.get("mcts", {}).get("encounter_set")
                 or cfg.training.get("ppo", {}).get("encounter_set")
             ),
-            "params": getattr(cfg, "total_params", None),
+            "params": _arch_params(cfg),
             "description": cfg.description,
             "status": st,
             "progress": progress,
@@ -154,6 +189,8 @@ def list_experiments(*, include_kinds: tuple[str, ...] | None = None) -> list[di
             "latest_eval": latest_eval,
             "latest_value_eval": latest_value_eval,
             "latest_mcts_eval": latest_mcts_eval,
+            "peak_eval": peak_eval,
+            "peak_value_eval": peak_value_eval,
         })
 
     # Sort: running first, then stalled, then stopped/finalized, then alpha
@@ -195,7 +232,7 @@ def get_experiment(name: str) -> dict | None:
             "concluded_reason": getattr(cfg, "concluded_reason", None),
             "parent": getattr(cfg, "parent", None),
             "generations_total": cfg.training.get("generations"),
-            "params": getattr(cfg, "total_params", None),
+            "params": _arch_params(cfg),
             "encounter_set": (
                 cfg.training.get("encounter_set")
                 or cfg.training.get("mcts", {}).get("encounter_set")
@@ -381,7 +418,7 @@ def list_distill() -> list[dict]:
             "finalized": cfg.concluded_gen is not None,
             "concluded_epoch": cfg.concluded_gen,
             "epochs_total": epochs_total,
-            "params": getattr(cfg, "total_params", None),
+            "params": _arch_params(cfg),
             "description": cfg.description,
             "parent": getattr(cfg, "parent", None),
             "dataset": (

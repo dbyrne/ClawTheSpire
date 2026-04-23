@@ -55,6 +55,18 @@ export interface ExperimentSummary {
     fixed?: number;
     broke?: number;
   } | null;
+  peak_eval: {
+    passed?: number;
+    total?: number;
+    gen?: number;
+    score?: number;
+  } | null;
+  peak_value_eval: {
+    passed?: number;
+    total?: number;
+    gen?: number;
+    score?: number;
+  } | null;
 }
 
 export interface BenchmarkRow {
