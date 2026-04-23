@@ -37,13 +37,14 @@ HAS_BETAONE_ENCODE_FFI = hasattr(sts2_engine, "betaone_encode_state")
 
 class TestDimensions:
     def test_state_dim(self):
-        # base(156) + hand_cards(10*28=280) + hand_mask(10) = 446
-        assert STATE_DIM == 446
+        # base(177) + hand_cards(10*28=280) + hand_mask(10) = 467
+        assert STATE_DIM == 467
         assert STATE_DIM == BASE_STATE_DIM + MAX_HAND * CARD_STATS_DIM + MAX_HAND
 
     def test_base_state_dim(self):
-        # player(25) + enemies(5*19=95) + context(6) + relics(27) + hand_agg(3) = 156
-        assert BASE_STATE_DIM == 156
+        # player(25) + enemies(5*19=95) + context(6) + relics(27) + hand_agg(3)
+        # + turn_counters(3) + potions(18) = 177
+        assert BASE_STATE_DIM == 177
 
     def test_hand_agg_dim(self):
         assert HAND_AGG_DIM == 3
@@ -386,18 +387,25 @@ class TestTierConfigCompleteness:
 class TestFullStateDim:
     def test_total(self):
         """Verify the sum of Python encoder parts matches STATE_DIM."""
+        from sts2_solver.betaone.eval import encode_potions
+        from sts2_solver.betaone.network import TURN_COUNTERS_DIM, POTIONS_DIM
         p = encode_player({"hp": 70, "max_hp": 70, "energy": 3, "max_energy": 3})
         enemies = [encode_enemy(None) for _ in range(5)]
         c = encode_context(0, 0, 0, 0, 0)
-        # encode_relics dim = RELIC_DIM (26) but we don't import it here;
+        # encode_relics dim = RELIC_DIM (27) but we don't import it here;
         # instead we compute the base directly and let BASE_STATE_DIM compare.
         relics_dim = 27
         hand_agg = encode_hand_aggregates([])  # empty hand = zero vector
+        turn_counters = [0.0] * TURN_COUNTERS_DIM
+        potions = encode_potions(None)
         hand_cards = [0.0] * (MAX_HAND * CARD_STATS_DIM)
         hand_mask = [0.0] * MAX_HAND
         total = (len(p) + sum(len(e) for e in enemies) + len(c)
-                 + relics_dim + len(hand_agg) + len(hand_cards) + len(hand_mask))
+                 + relics_dim + len(hand_agg)
+                 + len(turn_counters) + len(potions)
+                 + len(hand_cards) + len(hand_mask))
         assert total == STATE_DIM, f"computed {total} != STATE_DIM {STATE_DIM}"
+        assert len(potions) == POTIONS_DIM
 
 
 # ---------------------------------------------------------------------------

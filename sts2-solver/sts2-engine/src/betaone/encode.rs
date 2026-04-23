@@ -22,11 +22,18 @@ pub const ENEMY_SLOTS: usize = 5;
 pub const CONTEXT_DIM: usize = 6;
 pub const RELIC_DIM: usize = 27;
 pub const HAND_AGG_DIM: usize = 3;  // total_damage, total_block, count_powers
+pub const TURN_COUNTERS_DIM: usize = 3;  // cards_played, attacks_played, _skills_played (this turn)
+pub const POTION_SLOTS: usize = 3;
+pub const POTION_FIELDS: usize = 6;  // empty_flag, heal, block, strength, damage_all, enemy_weak
+pub const POTIONS_DIM: usize = POTION_SLOTS * POTION_FIELDS;  // 18
 pub const MAX_HAND: usize = 10;
-const BASE_STATE_DIM: usize = PLAYER_DIM + ENEMY_SLOTS * ENEMY_FEATURES + CONTEXT_DIM + RELIC_DIM + HAND_AGG_DIM;  // 156
+pub const MAX_DRAW_PILE: usize = 30;
+pub const MAX_DISCARD_PILE: usize = 30;
+pub const MAX_EXHAUST_PILE: usize = 20;
+const BASE_STATE_DIM: usize = PLAYER_DIM + ENEMY_SLOTS * ENEMY_FEATURES + CONTEXT_DIM + RELIC_DIM + HAND_AGG_DIM + TURN_COUNTERS_DIM + POTIONS_DIM;  // 156 + 3 + 18 = 177
 const HAND_CARDS_DIM: usize = MAX_HAND * CARD_STATS_DIM;  // 10 × 28 = 280
 const HAND_MASK_DIM: usize = MAX_HAND;                     // 10
-pub const STATE_DIM: usize = BASE_STATE_DIM + HAND_CARDS_DIM + HAND_MASK_DIM;  // 446
+pub const STATE_DIM: usize = BASE_STATE_DIM + HAND_CARDS_DIM + HAND_MASK_DIM;  // 467
 
 // Relic flag indices (within the RELIC_DIM block)
 mod relic_idx {
@@ -216,6 +223,34 @@ pub fn encode_state(state: &CombatState) -> [f32; STATE_DIM] {
     }
     o += HAND_AGG_DIM;
 
+    // --- Turn-progress counters (TURN_COUNTERS_DIM = 3 dims) ---
+    // Without these, cards/relics whose payoff depends on turn-progress (Storm of
+    // Steel, Kunai, Shuriken, Velvet Choker, Smoggy, Pocketwatch) cannot be
+    // evaluated correctly. Must match Python encoder exactly.
+    v[o] = state.cards_played_this_turn as f32 / 10.0;
+    v[o + 1] = state.attacks_played_this_turn as f32 / 10.0;
+    v[o + 2] = state.player.get_power("_skills_played") as f32 / 5.0;
+    o += TURN_COUNTERS_DIM;
+
+    // --- Potion inventory (POTIONS_DIM = 3 slots × 6 fields = 18 dims) ---
+    // Per slot: [empty_flag, heal, block, strength, damage_all, enemy_weak].
+    // Empty flag distinguishes "no potion here" from "potion with all-zero stats".
+    for slot in 0..POTION_SLOTS {
+        let b = o + slot * POTION_FIELDS;
+        if slot < state.player.potions.len() && !state.player.potions[slot].is_empty() {
+            let pot = &state.player.potions[slot];
+            v[b] = 0.0;  // empty_flag = 0 (occupied)
+            v[b + 1] = pot.heal as f32 / 10.0;
+            v[b + 2] = pot.block as f32 / 30.0;
+            v[b + 3] = pot.strength as f32 / 5.0;
+            v[b + 4] = pot.damage_all as f32 / 30.0;
+            v[b + 5] = pot.enemy_weak as f32 / 3.0;
+        } else {
+            v[b] = 1.0;  // empty_flag = 1 (empty slot)
+        }
+    }
+    o += POTIONS_DIM;
+
     // --- Individual hand cards (MAX_HAND × CARD_STATS_DIM + MAX_HAND mask) ---
     let hand_len = state.player.hand.len().min(MAX_HAND);
     for i in 0..hand_len {
@@ -326,6 +361,36 @@ fn vocab_lookup(vocab: &CardVocab, card: &Card) -> i64 {
 pub fn encode_hand_card_ids(state: &CombatState, vocab: &CardVocab) -> [i64; MAX_HAND] {
     let mut ids = [0i64; MAX_HAND];
     for (i, card) in state.player.hand.iter().take(MAX_HAND).enumerate() {
+        ids[i] = vocab_lookup(vocab, card);
+    }
+    ids
+}
+
+/// Encode draw pile card IDs for embedding lookup. PAD (0) for empty slots beyond
+/// the pile length. Network is expected to sum-pool or attend over these.
+pub fn encode_draw_pile_ids(state: &CombatState, vocab: &CardVocab) -> [i64; MAX_DRAW_PILE] {
+    let mut ids = [0i64; MAX_DRAW_PILE];
+    for (i, card) in state.player.draw_pile.iter().take(MAX_DRAW_PILE).enumerate() {
+        ids[i] = vocab_lookup(vocab, card);
+    }
+    ids
+}
+
+/// Encode discard pile card IDs for embedding lookup. Critical for Tactician /
+/// Reflex / Calculated Gamble reasoning. PAD (0) for slots beyond pile length.
+pub fn encode_discard_pile_ids(state: &CombatState, vocab: &CardVocab) -> [i64; MAX_DISCARD_PILE] {
+    let mut ids = [0i64; MAX_DISCARD_PILE];
+    for (i, card) in state.player.discard_pile.iter().take(MAX_DISCARD_PILE).enumerate() {
+        ids[i] = vocab_lookup(vocab, card);
+    }
+    ids
+}
+
+/// Encode exhaust pile card IDs for embedding lookup. Critical for Phantom Blades
+/// and Dead Branch reasoning. PAD (0) for slots beyond pile length.
+pub fn encode_exhaust_pile_ids(state: &CombatState, vocab: &CardVocab) -> [i64; MAX_EXHAUST_PILE] {
+    let mut ids = [0i64; MAX_EXHAUST_PILE];
+    for (i, card) in state.player.exhaust_pile.iter().take(MAX_EXHAUST_PILE).enumerate() {
         ids[i] = vocab_lookup(vocab, card);
     }
     ids

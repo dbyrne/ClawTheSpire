@@ -44,6 +44,9 @@ struct Step {
     action_mask: [bool; encode::MAX_ACTIONS],
     hand_card_ids: [i64; encode::MAX_HAND],
     action_card_ids: [i64; encode::MAX_ACTIONS],
+    draw_pile_ids: [i64; encode::MAX_DRAW_PILE],
+    discard_pile_ids: [i64; encode::MAX_DISCARD_PILE],
+    exhaust_pile_ids: [i64; encode::MAX_EXHAUST_PILE],
     num_valid: usize,
     chosen_idx: usize,
     log_prob: f32,
@@ -236,8 +239,12 @@ fn run_single_combat(
             let (act_feat, act_mask, num_valid) = encode::encode_actions(&actions, &state);
             let hand_ids = encode::encode_hand_card_ids(&state, card_vocab);
             let action_ids = encode::encode_action_card_ids(&actions, &state, card_vocab);
+            let draw_ids = encode::encode_draw_pile_ids(&state, card_vocab);
+            let discard_ids = encode::encode_discard_pile_ids(&state, card_vocab);
+            let exhaust_ids = encode::encode_exhaust_pile_ids(&state, card_vocab);
             let (logits, value) = inference.evaluate(
-                &state_enc, &act_feat, &act_mask, &hand_ids, &action_ids, num_valid,
+                &state_enc, &act_feat, &act_mask, &hand_ids, &action_ids,
+                &draw_ids, &discard_ids, &exhaust_ids, num_valid,
             );
             let (chosen_idx, log_prob) =
                 sample_action(&logits, temperature, &mut rng);
@@ -281,6 +288,9 @@ fn run_single_combat(
                         action_mask: act_mask,
                         hand_card_ids: hand_ids,
                         action_card_ids: action_ids,
+                        draw_pile_ids: draw_ids,
+                        discard_pile_ids: discard_ids,
+                        exhaust_pile_ids: exhaust_ids,
                         num_valid,
                         chosen_idx,
                         log_prob,
@@ -316,6 +326,9 @@ fn run_single_combat(
                         action_mask: act_mask,
                         hand_card_ids: hand_ids,
                         action_card_ids: action_ids,
+                        draw_pile_ids: draw_ids,
+                        discard_pile_ids: discard_ids,
+                        exhaust_pile_ids: exhaust_ids,
                         num_valid,
                         chosen_idx,
                         log_prob,
@@ -347,6 +360,9 @@ fn run_single_combat(
                         action_mask: act_mask,
                         hand_card_ids: hand_ids,
                         action_card_ids: action_ids,
+                        draw_pile_ids: draw_ids,
+                        discard_pile_ids: discard_ids,
+                        exhaust_pile_ids: exhaust_ids,
                         num_valid,
                         chosen_idx,
                         log_prob,
@@ -370,6 +386,9 @@ fn run_single_combat(
                         action_mask: act_mask,
                         hand_card_ids: hand_ids,
                         action_card_ids: action_ids,
+                        draw_pile_ids: draw_ids,
+                        discard_pile_ids: discard_ids,
+                        exhaust_pile_ids: exhaust_ids,
                         num_valid,
                         chosen_idx,
                         log_prob,
@@ -540,6 +559,9 @@ fn build_rollouts_py(py: Python<'_>, rollouts: &[Option<Rollout>]) -> PyResult<P
     let mut all_action_masks: Vec<bool> = Vec::new();
     let mut all_hand_card_ids: Vec<i64> = Vec::new();
     let mut all_action_card_ids: Vec<i64> = Vec::new();
+    let mut all_draw_pile_ids: Vec<i64> = Vec::new();
+    let mut all_discard_pile_ids: Vec<i64> = Vec::new();
+    let mut all_exhaust_pile_ids: Vec<i64> = Vec::new();
     let mut all_chosen: Vec<i64> = Vec::new();
     let mut all_log_probs: Vec<f32> = Vec::new();
     let mut all_values: Vec<f32> = Vec::new();
@@ -564,6 +586,9 @@ fn build_rollouts_py(py: Python<'_>, rollouts: &[Option<Rollout>]) -> PyResult<P
             all_action_masks.extend_from_slice(&step.action_mask);
             all_hand_card_ids.extend_from_slice(&step.hand_card_ids);
             all_action_card_ids.extend_from_slice(&step.action_card_ids);
+            all_draw_pile_ids.extend_from_slice(&step.draw_pile_ids);
+            all_discard_pile_ids.extend_from_slice(&step.discard_pile_ids);
+            all_exhaust_pile_ids.extend_from_slice(&step.exhaust_pile_ids);
             all_chosen.push(step.chosen_idx as i64);
             all_log_probs.push(step.log_prob);
             all_values.push(step.value);
@@ -578,6 +603,9 @@ fn build_rollouts_py(py: Python<'_>, rollouts: &[Option<Rollout>]) -> PyResult<P
     result.set_item("action_masks", PyList::new(py, all_action_masks.iter().map(|&b| b))?)?;
     result.set_item("hand_card_ids", &all_hand_card_ids)?;
     result.set_item("action_card_ids", &all_action_card_ids)?;
+    result.set_item("draw_pile_ids", &all_draw_pile_ids)?;
+    result.set_item("discard_pile_ids", &all_discard_pile_ids)?;
+    result.set_item("exhaust_pile_ids", &all_exhaust_pile_ids)?;
     result.set_item("chosen_indices", &all_chosen)?;
     result.set_item("log_probs", &all_log_probs)?;
     result.set_item("values", &all_values)?;

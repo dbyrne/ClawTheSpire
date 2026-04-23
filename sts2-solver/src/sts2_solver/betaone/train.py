@@ -190,6 +190,7 @@ def train(
         # Collect rollouts — one call per HP level, merge results
         all_states, all_act_feat, all_act_masks = [], [], []
         all_hand_card_ids, all_action_card_ids = [], []
+        all_draw_pile_ids, all_discard_pile_ids, all_exhaust_pile_ids = [], [], []
         all_chosen, all_lp, all_values, all_rewards, all_dones = [], [], [], [], []
         all_outcomes, all_hps = [], []
         seed_offset = gen * 100_000
@@ -223,6 +224,9 @@ def train(
             all_act_masks.extend(rollout["action_masks"])
             all_hand_card_ids.extend(rollout["hand_card_ids"])
             all_action_card_ids.extend(rollout["action_card_ids"])
+            all_draw_pile_ids.extend(rollout["draw_pile_ids"])
+            all_discard_pile_ids.extend(rollout["discard_pile_ids"])
+            all_exhaust_pile_ids.extend(rollout["exhaust_pile_ids"])
             all_chosen.extend(rollout["chosen_indices"])
             all_lp.extend(rollout["log_probs"])
             all_values.extend(rollout["values"])
@@ -246,6 +250,10 @@ def train(
         act_masks = torch.tensor(all_act_masks).reshape(T, MAX_ACTIONS)
         hand_card_ids = torch.tensor(all_hand_card_ids, dtype=torch.long).reshape(T, MAX_HAND)
         action_card_ids = torch.tensor(all_action_card_ids, dtype=torch.long).reshape(T, MAX_ACTIONS)
+        from .network import MAX_DRAW_PILE, MAX_DISCARD_PILE, MAX_EXHAUST_PILE
+        draw_pile_ids = torch.tensor(all_draw_pile_ids, dtype=torch.long).reshape(T, MAX_DRAW_PILE)
+        discard_pile_ids = torch.tensor(all_discard_pile_ids, dtype=torch.long).reshape(T, MAX_DISCARD_PILE)
+        exhaust_pile_ids = torch.tensor(all_exhaust_pile_ids, dtype=torch.long).reshape(T, MAX_EXHAUST_PILE)
         chosen = torch.tensor(all_chosen, dtype=torch.long)
         old_lp = torch.tensor(all_lp, dtype=torch.float32)
         values = np.array(all_values, dtype=np.float32)
@@ -268,6 +276,9 @@ def train(
             act_masks,
             hand_card_ids,
             action_card_ids,
+            draw_pile_ids,
+            discard_pile_ids,
+            exhaust_pile_ids,
             chosen,
             old_lp,
             torch.tensor(advantages, dtype=torch.float32),

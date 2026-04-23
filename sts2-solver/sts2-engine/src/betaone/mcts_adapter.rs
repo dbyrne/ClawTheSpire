@@ -27,8 +27,12 @@ impl<'a> Inference for BetaOneMCTSAdapter<'a> {
         let (act_feat, act_mask, num_valid) = encode::encode_actions(actions, state);
         let hand_ids = encode::encode_hand_card_ids(state, self.card_vocab);
         let action_ids = encode::encode_action_card_ids(actions, state, self.card_vocab);
+        let draw_ids = encode::encode_draw_pile_ids(state, self.card_vocab);
+        let discard_ids = encode::encode_discard_pile_ids(state, self.card_vocab);
+        let exhaust_ids = encode::encode_exhaust_pile_ids(state, self.card_vocab);
         self.inference.evaluate(
-            &state_enc, &act_feat, &act_mask, &hand_ids, &action_ids, num_valid,
+            &state_enc, &act_feat, &act_mask, &hand_ids, &action_ids,
+            &draw_ids, &discard_ids, &exhaust_ids, num_valid,
         )
     }
 
@@ -40,8 +44,12 @@ impl<'a> Inference for BetaOneMCTSAdapter<'a> {
         let act_mask = [true; encode::MAX_ACTIONS];
         let hand_ids = encode::encode_hand_card_ids(state, self.card_vocab);
         let action_ids = [0i64; encode::MAX_ACTIONS];
+        let draw_ids = encode::encode_draw_pile_ids(state, self.card_vocab);
+        let discard_ids = encode::encode_discard_pile_ids(state, self.card_vocab);
+        let exhaust_ids = encode::encode_exhaust_pile_ids(state, self.card_vocab);
         let (_, value) = self.inference.evaluate(
-            &state_enc, &act_feat, &act_mask, &hand_ids, &action_ids, 0,
+            &state_enc, &act_feat, &act_mask, &hand_ids, &action_ids,
+            &draw_ids, &discard_ids, &exhaust_ids, 0,
         );
         // Clamp to valid range: the value head has no tanh and can overshoot,
         // which flattens MCTS value differences and causes skipped turns.

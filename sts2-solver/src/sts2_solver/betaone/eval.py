@@ -119,6 +119,50 @@ def encode_relics(relics: set[str]) -> list[float]:
     return [1.0 if name in relics else 0.0 for name in RELIC_FLAG_NAMES]
 
 
+def encode_turn_counters(scenario: "Scenario") -> list[float]:
+    """Turn-progress counters → 3 floats. Mirrors Rust TURN_COUNTERS_DIM.
+
+    Scenario optional fields (default 0 if unset):
+      cards_played_this_turn, attacks_played_this_turn, skills_played_this_turn
+    """
+    cards = getattr(scenario, "cards_played_this_turn", 0) or 0
+    attacks = getattr(scenario, "attacks_played_this_turn", 0) or 0
+    skills = getattr(scenario, "skills_played_this_turn", 0) or 0
+    return [cards / 10.0, attacks / 10.0, skills / 5.0]
+
+
+def encode_potions(potions: list[dict] | None) -> list[float]:
+    """Potion inventory → POTION_SLOTS × POTION_FIELDS = 18 floats.
+
+    Per slot: [empty_flag, heal, block, strength, damage_all, enemy_weak].
+    """
+    from .network import POTION_SLOTS, POTION_FIELDS
+    v = [0.0] * (POTION_SLOTS * POTION_FIELDS)
+    pots = potions or []
+    for slot in range(POTION_SLOTS):
+        b = slot * POTION_FIELDS
+        if slot < len(pots) and pots[slot]:
+            p = pots[slot]
+            # Match Rust Potion::is_empty() semantics: all fields zero AND name empty.
+            heal = p.get("heal", 0)
+            block = p.get("block", 0)
+            strength = p.get("strength", 0)
+            damage_all = p.get("damage_all", 0)
+            enemy_weak = p.get("enemy_weak", 0)
+            name = p.get("name", "")
+            empty = not name and (heal == 0) and (block == 0) and (strength == 0) and (damage_all == 0) and (enemy_weak == 0)
+            if not empty:
+                v[b] = 0.0
+                v[b + 1] = heal / 10.0
+                v[b + 2] = block / 30.0
+                v[b + 3] = strength / 5.0
+                v[b + 4] = damage_all / 30.0
+                v[b + 5] = enemy_weak / 3.0
+                continue
+        v[b] = 1.0  # empty flag
+    return v
+
+
 def encode_state(scenario: "Scenario") -> list[float]:
     """Encode a full scenario state → STATE_DIM floats."""
     v = encode_player(scenario.player)
@@ -132,6 +176,8 @@ def encode_state(scenario: "Scenario") -> list[float]:
     ))
     v.extend(encode_relics(scenario.relics))
     v.extend(encode_hand_aggregates(scenario.hand))
+    v.extend(encode_turn_counters(scenario))
+    v.extend(encode_potions(getattr(scenario, "potions", None)))
     # Individual hand cards (MAX_HAND × CARD_STATS_DIM) + hand mask (MAX_HAND)
     hand_cards = [0.0] * (MAX_HAND * CARD_STATS_DIM)
     hand_mask = [0.0] * MAX_HAND
@@ -309,6 +355,21 @@ class Scenario:
     discard_size: int = 5
     exhaust_size: int = 0
     pending_choice: dict | None = None
+    # Turn-progress counters (encoder v3, 2026-04-23). Default 0 for scenarios that
+    # don't need them; only decision-quality scenarios testing attacks_played / skills_played
+    # semantics must set them explicitly.
+    cards_played_this_turn: int = 0
+    attacks_played_this_turn: int = 0
+    skills_played_this_turn: int = 0
+    # Potion inventory (list of up to POTION_SLOTS dicts). Scenarios testing potion
+    # planning must populate this; default empty keeps old scenarios encoding-equivalent.
+    potions: list[dict] = field(default_factory=list)
+    # Pile contents (encoder v3, tier 3). Scenarios opt in by providing these
+    # as lists of card dicts; otherwise _pile_ids_from_scenario returns all-PAD
+    # tensors (size fields draw_size/discard_size/exhaust_size remain in state).
+    draw_pile: list[dict] = field(default_factory=list)
+    discard_pile: list[dict] = field(default_factory=list)
+    exhaust_pile: list[dict] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -2979,6 +3040,27 @@ def _card_id_lookup(card: dict, vocab: dict[str, int]) -> int:
     return vocab.get(base_id, 1)  # 1 = UNK
 
 
+def _pile_ids_from_scenario(sc: "Scenario", vocab: dict[str, int]) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Build (draw_ids, discard_ids, exhaust_ids) tensors from a scenario.
+
+    Scenarios historically only stored pile SIZES, not contents. Callers can opt
+    in by populating `scenario.draw_pile`, `scenario.discard_pile`, `scenario.exhaust_pile`
+    as lists of card dicts (same format as hand). Otherwise pads to zeros
+    (PAD embedding is learned; treated as "unknown pile contents" during training).
+    """
+    from .network import MAX_DRAW_PILE, MAX_DISCARD_PILE, MAX_EXHAUST_PILE
+    draw_ids = torch.zeros(1, MAX_DRAW_PILE, dtype=torch.long)
+    discard_ids = torch.zeros(1, MAX_DISCARD_PILE, dtype=torch.long)
+    exhaust_ids = torch.zeros(1, MAX_EXHAUST_PILE, dtype=torch.long)
+    for i, card in enumerate(getattr(sc, "draw_pile", [])[:MAX_DRAW_PILE]):
+        draw_ids[0, i] = _card_id_lookup(card, vocab)
+    for i, card in enumerate(getattr(sc, "discard_pile", [])[:MAX_DISCARD_PILE]):
+        discard_ids[0, i] = _card_id_lookup(card, vocab)
+    for i, card in enumerate(getattr(sc, "exhaust_pile", [])[:MAX_EXHAUST_PILE]):
+        exhaust_ids[0, i] = _card_id_lookup(card, vocab)
+    return draw_ids, discard_ids, exhaust_ids
+
+
 def _warm_load_state_dict(net: "BetaOneNetwork", raw_old_state: dict) -> None:
     """Load an older-arch checkpoint into the current network.
 
@@ -3128,12 +3210,17 @@ def run_eval(checkpoint_path: str | None = None) -> dict:
             for i, card in enumerate(sc.hand[:MAX_HAND]):
                 hand_ids[0, i] = _card_id_lookup(card, card_vocab)
 
+        # Pile card IDs (encoder v3). Scenarios don't currently populate piles —
+        # pass PAD (0) arrays so the network's pile-pool evaluates to the PAD embedding.
+        draw_ids, discard_ids, exhaust_ids = _pile_ids_from_scenario(sc, card_vocab)
+
         # Forward pass
         with torch.no_grad():
             # Handle both 2-output nets (main trunk) and 3-output nets (HP-head
             # variants) so this eval.py works when cherry-picked into HP-head
             # worktrees without losing the new scenarios.
-            logits, value, *_ = net(state_t, action_t, mask_t, hand_ids, action_ids)
+            logits, value, *_ = net(state_t, action_t, mask_t, hand_ids, action_ids,
+                                    draw_ids, discard_ids, exhaust_ids)
 
         n_actions = len(sc.actions)
         probs = torch.softmax(logits[0, :n_actions], dim=0).tolist()
@@ -3518,9 +3605,11 @@ def _eval_value(net, state_dict, card_vocab) -> float:
     if sc.hand:
         for i, card in enumerate(sc.hand[:MAX_HAND]):
             hand_ids[0, i] = _card_id_lookup(card, card_vocab)
+    draw_ids, discard_ids, exhaust_ids = _pile_ids_from_scenario(sc, card_vocab)
 
     with torch.no_grad():
-        _logits, value, *_ = net(state_t, action_t, mask_t, hand_ids, action_ids)
+        _logits, value, *_ = net(state_t, action_t, mask_t, hand_ids, action_ids,
+                                 draw_ids, discard_ids, exhaust_ids)
 
     return value.item()
 
@@ -3749,8 +3838,9 @@ def run_mcts_eval(
             if a.card is not None:
                 cid = a.card.get("id", "") + ("+" if a.card.get("upgraded") else "")
                 ai[0, i] = card_vocab.get(cid, 0)
+        draw_ids, discard_ids, exhaust_ids = _pile_ids_from_scenario(sc, card_vocab)
         with torch.no_grad():
-            out = net(st, af, am, hi, ai)
+            out = net(st, af, am, hi, ai, draw_ids, discard_ids, exhaust_ids)
         logits = out[0][0].numpy()
         n = len(sc.actions)
         policy_idx = int(logits[:n].argmax())

@@ -105,6 +105,9 @@ class ReplayBuffer:
         self.act_masks: list[np.ndarray] = []
         self.hand_ids: list[np.ndarray] = []
         self.action_ids: list[np.ndarray] = []
+        self.draw_ids: list[np.ndarray] = []
+        self.discard_ids: list[np.ndarray] = []
+        self.exhaust_ids: list[np.ndarray] = []
         self.policies: list[np.ndarray] = []
         self.values: list[np.ndarray] = []
         self.state_jsons: list[str] = []
@@ -121,6 +124,9 @@ class ReplayBuffer:
         act_masks: np.ndarray,
         hand_ids: np.ndarray,
         action_ids: np.ndarray,
+        draw_ids: np.ndarray,
+        discard_ids: np.ndarray,
+        exhaust_ids: np.ndarray,
         policies: np.ndarray,
         values: np.ndarray,
         state_jsons: list[str] | None = None,
@@ -133,6 +139,9 @@ class ReplayBuffer:
         self.act_masks.extend(act_masks)
         self.hand_ids.extend(hand_ids)
         self.action_ids.extend(action_ids)
+        self.draw_ids.extend(draw_ids)
+        self.discard_ids.extend(discard_ids)
+        self.exhaust_ids.extend(exhaust_ids)
         self.policies.extend(policies)
         self.values.extend(values)
         # state_jsons optional for backwards-compat callers that don't do
@@ -149,13 +158,18 @@ class ReplayBuffer:
             del self.act_masks[:drop]
             del self.hand_ids[:drop]
             del self.action_ids[:drop]
+            del self.draw_ids[:drop]
+            del self.discard_ids[:drop]
+            del self.exhaust_ids[:drop]
             del self.policies[:drop]
             del self.values[:drop]
             del self.state_jsons[:drop]
 
     def sample_tensors(self, batch_size: int) -> tuple[
         torch.Tensor, torch.Tensor, torch.Tensor,
-        torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
+        torch.Tensor, torch.Tensor,
+        torch.Tensor, torch.Tensor, torch.Tensor,
+        torch.Tensor, torch.Tensor,
     ]:
         """Sample a random batch from the buffer, returns tensors."""
         n = len(self.states)
@@ -166,6 +180,9 @@ class ReplayBuffer:
             torch.tensor(np.array([self.act_masks[i] for i in indices])),
             torch.tensor(np.array([self.hand_ids[i] for i in indices]), dtype=torch.long),
             torch.tensor(np.array([self.action_ids[i] for i in indices]), dtype=torch.long),
+            torch.tensor(np.array([self.draw_ids[i] for i in indices]), dtype=torch.long),
+            torch.tensor(np.array([self.discard_ids[i] for i in indices]), dtype=torch.long),
+            torch.tensor(np.array([self.exhaust_ids[i] for i in indices]), dtype=torch.long),
             torch.tensor(np.array([self.policies[i] for i in indices]), dtype=torch.float32),
             torch.tensor(np.array([self.values[i] for i in indices]), dtype=torch.float32),
         )
@@ -272,6 +289,9 @@ def train_batch(
     action_masks: torch.Tensor,
     hand_card_ids: torch.Tensor,
     action_card_ids: torch.Tensor,
+    draw_pile_ids: torch.Tensor,
+    discard_pile_ids: torch.Tensor,
+    exhaust_pile_ids: torch.Tensor,
     target_policies: torch.Tensor,
     target_values: torch.Tensor,
     value_coef: float = 1.0,
@@ -285,7 +305,8 @@ def train_batch(
     enabled) — sample at a rate in the caller, don't enable per-step.
     """
     logits, values = network(states, action_features, action_masks,
-                             hand_card_ids, action_card_ids)
+                             hand_card_ids, action_card_ids,
+                             draw_pile_ids, discard_pile_ids, exhaust_pile_ids)
 
     # Policy loss: cross-entropy against MCTS visit distribution
     log_probs = F.log_softmax(logits, dim=1)
@@ -576,6 +597,7 @@ def train(
         all_final_hps = []
         gen_states, gen_act_feat, gen_act_masks = [], [], []
         gen_hand_ids, gen_action_ids, gen_policies = [], [], []
+        gen_draw_ids, gen_discard_ids, gen_exhaust_ids = [], [], []
         gen_visits, gen_q_values = [], []
         gen_mcts_values = []
         gen_state_jsons: list[str] = []
@@ -627,6 +649,10 @@ def train(
             gen_act_masks.extend(np.array(rollout["action_masks"]).reshape(-1, MAX_ACTIONS))
             gen_hand_ids.extend(np.array(rollout["hand_card_ids"], dtype=np.int64).reshape(-1, MAX_HAND))
             gen_action_ids.extend(np.array(rollout["action_card_ids"], dtype=np.int64).reshape(-1, MAX_ACTIONS))
+            from .network import MAX_DRAW_PILE, MAX_DISCARD_PILE, MAX_EXHAUST_PILE
+            gen_draw_ids.extend(np.array(rollout["draw_pile_ids"], dtype=np.int64).reshape(-1, MAX_DRAW_PILE))
+            gen_discard_ids.extend(np.array(rollout["discard_pile_ids"], dtype=np.int64).reshape(-1, MAX_DISCARD_PILE))
+            gen_exhaust_ids.extend(np.array(rollout["exhaust_pile_ids"], dtype=np.int64).reshape(-1, MAX_EXHAUST_PILE))
             gen_policies.extend(np.array(rollout["policies"], dtype=np.float32).reshape(-1, MAX_ACTIONS))
             # Always pull visits+q_values — reanalyse needs them even when
             # q_target_mix=0, and they're cheap (MAX_ACTIONS scalars per step).
@@ -681,6 +707,9 @@ def train(
             act_masks=gen_act_masks,
             hand_ids=gen_hand_ids,
             action_ids=gen_action_ids,
+            draw_ids=gen_draw_ids,
+            discard_ids=gen_discard_ids,
+            exhaust_ids=gen_exhaust_ids,
             policies=gen_policies,
             values=gen_values,
             state_jsons=gen_state_jsons,
@@ -713,6 +742,7 @@ def train(
             for _ in range(updates_per_epoch):
                 (b_states, b_act_feat, b_act_masks,
                  b_hand_ids, b_action_ids,
+                 b_draw_ids, b_discard_ids, b_exhaust_ids,
                  b_policies, b_values) = replay.sample_tensors(batch_size)
 
                 # Reshape action features from flat to (B, MAX_ACTIONS, ACTION_DIM)
@@ -726,6 +756,7 @@ def train(
                     network, optimizer,
                     b_states, b_act_feat, b_act_masks,
                     b_hand_ids, b_action_ids,
+                    b_draw_ids, b_discard_ids, b_exhaust_ids,
                     b_policies, b_values,
                     value_coef=value_coef,
                     measure_grad_conflict=measure,

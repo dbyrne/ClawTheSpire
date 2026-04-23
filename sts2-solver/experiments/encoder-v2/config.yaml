@@ -1,0 +1,87 @@
+name: encoder-v2
+method: mcts_selfplay
+description: |
+  Encoder v3 (arch_version 3) + 10x capacity bump, cold-start.
+
+  Encoder changes (vs v3):
+  - +3 turn-counter dims (cards_played, attacks_played, _skills_played)
+  - +18 potion-inventory dims (3 slots × 6 fields)
+  - +3 new pile ID tensor inputs (draw[30], discard[30], exhaust[20])
+    embedded + mean-pooled, concatenated to trunk input
+  - state_dim 446 -> 467, trunk_input 188 -> 561
+
+  Capacity (vs v3 140K):
+  - card_embed_dim 16 -> 64 (leverage: now used across hand/action/3 piles)
+  - hand_proj_dim 32 -> 192
+  - trunk 2x128 -> 4x768
+  - policy_head_type dot_product -> mlp (hidden 512)
+  - Estimated 3.1M params, ~10x v3
+
+  Training recipe: identical to reanalyse-v3 (proven baseline).
+  Only deltas: lr 3e-4 -> 1e-4 (bigger model sensitivity),
+  reanalyse_min_gen 10 -> 30 (cold-start, needs more gens
+  before the network produces meaningful MCTS labels).
+
+  Hypothesis: v3's ceiling (P-Eval ~115, policy-only WR ~48%)
+  was representational, not capacity or algorithm. Richer encoder
+  + capacity unlocks scaling. If false (P-Eval <= 95 at gen 20),
+  the ceiling is elsewhere and we stop spending on this axis.
+
+  Ship @ gen 50: P-Eval > 130 OR V-Eval > 120.
+  Kill @ gen 20: P-Eval <= 95 (within v3's noise band).
+created: '2026-04-23T11:15:08+00:00'
+parent: null
+parent_checkpoint: null
+network_type: betaone
+architecture:
+  arch_version: 3
+  hidden_dim: 768
+  action_hidden: 64
+  hand_proj_dim: 192
+  card_embed_dim: 64
+  card_stats_dim: 28
+  relic_dim: 27
+  hand_agg_dim: 3
+  turn_counters_dim: 3
+  potions_dim: 18
+  action_dim: 35
+  max_hand: 10
+  max_actions: 30
+  value_head_layers: 3
+  trunk_layers: 4
+  trunk_hidden: 768
+  policy_head_type: mlp
+  policy_mlp_hidden: 512
+  num_cards: 578
+  base_state_dim: 177
+  state_dim: 467
+  trunk_input: 561
+training:
+  generations: 200
+  combats_per_gen: 256
+  lr: 0.0001
+  batch_size: 512
+  mcts:
+    num_sims: 1000
+    temperature: 1.0
+    replay_capacity: 50000
+    train_epochs: 4
+    value_coef: 1.0
+    c_puct: 1.5
+    pomcp: true
+    mcts_bootstrap: true
+    turn_boundary_eval: true
+    q_target_mix: 0.5
+    q_target_temp: 0.5
+    eval_every: 1
+    grad_conflict_sample_every: 10
+    reanalyse_every: 2
+    reanalyse_frac: 0.75
+    reanalyse_min_gen: 30
+data:
+  mode: encounter_set
+  encounter_set: lean-decks-v1
+checkpoints:
+  save_every: 1
+  keep_best: true
+  cold_start: true

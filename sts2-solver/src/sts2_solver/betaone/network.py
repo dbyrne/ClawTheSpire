@@ -1,16 +1,16 @@
-"""BetaOne network: combat-only policy + value with hand attention + card embeddings (~60K params).
+"""BetaOne network: combat-only policy + value with hand attention + card embeddings.
 
 Architecture:
-  State (430) → split: base(140) + hand_cards(10,28) + hand_mask(10)
+  State (467) → split: base(177) + hand_cards(10,28) + hand_mask(10)
   Hand: card_embed(hand_ids) + hand_stats → Linear(44→32) → Q/K/V self-attention → pool → (32)
-  Trunk: cat(base, hand_pooled) = (172) → LayerNorm → Linear(128) → ReLU → Linear(128) → ReLU
+  Trunk: cat(base, hand_pooled) → LayerNorm → Linear(128) → ReLU → Linear(128) → ReLU
   Policy: card_embed(action_ids) + action_feats → Linear(51→64) keys, dot(query, keys) → logits
   Value:  Linear(128→64) → ReLU → Linear(64→1)
 
-  Base state includes 26 binary relic flags + 3 hand aggregates
-  (total_damage, total_block, count_powers).
+  Base state (177 dims) = player(25) + enemies(95) + context(6) + relics(27) + hand_agg(3)
+                        + turn_counters(3) + potions(18)
 
-Inputs:  state (B,430), action_features (B,30,35), action_mask (B,30),
+Inputs:  state (B,467), action_features (B,30,35), action_mask (B,30),
          hand_card_ids (B,10) int64, action_card_ids (B,30) int64
 Outputs: logits (B,30), value (B,1)
 """
@@ -26,14 +26,25 @@ MAX_HAND = 10
 CARD_STATS_DIM = 28
 RELIC_DIM = 27
 HAND_AGG_DIM = 3  # hand aggregates: total_damage, total_block, count_powers
-BASE_STATE_DIM = 156  # player(25) + enemies(95=5*19) + context(6) + relics(27) + hand_agg(3) — must match Rust
-STATE_DIM = BASE_STATE_DIM + MAX_HAND * CARD_STATS_DIM + MAX_HAND  # 446
+TURN_COUNTERS_DIM = 3  # cards_played, attacks_played, _skills_played (this turn)
+POTION_SLOTS = 3
+POTION_FIELDS = 6  # empty_flag, heal, block, strength, damage_all, enemy_weak
+POTIONS_DIM = POTION_SLOTS * POTION_FIELDS  # 18
+BASE_STATE_DIM = 156 + TURN_COUNTERS_DIM + POTIONS_DIM  # 177 = player(25) + enemies(95) + context(6) + relics(27) + hand_agg(3) + turn_counters(3) + potions(18)
+STATE_DIM = BASE_STATE_DIM + MAX_HAND * CARD_STATS_DIM + MAX_HAND  # 467
 ACTION_DIM = 35
 MAX_ACTIONS = 30
 HIDDEN_DIM = 128
 ACTION_HIDDEN = 64
 HAND_PROJ_DIM = 32
 CARD_EMBED_DIM = 16
+# Pile pooling: sum card embeddings per pile, divide by (count+eps) so the
+# magnitude stays bounded regardless of pile size. Each pool vector is
+# CARD_EMBED_DIM (shared embedding with hand/action).
+PILE_POOL_DIM = CARD_EMBED_DIM  # 16
+MAX_DRAW_PILE = 30
+MAX_DISCARD_PILE = 30
+MAX_EXHAUST_PILE = 20
 # Default value-head depth (1 hidden layer = legacy v2 behavior). Individual
 # experiments can override via `architecture.value_head_layers` in their config.
 # This is a per-experiment knob, not a version-bumping change — legacy
@@ -56,7 +67,8 @@ POLICY_MLP_HIDDEN_DEFAULT = 64
 
 # Architecture versioning — bump ARCH_VERSION on any change that breaks
 # checkpoint compatibility (any dimension constant above).
-ARCH_VERSION = 2
+# v3 (2026-04-23 encoder-v2): +3 turn-counter dims + 18 potion dims. base_state 156→177.
+ARCH_VERSION = 3
 
 ARCH_META = {
     "arch_version": ARCH_VERSION,
@@ -68,6 +80,8 @@ ARCH_META = {
     "card_stats_dim": CARD_STATS_DIM,
     "relic_dim": RELIC_DIM,
     "hand_agg_dim": HAND_AGG_DIM,
+    "turn_counters_dim": TURN_COUNTERS_DIM,
+    "potions_dim": POTIONS_DIM,
     "action_dim": ACTION_DIM,
     "max_hand": MAX_HAND,
     "max_actions": MAX_ACTIONS,
@@ -203,10 +217,9 @@ class BetaOneNetwork(nn.Module):
     def _build_trunk(layers: int, hidden: int) -> nn.Sequential:
         """Configurable trunk: LayerNorm → (Linear + ReLU) * layers.
 
-        layers=2: v3 default (188 → hidden → hidden).
-        layers=3: rebalanced arch (188 → hidden → hidden → hidden).
+        Trunk input = base_state(177) + hand_pooled(32) + 3 × pile_pooled(16) = 257.
         """
-        trunk_input = BASE_STATE_DIM + HAND_PROJ_DIM
+        trunk_input = BASE_STATE_DIM + HAND_PROJ_DIM + 3 * PILE_POOL_DIM
         modules: list[nn.Module] = [nn.LayerNorm(trunk_input)]
         prev = trunk_input
         for _ in range(layers):
@@ -259,6 +272,18 @@ class BetaOneNetwork(nn.Module):
             "policy_mlp_hidden": self.policy_mlp_hidden,
         }
 
+    def _pile_pool(self, pile_ids: torch.Tensor) -> torch.Tensor:
+        """Embed pile card IDs, mean-pool over non-padding slots.
+
+        Input:  pile_ids (B, N) int64 with 0 = PAD.
+        Output: pooled  (B, CARD_EMBED_DIM).
+        """
+        embeds = self.card_embed(pile_ids.long())  # (B, N, E)
+        mask = (pile_ids > 0).float().unsqueeze(-1)  # (B, N, 1)
+        summed = (embeds * mask).sum(dim=1)  # (B, E)
+        counts = mask.sum(dim=1).clamp(min=1)  # (B, 1)
+        return summed / counts
+
     def forward(
         self,
         state: torch.Tensor,
@@ -266,11 +291,14 @@ class BetaOneNetwork(nn.Module):
         action_mask: torch.Tensor,
         hand_card_ids: torch.Tensor,
         action_card_ids: torch.Tensor,
+        draw_pile_ids: torch.Tensor,
+        discard_pile_ids: torch.Tensor,
+        exhaust_pile_ids: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         B = state.shape[0]
 
         # Split state into components
-        base = state[:, :BASE_STATE_DIM]  # (B, 155)
+        base = state[:, :BASE_STATE_DIM]  # (B, 177)
         hand_raw = state[:, BASE_STATE_DIM:BASE_STATE_DIM + MAX_HAND * CARD_STATS_DIM]
         hand_raw = hand_raw.view(B, MAX_HAND, CARD_STATS_DIM)  # (B, 10, 28)
         hand_mask_float = state[:, BASE_STATE_DIM + MAX_HAND * CARD_STATS_DIM:]  # (B, 10)
@@ -296,8 +324,13 @@ class BetaOneNetwork(nn.Module):
         mask_expanded = hand_mask_float.unsqueeze(-1)
         hand_pooled = (attended * mask_expanded).sum(dim=1) / mask_expanded.sum(dim=1).clamp(min=1)
 
+        # Pile-composition pooled embeddings — mean over non-PAD slots per pile.
+        draw_pooled = self._pile_pool(draw_pile_ids)       # (B, 16)
+        discard_pooled = self._pile_pool(discard_pile_ids) # (B, 16)
+        exhaust_pooled = self._pile_pool(exhaust_pile_ids) # (B, 16)
+
         # Trunk
-        combined = torch.cat([base, hand_pooled], dim=1)
+        combined = torch.cat([base, hand_pooled, draw_pooled, discard_pooled, exhaust_pooled], dim=1)
         h = self.trunk(combined)
 
         # Policy: two configurations
@@ -339,12 +372,22 @@ def export_onnx(network: BetaOneNetwork, output_dir: str) -> str:
     dummy_hand_ids[0, :5] = 2  # Non-zero card indices for tracing
     dummy_action_ids = torch.zeros(1, MAX_ACTIONS, dtype=torch.long)
     dummy_action_ids[0, :5] = 2
+    # Pile inputs: non-zero in a few slots so pile_pool traces through both
+    # the embedding lookup and the mask-divide path.
+    dummy_draw_ids = torch.zeros(1, MAX_DRAW_PILE, dtype=torch.long)
+    dummy_draw_ids[0, :5] = 2
+    dummy_discard_ids = torch.zeros(1, MAX_DISCARD_PILE, dtype=torch.long)
+    dummy_discard_ids[0, :5] = 2
+    dummy_exhaust_ids = torch.zeros(1, MAX_EXHAUST_PILE, dtype=torch.long)
+    dummy_exhaust_ids[0, :5] = 2
 
     torch.onnx.export(
         network,
-        (dummy_state, dummy_actions, dummy_mask, dummy_hand_ids, dummy_action_ids),
+        (dummy_state, dummy_actions, dummy_mask, dummy_hand_ids, dummy_action_ids,
+         dummy_draw_ids, dummy_discard_ids, dummy_exhaust_ids),
         path,
-        input_names=["state", "action_features", "action_mask", "hand_card_ids", "action_card_ids"],
+        input_names=["state", "action_features", "action_mask", "hand_card_ids", "action_card_ids",
+                     "draw_pile_ids", "discard_pile_ids", "exhaust_pile_ids"],
         output_names=["logits", "value"],
         dynamic_axes={
             "state": {0: "batch"},
@@ -352,6 +395,9 @@ def export_onnx(network: BetaOneNetwork, output_dir: str) -> str:
             "action_mask": {0: "batch"},
             "hand_card_ids": {0: "batch"},
             "action_card_ids": {0: "batch"},
+            "draw_pile_ids": {0: "batch"},
+            "discard_pile_ids": {0: "batch"},
+            "exhaust_pile_ids": {0: "batch"},
             "logits": {0: "batch"},
             "value": {0: "batch"},
         },

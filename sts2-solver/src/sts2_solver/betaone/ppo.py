@@ -55,6 +55,9 @@ def ppo_update(
     action_masks: torch.Tensor,
     hand_card_ids: torch.Tensor,
     action_card_ids: torch.Tensor,
+    draw_pile_ids: torch.Tensor,
+    discard_pile_ids: torch.Tensor,
+    exhaust_pile_ids: torch.Tensor,
     chosen_indices: torch.Tensor,
     old_log_probs: torch.Tensor,
     advantages: torch.Tensor,
@@ -91,13 +94,17 @@ def ppo_update(
             b_masks = action_masks[b]
             b_hand_ids = hand_card_ids[b]
             b_action_ids = action_card_ids[b]
+            b_draw_ids = draw_pile_ids[b]
+            b_discard_ids = discard_pile_ids[b]
+            b_exhaust_ids = exhaust_pile_ids[b]
             b_chosen = chosen_indices[b]
             b_old_lp = old_log_probs[b]
             b_adv = advantages[b]
             b_ret = returns[b]
 
             # Forward pass
-            logits, values = network(b_states, b_actions, b_masks, b_hand_ids, b_action_ids)
+            logits, values = network(b_states, b_actions, b_masks, b_hand_ids, b_action_ids,
+                                     b_draw_ids, b_discard_ids, b_exhaust_ids)
 
             # Policy loss
             dist = torch.distributions.Categorical(logits=logits)

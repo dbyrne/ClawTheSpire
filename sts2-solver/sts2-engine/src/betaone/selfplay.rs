@@ -42,6 +42,9 @@ struct Sample {
     state: [f32; encode::STATE_DIM],
     hand_card_ids: [i64; encode::MAX_HAND],
     action_card_ids: [i64; encode::MAX_ACTIONS],
+    draw_pile_ids: [i64; encode::MAX_DRAW_PILE],
+    discard_pile_ids: [i64; encode::MAX_DISCARD_PILE],
+    exhaust_pile_ids: [i64; encode::MAX_EXHAUST_PILE],
     action_features: [f32; encode::MAX_ACTIONS * encode::ACTION_DIM],
     action_mask: [bool; encode::MAX_ACTIONS],
     policy: [f32; encode::MAX_ACTIONS],  // MCTS visit distribution (zero-padded)
@@ -174,6 +177,9 @@ fn run_selfplay_combat(
             let (act_feat, act_mask, _num_valid) = encode::encode_actions(&actions, &state);
             let hand_ids = encode::encode_hand_card_ids(&state, card_vocab);
             let action_ids = encode::encode_action_card_ids(&actions, &state, card_vocab);
+            let draw_ids = encode::encode_draw_pile_ids(&state, card_vocab);
+            let discard_ids = encode::encode_discard_pile_ids(&state, card_vocab);
+            let exhaust_ids = encode::encode_exhaust_pile_ids(&state, card_vocab);
             // Snapshot the state BEFORE MCTS mutates/clones it internally; this
             // is the exact state the encoded features describe and the one
             // reanalyse needs to re-run MCTS against.
@@ -205,6 +211,9 @@ fn run_selfplay_combat(
                 state: state_enc,
                 hand_card_ids: hand_ids,
                 action_card_ids: action_ids,
+                draw_pile_ids: draw_ids,
+                discard_pile_ids: discard_ids,
+                exhaust_pile_ids: exhaust_ids,
                 action_features: act_feat,
                 action_mask: act_mask,
                 policy,
@@ -404,6 +413,9 @@ fn build_selfplay_py(py: Python<'_>, results: &[Option<SelfPlayResult>]) -> PyRe
     let mut all_states: Vec<f32> = Vec::new();
     let mut all_hand_ids: Vec<i64> = Vec::new();
     let mut all_action_ids: Vec<i64> = Vec::new();
+    let mut all_draw_ids: Vec<i64> = Vec::new();
+    let mut all_discard_ids: Vec<i64> = Vec::new();
+    let mut all_exhaust_ids: Vec<i64> = Vec::new();
     let mut all_act_feat: Vec<f32> = Vec::new();
     let mut all_act_masks: Vec<bool> = Vec::new();
     let mut all_policies: Vec<f32> = Vec::new();
@@ -429,6 +441,9 @@ fn build_selfplay_py(py: Python<'_>, results: &[Option<SelfPlayResult>]) -> PyRe
             all_states.extend_from_slice(&sample.state);
             all_hand_ids.extend_from_slice(&sample.hand_card_ids);
             all_action_ids.extend_from_slice(&sample.action_card_ids);
+            all_draw_ids.extend_from_slice(&sample.draw_pile_ids);
+            all_discard_ids.extend_from_slice(&sample.discard_pile_ids);
+            all_exhaust_ids.extend_from_slice(&sample.exhaust_pile_ids);
             all_act_feat.extend_from_slice(&sample.action_features);
             all_act_masks.extend_from_slice(&sample.action_mask);
             all_policies.extend_from_slice(&sample.policy);
@@ -446,6 +461,9 @@ fn build_selfplay_py(py: Python<'_>, results: &[Option<SelfPlayResult>]) -> PyRe
     dict.set_item("states", &all_states)?;
     dict.set_item("hand_card_ids", &all_hand_ids)?;
     dict.set_item("action_card_ids", &all_action_ids)?;
+    dict.set_item("draw_pile_ids", &all_draw_ids)?;
+    dict.set_item("discard_pile_ids", &all_discard_ids)?;
+    dict.set_item("exhaust_pile_ids", &all_exhaust_ids)?;
     dict.set_item("action_features", &all_act_feat)?;
     dict.set_item("action_masks", PyList::new(py, all_act_masks.iter().map(|&b| b))?)?;
     dict.set_item("policies", &all_policies)?;

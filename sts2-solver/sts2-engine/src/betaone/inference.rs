@@ -1,6 +1,7 @@
 //! BetaOne ONNX inference: single model with policy (logits) + value outputs.
 //!
-//! 5 input tensors: state, action_features, action_mask, hand_card_ids, action_card_ids.
+//! 8 input tensors: state, action_features, action_mask, hand_card_ids, action_card_ids,
+//! draw_pile_ids, discard_pile_ids, exhaust_pile_ids.
 
 use std::cell::RefCell;
 
@@ -43,6 +44,9 @@ impl BetaOneInference {
         action_mask: &[bool; MAX_ACTIONS],
         hand_card_ids: &[i64; MAX_HAND],
         action_card_ids: &[i64; MAX_ACTIONS],
+        draw_pile_ids: &[i64; MAX_DRAW_PILE],
+        discard_pile_ids: &[i64; MAX_DISCARD_PILE],
+        exhaust_pile_ids: &[i64; MAX_EXHAUST_PILE],
         num_valid: usize,
     ) -> (Vec<f32>, f32) {
         // Build ONNX input tensors
@@ -56,6 +60,12 @@ impl BetaOneInference {
             Array::from_shape_vec((1, MAX_HAND), hand_card_ids.to_vec()).unwrap();
         let action_ids_arr =
             Array::from_shape_vec((1, MAX_ACTIONS), action_card_ids.to_vec()).unwrap();
+        let draw_ids_arr =
+            Array::from_shape_vec((1, MAX_DRAW_PILE), draw_pile_ids.to_vec()).unwrap();
+        let discard_ids_arr =
+            Array::from_shape_vec((1, MAX_DISCARD_PILE), discard_pile_ids.to_vec()).unwrap();
+        let exhaust_ids_arr =
+            Array::from_shape_vec((1, MAX_EXHAUST_PILE), exhaust_pile_ids.to_vec()).unwrap();
 
         let inputs: Vec<(String, ort::value::DynValue)> = vec![
             (
@@ -77,6 +87,18 @@ impl BetaOneInference {
             (
                 "action_card_ids".into(),
                 Tensor::from_array(action_ids_arr).unwrap().into_dyn(),
+            ),
+            (
+                "draw_pile_ids".into(),
+                Tensor::from_array(draw_ids_arr).unwrap().into_dyn(),
+            ),
+            (
+                "discard_pile_ids".into(),
+                Tensor::from_array(discard_ids_arr).unwrap().into_dyn(),
+            ),
+            (
+                "exhaust_pile_ids".into(),
+                Tensor::from_array(exhaust_ids_arr).unwrap().into_dyn(),
             ),
         ];
 
