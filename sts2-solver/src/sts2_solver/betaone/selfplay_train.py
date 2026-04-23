@@ -429,6 +429,12 @@ def train(
     reanalyse_frac: float = 0.25,          # fraction of buffer refreshed per pass
     reanalyse_min_gen: int = 10,           # start reanalysing only after buffer is seeded
     reanalyse_sims: int | None = None,     # defaults to num_sims
+    # Sim ramp: linearly ramp from initial_num_sims to num_sims across gens
+    # [0, sims_ramp_end_gen]. Default (0) disables ramp — num_sims is used flat.
+    # Use when a cold-start network doesn't benefit from deep search early on;
+    # shallower sims mean faster gens until the network is worth searching with.
+    sims_ramp_end_gen: int = 0,
+    initial_num_sims: int | None = None,
 ):
     os.makedirs(output_dir, exist_ok=True)
     onnx_dir = os.path.join(output_dir, "onnx")
@@ -576,6 +582,16 @@ def train(
     replay = ReplayBuffer(max_steps=replay_capacity)
     print(f"Replay buffer: capacity {replay_capacity:,} steps")
 
+    # Sim ramp resolution. If sims_ramp_end_gen>0, linearly interpolate from
+    # initial_num_sims (or num_sims//2 fallback) up to num_sims across gen
+    # [0, sims_ramp_end_gen]. At steady state (gen >= end_gen) use num_sims.
+    ramp_initial = initial_num_sims if initial_num_sims is not None else num_sims
+    def _sims_at_gen(g: int) -> int:
+        if sims_ramp_end_gen <= 0 or g >= sims_ramp_end_gen:
+            return num_sims
+        frac = g / sims_ramp_end_gen
+        return int(round(ramp_initial + (num_sims - ramp_initial) * frac))
+
     for gen in range(start_gen, num_generations + 1):
         t0 = time.time()
 
@@ -583,6 +599,8 @@ def train(
         current_lr = _lr_at_gen(gen)
         for param_group in optimizer.param_groups:
             param_group["lr"] = current_lr
+
+        current_sims = _sims_at_gen(gen)
 
         # Export ONNX
         onnx_path = export_onnx(network, onnx_dir)
@@ -624,7 +642,7 @@ def train(
                 enemy_profiles_json=profiles_json,
                 onnx_path=onnx_path,
                 card_vocab_json=card_vocab_json,
-                num_sims=num_sims,
+                num_sims=current_sims,
                 temperature=temperature,
                 seeds=b_seeds,
                 gen_id=gen,
@@ -874,7 +892,7 @@ def train(
             f"buf {buf_size:6d} | "
             f"pi {avg_ploss:.3f} | "
             f"v {avg_vloss:.3f} | "
-            f"sims {num_sims} | "
+            f"sims {current_sims} | "
             f"{elapsed:.1f}s"
             + (
                 f" | reana {reanalyse_stats['n_refreshed']} "
@@ -896,7 +914,8 @@ def train(
             "encounter_set": encounter_set_id,
             "policy_loss": round(avg_ploss, 5),
             "value_loss": round(avg_vloss, 5),
-            "num_sims": num_sims,
+            "num_sims": current_sims,
+            "num_sims_max": num_sims,
             "gen_time": round(elapsed, 2),
             "timestamp": time.time(),
         }

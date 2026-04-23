@@ -21,16 +21,26 @@ pub struct BetaOneInference {
 
 impl BetaOneInference {
     pub fn new(model_path: &str) -> Result<Self, ort::Error> {
-        // CPU stays as the default. GPU (DirectML / CUDA) was benchmarked
-        // and loses at batch=1 — kernel launch + transfer overhead swamps
-        // the compute win for a 72K-param model. GPU only beats CPU once
-        // batch ≥ ~32 (see examples/bench_inference.rs). Getting there
-        // requires virtual-loss MCTS or cross-thread request batching,
-        // neither of which is in place yet.
-        let session = Session::builder()?
+        // GPU via DirectML is opt-in via STS2_BETAONE_GPU=1. The bench_inference
+        // example historically showed CPU wins at batch=1 for small (72K-param)
+        // models — kernel launch + transfer overhead swamps the compute win. At
+        // 3M params (encoder-v2) the compute:transfer ratio shifts and DirectML
+        // can be a net win even at batch=1. Enabled per-training-run, falls back
+        // to CPU silently if the DirectML EP fails to register.
+        let use_gpu = std::env::var("STS2_BETAONE_GPU")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+
+        let mut builder = Session::builder()?
             .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level3)?
-            .with_intra_threads(1)?
-            .commit_from_file(model_path)?;
+            .with_intra_threads(1)?;
+
+        if use_gpu {
+            use ort::ep::{DirectML, ExecutionProvider};
+            let _ = DirectML::default().register(&mut builder);
+        }
+
+        let session = builder.commit_from_file(model_path)?;
         Ok(BetaOneInference {
             session: RefCell::new(session),
         })

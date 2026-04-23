@@ -78,6 +78,11 @@ training:
     reanalyse_every: 2
     reanalyse_frac: 0.75
     reanalyse_min_gen: 30
+    # Ramp MCTS sims up as the network becomes worth searching with.
+    # Gens 0-29: linear 400 -> 1000. Gen 30+: steady 1000 (matches v3).
+    # Cuts self-play time ~2.5x early while we're just building calibration.
+    initial_num_sims: 400
+    sims_ramp_end_gen: 30
 data:
   mode: encounter_set
   encounter_set: lean-decks-v1

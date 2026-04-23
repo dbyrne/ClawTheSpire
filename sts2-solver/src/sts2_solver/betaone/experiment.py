@@ -601,6 +601,8 @@ class ExperimentConfig:
                 "reanalyse_frac": _float(mcts.get("reanalyse_frac"), 0.25),
                 "reanalyse_min_gen": mcts.get("reanalyse_min_gen", 10),
                 "reanalyse_sims": mcts.get("reanalyse_sims"),
+                "sims_ramp_end_gen": mcts.get("sims_ramp_end_gen", 0),
+                "initial_num_sims": mcts.get("initial_num_sims"),
             }
         else:  # ppo
             ppo = t.get("ppo", {})
