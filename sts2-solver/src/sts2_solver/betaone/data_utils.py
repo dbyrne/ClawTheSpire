@@ -114,20 +114,37 @@ def sample_combat_batches(
     encounter_set: list[dict],
     combats_per_gen: int,
     gen: int,
-) -> list[tuple[list, list, list, int, int]]:
-    """Sample encounters from the set and group into batches by HP level.
+) -> list[tuple[list, list, list, list, int, int]]:
+    """Sample encounters from the set and group into batches.
 
-    Returns list of (encounters, decks, relics, hp, count) tuples.
+    Returns list of (encounters, decks, relics, potions, hp, count) tuples.
+
+    Grouped by (hp, potions_inventory) so that each Rust engine call shares a
+    single potion list (the FFI takes one `potions_json` per batch). Encounters
+    without potions or with identical potion inventories collapse to fewer
+    groups; worst case is one Rust call per unique inventory.
     """
+    import json as _json
     from .encounter_set import sample_encounters
     rng = stdlib_random.Random(gen * 7919)
     sampled = sample_encounters(encounter_set, combats_per_gen, rng=rng)
 
-    hp_groups: dict[int, tuple[list, list, list]] = defaultdict(lambda: ([], [], []))
+    # Key = (hp, serialized-potions). Serialize so the dict key is hashable
+    # and two encounters with identical potion inventories group together.
+    groups: dict[tuple[int, str], tuple[list, list, list, list]] = defaultdict(
+        lambda: ([], [], [], [])
+    )
     for enc in sampled:
         hp = enc.get("hp", 70)
-        hp_groups[hp][0].append(enc["enemies"])
-        hp_groups[hp][1].append(enc["deck"])
-        hp_groups[hp][2].append(enc.get("relics", []))
-    return [(encs, dks, rels, hp, len(encs))
-            for hp, (encs, dks, rels) in hp_groups.items()]
+        potions = enc.get("potions", []) or []
+        key = (hp, _json.dumps(potions, sort_keys=True))
+        groups[key][0].append(enc["enemies"])
+        groups[key][1].append(enc["deck"])
+        groups[key][2].append(enc.get("relics", []))
+        groups[key][3].append(potions)
+    # Each batch's shared potions is just the first encounter's list (all
+    # encounters in a group have identical potion inventories by construction).
+    return [
+        (encs, dks, rels, pots[0] if pots else [], hp, len(encs))
+        for (hp, _key), (encs, dks, rels, pots) in groups.items()
+    ]

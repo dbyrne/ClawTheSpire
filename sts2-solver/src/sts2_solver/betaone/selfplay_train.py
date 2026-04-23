@@ -623,7 +623,7 @@ def train(
         combat_offset = 0
         seed_idx = 0
 
-        for b_enc, b_dks, b_rels, b_hp, b_count in batches:
+        for b_enc, b_dks, b_rels, b_pots, b_hp, b_count in batches:
             if not b_enc:
                 continue
             b_seeds = [seeds[seed_idx + i] if seed_idx + i < len(seeds)
@@ -637,7 +637,7 @@ def train(
                 player_max_hp=player_max_hp,
                 player_max_energy=3,
                 relics_json=json.dumps(b_rels),
-                potions_json="[]",
+                potions_json=json.dumps(b_pots),
                 monster_data_json=monster_json,
                 enemy_profiles_json=profiles_json,
                 onnx_path=onnx_path,

@@ -851,6 +851,8 @@ def cmd_generate(args):
             encounters.extend(generate_from_recorded(
                 records, monster_json, profiles_json, card_vocab_json, onnx_path,
                 combats=args.combats,
+                potion_rate=args.potion_rate,
+                potion_max_count=args.potion_max,
             ))
 
     if include_packages:
@@ -860,11 +862,15 @@ def cmd_generate(args):
             print(f"\nGenerating package encounters from {package_names} ({args.decks_per} decks/encounter)...")
         else:
             print(f"\nGenerating package encounters ({args.decks_per} decks/encounter)...")
+        if args.potion_rate > 0:
+            print(f"  potion_rate={args.potion_rate}, potion_max={args.potion_max}")
         encounters.extend(generate_from_packages(
             monster_json, profiles_json, card_vocab_json, onnx_path,
             decks_per=args.decks_per,
             combats=args.combats,
             package_names=package_names,
+            potion_rate=args.potion_rate,
+            potion_max_count=args.potion_max,
         ))
 
     es_id = save_encounter_set(
@@ -1284,6 +1290,11 @@ def main():
     p.add_argument("--packages", default=None,
                     help="Comma-separated package names to restrict generation to "
                          "(e.g. synergy_grand_finale,synergy_finisher). Default: all.")
+    p.add_argument("--potion-rate", type=float, default=0.0,
+                    help="Fraction of encounters that get a non-empty potion "
+                         "inventory (default 0 = no potions, preserves prior sets).")
+    p.add_argument("--potion-max", type=int, default=2,
+                    help="Max potions per encounter when sampled (default 2, game allows 3).")
     p.set_defaults(func=cmd_generate)
 
     # encounter-sets

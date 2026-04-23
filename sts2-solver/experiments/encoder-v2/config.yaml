@@ -66,7 +66,7 @@ training:
     temperature: 1.0
     replay_capacity: 50000
     train_epochs: 4
-    value_coef: 1.0
+    value_coef: 0.3
     c_puct: 1.5
     pomcp: true
     mcts_bootstrap: true
@@ -85,7 +85,7 @@ training:
     sims_ramp_end_gen: 30
 data:
   mode: encounter_set
-  encounter_set: lean-decks-v1
+  encounter_set: gamma-train-v1
 checkpoints:
   save_every: 1
   keep_best: true

@@ -70,14 +70,16 @@ def _eval_batch(
     pomcp: bool = False,
     turn_boundary_eval: bool = False,
     pw_k: float = 1.0,
+    potions: list | None = None,
 ) -> int:
-    """Run a batch of combats at a single HP level. Returns win count."""
+    """Run a batch of combats at a single HP level + potion inventory. Returns win count."""
+    potions_json = json.dumps(potions or [])
     if use_mcts:
         r = sts2_engine.betaone_mcts_selfplay(
             encounters_json=json.dumps(encounters),
             decks_json=json.dumps(decks),
             player_hp=player_hp, player_max_hp=70, player_max_energy=3,
-            relics_json="[]", potions_json="[]",
+            relics_json="[]", potions_json=potions_json,
             monster_data_json=monster_json,
             enemy_profiles_json=profiles_json,
             onnx_path=onnx_path,
@@ -95,7 +97,7 @@ def _eval_batch(
             encounters_json=json.dumps(encounters),
             decks_json=json.dumps(decks),
             player_hp=player_hp, player_max_hp=70, player_max_energy=3,
-            relics_json="[]", potions_json="[]",
+            relics_json="[]", potions_json=potions_json,
             monster_data_json=monster_json,
             enemy_profiles_json=profiles_json,
             onnx_path=onnx_path,
@@ -161,17 +163,24 @@ def benchmark_checkpoint(
         use_mcts = m == "mcts"
         t0 = time.time()
 
-        # Group encounters by HP for batched execution
+        # Group encounters by (HP, potion inventory) for batched execution.
+        # The Rust FFI accepts one potions_json per batch; encounters with
+        # different potions must run in separate batches.
         from collections import defaultdict
-        hp_groups: dict[int, list[tuple[int, dict]]] = defaultdict(list)
+        # Key -> list[(orig_idx, enc, potions)]. `potions_key` is the serialized
+        # potion inventory (same shape as the `potions` field in the encounter).
+        groups: dict[tuple[int, str], list[tuple[int, dict, list]]] = defaultdict(list)
         for i, enc in enumerate(encounter_set):
             hp = enc.get("hp", enc.get("calibrated_hp", 70))
-            hp_groups[hp].append((i, enc))
+            potions = enc.get("potions", []) or []
+            key = (hp, json.dumps(potions, sort_keys=True))
+            groups[key].append((i, enc, potions))
 
         wins, n_games = 0, 0
-        for hp, enc_list in hp_groups.items():
+        for (hp, _pkey), enc_list in groups.items():
             batch_enc, batch_dks, batch_seeds = [], [], []
-            for i, enc in enc_list:
+            batch_potions = enc_list[0][2] if enc_list else []
+            for i, enc, _pots in enc_list:
                 deck = enc.get("deck", [])
                 if deck and isinstance(deck[0], str):
                     deck = [lookup_card(cid.rstrip("+")) for cid in deck
@@ -192,6 +201,7 @@ def benchmark_checkpoint(
                 batch_enc, batch_dks, hp, batch_seeds, use_mcts, num_sims,
                 c_puct=c_puct, pomcp=pomcp,
                 turn_boundary_eval=turn_boundary_eval, pw_k=pw_k,
+                potions=batch_potions,
             )
             wins += batch_wins
             n_games += len(batch_enc)

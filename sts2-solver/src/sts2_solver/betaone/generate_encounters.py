@@ -91,6 +91,8 @@ def generate_from_packages(
     combats: int = 64,
     rng: stdlib_random.Random | None = None,
     package_names: list[str] | None = None,
+    potion_rate: float = 0.0,
+    potion_max_count: int = 2,
 ) -> list[dict]:
     """Generate encounters from archetype packages with frozen decks.
 
@@ -100,7 +102,11 @@ def generate_from_packages(
     Args:
         package_names: if given, only generate from packages whose .name is in
             this list. Raises if any requested name isn't a known package.
+        potion_rate: fraction of generated encounters that get a non-empty
+            potion inventory (default 0 preserves historical behavior).
+        potion_max_count: max potions per encounter when sampled (1..max).
     """
+    from .potions import sample_potions
     if rng is None:
         rng = stdlib_random.Random(42)
 
@@ -147,13 +153,22 @@ def generate_from_packages(
 
             print(f"    -> HP {hp}, {decks_per} deck variants")
 
-            # Freeze each deck variant as a separate encounter
+            # Freeze each deck variant as a separate encounter.
+            # Potions are sampled per-encounter, so each deck variant can
+            # have a different inventory. Use a per-encounter sub-rng so the
+            # seed is deterministic without disturbing deck-build rng state.
             for deck in decks:
+                enc_rng = stdlib_random.Random(
+                    rng.getrandbits(32) ^ hash(tuple(enemy_ids))
+                )
                 encounters.append({
                     "enemies": enemy_ids,
                     "deck": deck,
                     "hp": hp,
                     "relics": ["RING_OF_THE_SNAKE"],
+                    "potions": sample_potions(
+                        enc_rng, rate=potion_rate, max_count=potion_max_count
+                    ),
                 })
 
     return encounters
@@ -166,11 +181,20 @@ def generate_from_recorded(
     card_vocab_json: str,
     onnx_path: str,
     combats: int = 64,
+    potion_rate: float = 0.0,
+    potion_max_count: int = 2,
+    rng: stdlib_random.Random | None = None,
 ) -> list[dict]:
     """Generate encounters from recorded death encounters.
 
     Converts card IDs to full card dicts, calibrates HP, freezes.
+
+    Recorded encounters may carry a `potions` field (real player's inventory
+    at death). If present, that wins over sampled potions.
     """
+    from .potions import sample_potions
+    if rng is None:
+        rng = stdlib_random.Random(4242)
     encounters = []
 
     for i, rec in enumerate(records):
@@ -200,11 +224,25 @@ def generate_from_recorded(
             continue
 
         print(f"    -> HP {hp}")
+        # Prefer the recorded player's potion inventory when available; fall
+        # back to sampling so recorded encounters also carry potion signal
+        # when the record doesn't have it.
+        rec_potions = rec.get("potions")
+        if rec_potions:
+            potions = rec_potions
+        else:
+            enc_rng = stdlib_random.Random(
+                rng.getrandbits(32) ^ hash(tuple(enemy_ids)) ^ i
+            )
+            potions = sample_potions(
+                enc_rng, rate=potion_rate, max_count=potion_max_count
+            )
         encounters.append({
             "enemies": enemy_ids,
             "deck": deck,
             "hp": hp,
             "relics": relics,
+            "potions": potions,
         })
 
     return encounters

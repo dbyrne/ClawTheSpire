@@ -1,0 +1,14 @@
+encounter_set_id: es-659d135f88d6
+name: gamma-train-v1
+encounter_count: 498
+avg_hp: 31.5
+source:
+  type: merged_with_potions
+  base_sets:
+  - lean-decks-v2
+  - uber-decks-v1
+  lean_v2_taken: 238
+  uber_sampled: 260
+  potion_rate: 0.5
+  potion_max_count: 2
+  rng_seed: 12345
