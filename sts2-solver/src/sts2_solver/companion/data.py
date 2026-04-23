@@ -66,6 +66,21 @@ def _history_path(d: Path, cfg) -> Path:
     return d / "betaone_history.jsonl"
 
 
+def _latest_pinned(rows: list[dict], concluded_gen: int | None) -> dict | None:
+    """Latest eval row, pinned to concluded_gen if the experiment's finalized.
+
+    Matches Experiment.info()'s semantics: finalized runs should report
+    their canonical scores, not whatever got evaluated last.
+    """
+    if not rows:
+        return None
+    if concluded_gen is not None:
+        pinned = [r for r in rows if r.get("gen") == concluded_gen]
+        if pinned:
+            return pinned[-1]
+    return rows[-1]
+
+
 def list_experiments(*, include_kinds: tuple[str, ...] | None = None) -> list[dict]:
     """Every experiment with a summary + liveness state.
 
@@ -105,6 +120,13 @@ def list_experiments(*, include_kinds: tuple[str, ...] | None = None) -> list[di
         top1_last10 = _mean("top1_agree_mean")
         vcorr_last10 = _mean("value_corr_mean")
 
+        evals = _read_jsonl(d / "benchmarks" / "eval.jsonl")
+        value_evals = _read_jsonl(d / "benchmarks" / "value_eval.jsonl")
+        mcts_evals = _read_jsonl(d / "benchmarks" / "mcts_eval.jsonl")
+        latest_eval = _latest_pinned(evals, cfg.concluded_gen)
+        latest_value_eval = _latest_pinned(value_evals, cfg.concluded_gen)
+        latest_mcts_eval = _latest_pinned(mcts_evals, cfg.concluded_gen)
+
         out.append({
             "name": name,
             "kind": _kind(cfg),
@@ -129,6 +151,9 @@ def list_experiments(*, include_kinds: tuple[str, ...] | None = None) -> list[di
             "value_corr_last10": vcorr_last10,
             "gen_time_last": (history[-1].get("gen_time") if history else None),
             "parent": getattr(cfg, "parent", None),
+            "latest_eval": latest_eval,
+            "latest_value_eval": latest_value_eval,
+            "latest_mcts_eval": latest_mcts_eval,
         })
 
     # Sort: running first, then stalled, then stopped/finalized, then alpha
@@ -345,18 +370,9 @@ def list_distill() -> list[dict]:
         value_evals = _read_jsonl(d / "benchmarks" / "value_eval.jsonl")
         mcts_evals = _read_jsonl(d / "benchmarks" / "mcts_eval.jsonl")
 
-        def _latest_pinned(rows: list[dict]) -> dict | None:
-            if not rows:
-                return None
-            if cfg.concluded_gen is not None:
-                pinned = [r for r in rows if r.get("gen") == cfg.concluded_gen]
-                if pinned:
-                    return pinned[-1]
-            return rows[-1]
-
-        latest_eval = _latest_pinned(evals)
-        latest_value_eval = _latest_pinned(value_evals)
-        latest_mcts_eval = _latest_pinned(mcts_evals)
+        latest_eval = _latest_pinned(evals, cfg.concluded_gen)
+        latest_value_eval = _latest_pinned(value_evals, cfg.concluded_gen)
+        latest_mcts_eval = _latest_pinned(mcts_evals, cfg.concluded_gen)
 
         out.append({
             "name": name,

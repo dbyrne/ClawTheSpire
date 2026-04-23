@@ -26,6 +26,9 @@ function Metric({
 
 export default function ExperimentCard({ exp }: { exp: ExperimentSummary }) {
   const { progress, status } = exp;
+  const ev = exp.latest_eval;
+  const vev = exp.latest_value_eval;
+  const mev = exp.latest_mcts_eval;
   const gen = progress?.gen ?? exp.concluded_gen ?? 0;
   const total = exp.generations_total ?? "?";
   const phase = progress?.phase;
@@ -86,7 +89,46 @@ export default function ExperimentCard({ exp }: { exp: ExperimentSummary }) {
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-x-3 gap-y-3 mb-3">
+      <div className="grid grid-cols-4 gap-x-3 gap-y-3 mb-3">
+        <Metric
+          label="P-Eval"
+          value={
+            ev?.passed != null && ev?.total
+              ? `${ev.passed}/${ev.total}`
+              : "-"
+          }
+          hint={
+            ev?.passed != null && ev?.total
+              ? `${formatPct(ev.passed / ev.total)}${ev.gen != null ? ` · g${ev.gen}` : ""}`
+              : undefined
+          }
+        />
+        <Metric
+          label="V-Eval"
+          value={
+            vev?.passed != null && vev?.total
+              ? `${vev.passed}/${vev.total}`
+              : "-"
+          }
+          hint={
+            vev?.passed != null && vev?.total
+              ? `${formatPct(vev.passed / vev.total)}${vev.gen != null ? ` · g${vev.gen}` : ""}`
+              : undefined
+          }
+        />
+        <Metric
+          label="rescue"
+          value={
+            mev?.rescue_rate != null
+              ? `${mev.rescue_rate >= 0 ? "+" : ""}${(mev.rescue_rate * 100).toFixed(0)}%`
+              : "-"
+          }
+          hint={
+            mev?.clean != null
+              ? `CL${mev.clean} EC${mev.echo ?? 0} FX${mev.fixed ?? 0}`
+              : undefined
+          }
+        />
         <Metric
           label="WR (last 10)"
           value={formatPct(exp.win_rate_last10)}
@@ -96,6 +138,9 @@ export default function ExperimentCard({ exp }: { exp: ExperimentSummary }) {
               : undefined
           }
         />
+      </div>
+
+      <div className="grid grid-cols-3 gap-x-3 gap-y-3 mb-3 pt-3 border-t border-border">
         <Metric
           label="P-loss"
           value={formatNum(exp.policy_loss_last10, 3)}
@@ -103,6 +148,14 @@ export default function ExperimentCard({ exp }: { exp: ExperimentSummary }) {
         <Metric
           label="V-loss"
           value={formatNum(exp.value_loss_last10, 3)}
+        />
+        <Metric
+          label="gen-time"
+          value={
+            exp.gen_time_last != null
+              ? formatDuration(exp.gen_time_last)
+              : "-"
+          }
         />
       </div>
 

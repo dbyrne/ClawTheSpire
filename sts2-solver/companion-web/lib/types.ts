@@ -45,6 +45,16 @@ export interface ExperimentSummary {
   value_corr_last10: number | null;
   gen_time_last: number | null;
   parent: string | null;
+  latest_eval: { passed?: number; total?: number; gen?: number } | null;
+  latest_value_eval: { passed?: number; total?: number; gen?: number } | null;
+  latest_mcts_eval: {
+    rescue_rate?: number;
+    gen?: number;
+    clean?: number;
+    echo?: number;
+    fixed?: number;
+    broke?: number;
+  } | null;
 }
 
 export interface BenchmarkRow {
