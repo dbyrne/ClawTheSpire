@@ -580,7 +580,11 @@ def train(
         gen_mcts_values = []
         gen_state_jsons: list[str] = []
         gen_combat_indices = []
-        combat_offset = 0
+        flat_encounters = []
+        flat_decks = []
+        flat_relics = []
+        flat_hps = []
+        flat_seeds = []
         seed_idx = 0
 
         for b_enc, b_dks, b_rels, b_hp, b_count in batches:
@@ -590,13 +594,20 @@ def train(
                        else gen * 100_000 + seed_idx + i
                        for i in range(b_count)]
             seed_idx += b_count
+            flat_encounters.extend(b_enc)
+            flat_decks.extend(b_dks)
+            flat_relics.extend(b_rels)
+            flat_hps.extend([b_hp] * b_count)
+            flat_seeds.extend(b_seeds)
+
+        if flat_encounters:
             rollout = sts2_engine.betaone_mcts_selfplay(
-                encounters_json=json.dumps(b_enc),
-                decks_json=json.dumps(b_dks),
-                player_hp=b_hp,
+                encounters_json=json.dumps(flat_encounters),
+                decks_json=json.dumps(flat_decks),
+                player_hp=flat_hps[0],
                 player_max_hp=player_max_hp,
                 player_max_energy=3,
-                relics_json=json.dumps(b_rels),
+                relics_json=json.dumps(flat_relics),
                 potions_json="[]",
                 monster_data_json=monster_json,
                 enemy_profiles_json=profiles_json,
@@ -604,7 +615,7 @@ def train(
                 card_vocab_json=card_vocab_json,
                 num_sims=num_sims,
                 temperature=temperature,
-                seeds=b_seeds,
+                seeds=flat_seeds,
                 gen_id=gen,
                 add_noise=True,
                 turn_boundary_eval=turn_boundary_eval,
@@ -612,15 +623,14 @@ def train(
                 pomcp=pomcp,
                 noise_frac=noise_frac,
                 pw_k=pw_k,
+                player_hps_json=json.dumps(flat_hps),
             )
 
             n_steps = rollout["total_steps"]
             if n_steps == 0:
                 continue
 
-            # Offset combat indices
-            ci = np.array(rollout["combat_indices"], dtype=np.int64) + combat_offset
-            combat_offset += len(rollout["outcomes"])
+            ci = np.array(rollout["combat_indices"], dtype=np.int64)
 
             gen_states.extend(np.array(rollout["states"], dtype=np.float32).reshape(-1, STATE_DIM))
             gen_act_feat.extend(np.array(rollout["action_features"], dtype=np.float32).reshape(-1, MAX_ACTIONS * ACTION_DIM))

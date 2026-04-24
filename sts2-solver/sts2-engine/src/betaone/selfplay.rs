@@ -291,7 +291,9 @@ fn run_selfplay_combat(
     c_puct = 2.5,
     pomcp = false,
     noise_frac = 0.25,
-    pw_k = 1.0
+    pw_k = 1.0,
+    player_hps_json = "",
+    potions_per_combat_json = ""
 ))]
 pub fn betaone_mcts_selfplay(
     py: Python<'_>,
@@ -316,6 +318,8 @@ pub fn betaone_mcts_selfplay(
     pomcp: bool,
     noise_frac: f32,
     pw_k: f32,
+    player_hps_json: &str,
+    potions_per_combat_json: &str,
 ) -> PyResult<PyObject> {
     let decks: Vec<Vec<Card>> = serde_json::from_str(decks_json)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("decks: {e}")))?;
@@ -333,6 +337,18 @@ pub fn betaone_mcts_selfplay(
     let relic_sets: Vec<HashSet<String>> = relic_lists.into_iter()
         .map(|v| v.into_iter().collect())
         .collect();
+    let player_hps: Vec<i32> = if player_hps_json.trim().is_empty() {
+        Vec::new()
+    } else {
+        serde_json::from_str(player_hps_json)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("player_hps_json: {e}")))?
+    };
+    let potions_per_combat: Vec<Vec<Potion>> = if potions_per_combat_json.trim().is_empty() {
+        Vec::new()
+    } else {
+        serde_json::from_str(potions_per_combat_json)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("potions_per_combat_json: {e}")))?
+    };
     let empty_relics: HashSet<String> = HashSet::new();
     let onnx = onnx_path.to_string();
     let cache_key = format!("{}:{}", onnx_path, gen_id);
@@ -353,6 +369,11 @@ pub fn betaone_mcts_selfplay(
                 } else {
                     &relic_sets[i % relic_sets.len()]
                 };
+                let combat_hp = player_hps.get(i).copied().unwrap_or(player_hp);
+                let combat_potions = potions_per_combat
+                    .get(i)
+                    .map(|p| p.as_slice())
+                    .unwrap_or(potions.as_slice());
 
                 SELFPLAY_CACHE.with(|cache| {
                     let mut cache = cache.borrow_mut();
@@ -379,8 +400,8 @@ pub fn betaone_mcts_selfplay(
                     let inference = &cache.as_ref().unwrap().inference;
                     Some(run_selfplay_combat(
                         deck,
-                        player_hp, player_max_hp, player_max_energy,
-                        enemy_ids, relics, &potions,
+                        combat_hp, player_max_hp, player_max_energy,
+                        enemy_ids, relics, combat_potions,
                         &monsters, &profiles,
                         inference, &card_vocab,
                         num_sims, temperature, seed, add_noise,
