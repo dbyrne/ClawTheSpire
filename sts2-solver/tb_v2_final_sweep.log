@@ -1,0 +1,25 @@
+[2026-04-19 13:45:31] === gen 60 on lean-decks-v1 ===
+Benchmarking: trunk-baseline-v2
+  Checkpoint: betaone_gen60.pt (resolved from 'gen60')
+  Encounter set: lean-decks-v1 (189 encounters)
+  repeats: 10, sims: 1000
+  MCTS config: c_puct=1.5, pomcp=True, turn_boundary_eval=True, pw_k=1.0
+  mcts       win_rate=73.8%  95%CI=[71.8%,75.7%]  n=1890  (588s)
+  1 result(s) saved incrementally -> C:\coding-projects\sts2-trunk-baseline-v2\sts2-solver\experiments\trunk-baseline-v2\benchmarks\results.jsonl
+[2026-04-19 13:55:21] === gen 80 on lean-decks-v1 ===
+Benchmarking: trunk-baseline-v2
+  Checkpoint: betaone_gen80.pt (resolved from 'gen80')
+  Encounter set: lean-decks-v1 (189 encounters)
+  repeats: 10, sims: 1000
+  MCTS config: c_puct=1.5, pomcp=True, turn_boundary_eval=True, pw_k=1.0
+  mcts       win_rate=72.2%  95%CI=[70.2%,74.2%]  n=1890  (583s)
+  1 result(s) saved incrementally -> C:\coding-projects\sts2-trunk-baseline-v2\sts2-solver\experiments\trunk-baseline-v2\benchmarks\results.jsonl
+[2026-04-19 14:05:05] === gen 90 on lean-decks-v1 ===
+Benchmarking: trunk-baseline-v2
+  Checkpoint: betaone_gen90.pt (resolved from 'gen90')
+  Encounter set: lean-decks-v1 (189 encounters)
+  repeats: 10, sims: 1000
+  MCTS config: c_puct=1.5, pomcp=True, turn_boundary_eval=True, pw_k=1.0
+  mcts       win_rate=71.9%  95%CI=[69.8%,73.9%]  n=1890  (583s)
+  1 result(s) saved incrementally -> C:\coding-projects\sts2-trunk-baseline-v2\sts2-solver\experiments\trunk-baseline-v2\benchmarks\results.jsonl
+[2026-04-19 14:14:49] DONE

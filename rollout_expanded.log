@@ -1,0 +1,21 @@
+Loading oracle from: C:/coding-projects/sts2-trunk-baseline-v2/sts2-solver/experiments/trunk-baseline-v2/betaone_latest.pt
+  -> ready in 0.2s, known enemies: 111
+Encounter pool: 353 entries
+DeckNet eval: 74 scenarios
+
+Config: probes/candidate=12, sims/combat=100
+
+  #  category           scenario                               pick                       correct
+--------------------------------------------------------------------------------------------------------------
+  0  starter_pick       starter_take_blade_dance               ADD BLADE_DANCE            OK     [12.9s]
+  1  bloat_skip         starter_skip_another_strike            ADD STRIKE_SILENT          miss   [3.3s]
+  2  archetype_poison   poison_deck_take_deadly                SKIP                       miss   [3.0s]
+  3  archetype_poison   poison_deck_skip_blade_dance           ADD BLADE_DANCE            miss   [3.8s]
+  4  archetype_shiv     shiv_deck_take_infinite_blades         ADD STRIKE_SILENT          miss   [11.7s]
+  5  archetype_shiv     shiv_deck_take_accuracy                SKIP                       miss   [16.8s]
+  6  deck_size          thin_grand_finale_skip_bloat           ADD ACROBATICS             miss   [11.6s]
+  7  deck_size          thin_grand_finale_take_cycle           ADD CALCULATED_GAMBLE      OK     [10.8s]
+  8  bloat_skip         skip_status_card                       ADD SLIMED                 BAD!   [5.1s]
+  9  deck_size          large_deck_skip_filler                 SKIP                       OK     [2.9s]
+ 10  utility            offered_footwork_always_take           ADD FOOTWORK               OK     [20.6s]
+ 11  utility            offered_prepared_in_early              SKIP                       miss   [18.0s]

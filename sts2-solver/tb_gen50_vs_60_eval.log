@@ -1,0 +1,722 @@
+[2026-04-19 08:53:19] === trunk-baseline-v1 gen 50 on expanded 109-scenario P-Eval ===
+Evaluating: trunk-baseline-v1 (suite: eval-32d2951ff6a2)
+Loaded checkpoint: gen 50
+
+============================================================
+BetaOne Eval — Gen 50 — 89/109 passed
+============================================================
+
+[PASS] discard: 8/8
+    ok  discard_status_over_strike
+    ok  discard_sly_for_value
+    ok  gamble_with_tactician_in_hand
+    ok  prepared_discards_slimed
+    ok  discard_wound_over_useful_card
+    ok  discard_tactician_for_energy
+    ok  discard_reflex_for_draw_trigger
+    ok  discard_defend_when_pre_blocked
+
+[PASS] block: 3/3
+    ok  dont_overblock
+    ok  block_when_lethal
+    ok  attack_when_enemy_defending
+
+[PASS] energy: 2/2
+    ok  dont_end_turn_with_energy
+    ok  play_zero_cost_before_end
+
+[FAIL] lethal: 1/2
+    ok  take_lethal_over_block
+  MISS  let_poison_kill
+        chose: Strike (overkill) (57%)
+        probs: Strike (overkill): 57%, Defend: 32%, End turn: 11%
+
+[FAIL] targeting: 2/5
+    ok  target_vulnerable_enemy
+    ok  kill_low_hp_enemy
+  MISS  neutralize_skip_artifact_target
+        chose: Neutralize Artifact enemy (wasted Weak) (48%)
+        probs: Neutralize Artifact enemy (wasted Weak): 48%, Neutralize non-Artifact enemy (Weak lands): 48%, End turn: 5%
+  MISS  attack_skip_intangible_target
+        chose: Dagger Throw Intangible (1 dmg) (48%)
+        probs: Dagger Throw Intangible (1 dmg): 48%, Dagger Throw non-Intangible (9 dmg): 48%, End turn: 4%
+  MISS  attack_skip_plating_target
+        chose: Strike Plating enemy (block absorbs) (48%)
+        probs: Strike Plating enemy (block absorbs): 48%, Strike non-Plating (6 dmg): 48%, End turn: 4%
+
+[FAIL] synergy: 6/8
+  MISS  accelerant_with_poison
+        chose: Defend (59%)
+        probs: Accelerant (double poison ticks): 24%, Defend: 59%, End turn: 17%
+    ok  play_power_early
+    ok  accelerant_without_poison_is_bad
+    ok  apply_poison_before_accelerant
+  MISS  accelerant_on_stacked_poison
+        chose: Strike (6 dmg one-shot) (67%)
+        probs: Accelerant (double poison ticks): 18%, Strike (6 dmg one-shot): 67%, End turn: 15%
+    ok  noxious_fumes_skip_near_kill
+    ok  sucker_punch_weak_for_damage_reduction
+    ok  wraith_form_with_intangible_attack_turn
+
+[FAIL] poison: 5/8
+    ok  poison_vs_strike_high_hp
+    ok  noxious_fumes_early
+  MISS  accelerant_high_poison
+        chose: Defend (5 block) (58%)
+        probs: Accelerant (12 poison ticks for 24): 24%, Defend (5 block): 58%, End turn: 18%
+    ok  block_over_accelerant_low_hp
+    ok  poison_over_block_free_turn
+  MISS  let_poison_finish_dont_waste_attack
+        chose: Strike (overkill) (49%)
+        probs: Defend: 30%, Strike (overkill): 49%, End turn: 21%
+    ok  discard_infection_over_poison_card
+   BAD  dont_overstack_dying_poison
+        chose: Deadly Poison (+5 poison, overkill) (62%)
+        probs: Deadly Poison (+5 poison, overkill): 62%, Defend (5 block vs 12 — saves HP): 30%, End turn: 8%
+
+[PASS] shiv: 5/5
+    ok  blade_dance_with_accuracy
+    ok  accuracy_early
+    ok  blade_dance_over_defend_free_turn
+    ok  shiv_targets_low_hp
+    ok  blade_dance_vs_defend_incoming_8
+
+[PASS] sly: 5/5
+    ok  discard_sly_over_normal
+    ok  discard_sly_reflex_for_draw
+    ok  sly_over_status_in_discard
+    ok  acrobatics_with_sly_hand
+    ok  survivor_triggers_sly
+
+[PASS] debuff: 2/2
+    ok  weak_vs_multi_hit
+    ok  dont_debuff_dying_enemy
+
+[FAIL] draw: 5/10
+  MISS  backflip_over_defend
+        chose: Strike (49%)
+        probs: Backflip (block + draw 2): 36%, Defend (block only): 12%, Strike: 49%, End turn: 3%
+    ok  adrenaline_always_play
+    ok  acrobatics_dig_with_burst
+    ok  adrenaline_before_strike
+    ok  acrobatics_refreshes_weak_hand
+  MISS  adrenaline_first_for_energy_chain
+        chose: Strike first (46%)
+        probs: Adrenaline (0-cost, +1 energy, draw 2): 39%, Strike first: 46%, Defend first: 13%, End turn: 2%
+    ok  calculated_gamble_on_junk_hand
+   BAD  calculated_gamble_skip_with_strong_hand
+        chose: Calculated Gamble (discard good hand) (52%)
+        probs: Calculated Gamble (discard good hand): 52%, Predator (15 dmg): 30%, Finisher: 3%, Strike: 13%, End turn: 1%
+  MISS  backflip_over_defend_two_enemies
+        chose: Strike enemy 0 (57%)
+        probs: Backflip (5 block + draw 2): 33%, Defend (5 block): 9%, Strike enemy 0: 57%, End turn: 2%
+  MISS  escape_plan_free_draw_chain
+        chose: Strike first (47%)
+        probs: Escape Plan (0-cost, draw 1): 32%, Strike first: 47%, Defend first: 17%, End turn: 4%
+
+[PASS] multi_enemy: 2/2
+    ok  aoe_vs_single_target
+    ok  aoe_kills_multiple_low
+
+[FAIL] combo: 7/10
+    ok  burst_before_blade_dance
+    ok  burst_wasted_if_no_skill
+    ok  finisher_after_attacks
+    ok  infinite_blades_power_early
+  MISS  well_laid_plans_early
+        chose: Strike (6 dmg) (43%)
+        probs: Well-Laid Plans (Power — retain cards): 33%, Strike (6 dmg): 43%, Defend: 22%, End turn: 2%
+    ok  accuracy_before_blade_dance
+    ok  expose_before_predator
+    ok  footwork_before_defends_scales_block
+  MISS  burst_skip_when_no_skills_available
+        chose: Burst (redundant: stacks but no Skill to double) (41%)
+        probs: Burst (redundant: stacks but no Skill to double): 41%, Strike: 20%, Dagger Throw (9 dmg): 37%, End turn: 2%
+   BAD  infinite_blades_skip_low_hp_kill
+        chose: Infinite Blades (Power — pointless if kill this turn) (38%)
+        probs: Infinite Blades (Power — pointless if kill this turn): 38%, Dagger Throw (9 dmg = LETHAL): 36%, Defend: 23%, End turn: 3%
+
+[PASS] survival: 3/3
+    ok  block_over_power_low_hp
+    ok  skip_block_when_safe
+    ok  intangible_skip_block
+
+[FAIL] damage: 7/8
+    ok  dagger_throw_over_strike
+    ok  predator_high_energy
+  MISS  skewer_with_3_energy
+        chose: Strike (6 dmg) (51%)
+        probs: Skewer (3 energy = 21 dmg): 45%, Strike (6 dmg): 51%, End turn: 4%
+    ok  omnislice_free_damage
+    ok  sucker_punch_higher_damage_and_debuff
+    ok  dagger_throw_lethal_over_weak_setup
+    ok  predator_single_big_hit_high_hp
+    ok  skewer_max_value_high_energy
+
+[PASS] block_cards: 4/4
+    ok  escape_plan_free_block
+    ok  cloak_and_dagger_over_defend
+    ok  blur_keeps_block
+    ok  wraith_form_early_high_hp
+
+[PASS] debuff_cards: 3/3
+    ok  sucker_punch_over_strike
+    ok  piercing_wail_vs_multi_enemy
+    ok  malaise_high_energy
+
+[FAIL] draw_cycle: 6/8
+    ok  prepared_free_cycle
+    ok  prepared_with_sly_in_hand
+  MISS  tools_of_the_trade_early
+        chose: Strike (50%)
+        probs: Tools of the Trade (Power): 28%, Strike: 50%, Defend: 18%, End turn: 3%
+   BAD  dont_acrobatics_at_lethal
+        chose: Acrobatics (draw 3 — but misses lethal, eats 12) (45%)
+        probs: Strike (6 dmg, lethal): 45%, Acrobatics (draw 3 — but misses lethal, eats 12): 45%, End turn: 10%
+    ok  calculated_gamble_dead_hand
+    ok  prepared_cycles_wound
+    ok  calculated_gamble_protects_power
+    ok  dont_cycle_when_lethal_ready
+
+[PASS] powers: 5/5
+    ok  double_damage_biggest_attack
+    ok  afterimage_dont_end_turn
+    ok  weak_player_defers_attack
+    ok  noxious_fumes_skip_redundant_poison
+    ok  accuracy_blade_dance_over_strike
+
+[PASS] relic: 8/8
+    ok  orichalcum_skip_block
+    ok  no_orichalcum_must_block
+    ok  anchor_turn1_offense
+    ok  velvet_choker_play_limit
+    ok  kunai_attack_priority
+    ok  lantern_turn1_aggro
+    ok  burning_blood_aggro
+    ok  cloak_clasp_end_turn_early
+
+End Turn bias (scenarios where ET is wrong):
+  Avg ET prob: 5.6% across 106 scenarios
+  High ET (>20%):
+    escape_plan_free_block: 35%
+
+
+Policy eval saved: 89/109 (81.7%)
+  Suite: eval-32d2951ff6a2
+  -> C:\coding-projects\sts2-trunk-baseline-v1\sts2-solver\experiments\trunk-baseline-v1\benchmarks\eval.jsonl
+
+============================================================
+Value Head Eval — Gen 50 — 102/121 passed
+============================================================
+
+[PASS] hp: 3/3
+    ok  enemy_lower_hp                  V=+1.076 vs +0.685  margin=+0.390
+    ok  player_higher_hp                V=+0.966 vs -0.241  margin=+1.207
+    ok  enemy_nearly_dead               V=+1.184 vs +0.424  margin=+0.760
+
+[PASS] defense: 2/2
+    ok  block_vs_incoming               V=+0.693 vs +0.056  margin=+0.637
+    ok  safe_hp_vs_lethal_range         V=+0.685 vs -1.214  margin=+1.900
+
+[PASS] poison: 2/2
+    ok  poison_on_enemy                 V=+0.870 vs +0.685  margin=+0.184
+    ok  heavy_poison                    V=+1.018 vs +0.575  margin=+0.443
+
+[FAIL] powers: 3/4
+    ok  player_strength                 V=+0.905 vs +0.685  margin=+0.219
+  MISS  player_dexterity                V=+0.682 vs +0.685  margin=-0.003
+    ok  intangible                      V=+0.216 vs -0.686  margin=+0.902
+    ok  noxious_fumes_power             V=+0.789 vs +0.685  margin=+0.104
+
+[FAIL] debuffs: 1/2
+    ok  enemy_weak                      V=+0.804 vs +0.685  margin=+0.118
+  MISS  enemy_vulnerable                V=+0.660 vs +0.685  margin=-0.025
+
+[PASS] multi: 1/1
+    ok  one_enemy_vs_two                V=+0.903 vs +0.774  margin=+0.129
+
+[FAIL] tempo: 0/1
+  MISS  early_turn_same_hp              V=+0.961 vs +0.970  margin=-0.009
+
+[PASS] resources: 1/1
+    ok  more_energy                     V=+0.685 vs -0.127  margin=+0.812
+
+[PASS] hand: 9/9
+    ok  blade_dance_vs_strike           V=+1.048 vs +0.685  margin=+0.362
+    ok  skewer_vs_strike                V=+0.878 vs +0.685  margin=+0.192
+    ok  predator_vs_strike              V=+0.923 vs +0.685  margin=+0.238
+    ok  backflip_vs_defend              V=+0.775 vs +0.685  margin=+0.089
+    ok  adrenaline_in_hand              V=+0.880 vs +0.685  margin=+0.195
+    ok  prepared_vs_strike              V=+0.790 vs +0.685  margin=+0.104
+    ok  burst_plus_blade_dance          V=+1.081 vs +0.685  margin=+0.396
+    ok  larger_hand                     V=+0.890 vs +0.681  margin=+0.208
+    ok  wraith_form_in_hand             V=+0.184 vs -0.873  margin=+1.057
+
+[PASS] compound_scaling: 26/26
+    ok  poison_more_8_vs_3              V=+0.827 vs +0.575  margin=+0.252
+    ok  poison_more_15_vs_8             V=+0.993 vs +0.827  margin=+0.166
+    ok  poison_more_25_vs_15            V=+1.045 vs +0.993  margin=+0.051
+    ok  poison_more_40_vs_25            V=+1.087 vs +1.045  margin=+0.042
+    ok  poison_more_30_vs_2             V=+1.065 vs +0.472  margin=+0.593
+    ok  poison_more_30_vs_10            V=+1.065 vs +0.870  margin=+0.195
+    ok  strength_1_vs_0                 V=+0.797 vs +0.685  margin=+0.112
+    ok  strength_3_vs_1                 V=+0.905 vs +0.797  margin=+0.108
+    ok  strength_5_vs_2                 V=+0.978 vs +0.874  margin=+0.103
+    ok  strength_7_vs_3                 V=+1.048 vs +0.905  margin=+0.143
+    ok  strength_2_vs_0                 V=+0.874 vs +0.685  margin=+0.189
+    ok  dexterity_3_vs_0                V=+0.637 vs +0.056  margin=+0.581
+    ok  dexterity_5_vs_2                V=+0.839 vs +0.655  margin=+0.183
+    ok  dexterity_2_vs_0                V=+0.655 vs +0.056  margin=+0.599
+    ok  noxious_fumes_2_vs_0            V=+0.789 vs +0.685  margin=+0.104
+    ok  noxious_fumes_4_vs_2            V=+0.998 vs +0.789  margin=+0.209
+    ok  noxious_fumes_3_vs_1            V=+0.929 vs +0.711  margin=+0.218
+    ok  fewer_hits_1_vs_3               V=+0.907 vs -0.055  margin=+0.962
+    ok  fewer_hits_2_vs_5               V=+0.476 vs -0.323  margin=+0.799
+    ok  fewer_hits_1_vs_4               V=+0.907 vs -0.296  margin=+1.202
+    ok  vulnerable_4_vs_1               V=+0.879 vs +0.444  margin=+0.435
+    ok  vulnerable_6_vs_2               V=+1.098 vs +0.660  margin=+0.438
+    ok  vulnerable_3_vs_1               V=+0.792 vs +0.444  margin=+0.348
+    ok  enemy_weak_4_vs_1               V=+0.844 vs +0.595  margin=+0.249
+    ok  enemy_weak_5_vs_2               V=+0.883 vs +0.797  margin=+0.086
+    ok  enemy_weak_3_vs_1               V=+0.817 vs +0.595  margin=+0.222
+
+[FAIL] conditional_value: 13/20
+    ok  block_matters_without_intangible  V=+0.408 vs -0.686  margin=+1.094
+    ok  intangible_beats_partial_block  V=+0.216 vs -0.126  margin=+0.343
+  MISS  player_no_weak_vs_weak_1        V=+0.685 vs +0.719  margin=-0.033
+  MISS  player_no_weak_vs_weak_3        V=+0.685 vs +0.752  margin=-0.067
+  MISS  player_no_weak_vs_weak_5        V=+0.685 vs +0.732  margin=-0.046
+    ok  player_no_vulnerable_vs_1       V=+0.685 vs +0.591  margin=+0.095
+    ok  player_no_vulnerable_vs_3       V=+0.685 vs +0.528  margin=+0.157
+  MISS  player_no_frail_vs_1            V=+0.056 vs +0.070  margin=-0.014
+  MISS  player_no_frail_vs_3            V=+0.056 vs +0.410  margin=-0.354
+    ok  enemy_no_block_better           V=+0.964 vs +0.919  margin=+0.045
+    ok  neutralize_vs_no_artifact       V=+0.820 vs +0.756  margin=+0.064
+    ok  accelerant_with_poison_precondition  V=+0.864 vs -0.016  margin=+0.880
+    ok  burst_with_skill_in_hand        V=+0.956 vs +0.861  margin=+0.095
+    ok  accuracy_with_shiv_source       V=+1.123 vs +0.994  margin=+0.129
+    ok  killing_blow_at_low_enemy_hp    V=+1.191 vs +0.860  margin=+0.331
+  MISS  no_slimed_vs_slimed             V=+0.685 vs +0.792  margin=-0.107
+  MISS  energy_with_playable_hand       V=+0.685 vs +0.721  margin=-0.036
+    ok  block_when_no_incoming          V=+0.953 vs -1.164  margin=+2.117
+    ok  blade_dance_with_vulnerable     V=+1.055 vs +1.048  margin=+0.007
+    ok  enemy_no_plated_armor           V=+0.685 vs +0.171  margin=+0.514
+
+[FAIL] arithmetic_compare: 23/28
+    ok  skewer_3e_vs_strike             V=+0.878 vs +0.685  margin=+0.192
+    ok  dagger_throw_vs_strike          V=+1.050 vs +0.685  margin=+0.365
+    ok  omnislice_vs_strike             V=+1.080 vs +0.685  margin=+0.395
+    ok  blade_dance_vs_strike_arith     V=+1.048 vs +0.685  margin=+0.362
+    ok  cloak_vs_defend                 V=+1.007 vs +0.685  margin=+0.322
+    ok  block_20_vs_5_vs_15dmg          V=+0.697 vs +0.472  margin=+0.226
+    ok  block_15_vs_0_vs_15dmg          V=+0.725 vs +0.056  margin=+0.668
+  MISS  block_25_vs_10_vs_15dmg         V=+0.684 vs +0.693  margin=-0.009
+    ok  block_10_vs_0_vs_15dmg          V=+0.693 vs +0.056  margin=+0.637
+  MISS  block_30_vs_15_vs_15dmg         V=+0.696 vs +0.725  margin=-0.029
+    ok  player_hp_30_vs_20              V=-0.209 vs -0.541  margin=+0.333
+    ok  player_hp_50_vs_30              V=+0.685 vs -0.209  margin=+0.894
+    ok  player_hp_25_vs_15              V=-0.241 vs -1.013  margin=+0.772
+    ok  player_hp_40_vs_20              V=-0.005 vs -0.541  margin=+0.536
+    ok  player_hp_60_vs_40              V=+0.966 vs -0.005  margin=+0.971
+  MISS  player_hp_35_vs_25              V=-0.301 vs -0.241  margin=-0.060
+    ok  enemy_hp_15_vs_30               V=+1.124 vs +0.964  margin=+0.160
+    ok  enemy_hp_5_vs_25                V=+1.184 vs +1.034  margin=+0.150
+    ok  enemy_hp_20_vs_40               V=+1.076 vs +0.685  margin=+0.390
+    ok  enemy_hp_10_vs_35               V=+1.163 vs +0.882  margin=+0.281
+    ok  enemy_hp_8_vs_30                V=+1.173 vs +0.964  margin=+0.209
+    ok  three_strikes_vs_one            V=+0.826 vs +0.552  margin=+0.274
+    ok  energy_3_vs_1                   V=+0.685 vs +0.302  margin=+0.383
+    ok  energy_2_vs_0                   V=+0.503 vs -0.127  margin=+0.630
+    ok  skewer_energy_3_vs_1            V=+0.878 vs +0.472  margin=+0.406
+  MISS  skewer_3e_vs_dagger_throw       V=+0.878 vs +1.050  margin=-0.173
+  MISS  skewer_2e_vs_dagger_throw       V=+0.727 vs +1.021  margin=-0.294
+    ok  dagger_throw_vs_skewer_1e       V=+1.009 vs +0.472  margin=+0.537
+
+[FAIL] future_value: 18/22
+    ok  adrenaline_over_defend          V=+0.961 vs +0.685  margin=+0.276
+    ok  prepared_over_defend            V=+0.790 vs +0.685  margin=+0.104
+  MISS  backflip_over_defend_fv         V=+0.803 vs +0.826  margin=-0.023
+    ok  acrobatics_over_strike_extra    V=+0.854 vs +0.685  margin=+0.168
+    ok  calculated_gamble_dead_hand     V=+0.757 vs +0.552  margin=+0.205
+    ok  footwork_power_over_strike      V=+0.831 vs +0.815  margin=+0.016
+    ok  wraith_form_long_fight          V=+0.177 vs +0.006  margin=+0.171
+    ok  accuracy_with_blade_dance       V=+1.085 vs +1.014  margin=+0.070
+  MISS  noxious_fumes_power_over_defend  V=+0.109 vs +0.795  margin=-0.686
+    ok  infinite_blades_long_fight      V=+1.037 vs +0.776  margin=+0.261
+    ok  well_laid_plans_over_strike     V=+0.829 vs +0.776  margin=+0.054
+    ok  power_early_turn_1_vs_6         V=+0.925 vs +0.666  margin=+0.258
+    ok  draw_engine_early_vs_late       V=+0.935 vs +0.843  margin=+0.093
+  MISS  more_cards_to_draw              V=+0.672 vs +0.905  margin=-0.233
+    ok  burst_blade_combo               V=+1.042 vs +0.851  margin=+0.191
+    ok  burst_acrobatics_combo          V=+0.924 vs +0.552  margin=+0.372
+  MISS  poison_primer_for_accelerant    V=+0.535 vs +0.846  margin=-0.311
+    ok  tactician_over_defend           V=+0.822 vs +0.790  margin=+0.032
+    ok  reflex_over_strike_with_discard  V=+0.905 vs +0.790  margin=+0.115
+    ok  escape_plan_over_defend         V=+0.944 vs +0.539  margin=+0.404
+    ok  expose_over_strike              V=+1.022 vs +0.859  margin=+0.163
+    ok  sucker_punch_over_strike        V=+0.945 vs +0.815  margin=+0.130
+
+
+Value eval saved: 102/121 (84.3%)
+  -> C:\coding-projects\sts2-trunk-baseline-v1\sts2-solver\experiments\trunk-baseline-v1\benchmarks\value_eval.jsonl
+[2026-04-19 08:53:20] === trunk-baseline-v1 gen 60 on expanded 109-scenario P-Eval ===
+Evaluating: trunk-baseline-v1 (suite: eval-32d2951ff6a2)
+Loaded checkpoint: gen 60
+
+============================================================
+BetaOne Eval — Gen 60 — 90/109 passed
+============================================================
+
+[FAIL] discard: 7/8
+    ok  discard_status_over_strike
+    ok  discard_sly_for_value
+    ok  gamble_with_tactician_in_hand
+    ok  prepared_discards_slimed
+    ok  discard_wound_over_useful_card
+    ok  discard_tactician_for_energy
+    ok  discard_reflex_for_draw_trigger
+  MISS  discard_defend_when_pre_blocked
+        chose: discard Strike (34%)
+        probs: discard Strike: 34%, discard Defend (already blocked): 28%, discard Neutralize: 5%
+
+[PASS] block: 3/3
+    ok  dont_overblock
+    ok  block_when_lethal
+    ok  attack_when_enemy_defending
+
+[PASS] energy: 2/2
+    ok  dont_end_turn_with_energy
+    ok  play_zero_cost_before_end
+
+[FAIL] lethal: 1/2
+    ok  take_lethal_over_block
+  MISS  let_poison_kill
+        chose: Strike (overkill) (67%)
+        probs: Strike (overkill): 67%, Defend: 27%, End turn: 6%
+
+[FAIL] targeting: 2/5
+    ok  target_vulnerable_enemy
+    ok  kill_low_hp_enemy
+  MISS  neutralize_skip_artifact_target
+        chose: Neutralize Artifact enemy (wasted Weak) (48%)
+        probs: Neutralize Artifact enemy (wasted Weak): 48%, Neutralize non-Artifact enemy (Weak lands): 48%, End turn: 3%
+  MISS  attack_skip_intangible_target
+        chose: Dagger Throw Intangible (1 dmg) (49%)
+        probs: Dagger Throw Intangible (1 dmg): 49%, Dagger Throw non-Intangible (9 dmg): 49%, End turn: 2%
+  MISS  attack_skip_plating_target
+        chose: Strike Plating enemy (block absorbs) (48%)
+        probs: Strike Plating enemy (block absorbs): 48%, Strike non-Plating (6 dmg): 48%, End turn: 4%
+
+[FAIL] synergy: 6/8
+  MISS  accelerant_with_poison
+        chose: Defend (63%)
+        probs: Accelerant (double poison ticks): 24%, Defend: 63%, End turn: 13%
+    ok  play_power_early
+    ok  accelerant_without_poison_is_bad
+    ok  apply_poison_before_accelerant
+  MISS  accelerant_on_stacked_poison
+        chose: Strike (6 dmg one-shot) (81%)
+        probs: Accelerant (double poison ticks): 12%, Strike (6 dmg one-shot): 81%, End turn: 7%
+    ok  noxious_fumes_skip_near_kill
+    ok  sucker_punch_weak_for_damage_reduction
+    ok  wraith_form_with_intangible_attack_turn
+
+[FAIL] poison: 5/8
+    ok  poison_vs_strike_high_hp
+    ok  noxious_fumes_early
+  MISS  accelerant_high_poison
+        chose: Defend (5 block) (66%)
+        probs: Accelerant (12 poison ticks for 24): 23%, Defend (5 block): 66%, End turn: 10%
+    ok  block_over_accelerant_low_hp
+    ok  poison_over_block_free_turn
+  MISS  let_poison_finish_dont_waste_attack
+        chose: Strike (overkill) (63%)
+        probs: Defend: 26%, Strike (overkill): 63%, End turn: 10%
+    ok  discard_infection_over_poison_card
+   BAD  dont_overstack_dying_poison
+        chose: Deadly Poison (+5 poison, overkill) (65%)
+        probs: Deadly Poison (+5 poison, overkill): 65%, Defend (5 block vs 12 — saves HP): 28%, End turn: 7%
+
+[PASS] shiv: 5/5
+    ok  blade_dance_with_accuracy
+    ok  accuracy_early
+    ok  blade_dance_over_defend_free_turn
+    ok  shiv_targets_low_hp
+    ok  blade_dance_vs_defend_incoming_8
+
+[PASS] sly: 5/5
+    ok  discard_sly_over_normal
+    ok  discard_sly_reflex_for_draw
+    ok  sly_over_status_in_discard
+    ok  acrobatics_with_sly_hand
+    ok  survivor_triggers_sly
+
+[PASS] debuff: 2/2
+    ok  weak_vs_multi_hit
+    ok  dont_debuff_dying_enemy
+
+[FAIL] draw: 4/10
+  MISS  backflip_over_defend
+        chose: Strike (50%)
+        probs: Backflip (block + draw 2): 37%, Defend (block only): 11%, Strike: 50%, End turn: 2%
+  MISS  adrenaline_always_play
+        chose: Strike (42%)
+        probs: Adrenaline (0-cost, draw 2, +1 energy): 36%, Strike: 42%, Defend: 16%, End turn: 6%
+    ok  acrobatics_dig_with_burst
+  MISS  adrenaline_before_strike
+        chose: Dagger Throw (locks in 1 energy) (50%)
+        probs: Adrenaline (0-cost, +1 energy, +2 draw): 27%, Strike (locks in 1 energy): 20%, Dagger Throw (locks in 1 energy): 50%, End turn: 2%
+    ok  acrobatics_refreshes_weak_hand
+  MISS  adrenaline_first_for_energy_chain
+        chose: Strike first (51%)
+        probs: Adrenaline (0-cost, +1 energy, draw 2): 32%, Strike first: 51%, Defend first: 14%, End turn: 2%
+    ok  calculated_gamble_on_junk_hand
+    ok  calculated_gamble_skip_with_strong_hand
+  MISS  backflip_over_defend_two_enemies
+        chose: Strike enemy 0 (51%)
+        probs: Backflip (5 block + draw 2): 39%, Defend (5 block): 9%, Strike enemy 0: 51%, End turn: 2%
+  MISS  escape_plan_free_draw_chain
+        chose: Strike first (47%)
+        probs: Escape Plan (0-cost, draw 1): 32%, Strike first: 47%, Defend first: 18%, End turn: 3%
+
+[PASS] multi_enemy: 2/2
+    ok  aoe_vs_single_target
+    ok  aoe_kills_multiple_low
+
+[FAIL] combo: 8/10
+    ok  burst_before_blade_dance
+    ok  burst_wasted_if_no_skill
+    ok  finisher_after_attacks
+    ok  infinite_blades_power_early
+  MISS  well_laid_plans_early
+        chose: Strike (6 dmg) (51%)
+        probs: Well-Laid Plans (Power — retain cards): 31%, Strike (6 dmg): 51%, Defend: 17%, End turn: 2%
+    ok  accuracy_before_blade_dance
+    ok  expose_before_predator
+    ok  footwork_before_defends_scales_block
+    ok  burst_skip_when_no_skills_available
+   BAD  infinite_blades_skip_low_hp_kill
+        chose: Infinite Blades (Power — pointless if kill this turn) (41%)
+        probs: Infinite Blades (Power — pointless if kill this turn): 41%, Dagger Throw (9 dmg = LETHAL): 40%, Defend: 16%, End turn: 2%
+
+[PASS] survival: 3/3
+    ok  block_over_power_low_hp
+    ok  skip_block_when_safe
+    ok  intangible_skip_block
+
+[PASS] damage: 8/8
+    ok  dagger_throw_over_strike
+    ok  predator_high_energy
+    ok  skewer_with_3_energy
+    ok  omnislice_free_damage
+    ok  sucker_punch_higher_damage_and_debuff
+    ok  dagger_throw_lethal_over_weak_setup
+    ok  predator_single_big_hit_high_hp
+    ok  skewer_max_value_high_energy
+
+[PASS] block_cards: 4/4
+    ok  escape_plan_free_block
+    ok  cloak_and_dagger_over_defend
+    ok  blur_keeps_block
+    ok  wraith_form_early_high_hp
+
+[PASS] debuff_cards: 3/3
+    ok  sucker_punch_over_strike
+    ok  piercing_wail_vs_multi_enemy
+    ok  malaise_high_energy
+
+[FAIL] draw_cycle: 7/8
+    ok  prepared_free_cycle
+    ok  prepared_with_sly_in_hand
+  MISS  tools_of_the_trade_early
+        chose: Strike (60%)
+        probs: Tools of the Trade (Power): 27%, Strike: 60%, Defend: 11%, End turn: 2%
+    ok  dont_acrobatics_at_lethal
+    ok  calculated_gamble_dead_hand
+    ok  prepared_cycles_wound
+    ok  calculated_gamble_protects_power
+    ok  dont_cycle_when_lethal_ready
+
+[PASS] powers: 5/5
+    ok  double_damage_biggest_attack
+    ok  afterimage_dont_end_turn
+    ok  weak_player_defers_attack
+    ok  noxious_fumes_skip_redundant_poison
+    ok  accuracy_blade_dance_over_strike
+
+[PASS] relic: 8/8
+    ok  orichalcum_skip_block
+    ok  no_orichalcum_must_block
+    ok  anchor_turn1_offense
+    ok  velvet_choker_play_limit
+    ok  kunai_attack_priority
+    ok  lantern_turn1_aggro
+    ok  burning_blood_aggro
+    ok  cloak_clasp_end_turn_early
+
+End Turn bias (scenarios where ET is wrong):
+  Avg ET prob: 5.0% across 106 scenarios
+  High ET (>20%):
+    escape_plan_free_block: 44%
+    block_over_power_low_hp: 22%
+
+
+Policy eval saved: 90/109 (82.6%)
+  Suite: eval-32d2951ff6a2
+  -> C:\coding-projects\sts2-trunk-baseline-v1\sts2-solver\experiments\trunk-baseline-v1\benchmarks\eval.jsonl
+
+============================================================
+Value Head Eval — Gen 60 — 102/121 passed
+============================================================
+
+[PASS] hp: 3/3
+    ok  enemy_lower_hp                  V=+1.071 vs +0.684  margin=+0.386
+    ok  player_higher_hp                V=+0.929 vs +0.559  margin=+0.370
+    ok  enemy_nearly_dead               V=+1.164 vs +0.480  margin=+0.684
+
+[PASS] defense: 2/2
+    ok  block_vs_incoming               V=+0.625 vs +0.590  margin=+0.035
+    ok  safe_hp_vs_lethal_range         V=+0.684 vs -0.787  margin=+1.471
+
+[PASS] poison: 2/2
+    ok  poison_on_enemy                 V=+0.847 vs +0.684  margin=+0.163
+    ok  heavy_poison                    V=+1.046 vs +0.549  margin=+0.497
+
+[PASS] powers: 4/4
+    ok  player_strength                 V=+0.956 vs +0.684  margin=+0.271
+    ok  player_dexterity                V=+0.712 vs +0.684  margin=+0.028
+    ok  intangible                      V=+0.640 vs +0.445  margin=+0.196
+    ok  noxious_fumes_power             V=+0.696 vs +0.684  margin=+0.011
+
+[PASS] debuffs: 2/2
+    ok  enemy_weak                      V=+0.791 vs +0.684  margin=+0.107
+    ok  enemy_vulnerable                V=+0.770 vs +0.684  margin=+0.085
+
+[PASS] multi: 1/1
+    ok  one_enemy_vs_two                V=+0.880 vs +0.698  margin=+0.181
+
+[PASS] tempo: 1/1
+    ok  early_turn_same_hp              V=+1.002 vs +0.966  margin=+0.036
+
+[PASS] resources: 1/1
+    ok  more_energy                     V=+0.684 vs +0.630  margin=+0.054
+
+[FAIL] hand: 7/9
+    ok  blade_dance_vs_strike           V=+0.979 vs +0.684  margin=+0.295
+    ok  skewer_vs_strike                V=+0.718 vs +0.684  margin=+0.033
+    ok  predator_vs_strike              V=+0.976 vs +0.684  margin=+0.292
+  MISS  backflip_vs_defend              V=+0.327 vs +0.684  margin=-0.357
+    ok  adrenaline_in_hand              V=+0.927 vs +0.684  margin=+0.242
+  MISS  prepared_vs_strike              V=+0.494 vs +0.684  margin=-0.190
+    ok  burst_plus_blade_dance          V=+0.995 vs +0.684  margin=+0.311
+    ok  larger_hand                     V=+0.928 vs +0.662  margin=+0.265
+    ok  wraith_form_in_hand             V=+0.492 vs +0.327  margin=+0.165
+
+[FAIL] compound_scaling: 25/26
+    ok  poison_more_8_vs_3              V=+0.754 vs +0.549  margin=+0.206
+    ok  poison_more_15_vs_8             V=+1.008 vs +0.754  margin=+0.253
+    ok  poison_more_25_vs_15            V=+1.071 vs +1.008  margin=+0.063
+    ok  poison_more_40_vs_25            V=+1.083 vs +1.071  margin=+0.013
+    ok  poison_more_30_vs_2             V=+1.079 vs +0.518  margin=+0.560
+    ok  poison_more_30_vs_10            V=+1.079 vs +0.847  margin=+0.232
+    ok  strength_1_vs_0                 V=+0.793 vs +0.684  margin=+0.109
+    ok  strength_3_vs_1                 V=+0.956 vs +0.793  margin=+0.162
+    ok  strength_5_vs_2                 V=+0.993 vs +0.887  margin=+0.106
+    ok  strength_7_vs_3                 V=+1.022 vs +0.956  margin=+0.066
+    ok  strength_2_vs_0                 V=+0.887 vs +0.684  margin=+0.203
+    ok  dexterity_3_vs_0                V=+0.843 vs +0.590  margin=+0.253
+    ok  dexterity_5_vs_2                V=+1.036 vs +0.652  margin=+0.384
+    ok  dexterity_2_vs_0                V=+0.652 vs +0.590  margin=+0.062
+    ok  noxious_fumes_2_vs_0            V=+0.696 vs +0.684  margin=+0.011
+    ok  noxious_fumes_4_vs_2            V=+0.852 vs +0.696  margin=+0.156
+    ok  noxious_fumes_3_vs_1            V=+0.769 vs +0.617  margin=+0.152
+    ok  fewer_hits_1_vs_3               V=+0.843 vs +0.408  margin=+0.435
+  MISS  fewer_hits_2_vs_5               V=+0.587 vs +0.603  margin=-0.016
+    ok  fewer_hits_1_vs_4               V=+0.843 vs +0.382  margin=+0.461
+    ok  vulnerable_4_vs_1               V=+1.002 vs +0.553  margin=+0.449
+    ok  vulnerable_6_vs_2               V=+1.053 vs +0.770  margin=+0.283
+    ok  vulnerable_3_vs_1               V=+0.893 vs +0.553  margin=+0.340
+    ok  enemy_weak_4_vs_1               V=+0.940 vs +0.556  margin=+0.384
+    ok  enemy_weak_5_vs_2               V=+1.004 vs +0.773  margin=+0.231
+    ok  enemy_weak_3_vs_1               V=+0.882 vs +0.556  margin=+0.326
+
+[FAIL] conditional_value: 15/20
+    ok  block_matters_without_intangible  V=+0.591 vs +0.445  margin=+0.146
+    ok  intangible_beats_partial_block  V=+0.640 vs +0.574  margin=+0.066
+  MISS  player_no_weak_vs_weak_1        V=+0.684 vs +0.741  margin=-0.057
+  MISS  player_no_weak_vs_weak_3        V=+0.684 vs +0.821  margin=-0.136
+  MISS  player_no_weak_vs_weak_5        V=+0.684 vs +0.879  margin=-0.195
+    ok  player_no_vulnerable_vs_1       V=+0.684 vs +0.636  margin=+0.048
+    ok  player_no_vulnerable_vs_3       V=+0.684 vs +0.607  margin=+0.077
+    ok  player_no_frail_vs_1            V=+0.590 vs +0.531  margin=+0.059
+    ok  player_no_frail_vs_3            V=+0.590 vs +0.533  margin=+0.057
+  MISS  enemy_no_block_better           V=+0.992 vs +0.993  margin=-0.001
+    ok  neutralize_vs_no_artifact       V=+0.884 vs +0.608  margin=+0.275
+    ok  accelerant_with_poison_precondition  V=+0.614 vs +0.326  margin=+0.288
+    ok  burst_with_skill_in_hand        V=+0.987 vs +0.860  margin=+0.127
+    ok  accuracy_with_shiv_source       V=+1.063 vs +1.032  margin=+0.031
+    ok  killing_blow_at_low_enemy_hp    V=+1.116 vs +0.920  margin=+0.196
+    ok  no_slimed_vs_slimed             V=+0.684 vs +0.539  margin=+0.145
+  MISS  energy_with_playable_hand       V=+0.684 vs +0.698  margin=-0.014
+    ok  block_when_no_incoming          V=+0.973 vs +0.278  margin=+0.696
+    ok  blade_dance_with_vulnerable     V=+1.021 vs +0.979  margin=+0.042
+    ok  enemy_no_plated_armor           V=+0.684 vs +0.469  margin=+0.216
+
+[FAIL] arithmetic_compare: 26/28
+    ok  skewer_3e_vs_strike             V=+0.718 vs +0.684  margin=+0.033
+    ok  dagger_throw_vs_strike          V=+0.990 vs +0.684  margin=+0.305
+    ok  omnislice_vs_strike             V=+1.036 vs +0.684  margin=+0.352
+    ok  blade_dance_vs_strike_arith     V=+0.979 vs +0.684  margin=+0.295
+    ok  cloak_vs_defend                 V=+0.942 vs +0.684  margin=+0.258
+    ok  block_20_vs_5_vs_15dmg          V=+0.769 vs +0.591  margin=+0.178
+    ok  block_15_vs_0_vs_15dmg          V=+0.729 vs +0.590  margin=+0.139
+    ok  block_25_vs_10_vs_15dmg         V=+0.725 vs +0.625  margin=+0.100
+    ok  block_10_vs_0_vs_15dmg          V=+0.625 vs +0.590  margin=+0.035
+    ok  block_30_vs_15_vs_15dmg         V=+0.744 vs +0.729  margin=+0.014
+    ok  player_hp_30_vs_20              V=+0.591 vs +0.536  margin=+0.054
+    ok  player_hp_50_vs_30              V=+0.684 vs +0.591  margin=+0.093
+    ok  player_hp_25_vs_15              V=+0.559 vs +0.443  margin=+0.116
+    ok  player_hp_40_vs_20              V=+0.610 vs +0.536  margin=+0.073
+    ok  player_hp_60_vs_40              V=+0.929 vs +0.610  margin=+0.319
+    ok  player_hp_35_vs_25              V=+0.599 vs +0.559  margin=+0.040
+    ok  enemy_hp_15_vs_30               V=+1.107 vs +0.992  margin=+0.115
+    ok  enemy_hp_5_vs_25                V=+1.164 vs +1.035  margin=+0.129
+    ok  enemy_hp_20_vs_40               V=+1.071 vs +0.684  margin=+0.386
+    ok  enemy_hp_10_vs_35               V=+1.138 vs +0.904  margin=+0.233
+    ok  enemy_hp_8_vs_30                V=+1.149 vs +0.992  margin=+0.157
+    ok  three_strikes_vs_one            V=+0.801 vs +0.639  margin=+0.162
+    ok  energy_3_vs_1                   V=+0.684 vs +0.678  margin=+0.007
+    ok  energy_2_vs_0                   V=+0.654 vs +0.630  margin=+0.024
+    ok  skewer_energy_3_vs_1            V=+0.718 vs +0.624  margin=+0.093
+  MISS  skewer_3e_vs_dagger_throw       V=+0.718 vs +0.990  margin=-0.272
+  MISS  skewer_2e_vs_dagger_throw       V=+0.680 vs +0.977  margin=-0.297
+    ok  dagger_throw_vs_skewer_1e       V=+0.936 vs +0.624  margin=+0.312
+
+[FAIL] future_value: 13/22
+    ok  adrenaline_over_defend          V=+0.872 vs +0.684  margin=+0.187
+  MISS  prepared_over_defend            V=+0.550 vs +0.684  margin=-0.134
+  MISS  backflip_over_defend_fv         V=+0.510 vs +0.801  margin=-0.291
+    ok  acrobatics_over_strike_extra    V=+0.875 vs +0.684  margin=+0.190
+    ok  calculated_gamble_dead_hand     V=+0.824 vs +0.639  margin=+0.185
+  MISS  footwork_power_over_strike      V=+0.546 vs +0.805  margin=-0.260
+  MISS  wraith_form_long_fight          V=+0.663 vs +0.743  margin=-0.080
+    ok  accuracy_with_blade_dance       V=+1.039 vs +0.963  margin=+0.075
+  MISS  noxious_fumes_power_over_defend  V=+0.609 vs +0.827  margin=-0.218
+    ok  infinite_blades_long_fight      V=+0.945 vs +0.813  margin=+0.132
+  MISS  well_laid_plans_over_strike     V=+0.786 vs +0.813  margin=-0.027
+    ok  power_early_turn_1_vs_6         V=+0.628 vs +0.466  margin=+0.162
+    ok  draw_engine_early_vs_late       V=+0.918 vs +0.891  margin=+0.027
+    ok  more_cards_to_draw              V=+0.861 vs +0.755  margin=+0.106
+    ok  burst_blade_combo               V=+0.980 vs +0.809  margin=+0.171
+    ok  burst_acrobatics_combo          V=+0.986 vs +0.639  margin=+0.347
+  MISS  poison_primer_for_accelerant    V=+0.490 vs +0.841  margin=-0.351
+  MISS  tactician_over_defend           V=+0.467 vs +0.494  margin=-0.027
+  MISS  reflex_over_strike_with_discard  V=+0.442 vs +0.550  margin=-0.108
+    ok  escape_plan_over_defend         V=+0.652 vs +0.635  margin=+0.017
+    ok  expose_over_strike              V=+0.867 vs +0.816  margin=+0.051
+    ok  sucker_punch_over_strike        V=+0.957 vs +0.805  margin=+0.152
+
+
+Value eval saved: 102/121 (84.3%)
+  -> C:\coding-projects\sts2-trunk-baseline-v1\sts2-solver\experiments\trunk-baseline-v1\benchmarks\value_eval.jsonl
+[2026-04-19 08:53:22] DONE

@@ -1,0 +1,7 @@
+Benchmarking: trunk-baseline-v2
+  Checkpoint: betaone_gen50.pt (resolved from 'gen50')
+  Encounter set: lean-decks-v1 (189 encounters)
+  repeats: 10, sims: 1000
+  MCTS config: c_puct=1.5, pomcp=True, turn_boundary_eval=True, pw_k=1.0
+  mcts       win_rate=72.5%  95%CI=[70.4%,74.5%]  n=1890  (674s)
+  1 result(s) saved incrementally -> C:\coding-projects\sts2-trunk-baseline-v2\sts2-solver\experiments\trunk-baseline-v2\benchmarks\results.jsonl

@@ -1,8 +1,14 @@
-# BetaOne / AlphaZero — Complete Experiment Timeline
+# AlphaZero / BetaOne / GammaTwo — Complete Experiment Timeline
 
-Compiled 2026-04-22 from memory files, archived experiment configs/PLANs, git history, and top-level docs.
+Compiled 2026-04-22 from memory files, archived experiment configs/PLANs, git history, and top-level docs. Updated 2026-04-23 to cover the Distillation, DAgger, PPO-v1, and GammaTwo eras.
 
 **Caveat:** the early PPO era is the thinnest section — most PPO experiments were already archived without rich `PLAN.md` docs, so it's reconstructed from memory + `config.yaml` only. Numbers in later eras pulled from concluded-gen records.
+
+## Model families
+
+- **AlphaZero** (Gen-33 cold restart through PPO v6, early April 2026) — original combat-net foundation. Shaped per-turn rewards, PPO self-play, ~270K params.
+- **BetaOne** (MCTS-bootstrap onward, mid-to-late April 2026) — MCTS self-play replaces PPO, adds reanalyse, hand-attention + card embeddings, and a distributional value head in some variants. Name change reflected the architectural rewrite. ~50K-550K params across variants.
+- **GammaTwo** (encoder-v2 forward, 2026-04-23) — new encoder (turn counters, potion inventory, pile-content pooled embeddings) + 10x capacity. Addresses the representational plateau hit by all BetaOne variants. ~3M params.
 
 ---
 
@@ -85,6 +91,31 @@ graph TD
 
     RA3 --> SPR[spr-v1<br/>1-step dynamics aux]:::done
     SPR --> MZ1[muzero-v1<br/>warm-start K=3<br/>trunk corrupted]:::killed
+    MZ1 --> MZ2[muzero-v2<br/>cold-start, null]:::done
+    MZ1 --> MZ3[muzero-v3<br/>HP-delta d-head, null]:::done
+
+    %% Distillation era
+    RA3 --> D1[distill-v1<br/>scalar baseline]:::done
+    D1 --> DC1[distill-c51-v1<br/>+11 V-Eval]:::done
+    DC1 --> DC1B[distill-c51-v1b<br/>value_coef=0.1]:::done
+    DC1 --> DC1C[distill-c51-v1c<br/>cosine LR]:::done
+    DC1 --> DC2[distill-c51-v2<br/>iterative, worse]:::done
+    D1 --> DT1[distill-transformer-v1<br/>517K transformer]:::done
+    DT1 --> DT2[distill-transformer-v2<br/>+diverse data, rescue regressed]:::done
+    D1 --> DW1[distill-c51-wide-v1<br/>MLP policy, null]:::done
+    D1 --> DD1[distill-c51-diverse-v1<br/>uber-decks, first V+v3]:::done
+    DC1 --> DV1[distval-v1<br/>C51 self-play]:::done
+    DT1 --> TV1[transval-v1<br/>transformer+C51 self-play]:::killed
+    DT1 --> DTM1[distill-transformer-mlp-v1<br/>MLP policy, e45 ref]:::done
+
+    %% DAgger
+    DD1 --> DAG1[distill-dagger-v1<br/>student-rollout states]:::done
+
+    %% PPO fine-tune era
+    DTM1 --> PPOV1[ppo-v1<br/>PPO fine-tune e45<br/>critic collapse]:::killed
+
+    %% GammaTwo — encoder-v2 cold start
+    RA3 -.encoder rewrite.-> ENC[encoder-v2 GammaTwo<br/>3M params, cold start<br/>P 34 -> 50 in gen 1-2]:::running
 ```
 
 Status colours: blue = shipped frontier, green = running, grey = done/concluded, red = killed, amber = invalidated by bug.
@@ -330,6 +361,127 @@ Status colours: blue = shipped frontier, green = running, grey = done/concluded,
 - **Diagnosis:** Random-init aux head's high gen-1 loss perturbed shared trunk before head stabilized. Trunk drift corrupted pretrained P/V heads.
 - **Lesson:** Warm-start + random-init aux head ALWAYS damages trunk. MuZero paper cold-starts for this reason.
 
+### muzero-v2 (cold-start) / muzero-v3 (HP-delta reward)
+- **Status:** both concluded/null.
+- **muzero-v2:** cold-start version of muzero-v1. Plateaued P=92 / V=98 by gen 19. Dynamics head IS learning (reward_loss 0.039) but doesn't move eval. Never reached v3's 115/100.
+- **muzero-v3:** HP-delta d-head + pure +/-1 value head. Peak P=94 (+2-9 over v2) but V-Eval tanked to 40-72. HP-delta signal learnable but must pair with HP-shaped value targets via engine, not broadcast.
+- **Verdict (3 nulls across muzero family):** teacher-student gap is compute-structural. Stop investing in dynamics-alone experiments.
+- **Memory:** `project_muzero_v2_concluded.md`, `project_muzero_v3_concluded.md`
+
+---
+
+## ERA 9: Distillation (2026-04-22)
+
+Supervised distillation of v3 + MCTS-2000 into various student architectures. All variants plateau at the same policy-only WR ceiling as their teacher, confirming imitation can't exceed teacher quality.
+
+### distill-v1 (baseline scalar)
+- **Status:** concluded.
+- **Arch:** BetaOne 144K params, scalar value head. Trained on v3 + MCTS-2000 labels (13K states).
+- **Result:** P-Eval=105, policy-only WR tied with v3 at n=9450.
+- **Memory:** `project_distill_v1_concluded.md`
+
+### distill-c51-v1 (distributional value head)
+- **Status:** concluded.
+- **Arch:** BetaOne with C51 head (51 atoms, v_min=-1.2, v_max=1.5).
+- **Result:** **V-Eval +11 (96 vs scalar 85)**, same P-Eval (106). Value-head arch scales V-Eval; policy ceiling unchanged.
+- **Follow-ups:** v1b (value_coef=0.1) null. v1c (cosine LR 200ep) traded +3 P for -7 V.
+- **Memory:** `project_distill_c51_v1_concluded.md`
+
+### distill-c51-v2 (iterative — distilling distill-c51-v1's outputs)
+- **Status:** concluded.
+- **Result:** WORSE on every metric than c51-v1. Distilling from a not-better teacher compounds errors.
+- **Memory:** `project_iterative_distill_closed.md`
+
+### distill-transformer-v1 (transformer trunk)
+- **Status:** concluded.
+- **Arch:** 517K transformer student (3.6x v3). Entity-tokenized attention over [CLS, player, 5 enemies, context, 10 hand].
+- **Result:** P=103 (same ceiling). Best curated rescue (+15%) but MCTS-1000 WR tied with v3 at n=5670.
+- **Memory:** `project_distill_transformer_v1_concluded.md`
+
+### distill-transformer-v2 (transformer + diverse data)
+- **Status:** concluded.
+- **Result:** Peak P=108 within noise. **Consistently -10 to -20% rescue** across 40 eval points. Arch x data overfits the value head.
+- **Memory:** `project_distill_transformer_v2_concluded.md`
+
+### distill-c51-wide-v1 / distill-c51-diverse-v1
+- **Status:** both concluded.
+- **wide-v1:** MLP policy head, null.
+- **diverse-v1:** uber-decks distillation. **First student to beat v3 on V-Eval (102 vs 100)** and best curated rescue (+19%). BUT MCTS-1000 WR on uber = 65.5% vs v3's 68%. Curated rescue != real WR.
+- **Memory:** `project_distill_policy_bottleneck_tests.md`
+
+### Distillation era verdict
+All 9 supervised variants cap at roughly v3-parity on policy-only WR (~48% on uber-decks-v1). Arch changes (transformer, wide), data changes (uber-decks), loss regime (C51, cosine), nothing moves the ceiling. Final diagnosis: **imitation-learning distribution shift** — student trained on states teacher visits, which systematically under-represents the close-call decisions the student itself will face.
+
+### distval-v1 (C51 self-play follow-on)
+- **Status:** concluded at gen 19.
+- **Result:** vc=1.0 variant plateaued P 71-73. vc=0.1 variant climbed to P=88 at g19 then regressed to 76. Finalized to free compute.
+
+### transval-v1 (transformer + C51 self-play)
+- **Status:** killed at gen 1.
+- **Rationale:** distillation variants already showed transformer + MCTS = v3 + MCTS within 0.1pp. Mechanism falsified; not worth compute.
+
+---
+
+## ERA 10: DAgger (2026-04-22 late)
+
+### distill-dagger-v1
+- **Status:** concluded.
+- **Approach:** Classic Ross et al. 2011 DAgger — student generates states via self-play, teacher labels them. Attacks the distribution-shift diagnosis directly.
+- **Config:** distill-c51-diverse-v1 as sampler, v3 + MCTS-2000 as labeler via `betaone_mcts_reanalyse` FFI. 2000 combats, 1000 sampler sims, 2000 teacher sims, temp=1.5, noise_frac=0.5.
+- **Result:** Still at v3 parity on policy-only WR. The imitation ceiling is real even when the distribution gap is fixed.
+- **Compute:** ~70 min dataset gen + 30 min training. Zero Rust changes — co-opted the reanalyse primitive.
+- **Memory:** `project_dagger_v1_inflight.md`
+
+---
+
+## ERA 11: PPO v1 fine-tune (2026-04-22 night)
+
+### ppo-v1
+- **Status:** concluded/null at gen 50. Name collision with earlier AlphaZero PPO era — distinguish by date and arch.
+- **Approach:** PPO fine-tune of distill-transformer-mlp-v1/e45 student. First session experiment using a training algorithm *capable* of exceeding teacher (PPO is unbounded by teacher; supervised + DAgger are).
+- **Config:** lr=1e-4, clip_ratio=0.2, value_coef=0.5, entropy_coef=0.01, kl_coef=0.05 toward frozen e45 ref, gamma=0.99, lam=0.95, ppo_epochs=4, batch_size=256, temperature=1.0 rollouts. 50 gens x 256 combats = 12,800 combats total.
+- **Result (apples-to-apples n=23,850):** v3=48.01%, e45=48.13%, PPO=48.26%, all CIs overlap. **Policy didn't move.** Additionally P-Eval dropped ~15 points and V-Eval dropped ~44 points vs v3 — value head saturated at +1.284 on most states (critic collapse).
+- **Diagnosis:** compute budget ~50x too small (12.8K combats); sparse +/-1 reward + KL anchor induced critic collapse while policy stayed frozen. 
+- **Verdict (combined with ERA 9-10):** At the budgets we can run on CPU, no training algorithm escapes the imitation ceiling. Bottleneck is representational, not algorithmic.
+- **Memory:** `project_ppo_v1_concluded.md`, `feedback_benchmark_bundle.md`
+
+---
+
+## ERA 12: GammaTwo — encoder-v2 (2026-04-23 in flight)
+
+### encoder-v2
+- **Status:** running, gen 2/200 complete at time of writing.
+- **Approach:** Full rewrite of the state encoder + 10x capacity bump. Addresses the 2026-04-22 finding that the BetaOne plateau was representational, not capacity/algorithm.
+- **Encoder changes vs BetaOne (arch_version 2 -> 3):**
+  - +3 turn-counter dims: `cards_played_this_turn`, `attacks_played_this_turn`, `_skills_played`. Storm of Steel, Kunai, Shuriken, Velvet Choker, Smoggy, Pocketwatch all depend on these.
+  - +18 potion-inventory dims: 3 slots x 6 fields (empty_flag, heal, block, strength, damage_all, enemy_weak). Closes "don't know what potions I'm holding" gap.
+  - +3 new pile-ID tensor inputs: `draw_pile_ids[30]`, `discard_pile_ids[30]`, `exhaust_pile_ids[20]`. Embedded via shared card_embed + mean-pooled over non-PAD, concat to trunk. Opens Tactician/Reflex/Calculated-Gamble reasoning.
+  - state_dim 446 -> 467, trunk_input 188 -> 561.
+- **Capacity changes vs v3:**
+  - card_embed_dim 16 -> 64 (highest-leverage: now used across hand/action/3 piles).
+  - hand_proj_dim 32 -> 192.
+  - trunk 2x128 -> 4x768.
+  - policy_head_type dot_product -> MLP (hidden 512).
+  - value_head_layers 3 (same).
+  - **~3.05M params (10x v3).**
+- **Training recipe:** identical to reanalyse-v3 (num_sims=1000, combats=256, replay=50K, train_epochs=4, c_puct=1.5, pomcp=true, mcts_bootstrap, turn_boundary_eval, q_target_mix=0.5, reanalyse_every=2, reanalyse_frac=0.75). Deltas: lr 3e-4 -> 1e-4 (bigger model), reanalyse_min_gen 10 -> 30 (cold-start needs more gens).
+- **Sim ramp:** linear 400 -> 1000 across gens 0-29. Untrained net doesn't benefit from deep search; ramp saves ~half the compute in the first 30 gens.
+- **GPU opt-in:** DirectML execution provider wired via `STS2_BETAONE_GPU=1` env var. Batch=1 benchmark showed 1.2x speedup at 3M params, but 16-thread rayon serialization on a single GPU device makes production training slower than CPU. Kept as a hook for future virtual-loss MCTS work where inference batches.
+- **Early results (gen 1-2 at 400 sims):**
+  | Gen | num_sims | P-Eval | V-Eval | WR | policy_loss | value_corr |
+  |---|---|---|---|---|---|---|
+  | 1 | 420 | 46/136 (34%) | 72/121 (60%) | 16% | 0.77 | 0.15 |
+  | 2 | 440 | 68/136 (50%) | 84/121 (69%) | 21% | 0.76 | **0.40** |
+  
+  **Fastest early trajectory any experiment has shown.** +22 P-Eval and +12 V-Eval in a single gen after cold-start is unprecedented at this stage.
+- **Kill criteria:** P-Eval <= 95 at gen 20 = representational-diagnosis falsified, stop.
+- **Ship criteria:** P-Eval > 130 OR V-Eval > 120 at gen 50 = combat-net ceiling broken.
+- **Compute projection:** ~16 min/gen at 420 sims, scaling ~linearly to ~38 min at 1000 sims. Steady-state gens 30+ add ~10 min reanalyse every 2 gens. Total ~5-6 days for 200 gens.
+- **Worktree:** `C:\coding-projects\sts2-encoder-v2` on branch `experiment/encoder-v2`.
+- **Commits:**
+  - `06c6824` encoder-v2: add turn counters, potions, pile ID tensors + 10x capacity
+  - `8a3d41b` encoder-v2: sim ramp 400->1000 over gens 0-29 + opt-in DirectML GPU
+
 ---
 
 ## What's been ruled out (the pivot decision matrix)
@@ -375,25 +527,34 @@ Status colours: blue = shipped frontier, green = running, grey = done/concluded,
 
 ---
 
-## Open / not-yet-tried directions (for the AlphaZero pivot)
+## Open / not-yet-tried directions
 
-These are explicitly noted as untried in the memory:
+Remaining after the Distillation / DAgger / PPO-v1 sweep (which falsified items 5 and 7 at this compute scale):
 
 1. **V-temperature at inference** — post-hoc V scaling at MCTS leaves (addresses V>100 -> rescue<0 pattern).
 2. **V-ensemble** — 2-3 V heads, take min/median at leaves.
 3. **Leaf-state augmentation in V training** — sample intermediate rollout states, not just root.
 4. **Policy-rollout leaf eval** — K-step rollout instead of V at leaves.
-5. **KL-anchor** for distribution shift — suppress drift from v3 outputs while training on new distribution.
-6. **Cold-start on expanded distribution** — eat the warm-start cost to gain coverage.
-7. **Distillation** — supervised policy from v3 + MCTS-N (not yet attempted).
-8. **MuZero with cold-start + trunk-freeze warmup** — addresses muzero-v1 trunk corruption.
-9. **HP-loss aux at different `hp_coef`/`hp_target_mix`** — only one point in design space tested.
-10. **Per-action advantage head with different integration** — alpha at different lambda values.
+5. **MuZero with cold-start + trunk-freeze warmup** — muzero-v2/v3 cold-start null; freeze-warmup still untested.
+6. **HP-loss aux at different `hp_coef`/`hp_target_mix`** — only one point in design space tested.
+7. **Per-action advantage head with different integration** — alpha at different lambda values.
+8. **Virtual-loss MCTS + GPU batched inference** — GPU path is wired (`STS2_BETAONE_GPU=1`); needs an inference batcher to actually win over CPU at 3M params.
+9. **PPO v2 with HP-delta reward shaping + 5x budget** — PPO v1 failed on sparse +/-1 + small compute; rich reward + more combats hasn't been tested.
+10. **ChooseCard source-context fix** — Tactician pick vs Survivor discard currently encode identically; add source-card flag to action features.
+
+### Falsified (no longer open)
+- **Distillation** (ERA 9): 9 variants all capped at v3 parity. Imitation ceiling is real.
+- **KL-anchor RL at low budget** (ERA 11, PPO-v1): KL=0.05 over 12.8K combats induced critic collapse without moving policy.
+- **Cold-start on expanded distribution**: tried as reanalyse-v4/v5 (uber unscaled/scaled), mixed-decks-v1, reanalyse-v6 (lean-v2). All regressed. Warm-start + distribution change = forgetting cascade; cold-start on expanded distribution needs a richer encoder first (GammaTwo is testing exactly this).
 
 ---
 
-## Current state at 2026-04-22
+## Current state at 2026-04-23
 
-- **Production frontier:** reanalyse-v3 g88 (P=112, V=100, WR=74.8%).
-- **Recently killed:** muzero-v1 (trunk corruption from warm-start + random aux), reanalyse-v6 (distribution-shift forgetting cascade).
-- **Strongest known foundation if pivoting back to AlphaZero-classic:** reanalyse-v3 g88 architecture + training config.
+- **Production frontier:** reanalyse-v3 g88 (P=112, V=100, WR=74.8%). Last BetaOne to ship; has stood since 2026-04-20.
+- **In flight:** GammaTwo `encoder-v2` (see ERA 12). Gen 2/200 showing fastest early eval trajectory of any experiment.
+- **Diagnostic history the GammaTwo hypothesis rests on:**
+  - 20+ BetaOne variants (ERA 1-11) all plateaued at ~P=115 / ~V=100 / ~48% policy-only WR on uber-decks.
+  - Capacity bumps (trunk-192, valuewide), loss regimes (C51, hp-aux, SPR), training algorithms (supervised distill 9x, DAgger, PPO), data distributions (uber-decks, lean, mixed) — ALL null at v3's ceiling.
+  - 2026-04-23 encoder audit identified concrete gaps: turn counters, potion inventory, pile contents missing from encoder entirely. GammaTwo closes all three.
+- **Falsification path:** if GammaTwo gen 20 P-Eval <= 95, the representational-gap hypothesis is wrong and ceiling is elsewhere (training algorithm / compute scale / fundamental architecture choice).

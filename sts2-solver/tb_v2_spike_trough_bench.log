@@ -1,0 +1,18 @@
+[2026-04-19 12:05:58] === gen 60 on lean-decks-v1 ===
+Benchmarking: trunk-baseline-v2
+  Checkpoint: betaone_gen60.pt (resolved from 'gen60')
+  Encounter set: lean-decks-v1 (189 encounters)
+  repeats: 10, sims: 1000
+  MCTS config: c_puct=1.5, pomcp=True, turn_boundary_eval=True, pw_k=1.0
+  mcts       win_rate=74.3%  95%CI=[72.3%,76.3%]  n=1890  (798s)
+  1 result(s) saved incrementally -> C:\coding-projects\sts2-trunk-baseline-v2\sts2-solver\experiments\trunk-baseline-v2\benchmarks\results.jsonl
+[2026-04-19 12:19:23] === gen 61 on lean-decks-v1 ===
+Benchmarking: trunk-baseline-v2
+  Checkpoint: betaone_gen61.pt (resolved from 'gen61')
+  Encounter set: lean-decks-v1 (189 encounters)
+  repeats: 10, sims: 1000
+  MCTS config: c_puct=1.5, pomcp=True, turn_boundary_eval=True, pw_k=1.0
+  mcts       win_rate=73.5%  95%CI=[71.5%,75.5%]  n=1890  (656s)
+  1 result(s) saved incrementally -> C:\coding-projects\sts2-trunk-baseline-v2\sts2-solver\experiments\trunk-baseline-v2\benchmarks\results.jsonl
+[2026-04-19 12:30:21] === gen 70 on lean-decks-v1 ===
+[2026-04-19 12:33:23] DONE

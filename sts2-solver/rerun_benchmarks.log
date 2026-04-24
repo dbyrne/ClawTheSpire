@@ -1,0 +1,50 @@
+[2026-04-19 07:14:55] starting benchmark re-run on finalized gen 50
+[2026-04-19 07:14:55] === trunk-baseline-v1 on lean-decks-v1 (gen 50) ===
+Benchmarking: trunk-baseline-v1
+  Checkpoint: betaone_gen50.pt (resolved from 'auto')
+  Encounter set: lean-decks-v1 (189 encounters)
+  repeats: 10, sims: 1000
+  MCTS config: c_puct=1.5, pomcp=True, turn_boundary_eval=True, pw_k=1.0
+  mcts       win_rate=71.3%  95%CI=[69.2%,73.3%]  n=1890  (590s)
+  1 result(s) saved incrementally -> C:\coding-projects\sts2-trunk-baseline-v1\sts2-solver\experiments\trunk-baseline-v1\benchmarks\results.jsonl
+[2026-04-19 07:24:47] === hploss-aux-v1 on lean-decks-v1 (gen 50) ===
+Benchmarking: hploss-aux-v1
+  Checkpoint: betaone_gen50.pt (resolved from 'auto')
+  Encounter set: lean-decks-v1 (189 encounters)
+  repeats: 10, sims: 1000
+  MCTS config: c_puct=1.5, pomcp=True, turn_boundary_eval=True, pw_k=1.0
+  mcts       win_rate=72.6%  95%CI=[70.6%,74.6%]  n=1890  (617s)
+  1 result(s) saved incrementally -> C:\coding-projects\sts2-hploss-aux-v1\sts2-solver\experiments\hploss-aux-v1\benchmarks\results.jsonl
+[2026-04-19 07:35:05] === trunk-baseline-v1 on draw-synergy-v1 (gen 50) ===
+Benchmarking: trunk-baseline-v1
+  Checkpoint: betaone_gen50.pt (resolved from 'auto')
+  Encounter set: draw-synergy-v1 (105 encounters)
+  repeats: 10, sims: 1000
+  MCTS config: c_puct=1.5, pomcp=True, turn_boundary_eval=True, pw_k=1.0
+  mcts       win_rate=82.9%  95%CI=[80.5%,85.0%]  n=1050  (405s)
+  1 result(s) saved incrementally -> C:\coding-projects\sts2-trunk-baseline-v1\sts2-solver\experiments\trunk-baseline-v1\benchmarks\results.jsonl
+[2026-04-19 07:41:51] === hploss-aux-v1 on draw-synergy-v1 (gen 50) ===
+Benchmarking: hploss-aux-v1
+  Checkpoint: betaone_gen50.pt (resolved from 'auto')
+  Encounter set: draw-synergy-v1 (105 encounters)
+  repeats: 10, sims: 1000
+  MCTS config: c_puct=1.5, pomcp=True, turn_boundary_eval=True, pw_k=1.0
+  mcts       win_rate=81.9%  95%CI=[79.5%,84.1%]  n=1050  (429s)
+  1 result(s) saved incrementally -> C:\coding-projects\sts2-hploss-aux-v1\sts2-solver\experiments\hploss-aux-v1\benchmarks\results.jsonl
+[2026-04-19 07:49:02] === trunk-baseline-v1 on base-es-v1 (gen 50) ===
+Benchmarking: trunk-baseline-v1
+  Checkpoint: betaone_gen50.pt (resolved from 'auto')
+  Encounter set: base-es-v1 (189 encounters)
+  repeats: 10, sims: 1000
+  MCTS config: c_puct=1.5, pomcp=True, turn_boundary_eval=True, pw_k=1.0
+  mcts       win_rate=51.4%  95%CI=[49.2%,53.7%]  n=1890  (637s)
+  1 result(s) saved incrementally -> C:\coding-projects\sts2-trunk-baseline-v1\sts2-solver\experiments\trunk-baseline-v1\benchmarks\results.jsonl
+[2026-04-19 07:59:40] === hploss-aux-v1 on base-es-v1 (gen 50) ===
+Benchmarking: hploss-aux-v1
+  Checkpoint: betaone_gen50.pt (resolved from 'auto')
+  Encounter set: base-es-v1 (189 encounters)
+  repeats: 10, sims: 1000
+  MCTS config: c_puct=1.5, pomcp=True, turn_boundary_eval=True, pw_k=1.0
+  mcts       win_rate=50.4%  95%CI=[48.2%,52.7%]  n=1890  (781s)
+  1 result(s) saved incrementally -> C:\coding-projects\sts2-hploss-aux-v1\sts2-solver\experiments\hploss-aux-v1\benchmarks\results.jsonl
+[2026-04-19 08:12:43] ALL BENCHMARKS COMPLETE

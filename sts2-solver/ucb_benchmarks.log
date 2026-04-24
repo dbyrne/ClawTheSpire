@@ -1,0 +1,48 @@
+[2026-04-19 08:08:11] monitor started. target gen=60
+[2026-04-19 08:08:11] status: hploss-ucb-v1=1
+[2026-04-19 08:13:12] status: hploss-ucb-v1=2
+[2026-04-19 08:18:12] status: hploss-ucb-v1=3
+[2026-04-19 08:23:12] status: hploss-ucb-v1=4
+[2026-04-19 08:28:12] status: hploss-ucb-v1=6
+[2026-04-19 08:33:12] status: hploss-ucb-v1=8
+[2026-04-19 08:38:12] status: hploss-ucb-v1=9
+[2026-04-19 08:43:13] status: hploss-ucb-v1=11
+[2026-04-19 08:48:13] status: hploss-ucb-v1=12
+[2026-04-19 08:53:13] status: hploss-ucb-v1=14
+[2026-04-19 08:58:13] status: hploss-ucb-v1=15
+[2026-04-19 09:03:13] status: hploss-ucb-v1=17
+[2026-04-19 09:08:13] status: hploss-ucb-v1=18
+[2026-04-19 09:13:13] status: hploss-ucb-v1=20
+[2026-04-19 09:18:13] status: hploss-ucb-v1=22
+[2026-04-19 09:23:13] status: hploss-ucb-v1=23
+[2026-04-19 09:28:13] status: hploss-ucb-v1=25
+[2026-04-19 09:33:13] status: hploss-ucb-v1=26
+[2026-04-19 09:38:13] status: hploss-ucb-v1=28
+[2026-04-19 09:43:14] status: hploss-ucb-v1=30
+[2026-04-19 09:48:14] status: hploss-ucb-v1=31
+[2026-04-19 09:53:14] status: hploss-ucb-v1=33
+[2026-04-19 09:58:14] status: hploss-ucb-v1=35
+[2026-04-19 10:03:14] status: hploss-ucb-v1=36
+[2026-04-19 10:08:14] status: hploss-ucb-v1=37
+[2026-04-19 10:13:14] status: hploss-ucb-v1=39
+[2026-04-19 10:18:14] status: hploss-ucb-v1=40
+[2026-04-19 10:23:14] status: hploss-ucb-v1=42
+[2026-04-19 10:28:14] status: hploss-ucb-v1=43
+[2026-04-19 10:33:15] status: hploss-ucb-v1=44
+[2026-04-19 10:38:15] status: hploss-ucb-v1=46
+[2026-04-19 10:43:15] status: hploss-ucb-v1=47
+[2026-04-19 10:48:15] status: hploss-ucb-v1=48
+[2026-04-19 10:53:15] status: hploss-ucb-v1=50
+[2026-04-19 10:58:16] status: hploss-ucb-v1=51
+[2026-04-19 11:03:16] status: hploss-ucb-v1=53
+[2026-04-19 11:08:16] status: hploss-ucb-v1=54
+[2026-04-19 11:13:16] status: hploss-ucb-v1=55
+[2026-04-19 11:18:16] status: hploss-ucb-v1=57
+[2026-04-19 11:23:16] status: hploss-ucb-v1=58
+[2026-04-19 11:28:16] status: hploss-ucb-v1=59
+[2026-04-19 11:33:16] status: hploss-ucb-v1=60
+[2026-04-19 11:33:16] reached gen 60
+[2026-04-19 11:33:16] === hploss-ucb-v1 on lean-decks-v1 (gen 60) ===
+[2026-04-19 11:37:49] === hploss-ucb-v1 on draw-synergy-v1 (gen 60) ===
+[2026-04-19 11:37:59] === hploss-ucb-v1 on base-es-v1 (gen 60) ===
+[2026-04-19 11:38:13] ALL BENCHMARKS COMPLETE

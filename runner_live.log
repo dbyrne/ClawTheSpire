@@ -1,0 +1,18 @@
+[EventServer] listening on localhost:8765
+Loading card database...
+Loaded 1098 cards
+Loading game data...
+BetaOne combat MCTS active (gen 60)
+No DeckNet checkpoint — card rewards use deterministic advisor
+Connected to game vv0.103.2
+[step] Enter=next, q=quit: Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "C:\coding-projects\STS2\sts2-solver\src\sts2_solver\runner.py", line 3230, in <module>
+    main()
+  File "C:\coding-projects\STS2\sts2-solver\src\sts2_solver\runner.py", line 3226, in main
+    runner.run()
+  File "C:\coding-projects\STS2\sts2-solver\src\sts2_solver\runner.py", line 624, in run
+    resp = input("[step] Enter=next, q=quit: ").strip().lower()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+EOFError: EOF when reading a line
