@@ -343,6 +343,8 @@ pub fn betaone_mcts_selfplay(
         serde_json::from_str(player_hps_json)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("player_hps_json: {e}")))?
     };
+    // Reserved for callers that need per-combat potion inventories; main
+    // training currently passes the shared `potions_json` fallback.
     let potions_per_combat: Vec<Vec<Potion>> = if potions_per_combat_json.trim().is_empty() {
         Vec::new()
     } else {

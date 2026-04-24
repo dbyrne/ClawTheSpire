@@ -571,7 +571,7 @@ def train(
         seeds = [gen * 100_000 + i for i in range(combats_per_gen)]
 
         _update_phase(progress_path, "SELFPLAY", gen)
-        # Self-play: MCTS combats (one call per HP level)
+        # Self-play: MCTS combats (one Rust call for the whole generation)
         all_outcomes = []
         all_final_hps = []
         gen_states, gen_act_feat, gen_act_masks = [], [], []
@@ -601,9 +601,17 @@ def train(
             flat_seeds.extend(b_seeds)
 
         if flat_encounters:
+            assert (
+                len(flat_encounters)
+                == len(flat_decks)
+                == len(flat_relics)
+                == len(flat_hps)
+                == len(flat_seeds)
+            ), "flattened self-play inputs must stay index-aligned"
             rollout = sts2_engine.betaone_mcts_selfplay(
                 encounters_json=json.dumps(flat_encounters),
                 decks_json=json.dumps(flat_decks),
+                # Backward-compatible scalar fallback; Rust uses player_hps_json.
                 player_hp=flat_hps[0],
                 player_max_hp=player_max_hp,
                 player_max_energy=3,
@@ -627,26 +635,24 @@ def train(
             )
 
             n_steps = rollout["total_steps"]
-            if n_steps == 0:
-                continue
+            if n_steps > 0:
+                ci = np.array(rollout["combat_indices"], dtype=np.int64)
 
-            ci = np.array(rollout["combat_indices"], dtype=np.int64)
-
-            gen_states.extend(np.array(rollout["states"], dtype=np.float32).reshape(-1, STATE_DIM))
-            gen_act_feat.extend(np.array(rollout["action_features"], dtype=np.float32).reshape(-1, MAX_ACTIONS * ACTION_DIM))
-            gen_act_masks.extend(np.array(rollout["action_masks"]).reshape(-1, MAX_ACTIONS))
-            gen_hand_ids.extend(np.array(rollout["hand_card_ids"], dtype=np.int64).reshape(-1, MAX_HAND))
-            gen_action_ids.extend(np.array(rollout["action_card_ids"], dtype=np.int64).reshape(-1, MAX_ACTIONS))
-            gen_policies.extend(np.array(rollout["policies"], dtype=np.float32).reshape(-1, MAX_ACTIONS))
-            # Always pull visits+q_values — reanalyse needs them even when
-            # q_target_mix=0, and they're cheap (MAX_ACTIONS scalars per step).
-            gen_visits.extend(np.array(rollout["child_visits"], dtype=np.int64).reshape(-1, MAX_ACTIONS))
-            gen_q_values.extend(np.array(rollout["child_q_values"], dtype=np.float32).reshape(-1, MAX_ACTIONS))
-            gen_combat_indices.extend(ci)
-            gen_mcts_values.extend(np.array(rollout["mcts_values"], dtype=np.float32))
-            gen_state_jsons.extend(rollout.get("state_jsons", [""] * n_steps))
-            all_outcomes.extend(rollout["outcomes"])
-            all_final_hps.extend(rollout["final_hps"])
+                gen_states.extend(np.array(rollout["states"], dtype=np.float32).reshape(-1, STATE_DIM))
+                gen_act_feat.extend(np.array(rollout["action_features"], dtype=np.float32).reshape(-1, MAX_ACTIONS * ACTION_DIM))
+                gen_act_masks.extend(np.array(rollout["action_masks"]).reshape(-1, MAX_ACTIONS))
+                gen_hand_ids.extend(np.array(rollout["hand_card_ids"], dtype=np.int64).reshape(-1, MAX_HAND))
+                gen_action_ids.extend(np.array(rollout["action_card_ids"], dtype=np.int64).reshape(-1, MAX_ACTIONS))
+                gen_policies.extend(np.array(rollout["policies"], dtype=np.float32).reshape(-1, MAX_ACTIONS))
+                # Always pull visits+q_values — reanalyse needs them even when
+                # q_target_mix=0, and they're cheap (MAX_ACTIONS scalars per step).
+                gen_visits.extend(np.array(rollout["child_visits"], dtype=np.int64).reshape(-1, MAX_ACTIONS))
+                gen_q_values.extend(np.array(rollout["child_q_values"], dtype=np.float32).reshape(-1, MAX_ACTIONS))
+                gen_combat_indices.extend(ci)
+                gen_mcts_values.extend(np.array(rollout["mcts_values"], dtype=np.float32))
+                gen_state_jsons.extend(rollout.get("state_jsons", [""] * n_steps))
+                all_outcomes.extend(rollout["outcomes"])
+                all_final_hps.extend(rollout["final_hps"])
 
         T = len(gen_states)
         if T == 0:
