@@ -44,7 +44,7 @@ CARD_EMBED_DIM = 64
 # Pile pooling: sum card embeddings per pile, divide by (count+eps) so the
 # magnitude stays bounded regardless of pile size. Each pool vector is
 # CARD_EMBED_DIM (shared embedding with hand/action).
-PILE_POOL_DIM = CARD_EMBED_DIM  # 16
+PILE_POOL_DIM = CARD_EMBED_DIM  # 64
 MAX_DRAW_PILE = 30
 MAX_DISCARD_PILE = 30
 MAX_EXHAUST_PILE = 20
@@ -142,7 +142,7 @@ def network_stats(
         "total_params": net.param_count(),
         "num_cards": num_cards,
         "state_dim": STATE_DIM,
-        "trunk_input": BASE_STATE_DIM + HAND_PROJ_DIM,
+        "trunk_input": BASE_STATE_DIM + HAND_PROJ_DIM + 3 * PILE_POOL_DIM,
         "trunk_hidden": net.trunk_hidden,
         "trunk_layers": net.trunk_layers,
         "policy_hidden": ACTION_HIDDEN,

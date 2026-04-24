@@ -10,6 +10,7 @@ use rand::SeedableRng;
 use rand::rngs::StdRng;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::time::Instant;
 
 use crate::actions::enumerate_actions;
 use crate::combat;
@@ -62,6 +63,7 @@ struct SelfPlayResult {
     samples: Vec<Sample>,
     outcome: String,
     final_hp: i32,
+    duration_ms: f64,
 }
 
 // ---------------------------------------------------------------------------
@@ -107,6 +109,7 @@ fn run_selfplay_combat(
             samples: vec![],
             outcome: "win".into(),
             final_hp: player_hp,
+            duration_ms: 0.0,
         };
     }
 
@@ -272,6 +275,7 @@ fn run_selfplay_combat(
         samples,
         outcome: final_outcome.to_string(),
         final_hp,
+        duration_ms: 0.0,
     }
 }
 
@@ -300,7 +304,9 @@ fn run_selfplay_combat(
     c_puct = 2.5,
     pomcp = false,
     noise_frac = 0.25,
-    pw_k = 1.0
+    pw_k = 1.0,
+    player_hps_json = "",
+    potions_per_combat_json = ""
 ))]
 pub fn betaone_mcts_selfplay(
     py: Python<'_>,
@@ -325,6 +331,8 @@ pub fn betaone_mcts_selfplay(
     pomcp: bool,
     noise_frac: f32,
     pw_k: f32,
+    player_hps_json: &str,
+    potions_per_combat_json: &str,
 ) -> PyResult<PyObject> {
     let decks: Vec<Vec<Card>> = serde_json::from_str(decks_json)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("decks: {e}")))?;
@@ -342,6 +350,18 @@ pub fn betaone_mcts_selfplay(
     let relic_sets: Vec<HashSet<String>> = relic_lists.into_iter()
         .map(|v| v.into_iter().collect())
         .collect();
+    let player_hps: Vec<i32> = if player_hps_json.trim().is_empty() {
+        Vec::new()
+    } else {
+        serde_json::from_str(player_hps_json)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("player_hps_json: {e}")))?
+    };
+    let potions_per_combat: Vec<Vec<Potion>> = if potions_per_combat_json.trim().is_empty() {
+        Vec::new()
+    } else {
+        serde_json::from_str(potions_per_combat_json)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("potions_per_combat_json: {e}")))?
+    };
     let empty_relics: HashSet<String> = HashSet::new();
     let onnx = onnx_path.to_string();
     let cache_key = format!("{}:{}", onnx_path, gen_id);
@@ -362,6 +382,11 @@ pub fn betaone_mcts_selfplay(
                 } else {
                     &relic_sets[i % relic_sets.len()]
                 };
+                let combat_hp = player_hps.get(i).copied().unwrap_or(player_hp);
+                let combat_potions = potions_per_combat
+                    .get(i)
+                    .map(|p| p.as_slice())
+                    .unwrap_or(potions.as_slice());
 
                 SELFPLAY_CACHE.with(|cache| {
                     let mut cache = cache.borrow_mut();
@@ -386,10 +411,11 @@ pub fn betaone_mcts_selfplay(
                     }
 
                     let inference = &cache.as_ref().unwrap().inference;
-                    Some(run_selfplay_combat(
+                    let combat_start = Instant::now();
+                    let mut result = run_selfplay_combat(
                         deck,
-                        player_hp, player_max_hp, player_max_energy,
-                        enemy_ids, relics, &potions,
+                        combat_hp, player_max_hp, player_max_energy,
+                        enemy_ids, relics, combat_potions,
                         &monsters, &profiles,
                         inference, &card_vocab,
                         num_sims, temperature, seed, add_noise,
@@ -397,7 +423,9 @@ pub fn betaone_mcts_selfplay(
                         pomcp,
                         noise_frac,
                         pw_k,
-                    ))
+                    );
+                    result.duration_ms = combat_start.elapsed().as_secs_f64() * 1000.0;
+                    Some(result)
                 })
             })
             .collect::<Vec<_>>()
@@ -425,12 +453,14 @@ fn build_selfplay_py(py: Python<'_>, results: &[Option<SelfPlayResult>]) -> PyRe
     let mut all_mcts_values: Vec<f32> = Vec::new();
     let mut all_state_jsons: Vec<String> = Vec::new();
     let mut combat_indices: Vec<i64> = Vec::new();
+    let mut combat_durations_ms: Vec<f64> = Vec::new();
     let mut outcomes: Vec<String> = Vec::new();
     let mut final_hps: Vec<i32> = Vec::new();
     let mut total_steps: i64 = 0;
     let mut combat_idx: i64 = 0;
 
     for result in results.iter().flatten() {
+        combat_durations_ms.push(result.duration_ms);
         if result.samples.is_empty() {
             continue;
         }
@@ -473,6 +503,7 @@ fn build_selfplay_py(py: Python<'_>, results: &[Option<SelfPlayResult>]) -> PyRe
     dict.set_item("mcts_values", &all_mcts_values)?;
     dict.set_item("state_jsons", all_state_jsons)?;
     dict.set_item("combat_indices", &combat_indices)?;
+    dict.set_item("combat_durations_ms", &combat_durations_ms)?;
     dict.set_item("outcomes", outcomes)?;
     dict.set_item("final_hps", &final_hps)?;
     dict.set_item("total_steps", total_steps)?;

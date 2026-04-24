@@ -593,7 +593,11 @@ def train(
         return int(round(ramp_initial + (num_sims - ramp_initial) * frac))
 
     for gen in range(start_gen, num_generations + 1):
-        t0 = time.time()
+        t0 = time.perf_counter()
+        selfplay_sec = 0.0
+        train_sec = 0.0
+        eval_sec = 0.0
+        combat_durations_ms: list[float] = []
 
         # Apply LR schedule (constant or cosine with warmup).
         current_lr = _lr_at_gen(gen)
@@ -620,7 +624,12 @@ def train(
         gen_mcts_values = []
         gen_state_jsons: list[str] = []
         gen_combat_indices = []
-        combat_offset = 0
+        flat_encounters = []
+        flat_decks = []
+        flat_relics = []
+        flat_potions = []
+        flat_hps = []
+        flat_seeds = []
         seed_idx = 0
 
         for b_enc, b_dks, b_rels, b_pots, b_hp, b_count in batches:
@@ -630,21 +639,30 @@ def train(
                        else gen * 100_000 + seed_idx + i
                        for i in range(b_count)]
             seed_idx += b_count
+            flat_encounters.extend(b_enc)
+            flat_decks.extend(b_dks)
+            flat_relics.extend(b_rels)
+            flat_potions.extend([b_pots] * b_count)
+            flat_hps.extend([b_hp] * b_count)
+            flat_seeds.extend(b_seeds)
+
+        if flat_encounters:
+            selfplay_t0 = time.perf_counter()
             rollout = sts2_engine.betaone_mcts_selfplay(
-                encounters_json=json.dumps(b_enc),
-                decks_json=json.dumps(b_dks),
-                player_hp=b_hp,
+                encounters_json=json.dumps(flat_encounters),
+                decks_json=json.dumps(flat_decks),
+                player_hp=flat_hps[0],
                 player_max_hp=player_max_hp,
                 player_max_energy=3,
-                relics_json=json.dumps(b_rels),
-                potions_json=json.dumps(b_pots),
+                relics_json=json.dumps(flat_relics),
+                potions_json=json.dumps(flat_potions[0] if flat_potions else []),
                 monster_data_json=monster_json,
                 enemy_profiles_json=profiles_json,
                 onnx_path=onnx_path,
                 card_vocab_json=card_vocab_json,
                 num_sims=current_sims,
                 temperature=temperature,
-                seeds=b_seeds,
+                seeds=flat_seeds,
                 gen_id=gen,
                 add_noise=True,
                 turn_boundary_eval=turn_boundary_eval,
@@ -652,15 +670,19 @@ def train(
                 pomcp=pomcp,
                 noise_frac=noise_frac,
                 pw_k=pw_k,
+                player_hps_json=json.dumps(flat_hps),
+                potions_per_combat_json=json.dumps(flat_potions),
+            )
+            selfplay_sec += time.perf_counter() - selfplay_t0
+            combat_durations_ms.extend(
+                float(ms) for ms in rollout.get("combat_durations_ms", [])
             )
 
             n_steps = rollout["total_steps"]
             if n_steps == 0:
                 continue
 
-            # Offset combat indices
-            ci = np.array(rollout["combat_indices"], dtype=np.int64) + combat_offset
-            combat_offset += len(rollout["outcomes"])
+            ci = np.array(rollout["combat_indices"], dtype=np.int64)
 
             gen_states.extend(np.array(rollout["states"], dtype=np.float32).reshape(-1, STATE_DIM))
             gen_act_feat.extend(np.array(rollout["action_features"], dtype=np.float32).reshape(-1, MAX_ACTIONS * ACTION_DIM))
@@ -739,9 +761,20 @@ def train(
         win_rate = n_wins / max(n_combats, 1)
         win_hps = [hp for hp, o in zip(all_final_hps, all_outcomes) if o == "win"]
         avg_hp = np.mean(win_hps) if win_hps else 0.0
+        combat_ms = np.array(combat_durations_ms, dtype=np.float64)
+        if combat_ms.size:
+            combat_p50_ms = float(np.percentile(combat_ms, 50))
+            combat_p90_ms = float(np.percentile(combat_ms, 90))
+            combat_p99_ms = float(np.percentile(combat_ms, 99))
+            combat_max_ms = float(np.max(combat_ms))
+            combat_sum_ms = float(np.sum(combat_ms))
+        else:
+            combat_p50_ms = combat_p90_ms = combat_p99_ms = 0.0
+            combat_max_ms = combat_sum_ms = 0.0
 
         # Train from replay buffer
         _update_phase(progress_path, "TRAINING", gen)
+        train_t0 = time.perf_counter()
         network.train()
         total_ploss = 0.0
         total_vloss = 0.0
@@ -789,6 +822,7 @@ def train(
                     grad_np_samples.append(metrics["grad_norm_p"])
                     grad_nv_samples.append(metrics["grad_norm_v"])
                 n_updates += 1
+        train_sec = time.perf_counter() - train_t0
 
         n = max(n_updates, 1)
         avg_ploss = total_ploss / n
@@ -882,7 +916,7 @@ def train(
                     "elapsed": round(time.time() - ra_t0, 2),
                 }
 
-        elapsed = time.time() - t0
+        elapsed = time.perf_counter() - t0
 
         print(
             f"Gen {gen:4d} | "
@@ -917,7 +951,14 @@ def train(
             "num_sims": current_sims,
             "num_sims_max": num_sims,
             "gen_time": round(elapsed, 2),
-            "timestamp": time.time(),
+            "selfplay_sec": round(selfplay_sec, 2),
+            "train_sec": round(train_sec, 2),
+            "eval_sec": round(eval_sec, 2),
+            "combat_p50_ms": round(combat_p50_ms, 1),
+            "combat_p90_ms": round(combat_p90_ms, 1),
+            "combat_p99_ms": round(combat_p99_ms, 1),
+            "combat_max_ms": round(combat_max_ms, 1),
+            "combat_sum_ms": round(combat_sum_ms, 1),
         }
         if grad_cos_samples:
             import statistics
@@ -942,12 +983,6 @@ def train(
             record["reanalyse_kl"] = round(reanalyse_stats["kl_old_new"], 4)
             record["reanalyse_dv"] = round(reanalyse_stats["dv_mean"], 4)
             record["reanalyse_time"] = reanalyse_stats["elapsed"]
-        with open(history_path, "a") as f:
-            f.write(json.dumps(record) + "\n")
-        with open(progress_path, "w") as f:
-            record["num_generations"] = num_generations
-            record["best_win_rate"] = round(max(best_win_rate, win_rate), 4)
-            json.dump(record, f, indent=2)
 
         best_win_rate = max(best_win_rate, win_rate)
 
@@ -973,6 +1008,7 @@ def train(
         # skill curve; eval pass rate moves earlier and at higher resolution.
         if eval_every > 0 and gen % eval_every == 0:
             _update_phase(progress_path, "EVALUATING", gen)
+            eval_t0 = time.perf_counter()
             try:
                 from .eval import run_eval, run_value_eval, run_mcts_eval
                 from .suite import compute_eval_suite, suite_id as _suite_id
@@ -1028,6 +1064,17 @@ def train(
                       f"FIXED={mce['fixed']} (rescue {mce['rescue_rate']:.0%})")
             except Exception as e:
                 print(f"       [eval_every] skipped gen {gen}: {e}")
+            finally:
+                eval_sec = time.perf_counter() - eval_t0
+
+        record["eval_sec"] = round(eval_sec, 2)
+        record["timestamp"] = time.time()
+        with open(history_path, "a") as f:
+            f.write(json.dumps(record) + "\n")
+        with open(progress_path, "w") as f:
+            record["num_generations"] = num_generations
+            record["best_win_rate"] = round(best_win_rate, 4)
+            json.dump(record, f, indent=2)
 
     print(f"\nTraining complete. Best win rate: {best_win_rate:.1%}")
 
