@@ -233,6 +233,42 @@ def list_experiments(*, include_kinds: tuple[str, ...] | None = None) -> list[di
         value_eval_delta = _eval_delta(value_evals, "score")
         rescue_delta = _eval_delta(mcts_evals, "rescue_rate")
 
+        # Sparkline-ready time series. Each is [{gen, value}] with nulls
+        # filtered out. Tails capped at 60 points — enough resolution for
+        # a 80px-wide sparkline, small enough to keep the payload tight.
+        def _series(rows: list[dict], key: str, n: int = 60) -> list[dict]:
+            out = [
+                {"gen": r.get("gen"), "value": r.get(key)}
+                for r in rows
+                if r.get(key) is not None
+            ]
+            return out[-n:]
+
+        def _eval_score_series(rows: list[dict], n: int = 60) -> list[dict]:
+            out: list[dict] = []
+            for r in rows:
+                t = r.get("total")
+                p = r.get("passed")
+                if not t or p is None:
+                    continue
+                out.append({
+                    "gen": r.get("gen"),
+                    "value": p / t,
+                    "passed": p,
+                    "total": t,
+                })
+            return out[-n:]
+
+        wr_series = _series(history, "win_rate")
+        p_loss_series = _series(history, "policy_loss")
+        v_loss_series = _series(history, "value_loss")
+        kl_series = _series(history, "kl_mcts_net_mean")
+        top1_series = _series(history, "top1_agree_mean")
+        vcorr_series = _series(history, "value_corr_mean")
+        eval_series = _eval_score_series(evals)
+        value_eval_series = _eval_score_series(value_evals)
+        rescue_series = _series(mcts_evals, "rescue_rate")
+
         out.append({
             "name": name,
             "kind": _kind(cfg),
@@ -275,6 +311,15 @@ def list_experiments(*, include_kinds: tuple[str, ...] | None = None) -> list[di
             "eval_delta": eval_delta,
             "value_eval_delta": value_eval_delta,
             "rescue_delta": rescue_delta,
+            "wr_series": wr_series,
+            "p_loss_series": p_loss_series,
+            "v_loss_series": v_loss_series,
+            "kl_series": kl_series,
+            "top1_series": top1_series,
+            "vcorr_series": vcorr_series,
+            "eval_series": eval_series,
+            "value_eval_series": value_eval_series,
+            "rescue_series": rescue_series,
         })
 
     # Sort: running first, then stalled, then stopped/finalized, then alpha

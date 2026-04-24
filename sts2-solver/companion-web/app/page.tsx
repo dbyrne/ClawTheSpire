@@ -4,24 +4,27 @@ import useSWR from "swr";
 import { fetcher } from "../lib/api";
 import { ExperimentSummary } from "../lib/types";
 import ExperimentCard from "../components/ExperimentCard";
+import CompactCard from "../components/CompactCard";
 
-type Group = { label: string; items: ExperimentSummary[] };
+type Group = { label: string; items: ExperimentSummary[]; compact: boolean };
 
 function groupByState(exps: ExperimentSummary[]): Group[] {
-  const buckets: Record<string, ExperimentSummary[]> = {
-    RUNNING: [],
-    STALLED: [],
-    STOPPED: [],
-  };
+  const running: ExperimentSummary[] = [];
+  const stalled: ExperimentSummary[] = [];
+  const stopped: ExperimentSummary[] = [];
   for (const e of exps) {
-    const key = e.status?.state ?? "STOPPED";
-    (buckets[key] ?? buckets.STOPPED).push(e);
+    const s = e.status?.state ?? "STOPPED";
+    if (s === "RUNNING") running.push(e);
+    else if (s === "STALLED") stalled.push(e);
+    else stopped.push(e);
   }
   const out: Group[] = [];
-  if (buckets.RUNNING.length) out.push({ label: "Running", items: buckets.RUNNING });
-  if (buckets.STALLED.length) out.push({ label: "Stalled", items: buckets.STALLED });
-  if (buckets.STOPPED.length)
-    out.push({ label: "Stopped / finalized", items: buckets.STOPPED });
+  if (running.length)
+    out.push({ label: "Running", items: running, compact: false });
+  if (stalled.length)
+    out.push({ label: "Stalled", items: stalled, compact: false });
+  if (stopped.length)
+    out.push({ label: "Stopped / finalized", items: stopped, compact: true });
   return out;
 }
 
@@ -37,7 +40,11 @@ export default function LivePage() {
       <header className="flex items-center justify-between mb-4">
         <h1 className="text-xl font-bold">Experiments</h1>
         <div className="text-xs text-muted mono">
-          {data ? `${data.length} total` : isLoading ? "loading…" : ""}
+          {data
+            ? `${data.filter((e) => e.status.state === "RUNNING").length} running · ${data.length} total`
+            : isLoading
+              ? "loading…"
+              : ""}
         </div>
       </header>
 
@@ -50,12 +57,17 @@ export default function LivePage() {
       {data &&
         groupByState(data).map((group) => (
           <section key={group.label} className="mb-5">
-            <h2 className="text-xs uppercase tracking-wider text-muted mb-2">
-              {group.label}
+            <h2 className="text-[11px] uppercase tracking-widest text-muted mb-2 font-semibold">
+              {group.label}{" "}
+              <span className="text-muted/60">· {group.items.length}</span>
             </h2>
-            {group.items.map((e) => (
-              <ExperimentCard key={e.name} exp={e} />
-            ))}
+            {group.items.map((e) =>
+              group.compact ? (
+                <CompactCard key={e.name} exp={e} />
+              ) : (
+                <ExperimentCard key={e.name} exp={e} />
+              ),
+            )}
           </section>
         ))}
 

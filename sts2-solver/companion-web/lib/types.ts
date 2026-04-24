@@ -80,6 +80,25 @@ export interface ExperimentSummary {
   eval_delta: number | null;
   value_eval_delta: number | null;
   rescue_delta: number | null;
+  wr_series: SeriesPoint[];
+  p_loss_series: SeriesPoint[];
+  v_loss_series: SeriesPoint[];
+  kl_series: SeriesPoint[];
+  top1_series: SeriesPoint[];
+  vcorr_series: SeriesPoint[];
+  eval_series: EvalSeriesPoint[];
+  value_eval_series: EvalSeriesPoint[];
+  rescue_series: SeriesPoint[];
+}
+
+export interface SeriesPoint {
+  gen: number | null;
+  value: number;
+}
+
+export interface EvalSeriesPoint extends SeriesPoint {
+  passed: number;
+  total: number;
 }
 
 export interface BenchmarkRow {
