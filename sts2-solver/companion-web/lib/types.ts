@@ -45,6 +45,10 @@ export interface ExperimentSummary {
   value_corr_last10: number | null;
   gen_time_last: number | null;
   parent: string | null;
+  best_win_rate: number | null;
+  best_win_rate_gen: number | null;
+  training_elapsed_s: number | null;
+  training_eta_s: number | null;
   latest_eval: { passed?: number; total?: number; gen?: number } | null;
   latest_value_eval: { passed?: number; total?: number; gen?: number } | null;
   latest_mcts_eval: {

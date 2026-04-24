@@ -90,6 +90,20 @@ export default function ExperimentCard({ exp }: { exp: ExperimentSummary }) {
             style={{ width: `${pct}%` }}
           />
         </div>
+        {(exp.training_elapsed_s != null || exp.training_eta_s != null) && (
+          <div className="flex justify-between text-[10px] mono text-muted mt-1">
+            <span>
+              {exp.training_elapsed_s != null
+                ? `trained ${formatDuration(exp.training_elapsed_s)}`
+                : ""}
+            </span>
+            <span>
+              {exp.training_eta_s != null
+                ? `ETA ${formatDuration(exp.training_eta_s)}`
+                : ""}
+            </span>
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-4 gap-x-3 gap-y-3 mb-3">
@@ -142,8 +156,12 @@ export default function ExperimentCard({ exp }: { exp: ExperimentSummary }) {
           label="WR (last 10)"
           value={formatPct(exp.win_rate_last10)}
           hint={
-            progress?.best_win_rate != null
-              ? `peak ${formatPct(progress.best_win_rate)}`
+            exp.best_win_rate != null
+              ? `peak ${formatPct(exp.best_win_rate)}${
+                  exp.best_win_rate_gen != null
+                    ? ` · g${exp.best_win_rate_gen}`
+                    : ""
+                }`
               : undefined
           }
         />

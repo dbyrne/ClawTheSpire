@@ -153,6 +153,46 @@ def list_experiments(*, include_kinds: tuple[str, ...] | None = None) -> list[di
         top1_last10 = _mean("top1_agree_mean")
         vcorr_last10 = _mean("value_corr_mean")
 
+        # Peak WR + which gen hit it. Prefer the row with strict max
+        # win_rate; ties broken by later gen (more mature checkpoint).
+        best_wr_row = None
+        for r in history:
+            wr = r.get("win_rate")
+            if wr is None:
+                continue
+            if best_wr_row is None or wr > best_wr_row.get("win_rate", 0):
+                best_wr_row = r
+        best_wr = best_wr_row.get("win_rate") if best_wr_row else None
+        best_wr_gen = best_wr_row.get("gen") if best_wr_row else None
+        # Fall back to progress.best_win_rate when history is sparse but
+        # the training loop has tracked it — we'll have no gen in that
+        # case, which the card shows as "peak X%".
+        if best_wr is None and progress:
+            best_wr = progress.get("best_win_rate")
+
+        # Training elapsed = sum of per-gen durations (resume-aware).
+        # ETA = remaining gens * recent median cadence. Cadence reused
+        # from `recent_times` above (already the last 5 gen_times).
+        gen_times_all = [
+            float(r.get("gen_time") or 0.0)
+            for r in history
+            if r.get("gen_time")
+        ]
+        training_elapsed_s = sum(gen_times_all) if gen_times_all else None
+        total_gens = cfg.training.get("generations")
+        cur_gen = progress.get("gen") if progress else None
+        cadence = st.get("cadence_s")
+        if (
+            total_gens
+            and cur_gen is not None
+            and cadence
+            and cur_gen < total_gens
+            and st.get("state") == "RUNNING"
+        ):
+            training_eta_s = (total_gens - cur_gen) * cadence
+        else:
+            training_eta_s = None
+
         evals = _read_jsonl(d / "benchmarks" / "eval.jsonl")
         value_evals = _read_jsonl(d / "benchmarks" / "value_eval.jsonl")
         mcts_evals = _read_jsonl(d / "benchmarks" / "mcts_eval.jsonl")
@@ -186,6 +226,10 @@ def list_experiments(*, include_kinds: tuple[str, ...] | None = None) -> list[di
             "value_corr_last10": vcorr_last10,
             "gen_time_last": (history[-1].get("gen_time") if history else None),
             "parent": getattr(cfg, "parent", None),
+            "best_win_rate": best_wr,
+            "best_win_rate_gen": best_wr_gen,
+            "training_elapsed_s": training_elapsed_s,
+            "training_eta_s": training_eta_s,
             "latest_eval": latest_eval,
             "latest_value_eval": latest_value_eval,
             "latest_mcts_eval": latest_mcts_eval,
