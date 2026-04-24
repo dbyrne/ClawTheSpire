@@ -47,7 +47,7 @@ architecture:
   action_dim: 35
   max_hand: 10
   max_actions: 30
-  value_head_layers: 3
+  value_head_layers: 1
   trunk_layers: 4
   trunk_hidden: 768
   policy_head_type: mlp
@@ -66,7 +66,7 @@ training:
     temperature: 1.0
     replay_capacity: 50000
     train_epochs: 4
-    value_coef: 0.3
+    value_coef: 0.1
     c_puct: 1.5
     pomcp: true
     mcts_bootstrap: true
@@ -78,11 +78,12 @@ training:
     reanalyse_every: 2
     reanalyse_frac: 0.75
     reanalyse_min_gen: 30
-    # Ramp MCTS sims up as the network becomes worth searching with.
-    # Gens 0-29: linear 400 -> 1000. Gen 30+: steady 1000 (matches v3).
-    # Cuts self-play time ~2.5x early while we're just building calibration.
-    initial_num_sims: 400
-    sims_ramp_end_gen: 30
+    # Sim ramp disabled (start at 1000 immediately). Cold-start overfitting
+    # diagnosis: the 400-sim early gens produce noisy MCTS targets the value
+    # head memorizes. Higher sims from gen 1 = cleaner targets, even at higher
+    # compute cost per early gen.
+    initial_num_sims: 1000
+    sims_ramp_end_gen: 0
 data:
   mode: encounter_set
   encounter_set: gamma-train-v1
