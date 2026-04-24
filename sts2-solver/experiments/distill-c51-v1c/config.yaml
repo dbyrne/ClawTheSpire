@@ -1,0 +1,41 @@
+name: distill-c51-v1c
+method: distill_c51
+description: Supervised distillation from v3 g88 + MCTS-2000. Finalized at epoch 200.
+network_type: betaone
+architecture:
+  arch_version: 2
+  base_state_dim: 156
+  hidden_dim: 128
+  action_hidden: 64
+  hand_proj_dim: 32
+  card_embed_dim: 16
+  card_stats_dim: 28
+  relic_dim: 27
+  hand_agg_dim: 3
+  action_dim: 35
+  max_hand: 10
+  max_actions: 30
+  value_head_layers: 3
+  trunk_layers: 2
+  trunk_hidden: 128
+  policy_head_type: dot_product
+  policy_mlp_hidden: 64
+  distributional_value: true
+  c51_atoms: 51
+  c51_v_min: -1.2
+  c51_v_max: 1.5
+  num_cards: 578
+  total_params: 144011
+training:
+  epochs: 200
+  lr: 0.0003
+  batch_size: 512
+data:
+  mode: distillation
+  teacher: reanalyse-v3 g88
+checkpoints:
+  save_every: 10
+  cold_start: true
+concluded_gen: 200
+concluded_reason: Supervised distillation finalized at epoch 200
+concluded_at: 2026-04-22T18:14:22-0400

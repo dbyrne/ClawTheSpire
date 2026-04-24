@@ -1,0 +1,93 @@
+name: neghp-v1
+method: mcts_selfplay
+description: "MuZero-style reanalyse with cadence prioritized over single-pass frac:\n\
+  frac=0.75, every=2. Tests whether minimizing MAX staleness (not just\naverage refresh\
+  \ rate) eliminates drift.\n\nv1 (frac=0.25, every=5): max stale ~8 gens, 5%/gen\
+  \ refresh rate\nv2 (frac=0.50, every=5): max stale ~6 gens, 10%/gen refresh rate\n\
+  v3 (frac=0.75, every=2): max stale 2 gens, 37.5%/gen refresh rate\n\nRationale:\
+  \ initially we considered frac=1.0, every=5 (Option B) but\nthat has max staleness\
+  \ 4 gens \u2014 no matter how high you push frac at\ncadence=5, some entries drift\
+  \ ~4 gens between refreshes. Cadence is\nthe stronger lever. At every=2, the newest\
+  \ 25% is already fresh\n(just-added from current-ish net), so skipping it saves\
+  \ compute at\nzero staleness cost, hence frac=0.75 instead of 1.0.\n\nFork point:\
+  \ tb-v2 g60, same as v1/v2. Merged main in first (simulator\nfixes, expanded 128-scenario\
+  \ eval suite, phase markers). Absolute WR\nwon't be directly comparable to v1/v2's\
+  \ due to engine drift, but the\ninternal drift test (does g80 WR hold through g90\
+  \ without drop?) is\nstill clean.\n\nShip criterion: g80 AND g90 both >= 74.1% (tb-v2\
+  \ g60 peak). If true,\ncadence-driven staleness reduction DID close the drift loop\
+  \ and this\nis our drift-free config.\nKill criterion: g90 drifts from g80 peak\
+  \ by >=1pp despite max\nstaleness = 2 gens. Staleness alone isn't the bottleneck\
+  \ \u2014 the\nremaining drift lives in the value-head bias, not the buffer.\n\n\
+  Compute cost: ~3.75x v2 (37.5K states \xD7 1/2 gens = 18.75K states/gen\nrefreshed\
+  \ vs v2's 25K \xD7 1/5 = 5K). Expect ~16 min/gen, ~27 hours for\n100 gens.\n"
+created: '2026-04-20T23:15:44+00:00'
+parent: reanalyse-v3
+parent_checkpoint: gen88
+network_type: betaone
+architecture:
+  arch_version: 2
+  base_state_dim: 156
+  hidden_dim: 128
+  action_hidden: 64
+  hand_proj_dim: 32
+  card_embed_dim: 16
+  card_stats_dim: 28
+  relic_dim: 27
+  hand_agg_dim: 3
+  action_dim: 35
+  max_hand: 10
+  max_actions: 30
+  value_head_layers: 1
+  num_cards: 578
+  total_params: 74841
+  state_dim: 446
+  trunk_input: 188
+training:
+  generations: 128
+  combats_per_gen: 256
+  lr: 0.0003
+  batch_size: 512
+  mcts:
+    num_sims: 1000
+    temperature: 1.0
+    replay_capacity: 50000
+    train_epochs: 4
+    value_coef: 1.0
+    c_puct: 1.5
+    pomcp: true
+    mcts_bootstrap: true
+    turn_boundary_eval: true
+    q_target_mix: 0.5
+    q_target_temp: 0.5
+    eval_every: 1
+    grad_conflict_sample_every: 10
+    reanalyse_every: 2
+    reanalyse_frac: 0.75
+    reanalyse_min_gen: 10
+data:
+  mode: encounter_set
+  encounter_set: lean-decks-v1
+checkpoints:
+  save_every: 1
+  keep_best: true
+  cold_start: false
+concluded_gen: 8
+concluded_reason: 'FAILED: continuous HP-delta reward (1 + delta/hp_max clamped to
+  [-1,+1]) hypothesis disconfirmed. Goal was to break the value-head echo chamber
+  by removing the HP=0 reward discontinuity and giving V(s) a continuous target across
+  the survival boundary. After 10 gens post-fork from v3 g88, with one false-start
+  fixed (initial reward formula was missing the +1 offset, causing the win-side range
+  to compress to [-1,0]), the corrected experiment showed: P-Eval 98-103 (vs v3''s
+  112), V-Eval recovered from 25 (broken) to 92-104 (peaked at gen 9), survival_rate
+  plateaued at 40-48% (vs v3''s ~75% WR), and crucially combat_eval_mcts ECHO went
+  3->11 while FIXED went 3->0 (rescue rate collapsed from v3''s 50% to 0% at gen 9).
+  The reward-smoothing actively hurt search''s corrective capability. Mechanism: under
+  v3''s reward, V(s) for clear wins ~+1.12 vs losses -1 gave search wide dynamic range
+  to disagree with policy. Under neghp, V(s) for typical wins compressed near 0 (because
+  avg combat ends at HP near 0 under self-play), so search has minimal range to argue
+  against policy priors. Echo chamber WORSENED, not improved. V-Eval climbing while
+  P-Eval declining + rescue rate collapsing matches the ''echo-chamber via value bias''
+  signature from project_capacity_dual_null findings. Direct evidence: bottleneck
+  is per-action signal granularity (Q(s,a) discrimination), not state-level signal
+  granularity (V(s) smoothness). Pivots toward action/advantage head as the next test.'
+concluded_at: '2026-04-21T00:30:20+00:00'

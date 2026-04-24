@@ -1,0 +1,88 @@
+name: valuewide-v1
+method: mcts_selfplay
+description: "Wider value head. HIDDEN_DIM=128 (unchanged); value head goes from\n\
+  128 -> 256 -> 128 -> 64 -> 1 (~74K params) to 128 -> 512 -> 256 -> 128 -> 1\n(~230K\
+  \ params) \u2014 2x scaling at the widest layers. Cold-start, 60 gens.\n\nPivot\
+  \ from trunk-192-v1's finding: capacity bump on shared trunk didn't\nunlock V-Eval\
+  \ past lean's ~105 ceiling. Gradient telemetry showed\ncos(g_P, g_V) ~ 0 (no head-vs-head\
+  \ conflict) AND |g_V| dominates\n|g_P| by 5-10x throughout training. Interpretation:\
+  \ value head is the\ntrunk's primary consumer, but its own downstream capacity is\
+  \ the\nbottleneck \u2014 not the shared trunk width. This experiment tests that\n\
+  directly by giving value head 2x width with the trunk unchanged.\n\nRuns on fixed\
+  \ sim (commits d4d6132 + b092087: Intangible implemented\neverywhere, Plating semantics\
+  \ correct, per-enemy Intangible/Plating/\nArtifact encoded) AND new BASE_STATE_DIM=155.\
+  \ So V-Eval numbers will\nbe on the canonical corrected baseline, not directly comparable\
+  \ to\ntrunk-192 (pre-fix) \u2014 but comparable to lean's trajectory modulo the\n\
+  encoding+sim-fix delta.\n\nGradient-conflict telemetry on (grad_conflict_sample_every=10).\
+  \ Watch:\n  - V-Eval trajectory vs lean: does it break past 105?\n  - compound_scaling\
+  \ + conditional_value: do they saturate ceiling\n    EARLIER than lean did (i.e.,\
+  \ gen 20 vs lean's gen 30)?\n  - |g_V| / |g_P| ratio: does wider value head reduce\
+  \ |g_V| magnitude\n    per shared-trunk param (head has more params absorbing the\
+  \ signal)?\n  - cos: expected to stay ~0; if it moves, that's a surprise.\n\nShip\
+  \ criteria (stricter than trunk-192):\n  1. V-Eval breaks 108/121 (clear ceiling\
+  \ break, not within noise)\n  2. compound_scaling holds 25+/26 across 2+ eval gens\
+  \ (stability)\n  3. conditional_value holds 17+/20 across 2+ eval gens\n  4. No\
+  \ P-Eval regression below lean's 80% (80-equiv)\n\nDon't ship if:\n  - V-Eval plateaus\
+  \ 100-105 (same ceiling as lean)\n  - V gains in one category offset by equal losses\
+  \ in another\n    (net within-noise even if categories shift)\n\nIf this plateaus\
+  \ at lean's ceiling, the remaining lever is training\nsignal quality (richer value\
+  \ supervision: TD-lambda, multi-step, etc.),\nnot arch capacity anywhere.\n"
+created: '2026-04-18T23:15:00+00:00'
+parent: null
+parent_checkpoint: null
+network_type: betaone
+architecture:
+  arch_version: 2
+  base_state_dim: 155
+  hidden_dim: 128
+  action_hidden: 64
+  hand_proj_dim: 32
+  card_embed_dim: 16
+  card_stats_dim: 28
+  relic_dim: 26
+  hand_agg_dim: 3
+  action_dim: 35
+  max_hand: 10
+  max_actions: 30
+  value_head_layers: 3
+  num_cards: 578
+  total_params: 296791
+  state_dim: 445
+  trunk_input: 187
+training:
+  generations: 60
+  combats_per_gen: 256
+  lr: 0.0003
+  batch_size: 512
+  mcts:
+    num_sims: 1000
+    temperature: 1.0
+    replay_capacity: 50000
+    train_epochs: 4
+    value_coef: 1.0
+    c_puct: 1.5
+    pomcp: true
+    mcts_bootstrap: true
+    turn_boundary_eval: true
+    q_target_mix: 0.5
+    q_target_temp: 0.5
+    eval_every: 10
+    grad_conflict_sample_every: 10
+data:
+  mode: encounter_set
+  encounter_set: lean-decks-v1
+checkpoints:
+  save_every: 10
+  keep_best: true
+  cold_start: true
+concluded_gen: 10
+concluded_reason: "Wider value head (128->512->256->128->1, 231K head params, 297K\
+  \ total) on fixed sim + per-enemy encoding. Cold-start, killed at gen 33/60. Disconfirmed\
+  \ value-head-internal-capacity hypothesis. Trajectory showed CLEAR OVERFITTING:\
+  \ P-Eval 79.5%->75.9%->72.3% gen 10/20/30, V-Eval 81->80->74 \u2014 both monotonic\
+  \ regression while v_loss kept dropping (0.07->0.04->0.028). compound_scaling crashed\
+  \ from 26/26 ceiling at gen 10 to 16/26 at gen 30. Gradient telemetry unchanged\
+  \ from trunk-192: cos~0, |gV| 5-10x |gP|. Conclusion combined with trunk-192: NEITHER\
+  \ trunk capacity NOR value-head expressiveness is the bottleneck. Finalized at gen\
+  \ 10 (V-Eval peak before overfitting set in)."
+concluded_at: '2026-04-19T01:38:10+00:00'

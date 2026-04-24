@@ -1,0 +1,97 @@
+name: reanalyse-v5
+method: mcts_selfplay
+description: "Warm-start from reanalyse-v3 g88 on uber-decks-v1, but with compute\n\
+  proportionally scaled to the 4x larger training distribution.\n\nMotivation: reanalyse-v4\
+  \ warm-started same weights on uber-decks-v1 with\nv3's original config (combats=256,\
+  \ buffer=50K, epochs=4). Result at gen\n103: combat WR tied v3 g88 (67.3% vs 67.7%\
+  \ on uber-decks), P-Eval dropped\n5.5pp, combo category regressed, and combat_eval_mcts\
+  \ showed CLEAN->MIXED\nmigration (105->95 CLEAN, 14->25 MIXED). Classic forgetting\
+  \ pattern.\n\nThe under-training hypothesis: v3 trained 28 gens on 189 encounters\
+  \ to\nreach convergence, implying ~1050 gradient-passes per encounter per gen.\n\
+  v4 with 256 combats on 795 encounters gave only ~252 per-encounter grads\nper gen\
+  \ (4x less) while actively unlearning v3's lean-decks sharpness.\nv4 at 15 gens\
+  \ post-fork was ~12% of v3's proportional training budget.\n\nv5 scales proportionally:\n\
+  \  combats_per_gen:   256  -> 1024   (4x: same per-encounter sampling rate)\n  replay_capacity:\
+  \   50K  -> 200K   (4x: same per-encounter buffer coverage)\n  train_epochs:   \
+  \   4    -> 4      (unchanged: 4x larger buffer already\n                      \
+  \               gives 4x more batches per epoch)\n  lr:                3e-4    \
+  \        (same)\n  reanalyse:         frac=0.75 every=2  (same as v3; max staleness\
+  \ 2 gens)\n\nNet effect: per-encounter gradient attention matches v3 (~1050\nupdates/enc/gen).\
+  \ Wall-clock 3-4x v3 due to 4x self-play and 4x reanalyse\n(same frac on 4x buffer).\
+  \ Expected ~40-50 min/gen.\n\nFork point: v3 g88 (same as v4 for comparability).\
+  \ 100 gens post-fork\n(89 -> 188).\n\nShip criterion: WR on uber-decks-v1 > 72%\
+  \ (5pp above v3 g88 baseline of\n67.7%) AND P-Eval >= 85% (no worse than v4's 80%-ish\
+  \ range). Demonstrates\nuber-decks training is feasible with right compute scaling.\n\
+  Kill criterion: P-Eval drops below 75% OR uber-decks WR fails to beat\nv3 g88 baseline\
+  \ after 40 gens post-fork. Would falsify the under-training\nhypothesis \u2014 something\
+  \ else is wrong with warm-start + distribution shift.\n"
+created: '2026-04-20T13:00:00+00:00'
+parent: reanalyse-v3
+parent_checkpoint: '88'
+network_type: betaone
+architecture:
+  arch_version: 2
+  hidden_dim: 128
+  action_hidden: 64
+  hand_proj_dim: 32
+  card_embed_dim: 16
+  card_stats_dim: 28
+  relic_dim: 27
+  hand_agg_dim: 3
+  action_dim: 35
+  max_hand: 10
+  max_actions: 30
+  value_head_layers: 3
+  num_cards: 578
+  total_params: 140761
+  base_state_dim: 156
+  state_dim: 446
+  trunk_input: 188
+training:
+  generations: 188
+  combats_per_gen: 1024
+  lr: 0.0003
+  batch_size: 512
+  mcts:
+    num_sims: 1000
+    temperature: 1.0
+    replay_capacity: 200000
+    train_epochs: 4
+    value_coef: 1.0
+    c_puct: 1.5
+    pomcp: true
+    mcts_bootstrap: true
+    turn_boundary_eval: true
+    q_target_mix: 0.5
+    q_target_temp: 0.5
+    eval_every: 1
+    grad_conflict_sample_every: 10
+    reanalyse_every: 2
+    reanalyse_frac: 0.75
+    reanalyse_min_gen: 99
+data:
+  mode: encounter_set
+  encounter_set: uber-decks-v1
+checkpoints:
+  save_every: 1
+  keep_best: true
+  cold_start: false
+concluded_gen: 95
+concluded_reason: "FAILED: warm-start on uber-decks-v1 with 4x compute scaling still\
+  \ regressed from v3 g88 baseline. Peak at g95 (P-Eval 109/128 85.2%, V-Eval 104/121\
+  \ 86.0%) matched v3 g88 on V-Eval but didn't exceed P-Eval; by g100 both dropped\
+  \ (P 102/128, V 99/121). combat_eval_mcts rescue rate collapsed from v3's 57% to\
+  \ 33% \u2014 value head lost calibration on OOD scenarios. Primary failure mode:\
+  \ signal dilution. Net reverted to 'play STRIKE' default on draw-sequencing scenarios\
+  \ (draw category 10/10 -> 6/10) because uber's broader distribution re-weighted\
+  \ STRIKE-wins over lean's fine 'draw-first' patterns. Failing scenarios use cards\
+  \ already in lean (ACROBATICS, BACKFLIP, ADRENALINE, ESCAPE_PLAN, CALCULATED_GAMBLE),\
+  \ so data coverage was not the gap \u2014 training dynamics was. Additional issue:\
+  \ reanalyse_min_gen=99 delayed refresh until gens 89-98 had already drifted; when\
+  \ reanalyse activated at g99, it locked in the drifted state (value_loss jumped\
+  \ 0.056->0.082, value_corr dropped 0.92->0.88 over g100->g101). v4's always-on reanalyse\
+  \ (from g90) produced smoother convergence despite thinner per-encounter attention.\
+  \ Lesson: compute scaling alone insufficient; new training distribution on warm-start\
+  \ needs an explicit anchor (mixed distribution, KL-distillation) to preserve parent's\
+  \ skill. Use reanalyse from fork point, not delayed."
+concluded_at: '2026-04-20T21:12:34+00:00'

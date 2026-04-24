@@ -1,0 +1,63 @@
+name: enemy-intent-v1
+method: mcts_selfplay
+description: "Enemy-aggregate features (4 dims in base_state: total_incoming_damage,\
+  \ total_enemy_block, count_attacking_enemies, total_enemy_strength) \u2014 mirrors\
+  \ hand_agg pattern on the enemy side, all true aggregates of already-encoded per-enemy\
+  \ values. Cold-start, value_head_layers=3. POMCP+pwfix+qtarget+mcts_bootstrap matching\
+  \ the stable regime. 40 gens, eval_every=10, 1000 sims. Targets the conditional_value\
+  \ V-Eval gap (baseline handagg-seq-v1 gen30: 14/20). Ship if V-Eval >= 110/121 AND\
+  \ conditional_value >= 17/20 AND P-Eval >= 82%. Artifact / Plated Armor moved to\
+  \ enemy-powers-v1 (per-enemy slot expansion)."
+created: '2026-04-18T16:27:10+00:00'
+parent: null
+parent_checkpoint: null
+network_type: betaone
+architecture:
+  arch_version: 2
+  base_state_dim: 144
+  hidden_dim: 128
+  action_hidden: 64
+  hand_proj_dim: 32
+  card_embed_dim: 16
+  card_stats_dim: 28
+  relic_dim: 26
+  hand_agg_dim: 3
+  enemy_agg_dim: 4
+  action_dim: 35
+  max_hand: 10
+  max_actions: 30
+  value_head_layers: 3
+  num_cards: 578
+  total_params: 139201
+  state_dim: 434
+  trunk_input: 176
+training:
+  generations: 40
+  combats_per_gen: 256
+  lr: 0.0003
+  batch_size: 512
+  mcts:
+    num_sims: 1000
+    temperature: 1.0
+    replay_capacity: 50000
+    train_epochs: 4
+    value_coef: 1.0
+    c_puct: 1.5
+    pomcp: true
+    mcts_bootstrap: true
+    turn_boundary_eval: true
+    q_target_mix: 0.5
+    q_target_temp: 0.5
+    eval_every: 10
+data:
+  mode: encounter_set
+  encounter_set: lean-decks-v1
+checkpoints:
+  save_every: 10
+  keep_best: true
+  cold_start: true
+concluded_gen: 30
+concluded_reason: "Killed \u2014 aggregate features of already-visible per-enemy state\
+  \ didn't improve conditional_value (12/20 vs baseline 14/20) or overall V-Eval (89\
+  \ vs baseline 107) at gen 30. Target category regressed; hypothesis disconfirmed."
+concluded_at: '2026-04-18T19:17:23+00:00'

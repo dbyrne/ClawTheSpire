@@ -1,0 +1,35 @@
+name: decknet-rootval-trunkv2g60
+method: decknet_selfplay
+description: "DeckNet rootval re-test with trunk-baseline-v2 gen 60 as combat oracle.
+2026-04-19: original decknet-rootval was declared failed for not beating a 67% untrained
+baseline — but that baseline was a 15-scenario small-sample artifact (true untrained
+~= random on 74-scn suite). Re-testing with stronger oracle (trunk-baseline-v2 gen 60,
+P-Eval 101/125, V-Eval 96/121) and measuring against the expanded 74-scn eval."
+created: '2026-04-19T22:00:00+00:00'
+parent: decknet-rootval
+parent_checkpoint: null
+network_type: decknet
+architecture:
+  network: decknet
+  num_cards: 578
+  total_params: 66881
+training:
+  generations: 30
+  runs_per_gen: 200
+  lr: 0.0003
+  batch_size: 256
+  decknet:
+    mcts_sims: 200
+    temperature: 1.0
+    combat_replays: 1
+    train_steps_per_gen: 100
+    option_epsilon: 0.15
+    replay_capacity: 100000
+    betaone_checkpoint: C:/coding-projects/sts2-trunk-baseline-v2/sts2-solver/experiments/trunk-baseline-v2/betaone_gen60.pt
+    target_mode: root_value
+data:
+  mode: full_run
+checkpoints:
+  save_every: 5
+  keep_best: false
+  cold_start: false

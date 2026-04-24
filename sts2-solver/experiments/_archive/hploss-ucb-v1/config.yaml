@@ -1,0 +1,83 @@
+name: hploss-ucb-v1
+method: mcts_selfplay
+description: "HP head + UCB consumes it. Follow-up to hploss-aux-v1 which showed\n\
+  training-only HP supervision is insufficient \u2014 MCTS still needs HP\nin its\
+  \ search objective for decision quality to transfer.\n\nThesis (from project_hploss_aux_v1_result.md\
+  \ + 2026-04-19 design\ndiscussion): win rate is a compressed signal; HP loss per\
+  \ decision\ncarries more bits of information about play quality. Value head\nwith\
+  \ pure \xB11 targets (hploss-aux-v1 design) gives clean training\ngradient, but\
+  \ dropping HP from MCTS UCB removes HP-awareness from\nsearch \u2192 policy targets\
+  \ lose HP steering \u2192 P-Eval regressed 7pt.\n\nArchitecture (same as hploss-aux-v1):\n\
+  \  - value head: pure win/loss targets (\xB11), terminal_scale (1,0,-1)\n  - hp\
+  \ head: HP-loss fraction [0,1], sigmoid output, ~9K params\n  - trunk: 128 hidden,\
+  \ value_head_layers=3\n  - total: ~149K params\n\nNEW vs hploss-aux-v1:\n  - MCTS\
+  \ UCB now uses V_mean + hp_ucb_mu \xD7 (1 \u2212 HP_mean)\n  - hp_ucb_mu = 1.0 \u2192\
+  \ HP weighted equal to V at MCTS selection\n  - This is the \"Option 2 done right\"\
+  \ design: each head has clean\n    training signal, AND HP is a first-class inference\
+  \ signal.\n\nSingle-knob delta from hploss-aux-v1: \u03BC flips from 0 \u2192 1.0.\n\
+  Cold-start from trunk-baseline-post-sim-fix codebase (via fork off\nexperiment/hploss-aux-v1,\
+  \ then cold training).\n\nShip criteria:\n  1. V-Eval > 102/121 (hploss-aux-v1 plateau)\
+  \ \u2192 preferably > 108\n  2. P-Eval \u2265 70/83 (trunk-baseline-v1 parity, recovering\
+  \ hploss-aux's 7pt drop)\n  3. conditional_value holds \u226517/20 (hploss-aux-v1's\
+  \ headroom gain)\n  4. |g_H| / |g_V| ratio comparable to hploss-aux-v1\n  5. grad_cos_vh\
+  \ stays < 0.6 (heads don't collapse into parrots)\n"
+created: '2026-04-19T11:45:23+00:00'
+parent: hploss-aux-v1
+parent_checkpoint: gen50
+network_type: betaone
+architecture:
+  arch_version: 2
+  base_state_dim: 156
+  hidden_dim: 128
+  action_hidden: 64
+  hand_proj_dim: 32
+  card_embed_dim: 16
+  card_stats_dim: 28
+  relic_dim: 27
+  hand_agg_dim: 3
+  action_dim: 35
+  max_hand: 10
+  max_actions: 30
+  value_head_layers: 3
+  hp_loss_head: true
+  num_cards: 578
+  total_params: 149082
+  state_dim: 446
+  trunk_input: 188
+training:
+  generations: 60
+  combats_per_gen: 256
+  lr: 0.0003
+  batch_size: 512
+  mcts:
+    num_sims: 1000
+    temperature: 1.0
+    replay_capacity: 50000
+    train_epochs: 4
+    value_coef: 1.0
+    hp_coef: 1.0
+    hp_ucb_mu: 1.0
+    c_puct: 1.5
+    pomcp: true
+    mcts_bootstrap: true
+    turn_boundary_eval: true
+    q_target_mix: 0.5
+    q_target_temp: 0.5
+    hp_target_mix: 0.5
+    eval_every: 10
+    grad_conflict_sample_every: 10
+data:
+  mode: encounter_set
+  encounter_set: lean-decks-v1
+checkpoints:
+  save_every: 10
+  keep_best: true
+  cold_start: true
+concluded_gen: 60
+concluded_reason: "Experiment falsified: MCTS UCB consuming HP head at mu=1.0 produced\
+  \ monotonic P-Eval decline across training (96 at gen 10 -> 89 at gen 60, -7 scenarios\
+  \ over 50 gens) while V-Eval oscillated (102,103,97,101,90,95). Finalized gen 60\
+  \ because no gen is 'good' \u2014 even gen 10's peak was worse than trunk-baseline-v1\
+  \ gen 60. mu=1.0 too aggressive: HP-in-UCB drives policy into restrictive basins.\
+  \ Future hp_ucb_mu experiments should try 0.3-0.5 (trunk-effective range)."
+concluded_at: '2026-04-19T15:35:04+00:00'

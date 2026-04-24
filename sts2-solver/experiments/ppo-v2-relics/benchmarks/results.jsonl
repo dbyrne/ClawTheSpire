@@ -1,1 +1,0 @@
-{"suite": "es-base-es-v1-7af4cfe921ce", "mode": "policy", "mcts_sims": 0, "timestamp": 1776289289.8524613, "checkpoint": "latest", "gen": 1803, "win_rate": 0.395, "wins": 1493, "games": 3780, "ci95_lo": 0.3795, "ci95_hi": 0.4107}

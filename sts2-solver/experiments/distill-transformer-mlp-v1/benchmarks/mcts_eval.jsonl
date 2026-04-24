@@ -1,0 +1,8 @@
+{"suite": "eval-b0fe09a9f6f8", "timestamp": 1776907555.901629, "gen": 5, "total": 136, "clean": 96, "echo": 23, "fixed": 9, "broke": 6, "rescue_rate": 0.07894736842105263}
+{"suite": "eval-b0fe09a9f6f8", "timestamp": 1776907745.1436083, "gen": 10, "total": 136, "clean": 91, "echo": 21, "fixed": 14, "broke": 8, "rescue_rate": 0.13953488372093023}
+{"suite": "eval-b0fe09a9f6f8", "timestamp": 1776907932.1640701, "gen": 15, "total": 136, "clean": 90, "echo": 21, "fixed": 15, "broke": 7, "rescue_rate": 0.18604651162790697}
+{"suite": "eval-b0fe09a9f6f8", "timestamp": 1776908119.2726295, "gen": 20, "total": 136, "clean": 86, "echo": 18, "fixed": 19, "broke": 10, "rescue_rate": 0.19148936170212766}
+{"suite": "eval-b0fe09a9f6f8", "timestamp": 1776908306.4030418, "gen": 25, "total": 136, "clean": 86, "echo": 17, "fixed": 19, "broke": 12, "rescue_rate": 0.14583333333333334}
+{"suite": "eval-b0fe09a9f6f8", "timestamp": 1776908493.266251, "gen": 30, "total": 136, "clean": 92, "echo": 14, "fixed": 13, "broke": 14, "rescue_rate": -0.024390243902439025}
+{"suite": "eval-b0fe09a9f6f8", "timestamp": 1776908680.7432332, "gen": 35, "total": 136, "clean": 94, "echo": 13, "fixed": 11, "broke": 15, "rescue_rate": -0.10256410256410256}
+{"suite": "eval-b0fe09a9f6f8", "timestamp": 1776908868.2164154, "gen": 40, "total": 136, "clean": 88, "echo": 14, "fixed": 17, "broke": 14, "rescue_rate": 0.06666666666666667}

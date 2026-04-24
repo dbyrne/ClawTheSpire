@@ -1,0 +1,86 @@
+name: reanalyse-v4
+method: mcts_selfplay
+description: "Warm-start from reanalyse-v3 g88 (the shipped combat-net baseline),\
+  \ train\non uber-decks-v1 (676 encounter set covering all eval-tested cards at\n\
+  higher coverage than lean-decks-v1). Same v3 reanalyse config\n(frac=0.75, every=2,\
+  \ max staleness 2 gens).\n\nTests whether the v3 config's strengths hold on a broader\
+  \ training\ndistribution, and specifically whether the failing combo-sequencing\n\
+  evals (BURST ordering, CALCULATED_GAMBLE sequencing, DODGE_AND_ROLL\nkeep/discard)\
+  \ improve when the training distribution actually contains\nthese cards at reasonable\
+  \ frequency.\n\nv3 at g88 on lean-decks-v1: P-Eval 87.5%, V-Eval 82.6%, combat WR\
+  \ 74.8%,\nrescue rate 50%. Failing evals were all training-distribution gaps\n(DODGE_AND_ROLL\
+  \ in 0.5% of decks, BURST in 17%). uber-decks-v1 bumps\nthese to DODGE_AND_ROLL\
+  \ ~14% (post-topup), BURST ~25%, FINISHER 17%,\netc. All eval-referenced cards are\
+  \ now represented at >= 10%.\n\nShip criterion: P-Eval combo category improves from\
+  \ 11/14 (v3) to 13+.\nSecondary: overall P-Eval maintains or exceeds v3's 87.5%\
+  \ despite\ntraining on a different distribution.\nKill criterion: P-Eval drops below\
+  \ v3's baseline OR combo category\ndoesn't improve \u2014 either means training-distribution\
+  \ gap wasn't the\nbottleneck and we need to look elsewhere (architecture, value-head\
+  \ bias).\n\nConfig merged with latest main (sim fixes, uber-decks tooling, phase\n\
+  markers). 100 gens warm-started, ~12-15 min/gen wall-clock.\n"
+created: '2026-04-20T14:49:27+00:00'
+parent: reanalyse-v3
+parent_checkpoint: '88'
+network_type: betaone
+architecture:
+  arch_version: 2
+  hidden_dim: 128
+  action_hidden: 64
+  hand_proj_dim: 32
+  card_embed_dim: 16
+  card_stats_dim: 28
+  relic_dim: 27
+  hand_agg_dim: 3
+  action_dim: 35
+  max_hand: 10
+  max_actions: 30
+  value_head_layers: 3
+  num_cards: 578
+  total_params: 140761
+  base_state_dim: 156
+  state_dim: 446
+  trunk_input: 188
+training:
+  generations: 188
+  combats_per_gen: 256
+  lr: 0.0003
+  batch_size: 512
+  mcts:
+    num_sims: 1000
+    temperature: 1.0
+    replay_capacity: 50000
+    train_epochs: 4
+    value_coef: 1.0
+    c_puct: 1.5
+    pomcp: true
+    mcts_bootstrap: true
+    turn_boundary_eval: true
+    q_target_mix: 0.5
+    q_target_temp: 0.5
+    eval_every: 1
+    grad_conflict_sample_every: 10
+    reanalyse_every: 2
+    reanalyse_frac: 0.75
+    reanalyse_min_gen: 10
+data:
+  mode: encounter_set
+  encounter_set: uber-decks-v1
+checkpoints:
+  save_every: 1
+  keep_best: true
+  cold_start: false
+concluded_gen: 103
+concluded_reason: "Informative failure: warm-start on new distribution without compute\
+  \ scaling. Forked from v3 g88 on uber-decks-v1 (4x larger distribution: 795 vs 189\
+  \ encounters) with v3's original config (combats=256, buffer=50K, epochs=4). Trained\
+  \ 15 gens post-fork before killed. Combat WR on uber-decks-v1 = 67.3% [65.8, 68.8]\
+  \ n=3975, statistically tied with v3 g88's 67.7% baseline (p=0.70). Meanwhile P-Eval\
+  \ dropped 83.6% -> 78.1% (-5.5pp), combo category regressed 12/14 -> 9/14, and combat_eval_mcts\
+  \ showed 10 scenarios migrate CLEAN (105->95) -> MIXED (14->25). Net became less\
+  \ decisive, not wrong \u2014 classic forgetting pattern. Root cause identified (see\
+  \ feedback_distribution_scaling): per-encounter gradient attention was 4x thinner\
+  \ than v3's equivalent (1050 -> 252 grads/enc/gen) while v3's fixed-point was actively\
+  \ decaying due to weight drift. Reanalyse aggressive refresh locked in the mid-transition\
+  \ state. v5 tests the under-training hypothesis with proportionally scaled config\
+  \ (combats 1024, buffer 200K)."
+concluded_at: '2026-04-20T17:47:52+00:00'

@@ -1,0 +1,93 @@
+name: trunk-baseline-v1
+method: mcts_selfplay
+description: 'Canonical vanilla trunk baseline on the post-sim-fix codebase. All
+
+  recent/finalized experiments (trunk-192, valuewide, enemy-intent/powers,
+
+  handagg-*, valuedepth) pre-date today''s Intangible/Plated/Slippery
+
+  fixes and/or modify arch. We have no clean reference point for
+
+  "what does vanilla trunk actually score now."
+
+
+  This run establishes that reference so future experiments can A/B
+
+  against a real baseline instead of stale peers.
+
+
+  Arch: current main (BASE_STATE_DIM=156, per-enemy Intangible/Plated/
+
+  Artifact, PENDULUM in relic block). value_head_layers=3 to match the
+
+  emerging convention used by trunk-192, valuewide, and hploss-aux-v1
+
+  (avoids head-depth confound when comparing).
+
+
+  Training: matches hploss-aux-v1 exactly (same encounter set, same
+
+  POMCP+pwfix+qtarget+mcts_bootstrap regime, same 60 gens) minus the
+
+  hp_loss_head. Pair with hploss on the same sim => the ONLY delta is
+
+  the HP aux head + reward strip.
+
+
+  Cold-start.
+
+  '
+created: '2026-04-19T02:00:00+00:00'
+parent: null
+parent_checkpoint: null
+network_type: betaone
+architecture:
+  arch_version: 2
+  hidden_dim: 128
+  action_hidden: 64
+  hand_proj_dim: 32
+  card_embed_dim: 16
+  card_stats_dim: 28
+  relic_dim: 27
+  hand_agg_dim: 3
+  action_dim: 35
+  max_hand: 10
+  max_actions: 30
+  value_head_layers: 3
+  hp_loss_head: false
+  num_cards: 578
+  total_params: 140761
+  base_state_dim: 156
+  state_dim: 446
+  trunk_input: 188
+training:
+  generations: 60
+  combats_per_gen: 256
+  lr: 0.0003
+  batch_size: 512
+  mcts:
+    num_sims: 1000
+    temperature: 1.0
+    replay_capacity: 50000
+    train_epochs: 4
+    value_coef: 1.0
+    c_puct: 1.5
+    pomcp: true
+    mcts_bootstrap: true
+    turn_boundary_eval: true
+    q_target_mix: 0.5
+    q_target_temp: 0.5
+    eval_every: 10
+    grad_conflict_sample_every: 10
+data:
+  mode: encounter_set
+  encounter_set: lean-decks-v1
+checkpoints:
+  save_every: 10
+  keep_best: true
+  cold_start: true
+concluded_gen: 50
+concluded_reason: V-Eval stabilized at 102/121, P-Eval at 70/83; gen 60 regressed
+  ceiling cats (hand, compound_scaling, future_value) without net total gain. Gen
+  50 is the cleanest reference point.
+concluded_at: '2026-04-19T11:13:48+00:00'

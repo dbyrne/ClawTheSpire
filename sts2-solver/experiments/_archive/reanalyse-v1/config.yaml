@@ -1,0 +1,77 @@
+name: reanalyse-v1
+method: mcts_selfplay
+description: "MuZero-style reanalyse: every 5 gens, re-run MCTS on 25% of the oldest\n\
+  buffer entries with the current network and overwrite their (policy,\nvalue) targets.\
+  \ Tests whether the post-gen-60 drift seen in tb-v2 is\ncaused by the critic fitting\
+  \ increasingly stale bootstrap targets.\n\nForked from trunk-baseline-v2 gen 60:\
+  \ tb-v2 showed no drift before gen 60,\nso forking at that point gives a tight apples-to-apples\
+  \ A/B \u2014 same starting\nweights, only variable is reanalyse. tb-v2's continued\
+  \ training past gen 60\nis the negative control (monotonic WR decline 74.1% \u2192\
+  \ 71.9% gen 60\u219290);\nreanalyse-v1 training the same gen range is the intervention\
+  \ arm.\n\nTrunk-v1 config (POMCP 1000 sims, pwfix, qtarget, mcts_bootstrap,\nturn_boundary_eval),\
+  \ value_head_layers=3. save_every=1, eval_every=1 for\ndense trajectory analysis.\
+  \ Target gen range: 61 -> 100.\n\nShip criterion: benchmark WR at gen 80/90 holds\
+  \ vs tb-v2 gen 60 peak (74.1%)\ninstead of drifting to tb-v2's 71.9% at gen 90.\n\
+  Kill criterion: WR drifts like tb-v2 despite reanalyse -> stale-target\nhypothesis\
+  \ falsified, drift is inherent to T(V_\u03B8) even with fresh targets.\n\nSee PLAN.md\
+  \ for mechanism, signals, follow-up experiments.\n"
+created: '2026-04-19T18:29:07+00:00'
+parent: trunk-baseline-v2
+parent_checkpoint: '60'
+network_type: betaone
+architecture:
+  arch_version: 2
+  hidden_dim: 128
+  action_hidden: 64
+  hand_proj_dim: 32
+  card_embed_dim: 16
+  card_stats_dim: 28
+  relic_dim: 27
+  hand_agg_dim: 3
+  action_dim: 35
+  max_hand: 10
+  max_actions: 30
+  value_head_layers: 3
+  num_cards: 578
+  total_params: 140761
+  base_state_dim: 156
+  state_dim: 446
+  trunk_input: 188
+training:
+  generations: 100
+  combats_per_gen: 256
+  lr: 0.0003
+  batch_size: 512
+  mcts:
+    num_sims: 1000
+    temperature: 1.0
+    replay_capacity: 50000
+    train_epochs: 4
+    value_coef: 1.0
+    c_puct: 1.5
+    pomcp: true
+    mcts_bootstrap: true
+    turn_boundary_eval: true
+    q_target_mix: 0.5
+    q_target_temp: 0.5
+    eval_every: 1
+    grad_conflict_sample_every: 10
+    reanalyse_every: 5
+    reanalyse_frac: 0.25
+    reanalyse_min_gen: 10
+data:
+  mode: encounter_set
+  encounter_set: lean-decks-v1
+checkpoints:
+  save_every: 1
+  keep_best: true
+  cold_start: false
+concluded_gen: 80
+concluded_reason: "First reanalyse experiment. frac=0.25, every=5 (5%/gen refresh).\
+  \ Forked from tb-v2 g60 (74.1%), reached 73.8% [71.8, 75.7] at gen 80 on lean-decks-v1\
+  \ (n=1890, +1.6pp over tb-v2 g80 at 72.2% but p=0.339, not significant at this n).\
+  \ Confirmed reanalyse mechanism slows drift but doesn't eliminate it \u2014 g90\
+  \ dropped to 72.9%, showing staleness leaks through at low refresh rate. Superseded\
+  \ by reanalyse-v2 (frac=0.5) which hit 75.0% at g80 (p=0.022 significant). Kept\
+  \ for 3-point curve in refresh-rate sweep."
+concluded_at: '2026-04-20T01:44:16+00:00'

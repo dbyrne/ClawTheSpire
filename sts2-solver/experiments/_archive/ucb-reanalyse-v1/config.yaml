@@ -1,0 +1,88 @@
+name: ucb-reanalyse-v1
+method: mcts_selfplay
+description: "2x2 combination experiment: UCB-HP action selection (mu=1.0) in MCTS\n\
+  plus MuZero-style reanalyse (50% every 4 gens, aligned to buffer turnover).\n\n\
+  Tests whether ucb-v1's monotonic P-Eval decline (96->89 over 50 gens at\nmu=1.0)\
+  \ was caused by:\n(a) UCB-HP visits being intrinsically worse targets -> reanalyse\
+  \ won't save it\n(b) UCB-HP visits slightly off, stale targets amplifying the drift\
+  \ ->\n    reanalyse breaks the compounding\n\nCold start (no carryover from aux-v1\
+  \ or ucb-v1 \u2014 HP head + policy +\nvalue co-evolve under the combined regime).\
+  \ 100 gens on lean-decks-v1.\n\nCadence rationale: buffer holds 50K steps / ~6.5K\
+  \ per gen ~= 7.7 gens\nto full FIFO turnover. 50% every 4 gens refreshes each entry\
+  \ at ~52%\nof its natural lifetime (before eviction takes it). Tighter than\nreanalyse-v1\
+  \ (25%/5 = 5%/gen leak) or reanalyse-v2 (50%/5 = 10%/gen).\n\nreanalyse_min_gen:\
+  \ 20 to let the HP head build structure before\nreanalyse uses its predictions to\
+  \ refresh targets (otherwise early\nreanalyse uses random-HP-head outputs as signal).\n\
+  \nShip criterion: P-Eval doesn't monotonically decline (vs ucb-v1's 96->89).\nSecondary:\
+  \ benchmark WR at gen 80/90 retains tb-v2 g60 peak (74.1%) like\nreanalyse-v1 did.\n\
+  Kill criterion: same decline as ucb-v1 -> UCB-HP is intrinsically\ndestabilizing,\
+  \ independent of staleness.\n"
+created: '2026-04-19T22:00:00+00:00'
+parent: null
+parent_checkpoint: null
+network_type: betaone
+architecture:
+  arch_version: 2
+  hidden_dim: 128
+  action_hidden: 64
+  hand_proj_dim: 32
+  card_embed_dim: 16
+  card_stats_dim: 28
+  relic_dim: 27
+  hand_agg_dim: 3
+  action_dim: 35
+  max_hand: 10
+  max_actions: 30
+  value_head_layers: 3
+  hp_loss_head: true
+  num_cards: 578
+  total_params: 149082
+  base_state_dim: 156
+  state_dim: 446
+  trunk_input: 188
+training:
+  generations: 100
+  combats_per_gen: 256
+  lr: 0.0003
+  batch_size: 512
+  mcts:
+    num_sims: 1000
+    temperature: 1.0
+    replay_capacity: 50000
+    train_epochs: 4
+    value_coef: 1.0
+    c_puct: 1.5
+    pomcp: true
+    mcts_bootstrap: true
+    turn_boundary_eval: true
+    q_target_mix: 0.5
+    q_target_temp: 0.5
+    eval_every: 1
+    grad_conflict_sample_every: 10
+    reanalyse_every: 4
+    reanalyse_frac: 0.5
+    reanalyse_min_gen: 20
+    ucb_hp_mu: 1.0
+    hp_coef: 1.0
+    hp_target_mix: 0.5
+data:
+  mode: encounter_set
+  encounter_set: lean-decks-v1
+checkpoints:
+  save_every: 1
+  keep_best: true
+  cold_start: true
+concluded_gen: 50
+concluded_reason: "UCB-HP + reanalyse experiment \u2014 informative failure. Cold-start,\
+  \ HP head, UCB mu=1.0, reanalyse frac=0.5 every=4. Hit P-Eval peak 71.9% at g41\
+  \ and V-Eval peak 90.9% at g50, then V-Eval went volatile in late gens (down to\
+  \ 59.5% at g95). Final gen 100 P-Eval 67.2%, V-Eval 81.0%. Pinned at g50 to preserve\
+  \ the trained HP head as a reusable asset. combat_eval_mcts at g50 shows FIXED=0\
+  \ at both mu=0 and mu=1.0, with BROKE=2 at mu=1.0 \u2014 UCB-HP does not help rescue\
+  \ rate at inference and actively breaks correct decisions at mu=1.0. Combined with\
+  \ earlier 2x3 sweep showing mu=0.3/0.5 is no-op at inference, UCB-HP as a mechanism\
+  \ is a dead end at every mu value tested. HP head itself trained fine (H-Eval ~70%)\
+  \ and may have value for future interventions that are not UCB-based (e.g., distillation,\
+  \ aux loss with stronger weight). Contrast with v3 (pure reanalyse, aggressive refresh):\
+  \ v3 g88 has 50% rescue rate, 87.5% P-Eval, stable V-Eval through g100."
+concluded_at: '2026-04-20T12:27:52+00:00'

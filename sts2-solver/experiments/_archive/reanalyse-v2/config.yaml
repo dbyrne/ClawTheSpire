@@ -1,0 +1,98 @@
+name: reanalyse-v2
+method: mcts_selfplay
+description: 'MuZero-style reanalyse with aggressive refresh: frac=0.5 every 5 gens
+
+  (2x reanalyse-v1''s 0.25). Tests whether the gap-closing pattern in
+
+  reanalyse-v1 (+1.6pp at g80 vs +1.0pp at g90 vs tb-v2) was caused by
+
+  an undersized refresh rate letting staleness leak through at long
+
+  horizons.
+
+
+  Same fork point as reanalyse-v1: trunk-baseline-v2 gen 60. Same
+
+  architecture, config, and encounter set. Only difference is
+
+  reanalyse_frac: 0.25 -> 0.5.
+
+
+  reanalyse-v1 already showed the combat-WR side of drift is mitigated
+
+  by target refresh; v2 tests whether we can close the drift fully
+
+  instead of partially. Expected wall-clock overhead ~8 min/gen (vs
+
+  ~4 min/gen at frac=0.25).
+
+
+  Ship criterion: gen 80 WR >= 74.1% (matches tb-v2 g60 peak) AND
+
+  gen 90 WR >= 73.5%. Closes the g80->g90 gap we saw in v1.
+
+  Kill criterion: g80/g90 WR matches reanalyse-v1 (+1-1.6pp vs tb-v2).
+
+  More refresh didn''t help -> staleness isn''t the remaining bottleneck.
+
+  '
+created: '2026-04-19T21:42:15+00:00'
+parent: trunk-baseline-v2
+parent_checkpoint: '60'
+network_type: betaone
+architecture:
+  arch_version: 2
+  hidden_dim: 128
+  action_hidden: 64
+  hand_proj_dim: 32
+  card_embed_dim: 16
+  card_stats_dim: 28
+  relic_dim: 27
+  hand_agg_dim: 3
+  action_dim: 35
+  max_hand: 10
+  max_actions: 30
+  value_head_layers: 3
+  num_cards: 578
+  total_params: 140761
+  base_state_dim: 156
+  state_dim: 446
+  trunk_input: 188
+training:
+  generations: 100
+  combats_per_gen: 256
+  lr: 0.0003
+  batch_size: 512
+  mcts:
+    num_sims: 1000
+    temperature: 1.0
+    replay_capacity: 50000
+    train_epochs: 4
+    value_coef: 1.0
+    c_puct: 1.5
+    pomcp: true
+    mcts_bootstrap: true
+    turn_boundary_eval: true
+    q_target_mix: 0.5
+    q_target_temp: 0.5
+    eval_every: 1
+    grad_conflict_sample_every: 10
+    reanalyse_every: 5
+    reanalyse_frac: 0.5
+    reanalyse_min_gen: 10
+data:
+  mode: encounter_set
+  encounter_set: lean-decks-v1
+checkpoints:
+  save_every: 1
+  keep_best: true
+  cold_start: false
+concluded_gen: 80
+concluded_reason: "New combat WR baseline. Forked from tb-v2 g60 (74.1%), reached\
+  \ 75.0% [73.5, 76.3] at gen 80 (n=3780, p=0.022 vs tb-v2 g80 at 72.8%). Gen 90 dropped\
+  \ to 73.5%, so gen 80 is the peak. V-Eval held stable around 104 across gens 81-90\
+  \ (unlike v1 which drifted). Reanalyse at frac=0.5, every 5 gens (2x v1). Some drift\
+  \ remains past g80 but combat WR gain is significant \u2014 reanalyse mechanism\
+  \ validated as a drift mitigator. Follow-up: v3 with more aggressive refresh to\
+  \ test whether drift can be fully eliminated."
+concluded_at: '2026-04-20T01:27:13+00:00'

@@ -1,0 +1,66 @@
+name: ppo-v1
+method: ppo
+description: PPO fine-tuning of distill-transformer-mlp-v1 e45 on uber-decks-v1. KL
+  regularization (0.05) toward e45 reference prevents catastrophic forgetting. First
+  experiment this session with training paradigm capable of exceeding v3 (direct WR
+  optimization, not bounded by teacher).
+created: ''
+parent: null
+parent_checkpoint: null
+network_type: betaone
+architecture:
+  arch_version: 2
+  base_state_dim: 156
+  hidden_dim: 128
+  action_hidden: 64
+  hand_proj_dim: 32
+  card_embed_dim: 16
+  card_stats_dim: 28
+  relic_dim: 27
+  hand_agg_dim: 3
+  action_dim: 35
+  max_hand: 10
+  max_actions: 30
+  value_head_layers: 3
+  trunk_layers: 2
+  trunk_hidden: 128
+  policy_head_type: mlp
+  policy_mlp_hidden: 256
+  use_distributional_value: true
+  c51_atoms: 51
+  c51_v_min: -1.2
+  c51_v_max: 1.5
+  transformer_trunk: true
+  transformer_layers: 3
+  transformer_heads: 4
+  transformer_ffn: 256
+  num_cards: 578
+  total_params: 552404
+  state_dim: 446
+  trunk_input: 188
+training:
+  generations: 50
+  combats_per_gen: 256
+  lr: 0.0001
+  batch_size: 256
+  clip_ratio: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.01
+  kl_coef: 0.05
+  gamma: 0.99
+  lam: 0.95
+  ppo_epochs: 4
+  temperature: 1.0
+data:
+  mode: self_play
+  encounter_set: uber-decks-v1
+checkpoints:
+  save_every: 5
+  cold_start: false
+  init_from: distill-transformer-mlp-v1/student_epoch45.pt
+concluded_gen: 50
+concluded_reason: "null+regression: v3-parity on uber-decks-v1 policy-only WR (v3\
+  \ 48.01%, PPO 48.26%, CIs overlap), but P-Eval 100/136 and V-Eval 56/121 \u2014\
+  \ drop of ~15 P / ~44 V. Value head saturated (V=+1.284 on both sides of many scenarios).\
+  \ PPO critic collapsed under sparse win/loss reward + small budget (12.8K combats)."
+concluded_at: '2026-04-23T02:29:51+00:00'

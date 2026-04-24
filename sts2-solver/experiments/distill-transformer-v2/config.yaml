@@ -1,0 +1,65 @@
+name: distill-transformer-v2
+method: distill_transformer
+description: Transformer (517K params) distillation on diverse-v1 dataset (110K states
+  from uber-decks-v1). 400 epochs cosine LR. Tests whether combining best-known value-head
+  arch (transformer) with best-known dataset (diverse) compounds.
+created: ''
+parent: null
+parent_checkpoint: null
+network_type: betaone
+architecture:
+  arch_version: 2
+  base_state_dim: 156
+  hidden_dim: 128
+  action_hidden: 64
+  hand_proj_dim: 32
+  card_embed_dim: 16
+  card_stats_dim: 28
+  relic_dim: 27
+  hand_agg_dim: 3
+  action_dim: 35
+  max_hand: 10
+  max_actions: 30
+  value_head_layers: 3
+  trunk_layers: 2
+  trunk_hidden: 128
+  policy_head_type: dot_product
+  policy_mlp_hidden: 64
+  use_distributional_value: true
+  c51_atoms: 51
+  c51_v_min: -1.2
+  c51_v_max: 1.5
+  transformer_trunk: true
+  transformer_layers: 3
+  transformer_heads: 4
+  transformer_ffn: 256
+  transformer_dropout: 0.1
+  num_cards: 578
+  total_params: 517651
+  state_dim: 446
+  trunk_input: 188
+training:
+  epochs: 400
+  lr: 0.0003
+  batch_size: 256
+  lr_schedule: cosine_warmup
+data:
+  mode: distillation
+  teacher: reanalyse-v3 g88
+  dataset: distill-c51-diverse-v1/dataset.pkl
+checkpoints:
+  save_every: 25
+  cold_start: true
+concluded_gen: 62
+concluded_reason: "Transformer (517K params) + uber-decks-v1 diverse dataset distillation.\
+  \ Killed at epoch 68/200 after 40 epochs showed consistent negative rescue rate.\
+  \ P-Eval peaked at 108 (e62) but within noise (mean 101, std 3). V-Eval peaked at\
+  \ 103. Val c51 loss still declining (1.75 at e40 -> 1.60 at e68, vs transformer-v1\
+  \ final 1.39) \u2014 value head undertrained when killed. Key finding: transformer\
+  \ + diverse combination produces -10 to -20% MCTS rescue consistently (40 eval points,\
+  \ never positive), while diverse-v1 non-transformer had +19% and transformer-v1\
+  \ on lean-decks had +15%. The arch+data combo overfits training distribution \u2014\
+  \ value head 'confidently wrong' on unseen states, breaking more MCTS picks than\
+  \ rescuing. Redirected compute to DAgger (task bku3l1t3q) which addresses distribution-shift\
+  \ root cause directly."
+concluded_at: '2026-04-22T23:51:00+00:00'

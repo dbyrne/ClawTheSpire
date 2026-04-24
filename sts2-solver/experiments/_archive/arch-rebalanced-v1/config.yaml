@@ -1,0 +1,65 @@
+name: arch-rebalanced-v1
+method: mcts_selfplay
+description: MCTS self-play training
+created: '2026-04-21T12:03:12+00:00'
+parent: null
+parent_checkpoint: null
+network_type: betaone
+architecture:
+  arch_version: 2
+  base_state_dim: 156
+  hidden_dim: 128
+  action_hidden: 64
+  hand_proj_dim: 32
+  card_embed_dim: 16
+  card_stats_dim: 28
+  relic_dim: 27
+  hand_agg_dim: 3
+  action_dim: 35
+  max_hand: 10
+  max_actions: 30
+  value_head_layers: 0
+  trunk_layers: 3
+  trunk_hidden: 192
+  policy_head_type: mlp
+  policy_mlp_hidden: 64
+  num_cards: 578
+  total_params: 146522
+  state_dim: 446
+  trunk_input: 188
+training:
+  generations: 100
+  combats_per_gen: 256
+  lr: 0.0003
+  batch_size: 512
+  mcts:
+    num_sims: 1000
+    temperature: 1.0
+    replay_capacity: 50000
+    train_epochs: 4
+    value_coef: 1.0
+    c_puct: 1.5
+    pomcp: true
+    mcts_bootstrap: true
+    turn_boundary_eval: true
+    q_target_mix: 0.5
+    q_target_temp: 0.5
+    eval_every: 1
+    grad_conflict_sample_every: 10
+    reanalyse_every: 2
+    reanalyse_frac: 0.75
+    reanalyse_min_gen: 10
+  lr_schedule: cosine_warmup
+data:
+  mode: encounter_set
+  encounter_set: lean-decks-v1
+checkpoints:
+  save_every: 1
+  keep_best: true
+  cold_start: true
+concluded_gen: 44
+concluded_reason: Peak V-Eval (108/121) with highest narrow-set training WR (71.1%)
+  and tied-best conditional_value (15/20). Gen 47 matches eval at 208 vs 207 (1 scenario,
+  noise-range) but 5.5pt lower WR. Draw-category echo chamber (5-6/10 ECHO) never
+  resolved across any gen; V regressed to 98 by gen 70 with cond_v dropping 15->11.
+concluded_at: '2026-04-21T20:03:58+00:00'

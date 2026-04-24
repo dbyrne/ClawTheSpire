@@ -1,0 +1,1 @@
+{"suite": "es-02b5c202d164", "mode": "policy", "mcts_sims": 0, "pw_k": null, "c_puct": null, "pomcp": null, "turn_boundary_eval": null, "timestamp": 1776896137.5398328, "checkpoint": "gen_latest", "gen": 200, "win_rate": 0.5408, "wins": 5111, "games": 9450, "ci95_lo": 0.5308, "ci95_hi": 0.5509}

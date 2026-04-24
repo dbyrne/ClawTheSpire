@@ -1,0 +1,68 @@
+name: trunk-baseline-v2
+method: mcts_selfplay
+description: "trunk-baseline-v1 continuation (warm-start from gen 60 -> target gen\
+  \ 100).\n\nTests the \"maybe 60 gens is too short\" hypothesis surfaced 2026-04-19:\n\
+  trunk-baseline-v1 P-Eval trajectory on the expanded 125-scenario suite\nwas 89 ->\
+  \ 91 -> 94 -> 96 -> 101 -> 102 across gens 10..60 \u2014 still\nclimbing at the\
+  \ 60-gen cutoff rather than plateauing. Extending to 100\ngens should reveal whether\
+  \ there's 5-10 more scenarios of policy\nimprovement on the table for this architecture.\n\
+  \nSame architecture, config, and encounter set as trunk-baseline-v1.\nWarm-start\
+  \ from trunk-baseline-v1 gen 60 checkpoint \u2014 continuation,\nnot a fresh run.\
+  \ All training + inference knobs identical to v1.\nThe expanded 125-scenario P-Eval\
+  \ suite will auto-run every 10 gens\nvia eval_every=10.\n"
+created: '2026-04-19T13:58:22+00:00'
+parent: trunk-baseline-v1
+parent_checkpoint: gen60
+network_type: betaone
+architecture:
+  arch_version: 2
+  base_state_dim: 156
+  hidden_dim: 128
+  action_hidden: 64
+  hand_proj_dim: 32
+  card_embed_dim: 16
+  card_stats_dim: 28
+  relic_dim: 27
+  hand_agg_dim: 3
+  action_dim: 35
+  max_hand: 10
+  max_actions: 30
+  value_head_layers: 3
+  hp_loss_head: false
+  num_cards: 578
+  total_params: 140761
+  state_dim: 446
+  trunk_input: 188
+training:
+  generations: 100
+  combats_per_gen: 256
+  lr: 0.0003
+  batch_size: 512
+  mcts:
+    num_sims: 1000
+    temperature: 1.0
+    replay_capacity: 50000
+    train_epochs: 4
+    value_coef: 1.0
+    c_puct: 1.5
+    pomcp: true
+    mcts_bootstrap: true
+    turn_boundary_eval: true
+    q_target_mix: 0.5
+    q_target_temp: 0.5
+    eval_every: 1
+    grad_conflict_sample_every: 10
+data:
+  mode: encounter_set
+  encounter_set: lean-decks-v1
+checkpoints:
+  save_every: 1
+  keep_best: true
+  cold_start: false
+concluded_gen: 80
+concluded_reason: Eval peak before drift. P=105/125, V=108/121 (highest combined sum).
+  Training past gen 80 showed monotonic V-Eval collapse (108->86 by gen 92) and combat-WR
+  decline (72.2->71.9 gen 80->90) diagnosed as stale-target drift pathology. Reanalyse-v1
+  experiment now forks from tb-v2 gen 60 to test MuZero-style target refresh as the
+  drift intervention.
+concluded_at: '2026-04-19T18:45:44+00:00'

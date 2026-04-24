@@ -1,0 +1,14 @@
+{
+  "gen": 50,
+  "win_rate": 0.41796875,
+  "policy_loss": 0.001192213105969131,
+  "value_loss": 0.7853083032369613,
+  "entropy": 0.9913105642795563,
+  "kl_from_ref": 0.15006193481385707,
+  "n_steps": 6268,
+  "n_combats": 256,
+  "gen_time": 10.134729623794556,
+  "timestamp": 1776910423.1812918,
+  "phase": "PPO",
+  "num_generations": 50
+}

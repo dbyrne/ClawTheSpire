@@ -1,1 +1,0 @@
-{"suite": "es-lean-decks-v1-ed5193d56cce", "mode": "mcts", "mcts_sims": 1000, "pw_k": 1.0, "c_puct": 1.5, "pomcp": true, "turn_boundary_eval": true, "timestamp": 1776526244.5206978, "checkpoint": "latest", "gen": 83, "win_rate": 0.7683, "wins": 726, "games": 945, "ci95_lo": 0.7403, "ci95_hi": 0.794}

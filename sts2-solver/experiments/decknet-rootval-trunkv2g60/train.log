@@ -1,0 +1,36 @@
+Training experiment: decknet-rootval-trunkv2g60 (network=decknet, method=decknet_selfplay)
+  Output: C:\coding-projects\STS2\sts2-solver\experiments\decknet-rootval-trunkv2g60
+DeckNet: 66,881 params, 578 card embeddings inherited (frozen) from BetaOne
+  Dropped 3 encounters with unknown monsters (kept 84).
+Gen   1 | wins  20/200 (10.0%) | avg_floor 10.2 | samples  904 | buf   904 | loss 0.2307 | 32.5s
+Gen   2 | wins  22/200 (11.0%) | avg_floor 10.6 | samples  942 | buf  1846 | loss 0.1902 | 32.4s
+Gen   3 | wins  22/200 (11.0%) | avg_floor 10.7 | samples  960 | buf  2806 | loss 0.1755 | 36.0s
+Gen   4 | wins  31/200 (15.5%) | avg_floor 11.4 | samples  994 | buf  3800 | loss 0.1618 | 38.8s
+Gen   5 | wins  27/200 (13.5%) | avg_floor 10.9 | samples  949 | buf  4749 | loss 0.1698 | 36.0s
+Gen   6 | wins  21/200 (10.5%) | avg_floor 10.4 | samples  938 | buf  5687 | loss 0.1719 | 36.5s
+Gen   7 | wins  17/200 (8.5%) | avg_floor 10.5 | samples  933 | buf  6620 | loss 0.1715 | 35.6s
+Gen   8 | wins  25/200 (12.5%) | avg_floor 10.9 | samples  948 | buf  7568 | loss 0.1742 | 36.8s
+Gen   9 | wins  16/200 (8.0%) | avg_floor 11.0 | samples  998 | buf  8566 | loss 0.1680 | 39.0s
+Gen  10 | wins  29/200 (14.5%) | avg_floor 11.2 | samples  983 | buf  9549 | loss 0.1672 | 42.7s
+Gen  11 | wins  26/200 (13.0%) | avg_floor 11.5 | samples  995 | buf 10544 | loss 0.1680 | 45.5s
+Gen  12 | wins  24/200 (12.0%) | avg_floor 10.7 | samples  947 | buf 11491 | loss 0.1694 | 47.9s
+Gen  13 | wins  24/200 (12.0%) | avg_floor 10.9 | samples  970 | buf 12461 | loss 0.1696 | 42.1s
+Gen  14 | wins  24/200 (12.0%) | avg_floor 11.2 | samples 1019 | buf 13480 | loss 0.1658 | 38.6s
+Gen  15 | wins  33/200 (16.5%) | avg_floor 11.2 | samples 1007 | buf 14487 | loss 0.1740 | 42.6s
+Gen  16 | wins  43/200 (21.5%) | avg_floor 11.6 | samples 1021 | buf 15508 | loss 0.1733 | 40.7s
+Gen  17 | wins  28/200 (14.0%) | avg_floor 10.8 | samples  970 | buf 16478 | loss 0.1718 | 42.7s
+Gen  18 | wins  32/200 (16.0%) | avg_floor 11.3 | samples 1001 | buf 17479 | loss 0.1743 | 39.5s
+Gen  19 | wins  17/200 (8.5%) | avg_floor 10.6 | samples  942 | buf 18421 | loss 0.1738 | 36.2s
+Gen  20 | wins  26/200 (13.0%) | avg_floor 10.8 | samples  989 | buf 19410 | loss 0.1659 | 59.7s
+Gen  21 | wins  30/200 (15.0%) | avg_floor 11.3 | samples  983 | buf 20393 | loss 0.1730 | 91.0s
+Gen  22 | wins  28/200 (14.0%) | avg_floor 11.2 | samples 1001 | buf 21394 | loss 0.1731 | 39.2s
+Gen  23 | wins  31/200 (15.5%) | avg_floor 11.1 | samples  990 | buf 22384 | loss 0.1705 | 38.9s
+Gen  24 | wins  33/200 (16.5%) | avg_floor 11.3 | samples  993 | buf 23377 | loss 0.1712 | 35.1s
+Gen  25 | wins  24/200 (12.0%) | avg_floor 10.8 | samples  964 | buf 24341 | loss 0.1761 | 40.7s
+Gen  26 | wins  26/200 (13.0%) | avg_floor 11.2 | samples  977 | buf 25318 | loss 0.1720 | 37.7s
+Gen  27 | wins  30/200 (15.0%) | avg_floor 10.6 | samples  933 | buf 26251 | loss 0.1719 | 37.9s
+Gen  28 | wins  15/200 (7.5%) | avg_floor 10.3 | samples  897 | buf 27148 | loss 0.1733 | 36.9s
+Gen  29 | wins  22/200 (11.0%) | avg_floor 10.8 | samples  943 | buf 28091 | loss 0.1751 | 35.9s
+Gen  30 | wins  23/200 (11.5%) | avg_floor 11.3 | samples 1017 | buf 29108 | loss 0.1747 | 42.4s
+
+Training complete after 30 generations.

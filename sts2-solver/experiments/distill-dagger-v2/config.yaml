@@ -1,0 +1,55 @@
+name: distill-dagger-v2
+method: distill_c51_dagger
+description: 'DAgger-v2: v3 g88 as sampler (not derived student), temp=1.1, noise=0.15
+  (low exploration). Dataset AUGMENTS distill-v1 (53K teacher-greedy states) with
+  27K v3-exploration states labeled by v3+MCTS-2000 = 80K merged. Tests whether classical
+  DAgger (stronger sampler + low exploration + dataset aggregation) breaks the ceiling
+  vs the aggressive DAgger-v1 which regressed -3.6pp.'
+network_type: betaone
+architecture:
+  arch_version: 2
+  base_state_dim: 156
+  hidden_dim: 128
+  action_hidden: 64
+  hand_proj_dim: 32
+  card_embed_dim: 16
+  card_stats_dim: 28
+  relic_dim: 27
+  hand_agg_dim: 3
+  action_dim: 35
+  max_hand: 10
+  max_actions: 30
+  value_head_layers: 3
+  trunk_layers: 2
+  trunk_hidden: 128
+  policy_head_type: dot_product
+  policy_mlp_hidden: 64
+  use_distributional_value: true
+  c51_atoms: 51
+  c51_v_min: -1.2
+  c51_v_max: 1.5
+  num_cards: 578
+  total_params: 144011
+  state_dim: 446
+  trunk_input: 188
+training:
+  epochs: 100
+  lr: 0.0003
+  batch_size: 512
+  lr_schedule: cosine_warmup
+data:
+  mode: dagger_augmented
+  sampler: reanalyse-v3 g88
+  teacher: reanalyse-v3 g88
+  dataset: distill-dagger-v2/dataset_merged.pkl
+  encounter_set: uber-decks-v1
+  n_states: 80362
+  n_student_states: 27101
+  n_teacher_states: 53261
+  sampler_sims: 1000
+  teacher_sims: 2000
+  temperature: 1.1
+  noise_frac: 0.15
+checkpoints:
+  save_every: 10
+  cold_start: true

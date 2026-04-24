@@ -1,0 +1,73 @@
+name: reanalyse-v25
+method: mcts_selfplay
+description: "reanalyse midpoint config: frac=0.75, every=3 (between v2 and v3).\n\
+  \nMulti-gen V-Eval (last 10 gens, binary suite, 2026-04-21):\n  v1 mean 95.4, v2\
+  \ mean 104.6, v3 mean 100.3\nMulti-gen P-Eval snapshot (binary suite):\n  v1 102,\
+  \ v2 99, v3 112\n\nv2 has best V-Eval; v3 has best P-Eval. Hypothesis: v3's aggressive\n\
+  refresh (every=2, 37.5%/gen) perturbs V-head targets faster than V\ncan stabilize.\
+  \ Midpoint (every=3, frac=0.75, 25%/gen) keeps cadence\nas the primary lever (per\
+  \ project_reanalyse_v3_ship) but relaxes\nchurn.\n\nFork point: tb-v2 g60 (same\
+  \ parent as v1/v2/v3 for clean comparison).\n\nShip criterion: V-Eval 10-gen mean\
+  \ >= 103 (near v2) AND P-Eval 10-gen\nmean >= 108 (near v3).\nKill criterion: V-Eval\
+  \ mean < 100 (worse than v3) OR P-Eval mean < 103\n(worse than v2).\n\nCompute cost:\
+  \ 25%/gen refresh = 12.5K states/gen vs v3's 18.75K.\nExpect ~11 min/gen, ~18 hours\
+  \ for 100 gens (vs v3's 27 hours).\n"
+created: '2026-04-21T16:37:11+00:00'
+parent: trunk-baseline-v2
+parent_checkpoint: gen60
+network_type: betaone
+architecture:
+  arch_version: 2
+  base_state_dim: 156
+  hidden_dim: 128
+  action_hidden: 64
+  hand_proj_dim: 32
+  card_embed_dim: 16
+  card_stats_dim: 28
+  relic_dim: 27
+  hand_agg_dim: 3
+  action_dim: 35
+  max_hand: 10
+  max_actions: 30
+  value_head_layers: 3
+  num_cards: 578
+  total_params: 140761
+  state_dim: 446
+  trunk_input: 188
+training:
+  generations: 100
+  combats_per_gen: 256
+  lr: 0.0003
+  batch_size: 512
+  mcts:
+    num_sims: 1000
+    temperature: 1.0
+    replay_capacity: 50000
+    train_epochs: 4
+    value_coef: 1.0
+    c_puct: 1.5
+    pomcp: true
+    mcts_bootstrap: true
+    turn_boundary_eval: true
+    q_target_mix: 0.5
+    q_target_temp: 0.5
+    eval_every: 1
+    grad_conflict_sample_every: 10
+    reanalyse_every: 3
+    reanalyse_frac: 0.75
+    reanalyse_min_gen: 10
+data:
+  mode: encounter_set
+  encounter_set: lean-decks-v1
+checkpoints:
+  save_every: 1
+  keep_best: true
+  cold_start: false
+concluded_gen: 20
+concluded_reason: "Peak sum 212 (P 108/127, V 104/121) \u2014 only v25 gen that satisfies\
+  \ ship criteria as single-gen reading (P>=108 AND V>=103). Training killed at gen\
+  \ 44 after kill criterion tripped: P-Eval last-3 mean 102.0 vs kill threshold 103;\
+  \ monotonic P decline 110->100 over gens 21-44 while V held stable ~103. Midpoint\
+  \ reanalyse cadence preserved V-head but starved P-head of fresh targets \u2014\
+  \ fails v25's hypothesis that cadence=3 (vs v3's cadence=2) would preserve both."
+concluded_at: '2026-04-21T20:43:03+00:00'

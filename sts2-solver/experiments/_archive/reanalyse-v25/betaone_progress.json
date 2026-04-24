@@ -1,0 +1,21 @@
+{
+  "gen": 44,
+  "win_rate": 0.6797,
+  "avg_hp": 9.9,
+  "steps": 7601,
+  "buffer_size": 49462,
+  "episodes": 256,
+  "encounter_set": "lean-decks-v1",
+  "policy_loss": 0.6238,
+  "value_loss": 0.02687,
+  "num_sims": 1000,
+  "gen_time": 322.15,
+  "timestamp": 1776803948.5615532,
+  "grad_cos_pv_mean": 0.0214,
+  "grad_cos_pv_std": 0.056,
+  "grad_norm_p_mean": 0.1429,
+  "grad_norm_v_mean": 0.4603,
+  "grad_conflict_samples": 39,
+  "num_generations": 100,
+  "best_win_rate": 0.7266
+}

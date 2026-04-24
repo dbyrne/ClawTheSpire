@@ -1,0 +1,12 @@
+encounter_set_id: es-14f121d8dfab
+name: mixed-decks-v1
+encounter_count: 189
+avg_hp: 30.5
+source:
+  description: 'Mixed sampling test: 70% lean-decks-v1 + 30% lean-decks-v2 (gap-fillers
+    + HP x0.81 versions). Tests whether mixed-distribution sampling avoids the warm-start
+    signal-dilution failure that killed reanalyse-v6 (uber-decks v4/v5 also).'
+  based_on: lean-decks-v1 + lean-decks-v2
+  modifications: 'Mixed sampled at 70/30 ratio: 132 from v1 + 57 from v2. Total=189
+    matches v1 size to preserve per-encounter signal density for v3 g88 warm-start.'
+  rng_seed: 20260422

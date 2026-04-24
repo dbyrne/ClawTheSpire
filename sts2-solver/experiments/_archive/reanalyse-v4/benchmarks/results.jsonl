@@ -1,0 +1,1 @@
+{"suite": "es-uber-decks-v1-8bda755587aa", "mode": "mcts", "mcts_sims": 1000, "pw_k": 1.0, "c_puct": 1.5, "pomcp": true, "turn_boundary_eval": true, "timestamp": 1776704754.6016047, "checkpoint": "gen103", "gen": 103, "win_rate": 0.6732, "wins": 2676, "games": 3975, "ci95_lo": 0.6585, "ci95_hi": 0.6876}

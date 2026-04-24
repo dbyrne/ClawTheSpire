@@ -1,0 +1,55 @@
+name: distill-transformer-mlp-v1
+method: distill_transformer_mlp
+description: 'Iter 1 of PPO-v2 plan: distill v3+MCTS-2000 targets into transformer
+  trunk + MLP policy head (256 hidden). 159K merged states (diverse-v1 110K + DAgger-v1
+  48K). Gets a pretrained transformer+MLP student at roughly v3 parity, to warm-start
+  PPO fine-tuning in iter 2. PPO not bounded by imitation ceiling can then push past
+  v3.'
+network_type: betaone
+architecture:
+  arch_version: 2
+  base_state_dim: 156
+  hidden_dim: 128
+  action_hidden: 64
+  hand_proj_dim: 32
+  card_embed_dim: 16
+  card_stats_dim: 28
+  relic_dim: 27
+  hand_agg_dim: 3
+  action_dim: 35
+  max_hand: 10
+  max_actions: 30
+  value_head_layers: 3
+  trunk_layers: 2
+  trunk_hidden: 128
+  policy_head_type: mlp
+  policy_mlp_hidden: 256
+  use_distributional_value: true
+  c51_atoms: 51
+  c51_v_min: -1.2
+  c51_v_max: 1.5
+  transformer_trunk: true
+  transformer_layers: 3
+  transformer_heads: 4
+  transformer_ffn: 256
+  num_cards: 578
+  total_params: 552404
+  state_dim: 446
+  trunk_input: 188
+training:
+  epochs: 100
+  lr: 0.0003
+  batch_size: 256
+  lr_schedule: cosine_warmup
+data:
+  mode: distillation_merged
+  teacher: reanalyse-v3 g88
+  dataset: distill-transformer-mlp-v1/dataset_merged.pkl
+  encounter_set: uber-decks-v1
+  n_states: 159405
+  components:
+  - distill-c51-diverse-v1 (110K)
+  - distill-dagger-v1 (48K)
+checkpoints:
+  save_every: 5
+  cold_start: true

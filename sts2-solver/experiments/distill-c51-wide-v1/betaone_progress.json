@@ -1,0 +1,16 @@
+{
+  "gen": 200,
+  "win_rate": 0.0,
+  "avg_hp": 0.0,
+  "steps": 0,
+  "buffer_size": 0,
+  "episodes": 0,
+  "policy_loss": 1.252362477658975,
+  "value_loss": 1.2752402069592716,
+  "num_sims": 0,
+  "gen_time": 45.30949425697327,
+  "timestamp": 1776891057.7454193,
+  "num_generations": 200,
+  "best_win_rate": 0.5218920707702637,
+  "phase": "DONE"
+}
