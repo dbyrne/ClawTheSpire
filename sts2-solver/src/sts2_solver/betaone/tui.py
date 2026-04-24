@@ -19,8 +19,36 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from .experiment import MCTS_DEFAULTS
+from .experiment import MCTS_DEFAULTS, live_arch_stats
 from .paths import EXPERIMENTS_DIR
+
+
+def _live_arch_for_tui(arch: dict) -> dict:
+    """Compute fresh params/dims for one TUI row. Cached per (arch_kwargs-tuple)
+    to avoid rebuilding BetaOneNetwork once per experiment per refresh."""
+    if not arch or arch.get("network") == "decknet":
+        return arch
+    key = (
+        arch.get("num_cards"),
+        arch.get("value_head_layers"),
+        arch.get("trunk_layers"),
+        arch.get("trunk_hidden"),
+        arch.get("policy_head_type"),
+        arch.get("policy_mlp_hidden"),
+    )
+    cache = _live_arch_for_tui._cache  # type: ignore[attr-defined]
+    if key not in cache:
+        cache[key] = live_arch_stats(arch)
+    # Merge fresh derived fields into a fresh copy of `arch` so other fields
+    # (like parent, description) stay.
+    out = dict(arch)
+    for k in ("total_params", "state_dim", "trunk_input"):
+        if k in cache[key]:
+            out[k] = cache[key][k]
+    return out
+
+
+_live_arch_for_tui._cache = {}  # type: ignore[attr-defined]
 
 
 def _load_json(path: Path):
@@ -164,10 +192,16 @@ def _collect_experiments() -> list[dict]:
             config = yaml.safe_load(f)
 
         net_type = config.get("network_type", "betaone")
+        method = config.get("method", "")
+        is_distill = method.startswith("distill_")
         prog_name = "decknet_progress.json" if net_type == "decknet" else "betaone_progress.json"
         hist_name = "decknet_history.jsonl" if net_type == "decknet" else "betaone_history.jsonl"
         progress = _load_json(d / prog_name)
         history = _load_jsonl_all(d / hist_name, tail=60)
+        # Distillation experiments have a separate history format (epoch-indexed,
+        # per-batch train/val loss + top1). Load it in addition for the distill
+        # table rendering — no polling sync needed, read distill_history.jsonl directly.
+        distill_history = _load_jsonl_all(d / "distill_history.jsonl", tail=400) if is_distill else []
         eval_all = _load_jsonl_all(d / "benchmarks" / "eval.jsonl", tail=200)
         value_eval_all = _load_jsonl_all(d / "benchmarks" / "value_eval.jsonl", tail=200)
         mcts_eval_all = _load_jsonl_all(d / "benchmarks" / "mcts_eval.jsonl", tail=200)
@@ -197,14 +231,19 @@ def _collect_experiments() -> list[dict]:
             "name": config.get("name", d.name),
             "method": config.get("method", "?"),
             "network_type": config.get("network_type", "betaone"),
+            "is_distill": is_distill,
             "description": config.get("description", ""),
             "parent": config.get("parent"),
             "cold_start": config.get("checkpoints", {}).get("cold_start", False),
-            "arch": config.get("architecture", {}),
+            # Use live-computed arch stats (total_params / state_dim / trunk_input
+            # recomputed from current network module) so the TUI doesn't show
+            # stale values when module constants were bumped after experiment create.
+            "arch": _live_arch_for_tui(config.get("architecture", {})),
             "training": config.get("training", {}),
             "data": config.get("data", {}),
             "progress": progress,
             "history": history,
+            "distill_history": distill_history,
             "eval": eval_result,
             "value_eval": value_eval_result,
             "mcts_eval": mcts_eval_result,
@@ -278,9 +317,12 @@ def build_dashboard(experiments: list[dict]) -> Group:
     # Assign colors to experiments (global, so same color across tables)
     exp_color_map = {exp["name"]: _exp_color(i) for i, exp in enumerate(experiments)}
 
-    # Partition by network type
-    betaone_exps = [e for e in experiments if e.get("network_type", "betaone") != "decknet"]
+    # Partition: decknet / distillation / self-play betaone
     decknet_exps = [e for e in experiments if e.get("network_type") == "decknet"]
+    distill_exps = [e for e in experiments if e.get("is_distill")]
+    betaone_exps = [e for e in experiments
+                    if e.get("network_type", "betaone") != "decknet"
+                    and not e.get("is_distill")]
 
     # === BetaOne experiments table ===
     if betaone_exps:
@@ -416,6 +458,87 @@ def build_dashboard(experiments: list[dict]) -> Group:
                              style=row_style)
 
         left_parts.append(overview)
+
+    # === Distillation experiments table ===
+    # Supervised distillation (distill_c51, distill_transformer) have a
+    # different data model than self-play: epoch-indexed training, no WR
+    # during training, val top1 as the main progress signal. Separate table
+    # with appropriate columns.
+    if distill_exps:
+        dtable = Table(title="Distillation — Supervised Experiments",
+                       expand=True, show_lines=False)
+        dtable.add_column("Name", max_width=26)
+        dtable.add_column("Method", max_width=14)
+        dtable.add_column("Params", justify="right", max_width=8)
+        dtable.add_column("Dataset", max_width=22)
+        dtable.add_column("Status", max_width=10)
+        dtable.add_column("Epoch", justify="right", max_width=10)
+        dtable.add_column("Val top1", justify="right", max_width=8)
+        dtable.add_column("Pol Loss", justify="right", max_width=8)
+        dtable.add_column("C51 Loss", justify="right", max_width=8)
+        dtable.add_column("P-Eval", justify="right", max_width=7)
+        dtable.add_column("V-Eval", justify="right", max_width=7)
+        dtable.add_column("Search", justify="right", max_width=7)
+        dtable.add_column("Pol WR", justify="right", max_width=8)
+
+        for exp in distill_exps:
+            arch = exp["arch"]
+            dhist = exp.get("distill_history") or []
+            training = exp.get("training", {})
+            data_cfg = exp.get("data", {})
+            concluded = exp.get("concluded_gen")
+            ev = exp.get("eval"); vev = exp.get("value_eval"); mev = exp.get("mcts_eval")
+            bench = exp.get("benchmarks") or []
+
+            # Last epoch / last losses from distill_history
+            last = dhist[-1] if dhist else {}
+            epoch_now = last.get("epoch", concluded or 0)
+            epoch_total = training.get("epochs") or epoch_now
+            # Status: training if history modified in last 5 min AND no concluded_gen
+            import os as _os
+            hist_path = exp["dir"] / "distill_history.jsonl"
+            is_live = hist_path.exists() and (time.time() - hist_path.stat().st_mtime) < 300
+            if concluded is not None:
+                status = Text("done", style="bold cyan")
+            elif is_live:
+                status = Text("training", style="bold green")
+            else:
+                status = Text("stopped", style="dim")
+
+            val_top1 = last.get("val_top1")
+            val_pol = last.get("val_pol_loss")
+            val_c51 = last.get("val_val_loss")
+
+            params = arch.get("total_params")
+            params_str = f"{params//1000}K" if isinstance(params, int) else "-"
+            method = exp.get("method", "-").replace("distill_", "d_")
+            dataset_str = data_cfg.get("dataset") or data_cfg.get("teacher") or "-"
+            if len(dataset_str) > 22:
+                dataset_str = "…" + dataset_str[-21:]
+
+            epoch_str = f"{epoch_now}/{epoch_total}" if epoch_total else str(epoch_now)
+            top1_str = f"{val_top1:.1%}" if isinstance(val_top1, (int, float)) else "-"
+            pol_str = f"{val_pol:.3f}" if isinstance(val_pol, (int, float)) else "-"
+            c51_str = f"{val_c51:.3f}" if isinstance(val_c51, (int, float)) else "-"
+
+            p_str = f"{ev['passed']}/{ev['total']}" if ev and "passed" in ev else "-"
+            v_str = f"{vev['passed']}/{vev['total']}" if vev and "passed" in vev else "-"
+            search_str = f"{mev['rescue_rate']*100:+.0f}%" if mev and "rescue_rate" in mev else "-"
+            # Policy-only WR benchmark (if present)
+            pol_benches = [b for b in bench if b.get("mode") == "policy"]
+            if pol_benches:
+                wr = pol_benches[-1].get("win_rate", 0)
+                wr_str = f"{wr:.1%}"
+            else:
+                wr_str = "-"
+
+            color = exp_color_map.get(exp["name"], "white")
+            name_txt = Text(exp["name"], style=color)
+            dtable.add_row(name_txt, method, params_str, dataset_str, status,
+                           epoch_str, top1_str, pol_str, c51_str,
+                           p_str, v_str, search_str, wr_str)
+
+        left_parts.append(dtable)
 
     # === DeckNet experiments table ===
     if decknet_exps:

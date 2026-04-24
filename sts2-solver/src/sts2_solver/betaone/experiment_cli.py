@@ -495,10 +495,12 @@ def cmd_compare(args):
             suite_short = f"{p_total or '-'}/{v_total or '-'}"
         else:
             suite_short = "-"
+        from .experiment import live_arch_stats
+        _live_arch = live_arch_stats(config.architecture)
         rows.append({
             "name": name,
             "method": _format_method(config),
-            "params": config.architecture.get("total_params", "?"),
+            "params": _live_arch.get("total_params", "?"),
             "gen": gen_display,
             "wr": progress.get("win_rate", "?"),
             "best": progress.get("best_win_rate", "?"),
@@ -598,7 +600,8 @@ def cmd_info(args):
         print(f"  Forked from: {config.parent} ({config.parent_checkpoint})")
     print(f"  Dir: {exp.dir}")
 
-    arch = config.architecture
+    from .experiment import live_arch_stats
+    arch = live_arch_stats(config.architecture)
     params = arch.get("total_params", "?")
     params_str = f"{params:,}" if isinstance(params, int) else str(params)
     print(f"\nArchitecture (v{arch.get('arch_version', '?')}, {params_str} params):")

@@ -125,7 +125,9 @@ def network_stats(
         "total_params": net.param_count(),
         "num_cards": num_cards,
         "state_dim": STATE_DIM,
-        "trunk_input": BASE_STATE_DIM + HAND_PROJ_DIM,
+        # Match the actual trunk input: base state + hand_pooled + 3x pile pooled.
+        # Must stay consistent with _build_trunk in BetaOneNetwork.
+        "trunk_input": BASE_STATE_DIM + HAND_PROJ_DIM + 3 * PILE_POOL_DIM,
         "trunk_hidden": net.trunk_hidden,
         "trunk_layers": net.trunk_layers,
         "policy_hidden": ACTION_HIDDEN,

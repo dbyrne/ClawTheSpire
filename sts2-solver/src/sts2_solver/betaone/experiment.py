@@ -1238,6 +1238,39 @@ class Experiment:
 # Helpers
 # ---------------------------------------------------------------------------
 
+def live_arch_stats(arch: dict) -> dict:
+    """Return a copy of `arch` with total_params / state_dim / trunk_input
+    recomputed from the CURRENT network module (not the stored values).
+
+    Derived fields in config.yaml (total_params, state_dim, trunk_input)
+    are written at create/fork time from the module constants THEN. If the
+    module is later edited (e.g. HAND_PROJ_DIM bumped) those stored values
+    go stale. Callers that want accurate display should use this helper.
+
+    Falls back to the stored arch dict verbatim for decknet or if the
+    betaone network module fails to import / construct.
+    """
+    out = dict(arch)
+    if out.get("network") == "decknet":
+        return out
+    try:
+        from .network import network_stats
+        stats = network_stats(
+            num_cards=int(out.get("num_cards", 120)),
+            value_head_layers=int(out.get("value_head_layers", 1)),
+            trunk_layers=int(out.get("trunk_layers", 2)),
+            trunk_hidden=int(out.get("trunk_hidden", 128)),
+            policy_head_type=str(out.get("policy_head_type", "dot_product")),
+            policy_mlp_hidden=int(out.get("policy_mlp_hidden", 64)),
+        )
+        out["total_params"] = stats["total_params"]
+        out["state_dim"] = stats["state_dim"]
+        out["trunk_input"] = stats["trunk_input"]
+    except Exception:
+        pass  # Fall back to stored values on any error.
+    return out
+
+
 def _apply_overrides(config: ExperimentConfig, overrides: dict) -> None:
     """Apply dot-notation overrides like {'training.lr': 1e-3}."""
     for key, value in overrides.items():
