@@ -36,8 +36,11 @@ ACTION_DIM = 35
 MAX_ACTIONS = 30
 HIDDEN_DIM = 128
 ACTION_HIDDEN = 64
-HAND_PROJ_DIM = 32
-CARD_EMBED_DIM = 16
+# encoder-v2: widened to match the new encoder's leverage points.
+# card_embed is now used across hand + action + 3 pile-pool vectors; at 16 wide
+# the pile pooling averages out card identity. hand_proj scales with embed.
+HAND_PROJ_DIM = 192
+CARD_EMBED_DIM = 64
 # Pile pooling: sum card embeddings per pile, divide by (count+eps) so the
 # magnitude stays bounded regardless of pile size. Each pool vector is
 # CARD_EMBED_DIM (shared embedding with hand/action).
