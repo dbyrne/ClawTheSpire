@@ -71,6 +71,15 @@ export interface ExperimentSummary {
     gen?: number;
     score?: number;
   } | null;
+  win_rate_delta: number | null;
+  policy_loss_delta: number | null;
+  value_loss_delta: number | null;
+  kl_mcts_net_delta: number | null;
+  top1_agree_delta: number | null;
+  value_corr_delta: number | null;
+  eval_delta: number | null;
+  value_eval_delta: number | null;
+  rescue_delta: number | null;
 }
 
 export interface BenchmarkRow {

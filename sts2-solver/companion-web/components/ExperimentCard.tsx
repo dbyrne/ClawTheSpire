@@ -6,17 +6,49 @@ function Metric({
   label,
   value,
   hint,
+  delta,
+  deltaFormat,
+  higherIsBetter = true,
 }: {
   label: string;
   value: React.ReactNode;
   hint?: string;
+  delta?: number | null;
+  deltaFormat?: (d: number) => string;
+  higherIsBetter?: boolean;
 }) {
+  let deltaEl: React.ReactNode = null;
+  if (delta != null && deltaFormat) {
+    const eps = 1e-9;
+    const dir =
+      delta > eps ? 1 : delta < -eps ? -1 : 0;
+    const color =
+      dir === 0
+        ? "text-muted"
+        : higherIsBetter
+          ? dir > 0
+            ? "text-good"
+            : "text-bad"
+          : dir > 0
+            ? "text-bad"
+            : "text-good";
+    const sign = delta >= 0 ? "+" : "";
+    const arrow = dir > 0 ? "↑" : dir < 0 ? "↓" : "·";
+    deltaEl = (
+      <span className={`${color} text-[10px] mono ml-1`}>
+        {arrow} {sign}{deltaFormat(delta)}
+      </span>
+    );
+  }
   return (
     <div className="flex flex-col">
       <div className="text-[10px] uppercase tracking-wide text-muted">
         {label}
       </div>
-      <div className="mono text-sm text-text">{value}</div>
+      <div className="mono text-sm text-text flex items-baseline">
+        <span>{value}</span>
+        {deltaEl}
+      </div>
       {hint && (
         <div className="text-[10px] text-muted mono">{hint}</div>
       )}
@@ -121,6 +153,8 @@ export default function ExperimentCard({ exp }: { exp: ExperimentSummary }) {
                 }`
               : undefined
           }
+          delta={exp.eval_delta}
+          deltaFormat={(d) => `${(d * 100).toFixed(1)}%`}
         />
         <Metric
           label="V-Eval"
@@ -138,6 +172,8 @@ export default function ExperimentCard({ exp }: { exp: ExperimentSummary }) {
                 }`
               : undefined
           }
+          delta={exp.value_eval_delta}
+          deltaFormat={(d) => `${(d * 100).toFixed(1)}%`}
         />
         <Metric
           label="rescue"
@@ -151,6 +187,8 @@ export default function ExperimentCard({ exp }: { exp: ExperimentSummary }) {
               ? `CL${mev.clean} EC${mev.echo ?? 0} FX${mev.fixed ?? 0}`
               : undefined
           }
+          delta={exp.rescue_delta}
+          deltaFormat={(d) => `${(d * 100).toFixed(0)}%`}
         />
         <Metric
           label="WR (last 10)"
@@ -164,6 +202,8 @@ export default function ExperimentCard({ exp }: { exp: ExperimentSummary }) {
                 }`
               : undefined
           }
+          delta={exp.win_rate_delta}
+          deltaFormat={(d) => `${(d * 100).toFixed(1)}%`}
         />
       </div>
 
@@ -171,10 +211,16 @@ export default function ExperimentCard({ exp }: { exp: ExperimentSummary }) {
         <Metric
           label="P-loss"
           value={formatNum(exp.policy_loss_last10, 3)}
+          delta={exp.policy_loss_delta}
+          deltaFormat={(d) => d.toFixed(3)}
+          higherIsBetter={false}
         />
         <Metric
           label="V-loss"
           value={formatNum(exp.value_loss_last10, 3)}
+          delta={exp.value_loss_delta}
+          deltaFormat={(d) => d.toFixed(3)}
+          higherIsBetter={false}
         />
         <Metric
           label="gen-time"
@@ -194,15 +240,23 @@ export default function ExperimentCard({ exp }: { exp: ExperimentSummary }) {
             label="KL(mcts‖net)"
             value={formatNum(exp.kl_mcts_net_last10, 3)}
             hint="echo if →0"
+            delta={exp.kl_mcts_net_delta}
+            deltaFormat={(d) => d.toFixed(3)}
+            higherIsBetter={false}
           />
           <Metric
             label="top1-agree"
             value={formatNum(exp.top1_agree_last10, 2)}
             hint="echo if ≥.90"
+            delta={exp.top1_agree_delta}
+            deltaFormat={(d) => `${(d * 100).toFixed(1)}%`}
+            higherIsBetter={false}
           />
           <Metric
             label="V corr"
             value={formatNum(exp.value_corr_last10, 2)}
+            delta={exp.value_corr_delta}
+            deltaFormat={(d) => d.toFixed(3)}
           />
         </div>
       )}

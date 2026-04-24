@@ -146,12 +146,33 @@ def list_experiments(*, include_kinds: tuple[str, ...] | None = None) -> list[di
             vals = [r.get(key) for r in window if r.get(key) is not None]
             return statistics.mean(vals) if vals else None
 
+        def _window_delta(key: str, n: int = 10) -> float | None:
+            """Mean(last n) - mean(prior n). None until history >= 2n.
+
+            Mirrors TUI's 'window' delta-mode — smooths per-gen noise and
+            shows real trend direction.
+            """
+            vals = [
+                r.get(key) for r in history if r.get(key) is not None
+            ]
+            if len(vals) < 2 * n:
+                return None
+            cur = statistics.mean(vals[-n:])
+            prev = statistics.mean(vals[-2 * n : -n])
+            return cur - prev
+
         wr_last10 = _mean("win_rate")
         v_loss_last10 = _mean("value_loss")
         p_loss_last10 = _mean("policy_loss")
         kl_last10 = _mean("kl_mcts_net_mean")
         top1_last10 = _mean("top1_agree_mean")
         vcorr_last10 = _mean("value_corr_mean")
+        wr_delta = _window_delta("win_rate")
+        p_loss_delta = _window_delta("policy_loss")
+        v_loss_delta = _window_delta("value_loss")
+        kl_delta = _window_delta("kl_mcts_net_mean")
+        top1_delta = _window_delta("top1_agree_mean")
+        vcorr_delta = _window_delta("value_corr_mean")
 
         # Peak WR + which gen hit it. Prefer the row with strict max
         # win_rate; ties broken by later gen (more mature checkpoint).
@@ -202,6 +223,16 @@ def list_experiments(*, include_kinds: tuple[str, ...] | None = None) -> list[di
         peak_eval = _peak_eval(evals)
         peak_value_eval = _peak_eval(value_evals)
 
+        def _eval_delta(rows: list[dict], key: str, n: int = 5) -> float | None:
+            vals = [r.get(key) for r in rows if r.get(key) is not None]
+            if len(vals) < 2 * n:
+                return None
+            return statistics.mean(vals[-n:]) - statistics.mean(vals[-2 * n : -n])
+
+        eval_delta = _eval_delta(evals, "score")
+        value_eval_delta = _eval_delta(value_evals, "score")
+        rescue_delta = _eval_delta(mcts_evals, "rescue_rate")
+
         out.append({
             "name": name,
             "kind": _kind(cfg),
@@ -235,6 +266,15 @@ def list_experiments(*, include_kinds: tuple[str, ...] | None = None) -> list[di
             "latest_mcts_eval": latest_mcts_eval,
             "peak_eval": peak_eval,
             "peak_value_eval": peak_value_eval,
+            "win_rate_delta": wr_delta,
+            "policy_loss_delta": p_loss_delta,
+            "value_loss_delta": v_loss_delta,
+            "kl_mcts_net_delta": kl_delta,
+            "top1_agree_delta": top1_delta,
+            "value_corr_delta": vcorr_delta,
+            "eval_delta": eval_delta,
+            "value_eval_delta": value_eval_delta,
+            "rescue_delta": rescue_delta,
         })
 
     # Sort: running first, then stalled, then stopped/finalized, then alpha
