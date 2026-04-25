@@ -59,6 +59,22 @@ sts2-experiment workers launch encoder-v2-cpuct3-dist-pilot `
   --region us-west-2
 ```
 
+Check the running cost estimate:
+
+```powershell
+sts2-experiment workers cost encoder-v2-cpuct3-dist-pilot `
+  --config .\worker-capacity.json `
+  --region us-east-1 `
+  --region us-west-2
+```
+
+`workers cost` discovers EC2 instances tagged with `STS2Experiment=<name>`,
+uses current Spot pricing or explicit `hourly_prices` from the capacity config,
+and appends each estimate to `experiments/<name>/worker_costs.jsonl`. Prior
+ledger entries are kept in the total so terminated instances do not disappear
+after EC2 stops returning them. This is a live estimate; AWS Cost Explorer and
+the final bill can differ and usually lag.
+
 `--max-workers` caps worker containers, not instances. For shard-size-1 runs,
 keep `--threads-per-worker 1 --worker-count auto`; the planner will set the
 last instance's `WORKER_COUNT` lower when needed so the launch does not exceed
@@ -73,6 +89,13 @@ Example capacity config:
   "security_group_id": "sg-0ab2f9f94bdd40c0d",
   "iam_instance_profile": "sts2-ec2-worker-profile",
   "instance_types": ["c7i.4xlarge", "c7a.4xlarge", "m7i.4xlarge"],
+  "hourly_prices": {
+    "spot": {
+      "us-east-1": {
+        "c7i.4xlarge": 0.1234
+      }
+    }
+  },
   "regions": {
     "us-east-1": {
       "subnet_ids": ["subnet-0020689fdecb2b4f8"]

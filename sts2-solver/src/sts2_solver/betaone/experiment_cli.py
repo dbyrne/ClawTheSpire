@@ -1284,6 +1284,56 @@ def cmd_workers_user_data(args):
         print(script)
 
 
+def cmd_workers_cost(args):
+    from . import worker_orchestration as workers
+
+    try:
+        summary = workers.estimate_ec2_cost(
+            experiment=args.name,
+            config=workers.load_capacity_config(args.config),
+            regions=_csv_args(args.region),
+            default_hourly_price=args.default_hourly_price,
+            include_terminated=not args.active_only,
+            include_recorded=not args.no_recorded,
+        )
+    except (ValueError, subprocess.CalledProcessError) as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+    if not args.no_record:
+        workers.record_cost_snapshot(args.name, summary)
+
+    if args.json:
+        _print_json(summary)
+        return
+
+    print(f"Estimated EC2 worker cost for {args.name}:")
+    print(f"  total:       ${summary['estimated_total_cost']:.4f}")
+    print(f"  hourly burn: ${summary['estimated_hourly_burn']:.4f}/hr")
+    print(f"  instances:   {summary['instance_count']} ({summary['active_instance_count']} active)")
+    if summary["unknown_price_count"]:
+        print(f"  unknown prices: {summary['unknown_price_count']} instance(s)")
+    print()
+    print("  Instance                 Region      Type          State        Market     Hours    $/hr       Cost")
+    print("  -----------------------------------------------------------------------------------------------")
+    for item in summary["instances"]:
+        price = "?" if item["hourly_price"] is None else f"{item['hourly_price']:.4f}"
+        cost = "?" if item["cost"] is None else f"{item['cost']:.4f}"
+        print(
+            f"  {item['instance_id']:<24} "
+            f"{item['region']:<11} "
+            f"{item['instance_type']:<13} "
+            f"{item['state']:<12} "
+            f"{item['market']:<9} "
+            f"{item['hours']:>7.2f} "
+            f"{price:>8} "
+            f"{cost:>9}"
+        )
+    if not args.no_record:
+        print()
+        print("  Snapshot recorded in the experiment cost ledger.")
+
+
 def cmd_coordinator_start(args):
     from . import worker_orchestration as workers
 
@@ -1705,6 +1755,23 @@ def main():
     wu.add_argument("--tailscale-auth-key-env", default="TAILSCALE_AUTH_KEY")
     wu.add_argument("--output", default=None)
     wu.set_defaults(func=cmd_workers_user_data)
+
+    wc = wsp.add_parser("cost", help="Estimate running EC2 worker cost")
+    wc.add_argument("name", help="Experiment name")
+    wc.add_argument("--config", default=None,
+                    help="JSON EC2 capacity config; may include hourly_prices overrides")
+    wc.add_argument("--region", action="append", default=[],
+                    help="AWS region to scan; repeat or comma-separate")
+    wc.add_argument("--default-hourly-price", type=float, default=None,
+                    help="Fallback hourly price when AWS/config pricing is unavailable")
+    wc.add_argument("--active-only", action="store_true",
+                    help="Only ask EC2 for active states, not terminated instances")
+    wc.add_argument("--no-recorded", action="store_true",
+                    help="Do not include prior ledger entries for instances no longer returned by EC2")
+    wc.add_argument("--no-record", action="store_true",
+                    help="Do not append this estimate to worker_costs.jsonl")
+    wc.add_argument("--json", action="store_true")
+    wc.set_defaults(func=cmd_workers_cost)
 
     # coordinator
     p = sub.add_parser("coordinator",

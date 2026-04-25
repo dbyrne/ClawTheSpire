@@ -14,6 +14,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,7 @@ from .experiment import Experiment
 
 WORKER_IMAGE_RECORD = "worker_images.jsonl"
 WORKER_COORDINATOR_RECORD = "coordinator.json"
+WORKER_COST_RECORD = "worker_costs.jsonl"
 
 DEFAULT_INSTANCE_TYPES = [
     "c7i.4xlarge",
@@ -90,6 +92,42 @@ class LaunchPlan:
     @property
     def planned_workers(self) -> int:
         return sum(unit.planned_worker_count for unit in self.units)
+
+
+@dataclass
+class InstanceCost:
+    instance_id: str
+    region: str
+    instance_type: str
+    state: str
+    market: str
+    launch_time: str | None
+    end_time: str | None
+    hours: float
+    hourly_price: float | None
+    cost: float | None
+    source: str
+    planned_workers: int | None = None
+    availability_zone: str | None = None
+    note: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "instance_id": self.instance_id,
+            "region": self.region,
+            "instance_type": self.instance_type,
+            "state": self.state,
+            "market": self.market,
+            "launch_time": self.launch_time,
+            "end_time": self.end_time,
+            "hours": self.hours,
+            "hourly_price": self.hourly_price,
+            "cost": self.cost,
+            "source": self.source,
+            "planned_workers": self.planned_workers,
+            "availability_zone": self.availability_zone,
+            "note": self.note,
+        }
 
 
 def _run(
@@ -697,7 +735,10 @@ def launch_ec2_workers(
                 f"{{Key=Name,Value=sts2-{plan.experiment}-worker}},"
                 f"{{Key=STS2Experiment,Value={plan.experiment}}},"
                 f"{{Key=STS2WorkerGroup,Value={worker_group}}},"
-                f"{{Key=STS2GitSha,Value={plan.git_sha}}}"
+                f"{{Key=STS2GitSha,Value={plan.git_sha}}},"
+                f"{{Key=STS2Market,Value={plan.market}}},"
+                f"{{Key=STS2PlannedWorkers,Value={unit.workers}}},"
+                "{Key=STS2LaunchedBy,Value=sts2-experiment}"
                 "]"
             ),
         ]
@@ -732,6 +773,331 @@ def launch_ec2_workers(
         except OSError:
             pass
     return responses
+
+
+def _parse_dt(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc)
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone(timezone.utc)
+    except ValueError:
+        pass
+    for fmt in ("%Y-%m-%d %H:%M:%S %Z", "%Y-%m-%d %H:%M:%S GMT"):
+        try:
+            return datetime.strptime(text, fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return None
+
+
+def _iso(dt: datetime | None) -> str | None:
+    if dt is None:
+        return None
+    return dt.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _state_transition_time(instance: dict[str, Any]) -> datetime | None:
+    reason = str(instance.get("StateTransitionReason") or "")
+    match = re.search(r"\((\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) GMT\)", reason)
+    if not match:
+        return None
+    return _parse_dt(match.group(1) + " GMT")
+
+
+def _tags(instance: dict[str, Any]) -> dict[str, str]:
+    tags = {}
+    for item in instance.get("Tags") or []:
+        key = item.get("Key")
+        value = item.get("Value")
+        if key is not None and value is not None:
+            tags[str(key)] = str(value)
+    return tags
+
+
+def _planned_workers(tags: dict[str, str]) -> int | None:
+    value = tags.get("STS2PlannedWorkers")
+    if not value:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def _market(instance: dict[str, Any], tags: dict[str, str]) -> str:
+    lifecycle = str(instance.get("InstanceLifecycle") or tags.get("STS2Market") or "").lower()
+    return "spot" if lifecycle == "spot" else "on-demand"
+
+
+def _configured_hourly_price(
+    config: dict[str, Any],
+    *,
+    region: str,
+    instance_type: str,
+    market: str,
+) -> float | None:
+    pricing = config.get("hourly_prices") or config.get("prices") or {}
+    candidates: list[Any] = []
+    if isinstance(pricing, dict):
+        candidates.extend([
+            pricing.get(market, {}).get(region, {}).get(instance_type)
+            if isinstance(pricing.get(market), dict) and isinstance(pricing.get(market, {}).get(region), dict)
+            else None,
+            pricing.get(market, {}).get(instance_type)
+            if isinstance(pricing.get(market), dict)
+            else None,
+            pricing.get(region, {}).get(instance_type)
+            if isinstance(pricing.get(region), dict)
+            else None,
+            pricing.get(instance_type),
+        ])
+    for value in candidates:
+        if value is None:
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def latest_spot_hourly_price(
+    instance_type: str,
+    *,
+    region: str,
+    availability_zone: str | None = None,
+) -> float | None:
+    args = [
+        "ec2",
+        "describe-spot-price-history",
+        "--instance-types",
+        instance_type,
+        "--product-descriptions",
+        "Linux/UNIX",
+        "--max-results",
+        "1",
+    ]
+    if availability_zone:
+        args.extend(["--availability-zone", availability_zone])
+    try:
+        payload = aws_json(args, region=region)
+        history = payload.get("SpotPriceHistory") or []
+        if history:
+            return float(history[0]["SpotPrice"])
+    except Exception:
+        return None
+    return None
+
+
+def discover_ec2_worker_instances(
+    experiment: str,
+    *,
+    regions: list[str],
+    include_terminated: bool = True,
+) -> list[dict[str, Any]]:
+    states = ["pending", "running", "stopping", "stopped", "shutting-down"]
+    if include_terminated:
+        states.append("terminated")
+    instances: list[dict[str, Any]] = []
+    for region in regions:
+        payload = aws_json(
+            [
+                "ec2",
+                "describe-instances",
+                "--filters",
+                f"Name=tag:STS2Experiment,Values={experiment}",
+                f"Name=instance-state-name,Values={','.join(states)}",
+            ],
+            region=region,
+        )
+        for reservation in payload.get("Reservations") or []:
+            for instance in reservation.get("Instances") or []:
+                item = dict(instance)
+                item["_region"] = region
+                instances.append(item)
+    return instances
+
+
+def _regions_for_cost(config: dict[str, Any], regions: list[str] | None) -> list[str]:
+    selected = regions or list(_config_regions(config).keys()) or _split_csv([os.environ.get("STS2_EC2_REGIONS", "")])
+    return selected or ["us-east-1"]
+
+
+def _cost_record_path(experiment: str) -> Path:
+    return Experiment(experiment).dir / WORKER_COST_RECORD
+
+
+def load_cost_records(experiment: str) -> list[dict[str, Any]]:
+    path = _cost_record_path(experiment)
+    if not path.exists():
+        return []
+    records: list[dict[str, Any]] = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(payload, dict):
+                records.append(payload)
+    return records
+
+
+def _remembered_instance_costs(experiment: str) -> dict[str, InstanceCost]:
+    remembered: dict[str, InstanceCost] = {}
+    for record in load_cost_records(experiment):
+        for item in record.get("instances") or []:
+            if not isinstance(item, dict) or not item.get("instance_id"):
+                continue
+            cost = item.get("cost")
+            prev = remembered.get(str(item["instance_id"]))
+            if prev and prev.cost is not None and cost is not None and prev.cost >= float(cost):
+                continue
+            remembered[str(item["instance_id"])] = InstanceCost(
+                instance_id=str(item["instance_id"]),
+                region=str(item.get("region") or "unknown"),
+                instance_type=str(item.get("instance_type") or "unknown"),
+                state=str(item.get("state") or "not-returned"),
+                market=str(item.get("market") or "unknown"),
+                launch_time=item.get("launch_time"),
+                end_time=item.get("end_time"),
+                hours=float(item.get("hours") or 0.0),
+                hourly_price=float(item["hourly_price"]) if item.get("hourly_price") is not None else None,
+                cost=float(cost) if cost is not None else None,
+                source="recorded",
+                planned_workers=item.get("planned_workers"),
+                availability_zone=item.get("availability_zone"),
+                note="last recorded estimate; instance no longer returned by EC2",
+            )
+    return remembered
+
+
+def estimate_ec2_cost(
+    *,
+    experiment: str,
+    config: dict[str, Any] | None = None,
+    regions: list[str] | None = None,
+    now: datetime | None = None,
+    default_hourly_price: float | None = None,
+    include_terminated: bool = True,
+    include_recorded: bool = True,
+) -> dict[str, Any]:
+    config = config or {}
+    now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    selected_regions = _regions_for_cost(config, regions)
+    price_cache: dict[tuple[str, str, str, str | None], float | None] = {}
+    instances: list[InstanceCost] = []
+
+    for instance in discover_ec2_worker_instances(
+        experiment,
+        regions=selected_regions,
+        include_terminated=include_terminated,
+    ):
+        tags = _tags(instance)
+        region = str(instance.get("_region") or "unknown")
+        instance_type = str(instance.get("InstanceType") or "unknown")
+        state = str((instance.get("State") or {}).get("Name") or "unknown")
+        market = _market(instance, tags)
+        az = (instance.get("Placement") or {}).get("AvailabilityZone")
+        launch = _parse_dt(instance.get("LaunchTime"))
+        if state in {"terminated", "stopped"}:
+            end = _state_transition_time(instance) or now
+        else:
+            end = now
+        hours = max(0.0, (end - launch).total_seconds() / 3600.0) if launch else 0.0
+
+        price = _configured_hourly_price(
+            config,
+            region=region,
+            instance_type=instance_type,
+            market=market,
+        )
+        if price is None and market == "spot":
+            key = (region, instance_type, market, str(az) if az else None)
+            if key not in price_cache:
+                price_cache[key] = latest_spot_hourly_price(
+                    instance_type,
+                    region=region,
+                    availability_zone=str(az) if az else None,
+                )
+            price = price_cache[key]
+        if price is None:
+            price = default_hourly_price
+        cost = round(hours * price, 4) if price is not None else None
+        instances.append(
+            InstanceCost(
+                instance_id=str(instance.get("InstanceId") or "unknown"),
+                region=region,
+                instance_type=instance_type,
+                state=state,
+                market=market,
+                launch_time=_iso(launch),
+                end_time=_iso(end),
+                hours=round(hours, 4),
+                hourly_price=round(price, 6) if price is not None else None,
+                cost=cost,
+                source="ec2",
+                planned_workers=_planned_workers(tags),
+                availability_zone=str(az) if az else None,
+                note=None if price is not None else "no hourly price available",
+            )
+        )
+
+    if include_recorded:
+        remembered = _remembered_instance_costs(experiment)
+        for item in instances:
+            previous = remembered.get(item.instance_id)
+            if not previous:
+                continue
+            if previous.cost is not None and (item.cost is None or previous.cost > item.cost):
+                item.cost = previous.cost
+                item.note = "cost floored by prior ledger estimate"
+            if previous.hours > item.hours:
+                item.hours = previous.hours
+            if item.hourly_price is None and previous.hourly_price is not None:
+                item.hourly_price = previous.hourly_price
+        current_ids = {item.instance_id for item in instances}
+        for instance_id, item in remembered.items():
+            if instance_id not in current_ids:
+                instances.append(item)
+
+    known_costs = [item.cost for item in instances if item.cost is not None]
+    active_states = {"pending", "running", "stopping", "shutting-down"}
+    hourly_burn = sum(
+        item.hourly_price or 0.0
+        for item in instances
+        if item.state in active_states and item.hourly_price is not None
+    )
+    summary = {
+        "experiment": experiment,
+        "estimated_at": _iso(now),
+        "regions": selected_regions,
+        "estimated_total_cost": round(sum(known_costs), 4),
+        "estimated_hourly_burn": round(hourly_burn, 4),
+        "instances": [item.to_dict() for item in sorted(instances, key=lambda x: (x.region, x.instance_id))],
+        "instance_count": len(instances),
+        "active_instance_count": sum(1 for item in instances if item.state in active_states),
+        "unknown_price_count": sum(1 for item in instances if item.hourly_price is None),
+        "note": (
+            "Estimate uses current Spot prices or configured hourly prices; "
+            "actual AWS billing can differ and may lag."
+        ),
+    }
+    return summary
+
+
+def record_cost_snapshot(experiment: str, summary: dict[str, Any]) -> None:
+    path = _cost_record_path(experiment)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(summary, sort_keys=True) + "\n")
 
 
 def coordinator_record_path(experiment: str) -> Path:
