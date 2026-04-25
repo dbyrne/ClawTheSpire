@@ -20,6 +20,22 @@ so the image is the same artifact regardless of where it runs. Each container
 is stamped with `STS2_GIT_SHA` and tagged with `STS2_WORKER_GROUP` (e.g.
 `local`, `ec2`) so companion metrics can be sliced by source.
 
+For EC2 Spot capacity, prefer prebuilding one image per experiment commit and
+pulling it on boot. That avoids spending several minutes compiling Rust on
+instances that may be reclaimed.
+
+```powershell
+.\sts2-solver\scripts\build_worker_image.ps1 `
+  -ImageRepository 700694289572.dkr.ecr.us-east-1.amazonaws.com/sts2-worker `
+  -TagPrefix encoder-v2-cpuct3-dist-pilot `
+  -EcrLogin `
+  -Push
+```
+
+The image tag includes the full git SHA, and the image is labeled with the same
+SHA. EC2 workers use that label as `STS2_GIT_SHA`, so the distributed
+fingerprint check still rejects workers built from the wrong commit.
+
 ## Local Workers
 
 Run alongside the coordinator on the same machine. The launcher is
@@ -58,21 +74,25 @@ Launch path:
 2. Fill in `TAILSCALE_AUTH_KEY`.
 3. Set `COORDINATOR_URL`, `EXPERIMENT`, and `BRANCH` if the defaults are not the
    desired target.
-4. Paste the edited script as EC2 user data.
+4. For a prebuilt image, set `WORKER_IMAGE` to the pushed image URI. If the image
+   is in private ECR, the script logs in with the instance profile before
+   pulling. Set `AWS_REGION` if the instance metadata region is not the ECR
+   region.
+5. Paste the edited script as EC2 user data.
 
 The script installs Docker and Tailscale, joins the tailnet, clones the repo,
-builds `sts2-solver/Dockerfile.worker`, and launches one or more worker
-containers tagged `STS2_WORKER_GROUP=ec2`.
+then either pulls `WORKER_IMAGE` or builds `sts2-solver/Dockerfile.worker`, and
+launches one or more worker containers tagged `STS2_WORKER_GROUP=ec2`.
 
 Container logs are capped at three 50 MB json-file logs per worker.
 
 ## Sizing
 
-`THREADS_PER_WORKER` defaults to `8`, which matches the current shard size well.
-`WORKER_COUNT=auto` starts `floor(vCPU / THREADS_PER_WORKER)` containers. For a
-16-vCPU host this starts two containers at eight Rayon threads each. If the
-host has fewer vCPUs than `THREADS_PER_WORKER`, the launchers clamp
-`THREADS_PER_WORKER` down to the host vCPU count.
+`THREADS_PER_WORKER` defaults to `8`, which matches larger shard sizes well.
+For shard-size-1 distributed runs, use `THREADS_PER_WORKER=1` and
+`WORKER_COUNT=auto`, which starts one container per vCPU. If the host has fewer
+vCPUs than `THREADS_PER_WORKER`, the launchers clamp `THREADS_PER_WORKER` down
+to the host vCPU count.
 
 Tune the host shape by watching the companion app worker metrics:
 

@@ -12,6 +12,10 @@ LEASE_S="${LEASE_S:-240}"
 IDLE_SLEEP_S="${IDLE_SLEEP_S:-5}"
 THREADS_PER_WORKER="${THREADS_PER_WORKER:-8}"
 WORKER_COUNT="${WORKER_COUNT:-auto}"
+WORKER_IMAGE="${WORKER_IMAGE:-}"
+WORKER_GIT_SHA="${WORKER_GIT_SHA:-}"
+AWS_REGION="${AWS_REGION:-}"
+ECR_LOGIN_REGISTRY="${ECR_LOGIN_REGISTRY:-}"
 
 if [[ -z "$TAILSCALE_AUTH_KEY" ]]; then
   echo "TAILSCALE_AUTH_KEY is required" >&2
@@ -43,20 +47,46 @@ metadata() {
 
 INSTANCE_ID="$(metadata instance-id)"
 INSTANCE_TYPE="$(metadata instance-type)"
+if [[ -z "$AWS_REGION" ]]; then
+  AWS_REGION="$(metadata placement/region)"
+fi
 INSTANCE_ID="${INSTANCE_ID:-$(hostname)}"
 INSTANCE_TYPE="${INSTANCE_TYPE:-unknown}"
+AWS_REGION="${AWS_REGION:-us-east-1}"
 
 tailscale up \
   --auth-key="$TAILSCALE_AUTH_KEY" \
   --hostname="sts2-${INSTANCE_ID}" \
   --accept-routes=false
 
-rm -rf /opt/sts2
-git clone --depth 1 --branch "$BRANCH" "$REPO_URL" /opt/sts2
-cd /opt/sts2
-GIT_SHA="$(git rev-parse HEAD)"
+if [[ -n "$WORKER_IMAGE" ]]; then
+  if [[ "$WORKER_IMAGE" == *".dkr.ecr."*".amazonaws.com"* ]]; then
+    apt-get install -y --no-install-recommends awscli
+    registry="${ECR_LOGIN_REGISTRY:-${WORKER_IMAGE%%/*}}"
+    aws ecr get-login-password --region "$AWS_REGION" \
+      | docker login --username AWS --password-stdin "$registry"
+  fi
+  docker pull "$WORKER_IMAGE"
+  docker tag "$WORKER_IMAGE" sts2-worker:latest
+  GIT_SHA="${WORKER_GIT_SHA:-$(docker image inspect "$WORKER_IMAGE" \
+    --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' 2>/dev/null || true)}"
+  if [[ -z "$GIT_SHA" || "$GIT_SHA" == "<no value>" || "$GIT_SHA" == "unknown" ]]; then
+    echo "WORKER_GIT_SHA is required when WORKER_IMAGE has no revision label" >&2
+    exit 1
+  fi
+else
+  rm -rf /opt/sts2
+  git clone --depth 1 --branch "$BRANCH" "$REPO_URL" /opt/sts2
+  cd /opt/sts2
+  GIT_SHA="$(git rev-parse HEAD)"
 
-docker build -f sts2-solver/Dockerfile.worker -t sts2-worker:latest .
+  docker build \
+    --build-arg STS2_GIT_SHA="$GIT_SHA" \
+    --build-arg STS2_IMAGE_SOURCE="${REPO_URL}#${BRANCH}" \
+    -f sts2-solver/Dockerfile.worker \
+    -t sts2-worker:latest \
+    .
+fi
 
 vcpus="$(nproc)"
 if (( THREADS_PER_WORKER < 1 )); then
