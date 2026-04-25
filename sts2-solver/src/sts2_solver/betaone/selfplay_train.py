@@ -266,6 +266,82 @@ def compute_mixed_policy_target(
     return ((1.0 - mix) * visits_norm + mix * softmax_q).astype(np.float32)
 
 
+def _rollout_to_replay_generation(
+    rollout: dict,
+    *,
+    player_max_hp: int,
+    mcts_bootstrap: bool,
+    q_target_mix: float,
+    q_target_temp: float,
+) -> dict | None:
+    n_steps = int(rollout.get("total_steps") or 0)
+    if n_steps == 0:
+        return None
+
+    states = np.array(rollout["states"], dtype=np.float32).reshape(-1, STATE_DIM)
+    act_feat = np.array(rollout["action_features"], dtype=np.float32).reshape(
+        -1, MAX_ACTIONS * ACTION_DIM
+    )
+    act_masks = np.array(rollout["action_masks"]).reshape(-1, MAX_ACTIONS)
+    hand_ids = np.array(rollout["hand_card_ids"], dtype=np.int64).reshape(-1, MAX_HAND)
+    action_ids = np.array(rollout["action_card_ids"], dtype=np.int64).reshape(
+        -1, MAX_ACTIONS
+    )
+    from .network import MAX_DRAW_PILE, MAX_DISCARD_PILE, MAX_EXHAUST_PILE
+    draw_ids = np.array(rollout["draw_pile_ids"], dtype=np.int64).reshape(
+        -1, MAX_DRAW_PILE
+    )
+    discard_ids = np.array(rollout["discard_pile_ids"], dtype=np.int64).reshape(
+        -1, MAX_DISCARD_PILE
+    )
+    exhaust_ids = np.array(rollout["exhaust_pile_ids"], dtype=np.int64).reshape(
+        -1, MAX_EXHAUST_PILE
+    )
+    policies = np.array(rollout["policies"], dtype=np.float32).reshape(-1, MAX_ACTIONS)
+    visits = np.array(rollout["child_visits"], dtype=np.int64).reshape(-1, MAX_ACTIONS)
+    q_values = np.array(rollout["child_q_values"], dtype=np.float32).reshape(
+        -1, MAX_ACTIONS
+    )
+    combat_indices = np.array(rollout["combat_indices"], dtype=np.int64)
+    mcts_values = np.array(rollout["mcts_values"], dtype=np.float32)
+
+    T = len(states)
+    if mcts_bootstrap:
+        values = mcts_values
+    else:
+        values = np.zeros(T, dtype=np.float32)
+        for ci, outcome in enumerate(rollout["outcomes"]):
+            mask = combat_indices == ci
+            if outcome == "win":
+                hp_frac = max(rollout["final_hps"][ci], 0) / max(player_max_hp, 1)
+                values[mask] = 1.0 + 0.3 * hp_frac
+            else:
+                values[mask] = -1.0
+
+    if q_target_mix > 0:
+        policies = compute_mixed_policy_target(
+            visits, q_values, act_masks.astype(bool), q_target_mix, q_target_temp
+        )
+
+    state_jsons = list(rollout.get("state_jsons", []))
+    if len(state_jsons) != T:
+        state_jsons = (state_jsons + [""] * T)[:T]
+
+    return {
+        "states": states,
+        "act_feat": act_feat,
+        "act_masks": act_masks,
+        "hand_ids": hand_ids,
+        "action_ids": action_ids,
+        "draw_ids": draw_ids,
+        "discard_ids": discard_ids,
+        "exhaust_ids": exhaust_ids,
+        "policies": policies,
+        "values": values,
+        "state_jsons": state_jsons,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Training step
 # ---------------------------------------------------------------------------
@@ -588,6 +664,37 @@ def train(
     # Replay buffer
     replay = ReplayBuffer(max_steps=replay_capacity)
     print(f"Replay buffer: capacity {replay_capacity:,} steps")
+    if distributed_selfplay and start_gen > 1:
+        try:
+            from .distributed import gen_root, load_generation_rollouts, merge_rollouts, root_done
+
+            hydrated_gens = 0
+            hydrated_steps = 0
+            for prev_gen in range(1, start_gen):
+                root = gen_root(output_dir, prev_gen)
+                if not root_done(root):
+                    continue
+                rollout = merge_rollouts(load_generation_rollouts(root))
+                replay_gen = _rollout_to_replay_generation(
+                    rollout,
+                    player_max_hp=player_max_hp,
+                    mcts_bootstrap=mcts_bootstrap,
+                    q_target_mix=q_target_mix,
+                    q_target_temp=q_target_temp,
+                )
+                if replay_gen is None:
+                    continue
+                replay.add_generation(**replay_gen)
+                hydrated_gens += 1
+                hydrated_steps += len(replay_gen["states"])
+            if hydrated_gens:
+                print(
+                    f"Hydrated replay buffer from {hydrated_gens} distributed gens: "
+                    f"{len(replay):,}/{replay_capacity:,} active steps "
+                    f"({hydrated_steps:,} loaded before eviction)"
+                )
+        except Exception as e:
+            print(f"Replay hydration skipped: {e}")
 
     # Sim ramp resolution. If sims_ramp_end_gen>0, linearly interpolate from
     # initial_num_sims (or num_sims//2 fallback) up to num_sims across gen
