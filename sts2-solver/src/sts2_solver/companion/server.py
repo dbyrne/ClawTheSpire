@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
 
@@ -128,14 +129,37 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
             payload = {}
         worker_id = str(payload.get("worker_id") or "unknown-worker")
         experiment_name = payload.get("experiment")
+        worker_fingerprint = payload.get("fingerprint")
+        if not experiment_name:
+            raise HTTPException(status_code=400, detail="distributed workers must set --experiment")
+        if not isinstance(worker_fingerprint, dict):
+            raise HTTPException(status_code=400, detail="distributed workers must send a code fingerprint")
         lease_s = dist.normalize_lease_s(payload.get("lease_s"))
         claimed = dist.claim_next_job(
             exp_mod._all_experiment_sources(),
             worker_id=worker_id,
-            experiment=str(experiment_name) if experiment_name else None,
+            experiment=str(experiment_name),
+            worker_fingerprint=worker_fingerprint,
             lease_s=lease_s,
         )
         if not claimed:
+            exp_dir = _experiment_dir(str(experiment_name))
+            for root in dist.iter_experiment_roots(exp_dir):
+                shared = dist.read_json(root / "shared.json")
+                mismatches = dist.fingerprint_mismatches(
+                    shared.get("required_worker_fingerprint"),
+                    worker_fingerprint,
+                )
+                if mismatches:
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "message": "worker code fingerprint does not match experiment",
+                            "mismatches": mismatches,
+                            "expected": shared.get("required_worker_fingerprint"),
+                            "actual": worker_fingerprint,
+                        },
+                    )
             return {"job": None}
         return _claim_response(request, claimed)
 
@@ -204,6 +228,7 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
                 shard_id,
                 worker_id=worker_id,
                 lease_s=lease_s,
+                worker_fingerprint=payload.get("fingerprint"),
                 worker_metrics=payload.get("metrics") or payload.get("worker_metrics"),
             )
         except FileNotFoundError:
@@ -217,6 +242,16 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
         from ..betaone import distributed as dist
 
         worker_id = str(request.query_params.get("worker_id") or "unknown-worker")
+        fingerprint_header = request.headers.get("x-sts2-fingerprint")
+        if not fingerprint_header:
+            raise HTTPException(status_code=400, detail="distributed workers must send a code fingerprint")
+        if fingerprint_header:
+            try:
+                worker_fingerprint = json.loads(fingerprint_header)
+            except Exception:
+                raise HTTPException(status_code=400, detail="invalid worker code fingerprint")
+        if not isinstance(worker_fingerprint, dict):
+            raise HTTPException(status_code=400, detail="invalid worker code fingerprint")
         body = await request.body()
         if not body:
             raise HTTPException(status_code=400, detail="empty result body")
@@ -226,6 +261,7 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
                 shard_id,
                 worker_id=worker_id,
                 result_bytes=body,
+                worker_fingerprint=worker_fingerprint,
             )
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail=f"job '{shard_id}' not found")

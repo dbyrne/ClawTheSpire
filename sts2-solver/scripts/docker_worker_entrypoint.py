@@ -18,6 +18,7 @@ def _env(name: str, default: str | None = None) -> str:
 
 def main() -> None:
     coordinator = _env("COORDINATOR_URL")
+    experiment = _env("EXPERIMENT")
     worker_id = _env("WORKER_ID", platform.node() or "sts2-worker")
     args = [
         sys.executable,
@@ -25,6 +26,8 @@ def main() -> None:
         "sts2_solver.betaone.distributed_worker",
         "--coordinator",
         coordinator,
+        "--experiment",
+        experiment,
         "--worker-id",
         worker_id,
         "--cache-dir",
@@ -34,9 +37,6 @@ def main() -> None:
         "--idle-sleep-s",
         _env("IDLE_SLEEP_S", "5"),
     ]
-    experiment = os.environ.get("EXPERIMENT")
-    if experiment:
-        args.extend(["--experiment", experiment])
     if os.environ.get("ONCE", "").lower() in {"1", "true", "yes"}:
         args.append("--once")
     os.execv(sys.executable, args)
