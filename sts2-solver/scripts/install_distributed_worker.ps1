@@ -5,6 +5,7 @@ param(
     [string]$Experiment = "",
     [string]$WorkerId = $env:COMPUTERNAME,
     [string]$TaskName = "STS2 Distributed Worker",
+    [double]$LeaseSeconds = 240,
     [string]$Python = "",
     [switch]$PrintOnly
 )
@@ -24,7 +25,8 @@ if ($LASTEXITCODE -ne 0) {
 $workerArgs = @(
     "-m", "sts2_solver.betaone.distributed_worker",
     "--coordinator", $Coordinator,
-    "--worker-id", $WorkerId
+    "--worker-id", $WorkerId,
+    "--lease-s", "$LeaseSeconds"
 )
 if ($Experiment) {
     $workerArgs += @("--experiment", $Experiment)

@@ -22,6 +22,9 @@ from typing import Any
 
 SCHEMA_VERSION = 1
 RESULT_SUFFIX = ".pkl.gz"
+DEFAULT_LEASE_S = 240.0
+MIN_LEASE_S = 60.0
+MAX_LEASE_S = 240.0
 _CLAIM_LOCK = threading.Lock()
 
 
@@ -31,6 +34,14 @@ def utc_ts() -> float:
 
 def iso_ts(ts: float | None = None) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(utc_ts() if ts is None else ts))
+
+
+def normalize_lease_s(lease_s: float | int | str | None) -> float:
+    try:
+        value = float(lease_s) if lease_s is not None else DEFAULT_LEASE_S
+    except (TypeError, ValueError):
+        value = DEFAULT_LEASE_S
+    return max(MIN_LEASE_S, min(MAX_LEASE_S, value))
 
 
 def _atomic_write_bytes(path: Path, data: bytes) -> None:
@@ -202,7 +213,7 @@ def _write_pending_status(
         "attempts": 0,
         "created_at": now,
         "updated_at": now,
-        "stale_after_s": max(float(lease_s) * 1.5, 900.0),
+        "stale_after_s": max(normalize_lease_s(lease_s) * 1.5, 300.0),
     })
 
 
@@ -231,7 +242,7 @@ def schedule_selfplay_generation(
     noise_frac: float,
     pw_k: float,
     shard_size: int = 16,
-    lease_s: float = 900.0,
+    lease_s: float = DEFAULT_LEASE_S,
 ) -> dict:
     """Create/refresh shard job files for one self-play generation."""
     lengths = {
@@ -251,6 +262,7 @@ def schedule_selfplay_generation(
     for d in (status_dir(root), jobs_dir(root), results_dir(root), shared_dir(root)):
         d.mkdir(parents=True, exist_ok=True)
 
+    lease_s = normalize_lease_s(lease_s)
     plan_id = _plan_id(gen, onnx_path, n_combats, num_sims, shard_size)
     onnx_dest = shared_dir(root) / "betaone.onnx"
     shutil.copy2(onnx_path, onnx_dest)
@@ -390,9 +402,10 @@ def claim_next_job_in_root(
     root: Path,
     *,
     worker_id: str,
-    lease_s: float = 900.0,
+    lease_s: float = DEFAULT_LEASE_S,
 ) -> ClaimedJob | None:
     now = utc_ts()
+    lease_s = normalize_lease_s(lease_s)
     with _CLAIM_LOCK:
         for sp in sorted(status_dir(root).glob("*.json")):
             status = read_json(sp)
@@ -432,8 +445,9 @@ def claim_next_job(
     *,
     worker_id: str,
     experiment: str | None = None,
-    lease_s: float = 900.0,
+    lease_s: float = DEFAULT_LEASE_S,
 ) -> ClaimedJob | None:
+    lease_s = normalize_lease_s(lease_s)
     for name, exp_dir in experiments:
         if experiment and name != experiment:
             continue
@@ -453,6 +467,7 @@ def heartbeat(root: Path, shard_id: str, *, worker_id: str, lease_s: float) -> d
         if status.get("state") == "done":
             return status
         now = utc_ts()
+        lease_s = normalize_lease_s(lease_s)
         status.update({
             "state": "running",
             "worker": worker_id,
@@ -594,10 +609,11 @@ def run_distributed_selfplay_generation(
     pw_k: float,
     shard_size: int,
     poll_s: float = 2.0,
-    lease_s: float = 900.0,
+    lease_s: float = DEFAULT_LEASE_S,
     local_fallback_after_s: float | None = 60.0,
     timeout_s: float | None = None,
 ) -> tuple[list[tuple[int, str, dict]], dict]:
+    lease_s = normalize_lease_s(lease_s)
     plan = schedule_selfplay_generation(
         output_dir=output_dir,
         experiment=experiment,

@@ -128,7 +128,7 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
             payload = {}
         worker_id = str(payload.get("worker_id") or "unknown-worker")
         experiment_name = payload.get("experiment")
-        lease_s = float(payload.get("lease_s") or 900.0)
+        lease_s = dist.normalize_lease_s(payload.get("lease_s"))
         claimed = dist.claim_next_job(
             exp_mod._all_experiment_sources(),
             worker_id=worker_id,
@@ -197,7 +197,7 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
         except Exception:
             payload = {}
         worker_id = str(payload.get("worker_id") or request.query_params.get("worker_id") or "unknown-worker")
-        lease_s = float(payload.get("lease_s") or request.query_params.get("lease_s") or 900.0)
+        lease_s = dist.normalize_lease_s(payload.get("lease_s") or request.query_params.get("lease_s"))
         try:
             return dist.heartbeat(_job_root(experiment, gen), shard_id, worker_id=worker_id, lease_s=lease_s)
         except FileNotFoundError:

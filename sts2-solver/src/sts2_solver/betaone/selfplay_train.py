@@ -593,7 +593,7 @@ def train(
     distributed_selfplay: bool = False,
     distributed_shard_size: int = 16,
     distributed_poll_s: float = 2.0,
-    distributed_lease_s: float = 900.0,
+    distributed_lease_s: float = 240.0,
     distributed_local_fallback_after_s: float | None = 60.0,
     distributed_timeout_s: float | None = None,
 ):
