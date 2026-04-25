@@ -44,6 +44,39 @@ def normalize_lease_s(lease_s: float | int | str | None) -> float:
     return max(MIN_LEASE_S, min(MAX_LEASE_S, value))
 
 
+def clean_worker_metrics(metrics: Any) -> dict[str, Any] | None:
+    if not isinstance(metrics, dict):
+        return None
+    out: dict[str, Any] = {}
+    allowed_str = {
+        "worker_id", "host", "active_shard", "python", "platform", "machine",
+        "instance_id", "instance_type", "worker_group", "git_sha",
+    }
+    allowed_num = {
+        "pid", "sampled_at", "cpu_count", "cpu_pct", "load1", "load5", "load15",
+        "load_per_cpu", "rss_mb", "rayon_threads",
+    }
+    for key in allowed_str:
+        value = metrics.get(key)
+        if value is None:
+            continue
+        text = str(value)
+        out[key] = text[:200]
+    for key in allowed_num:
+        value = metrics.get(key)
+        if value is None:
+            continue
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+        if key in {"pid", "cpu_count", "rayon_threads"}:
+            out[key] = int(number)
+        else:
+            out[key] = number
+    return out or None
+
+
 def _atomic_write_bytes(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
@@ -458,7 +491,14 @@ def claim_next_job(
     return None
 
 
-def heartbeat(root: Path, shard_id: str, *, worker_id: str, lease_s: float) -> dict:
+def heartbeat(
+    root: Path,
+    shard_id: str,
+    *,
+    worker_id: str,
+    lease_s: float,
+    worker_metrics: dict | None = None,
+) -> dict:
     sp = status_path(root, shard_id)
     with _CLAIM_LOCK:
         status = read_json(sp)
@@ -468,6 +508,7 @@ def heartbeat(root: Path, shard_id: str, *, worker_id: str, lease_s: float) -> d
             return status
         now = utc_ts()
         lease_s = normalize_lease_s(lease_s)
+        metrics = clean_worker_metrics(worker_metrics)
         status.update({
             "state": "running",
             "worker": worker_id,
@@ -475,17 +516,27 @@ def heartbeat(root: Path, shard_id: str, *, worker_id: str, lease_s: float) -> d
             "heartbeat_at": now,
             "lease_expires_at": now + float(lease_s),
         })
+        if metrics:
+            status["worker_metrics"] = metrics
         atomic_write_json(sp, status)
         return status
 
 
-def mark_failed(root: Path, shard_id: str, *, worker_id: str, error: str) -> dict:
+def mark_failed(
+    root: Path,
+    shard_id: str,
+    *,
+    worker_id: str,
+    error: str,
+    worker_metrics: dict | None = None,
+) -> dict:
     sp = status_path(root, shard_id)
     with _CLAIM_LOCK:
         status = read_json(sp)
         if not status:
             raise FileNotFoundError(sp)
         now = utc_ts()
+        metrics = clean_worker_metrics(worker_metrics)
         status.update({
             "state": "failed",
             "worker": worker_id,
@@ -493,6 +544,8 @@ def mark_failed(root: Path, shard_id: str, *, worker_id: str, error: str) -> dic
             "failed_at": now,
             "error": error[-1000:],
         })
+        if metrics:
+            status["worker_metrics"] = metrics
         atomic_write_json(sp, status)
         return status
 

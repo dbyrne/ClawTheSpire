@@ -27,6 +27,9 @@ from typing import Any
 from . import distributed as dist
 
 
+_PROC_STAT_PREV: tuple[int, int] | None = None
+
+
 def _url(base: str, path: str) -> str:
     return base.rstrip("/") + "/" + path.lstrip("/")
 
@@ -43,6 +46,119 @@ def _request_json(url: str, payload: dict | None = None, timeout: float = 30.0) 
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         raw = resp.read()
     return json.loads(raw.decode("utf-8")) if raw else {}
+
+
+def _read_proc_stat() -> tuple[int, int] | None:
+    """Return (idle, total) jiffies for Linux host CPU accounting."""
+    try:
+        with open("/proc/stat", "r", encoding="utf-8") as f:
+            fields = f.readline().split()
+    except OSError:
+        return None
+    if not fields or fields[0] != "cpu":
+        return None
+    try:
+        values = [int(x) for x in fields[1:]]
+    except ValueError:
+        return None
+    if len(values) < 4:
+        return None
+    idle = values[3] + (values[4] if len(values) > 4 else 0)
+    return idle, sum(values)
+
+
+def _cpu_percent() -> float | None:
+    global _PROC_STAT_PREV
+    current = _read_proc_stat()
+    if current is None:
+        return None
+    if _PROC_STAT_PREV is None:
+        _PROC_STAT_PREV = current
+        return None
+    prev_idle, prev_total = _PROC_STAT_PREV
+    idle, total = current
+    _PROC_STAT_PREV = current
+    total_delta = total - prev_total
+    idle_delta = idle - prev_idle
+    if total_delta <= 0:
+        return None
+    return max(0.0, min(100.0, 100.0 * (1.0 - idle_delta / total_delta)))
+
+
+def _rss_mb() -> float | None:
+    try:
+        with open("/proc/self/statm", "r", encoding="utf-8") as f:
+            parts = f.readline().split()
+        pages = int(parts[1])
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        return pages * page_size / (1024 * 1024)
+    except (OSError, ValueError, IndexError, AttributeError):
+        return None
+
+
+def _env_int(name: str) -> int | None:
+    value = os.environ.get(name)
+    if not value:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def _worker_metrics(*, worker_id: str, active_shard: str | None = None) -> dict[str, Any]:
+    cpu_count = os.cpu_count() or None
+    load1 = load5 = load15 = None
+    try:
+        load1, load5, load15 = os.getloadavg()
+    except (AttributeError, OSError):
+        pass
+    cpu_pct = _cpu_percent()
+    rss_mb = _rss_mb()
+    metrics: dict[str, Any] = {
+        "worker_id": worker_id,
+        "host": platform.node(),
+        "pid": os.getpid(),
+        "active_shard": active_shard,
+        "sampled_at": time.time(),
+        "cpu_count": cpu_count,
+        "cpu_pct": round(cpu_pct, 1) if cpu_pct is not None else None,
+        "load1": round(load1, 2) if load1 is not None else None,
+        "load5": round(load5, 2) if load5 is not None else None,
+        "load15": round(load15, 2) if load15 is not None else None,
+        "load_per_cpu": (
+            round(load1 / cpu_count, 3)
+            if load1 is not None and cpu_count
+            else None
+        ),
+        "rss_mb": round(rss_mb, 1) if rss_mb is not None else None,
+        "rayon_threads": _env_int("RAYON_NUM_THREADS"),
+        "python": platform.python_version(),
+        "platform": platform.platform(),
+        "machine": platform.machine(),
+    }
+    for key, env_name in {
+        "instance_id": "AWS_INSTANCE_ID",
+        "instance_type": "AWS_INSTANCE_TYPE",
+        "worker_group": "STS2_WORKER_GROUP",
+        "git_sha": "STS2_GIT_SHA",
+    }.items():
+        value = os.environ.get(env_name)
+        if value:
+            metrics[key] = value
+    return metrics
+
+
+def _heartbeat_once(url: str, *, worker_id: str, lease_s: float, active_shard: str | None) -> dict:
+    return _request_json(
+        url,
+        {
+            "worker_id": worker_id,
+            "lease_s": lease_s,
+            "metrics": _worker_metrics(worker_id=worker_id, active_shard=active_shard),
+        },
+        timeout=20.0,
+    )
 
 
 def _download(url: str, path: Path, timeout: float = 120.0) -> None:
@@ -81,11 +197,17 @@ def _heartbeat_loop(
     worker_id: str,
     lease_s: float,
     interval_s: float,
+    active_shard: str,
     stop: threading.Event,
 ) -> None:
     while not stop.wait(max(5.0, interval_s)):
         try:
-            _request_json(url, {"worker_id": worker_id, "lease_s": lease_s}, timeout=20.0)
+            _heartbeat_once(
+                url,
+                worker_id=worker_id,
+                lease_s=lease_s,
+                active_shard=active_shard,
+            )
         except Exception as exc:
             print(f"[heartbeat] failed: {exc}", flush=True)
 
@@ -115,11 +237,16 @@ def _run_claim(claim: dict, *, worker_id: str, cache_dir: Path, lease_s: float) 
             "url": urls["heartbeat"],
             "worker_id": worker_id,
             "lease_s": lease_s,
-            "interval_s": min(60.0, max(10.0, lease_s / 3.0)),
+            "interval_s": min(30.0, max(10.0, lease_s / 4.0)),
+            "active_shard": shard_id,
             "stop": stop,
         },
         daemon=True,
     )
+    try:
+        _heartbeat_once(urls["heartbeat"], worker_id=worker_id, lease_s=lease_s, active_shard=shard_id)
+    except Exception as exc:
+        print(f"[heartbeat] initial failed: {exc}", flush=True)
     hb.start()
     started = time.perf_counter()
     try:
@@ -130,6 +257,10 @@ def _run_claim(claim: dict, *, worker_id: str, cache_dir: Path, lease_s: float) 
         )
         rollout = dist.run_selfplay_job(job, shared, onnx_path=onnx_path)
         data = dist.dumps_rollout(rollout)
+        try:
+            _heartbeat_once(urls["heartbeat"], worker_id=worker_id, lease_s=lease_s, active_shard=shard_id)
+        except Exception:
+            pass
         _post_bytes(urls["result"], data, worker_id=worker_id)
         elapsed = time.perf_counter() - started
         print(
@@ -140,7 +271,15 @@ def _run_claim(claim: dict, *, worker_id: str, cache_dir: Path, lease_s: float) 
     except Exception as exc:
         err = "".join(traceback.format_exception_only(type(exc), exc)).strip()
         try:
-            _request_json(urls["fail"], {"worker_id": worker_id, "error": err}, timeout=30.0)
+            _request_json(
+                urls["fail"],
+                {
+                    "worker_id": worker_id,
+                    "error": err,
+                    "metrics": _worker_metrics(worker_id=worker_id, active_shard=shard_id),
+                },
+                timeout=30.0,
+            )
         except Exception:
             pass
         raise
