@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 import time
 
@@ -1076,6 +1077,254 @@ def cmd_session(args):
         print(f"# then type: {first_prompt_hint}")
 
 
+def _csv_args(values: list[str] | None) -> list[str]:
+    out: list[str] = []
+    for raw in values or []:
+        out.extend(part.strip() for part in str(raw).split(",") if part.strip())
+    return out
+
+
+def _print_json(payload) -> None:
+    print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def cmd_worker_image_build(args):
+    from . import worker_orchestration as workers
+
+    try:
+        plan = workers.build_worker_image(
+            experiment=args.name,
+            repository=args.repository,
+            tag_prefix=args.tag_prefix,
+            push=args.push,
+            ecr_login_enabled=args.ecr_login,
+            regions=_csv_args(args.region),
+            ensure_repository=args.ensure_repository,
+            gen=args.gen,
+            allow_dirty=args.allow_dirty,
+            dry_run=args.dry_run,
+        )
+    except (ValueError, subprocess.CalledProcessError) as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+    print(f"Worker image for {args.name}:")
+    print(f"  git_sha: {plan.git_sha}")
+    print(f"  source:  {plan.solver_root}")
+    print(f"  image:   {plan.image}")
+    if plan.images_by_region:
+        print("  regions:")
+        for region, image in plan.images_by_region.items():
+            print(f"    {region}: {image}")
+    if args.dry_run:
+        print("  commands:")
+        for cmd in plan.commands:
+            print("    " + " ".join(str(x) for x in cmd))
+
+
+def cmd_worker_image_list(args):
+    from . import worker_orchestration as workers
+
+    records = workers.load_image_records(args.name)
+    if args.json:
+        _print_json(records)
+        return
+    if not records:
+        print(f"No worker images recorded for {args.name}.")
+        return
+    for record in records[-args.limit:]:
+        pushed = "pushed" if record.get("pushed") else "local"
+        print(f"{record.get('built_at', '?')}  {record.get('git_sha', '?')[:12]}  {pushed}")
+        print(f"  {record.get('image')}")
+        images = record.get("images_by_region") or {}
+        if isinstance(images, dict) and images:
+            for region, image in images.items():
+                print(f"  {region}: {image}")
+
+
+def _resolve_worker_image(args):
+    from . import worker_orchestration as workers
+
+    if args.image != "auto":
+        return args.image, None
+    record = workers.latest_image_record(args.name, gen=args.gen)
+    if not record:
+        hint = f" for gen {args.gen}" if args.gen is not None else ""
+        raise ValueError(
+            f"no recorded worker image{hint}; run "
+            f"`sts2-experiment worker-image build {args.name} --push ...` first"
+        )
+    return str(record["image"]), record
+
+
+def _make_workers_plan(args):
+    from . import worker_orchestration as workers
+
+    image, record = _resolve_worker_image(args)
+    config = workers.load_capacity_config(args.config)
+    return workers.make_launch_plan(
+        experiment=args.name,
+        max_workers=args.max_workers,
+        config=config,
+        regions=_csv_args(args.region),
+        instance_types=_csv_args(args.instance_type),
+        image=image,
+        image_record=record,
+        coordinator_url=args.coordinator,
+        threads_per_worker=args.threads_per_worker,
+        worker_count=args.worker_count,
+        market=args.market,
+    )
+
+
+def _print_launch_plan(plan) -> None:
+    print(f"Worker launch plan for {plan.experiment}:")
+    print(f"  target workers: {plan.max_workers}")
+    print(f"  planned workers: {plan.planned_workers}")
+    print(f"  coordinator: {plan.coordinator_url}")
+    print(f"  market: {plan.market}")
+    for idx, unit in enumerate(plan.units, 1):
+        print(
+            f"  [{idx}] {unit.region} {unit.instance_type}: "
+            f"{unit.workers} worker(s), threads={unit.threads_per_worker}"
+        )
+        print(f"      image: {unit.image}")
+        print(f"      ami: {unit.ami}")
+        if unit.subnet_id:
+            print(f"      subnet: {unit.subnet_id}")
+
+
+def cmd_workers_plan(args):
+    try:
+        plan = _make_workers_plan(args)
+    except ValueError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+    _print_launch_plan(plan)
+
+
+def cmd_workers_launch(args):
+    from . import worker_orchestration as workers
+
+    try:
+        plan = _make_workers_plan(args)
+    except ValueError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+    _print_launch_plan(plan)
+
+    tailscale_key = args.tailscale_auth_key or os.environ.get(args.tailscale_auth_key_env)
+    if not tailscale_key and not args.dry_run:
+        print(
+            f"Error: Tailscale auth key required. Set {args.tailscale_auth_key_env} "
+            "or pass --tailscale-auth-key."
+        )
+        sys.exit(1)
+    if not tailscale_key:
+        tailscale_key = "tskey-placeholder"
+
+    try:
+        responses = workers.launch_ec2_workers(
+            plan,
+            tailscale_auth_key=tailscale_key,
+            worker_group=args.worker_group,
+            lease_s=args.lease_s,
+            idle_sleep_s=args.idle_sleep_s,
+            dry_run=args.dry_run,
+        )
+    except subprocess.CalledProcessError as e:
+        print(f"Error launching EC2 workers: {e}")
+        sys.exit(1)
+
+    if args.json:
+        _print_json(responses)
+        return
+    if args.dry_run:
+        print("Dry run only; no instances launched.")
+        return
+    launched = []
+    for response in responses:
+        for inst in response.get("Instances", []):
+            launched.append((response.get("_region"), inst.get("InstanceId"), inst.get("InstanceType")))
+    print(f"Launched {len(launched)} EC2 instance(s).")
+    for region, instance_id, instance_type in launched:
+        print(f"  {region}: {instance_id} ({instance_type})")
+
+
+def cmd_workers_user_data(args):
+    from . import worker_orchestration as workers
+
+    image, record = _resolve_worker_image(args)
+    git_sha = str((record or {}).get("git_sha") or workers.experiment_git_sha(args.name))
+    worker_image = image
+    if args.region:
+        worker_image = workers._image_for_region(image, record, args.region)
+    tailscale_key = args.tailscale_auth_key or os.environ.get(args.tailscale_auth_key_env) or "tskey-placeholder"
+    script = workers.render_worker_user_data(
+        experiment=args.name,
+        coordinator_url=args.coordinator,
+        tailscale_auth_key=tailscale_key,
+        worker_image=worker_image,
+        worker_git_sha=git_sha,
+        aws_region=args.region,
+        threads_per_worker=args.threads_per_worker,
+        worker_count=int(args.worker_count),
+        worker_group=args.worker_group,
+        lease_s=args.lease_s,
+        idle_sleep_s=args.idle_sleep_s,
+    )
+    if args.output:
+        from pathlib import Path as _Path
+        _Path(args.output).write_text(script, encoding="utf-8", newline="\n")
+        print(f"Wrote user-data script: {args.output}")
+    else:
+        print(script)
+
+
+def cmd_coordinator_start(args):
+    from . import worker_orchestration as workers
+
+    record = workers.start_coordinator(
+        experiment=args.name,
+        host=args.host,
+        port=args.port,
+        static=args.static,
+    )
+    print(f"Started companion coordinator for {args.name}:")
+    print(f"  pid: {record['pid']}")
+    print(f"  url: {record['url']}")
+    print(f"  log: {record['log']}")
+
+
+def cmd_coordinator_status(args):
+    from . import worker_orchestration as workers
+
+    status = workers.coordinator_status(args.name, url=args.url)
+    if args.json:
+        _print_json(status)
+        return
+    if status["healthy"]:
+        print(f"Coordinator healthy: {status['url']}")
+    else:
+        print(f"Coordinator not healthy: {status['url']}")
+        print(f"  {status.get('error')}")
+    record = status.get("record") or {}
+    if record:
+        print(f"  pid: {record.get('pid')}")
+        print(f"  log: {record.get('log')}")
+
+
+def cmd_coordinator_stop(args):
+    from . import worker_orchestration as workers
+
+    try:
+        record = workers.stop_coordinator(args.name)
+    except ValueError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+    print(f"Stopped coordinator for {args.name} (pid {record.get('pid')}).")
+
+
 def cmd_ship(args):
     """Sync a finalized worktree experiment's data back to main.
 
@@ -1357,6 +1606,120 @@ def main():
                          "(default is to skip permissions, since worktrees are "
                          "scoped and we want fast iteration).")
     p.set_defaults(func=cmd_session)
+
+    # worker-image
+    p = sub.add_parser("worker-image",
+                       help="Build and record immutable distributed worker images")
+    wimg = p.add_subparsers(dest="worker_image_command", required=True)
+
+    b = wimg.add_parser("build", help="Build a worker image for an experiment worktree")
+    b.add_argument("name", help="Experiment name")
+    b.add_argument("--repository", required=True,
+                   help="Image repository without tag, e.g. acct.dkr.ecr.us-east-1.amazonaws.com/sts2-worker")
+    b.add_argument("--tag-prefix", default=None,
+                   help="Image tag prefix (default: experiment name)")
+    b.add_argument("--push", action="store_true", help="Push the built image")
+    b.add_argument("--ecr-login", action="store_true",
+                   help="Login to ECR before pushing")
+    b.add_argument("--region", action="append", default=[],
+                   help="Region to push to; repeat or comma-separate for region diversity")
+    b.add_argument("--ensure-repository", action="store_true",
+                   help="Create missing ECR repositories before pushing")
+    b.add_argument("--gen", type=int, default=None,
+                   help="Require compatibility with an already scheduled generation")
+    b.add_argument("--allow-dirty", action="store_true",
+                   help="Allow uncommitted source changes in fingerprint-affecting paths")
+    b.add_argument("--dry-run", action="store_true",
+                   help="Print docker commands without running them")
+    b.set_defaults(func=cmd_worker_image_build)
+
+    l = wimg.add_parser("list", help="List recorded worker images for an experiment")
+    l.add_argument("name", help="Experiment name")
+    l.add_argument("--limit", type=int, default=10)
+    l.add_argument("--json", action="store_true")
+    l.set_defaults(func=cmd_worker_image_list)
+
+    # workers
+    p = sub.add_parser("workers",
+                       help="Plan or launch EC2 distributed workers for an experiment")
+    wsp = p.add_subparsers(dest="workers_command", required=True)
+
+    def _add_worker_capacity_args(parser):
+        parser.add_argument("name", help="Experiment name")
+        parser.add_argument("--max-workers", type=int, required=True,
+                            help="Maximum distributed worker containers to launch")
+        parser.add_argument("--config", default=None,
+                            help="JSON EC2 capacity config (regions, AMIs, subnets, security groups)")
+        parser.add_argument("--image", default="auto",
+                            help="'auto' to use the latest recorded compatible image, or an explicit image URI")
+        parser.add_argument("--gen", type=int, default=None,
+                            help="When --image=auto, select the image matching this generation fingerprint")
+        parser.add_argument("--coordinator", default=None,
+                            help="Companion API URL reachable by workers")
+        parser.add_argument("--region", action="append", default=[],
+                            help="AWS region; repeat or comma-separate for region diversity")
+        parser.add_argument("--instance-type", action="append", default=[],
+                            help="Allowed EC2 instance type; repeat or comma-separate")
+        parser.add_argument("--threads-per-worker", type=int, default=1)
+        parser.add_argument("--worker-count", default="auto",
+                            help="'auto' or an explicit worker count per instance")
+        parser.add_argument("--market", choices=["spot", "on-demand"], default="spot")
+
+    wp = wsp.add_parser("plan", help="Show an EC2 launch plan without launching")
+    _add_worker_capacity_args(wp)
+    wp.set_defaults(func=cmd_workers_plan)
+
+    wl = wsp.add_parser("launch", help="Launch EC2 workers from a recorded image")
+    _add_worker_capacity_args(wl)
+    wl.add_argument("--tailscale-auth-key", default=None,
+                    help="Tailscale auth key; prefer env via --tailscale-auth-key-env")
+    wl.add_argument("--tailscale-auth-key-env", default="TAILSCALE_AUTH_KEY",
+                    help="Environment variable containing the Tailscale auth key")
+    wl.add_argument("--worker-group", default="ec2")
+    wl.add_argument("--lease-s", type=float, default=240.0)
+    wl.add_argument("--idle-sleep-s", type=float, default=5.0)
+    wl.add_argument("--dry-run", action="store_true")
+    wl.add_argument("--json", action="store_true")
+    wl.set_defaults(func=cmd_workers_launch)
+
+    wu = wsp.add_parser("user-data", help="Render one EC2 cloud-init user-data script")
+    wu.add_argument("name", help="Experiment name")
+    wu.add_argument("--image", default="auto")
+    wu.add_argument("--gen", type=int, default=None)
+    wu.add_argument("--coordinator", required=True)
+    wu.add_argument("--region", default="us-east-1")
+    wu.add_argument("--threads-per-worker", type=int, default=1)
+    wu.add_argument("--worker-count", default="1")
+    wu.add_argument("--worker-group", default="ec2")
+    wu.add_argument("--lease-s", type=float, default=240.0)
+    wu.add_argument("--idle-sleep-s", type=float, default=5.0)
+    wu.add_argument("--tailscale-auth-key", default=None)
+    wu.add_argument("--tailscale-auth-key-env", default="TAILSCALE_AUTH_KEY")
+    wu.add_argument("--output", default=None)
+    wu.set_defaults(func=cmd_workers_user_data)
+
+    # coordinator
+    p = sub.add_parser("coordinator",
+                       help="Start, stop, or check the companion coordinator")
+    csp = p.add_subparsers(dest="coordinator_command", required=True)
+    cs = csp.add_parser("start", help="Start the companion API in the background")
+    cs.add_argument("name", help="Experiment name")
+    cs.add_argument("--host", default="0.0.0.0")
+    cs.add_argument("--port", type=int, default=8765)
+    cs.add_argument("--static", default=None,
+                    help="Optional companion-web/out static export path")
+    cs.set_defaults(func=cmd_coordinator_start)
+
+    ct = csp.add_parser("status", help="Check coordinator health")
+    ct.add_argument("name", help="Experiment name")
+    ct.add_argument("--url", default=None,
+                    help="Override URL to check instead of the recorded one")
+    ct.add_argument("--json", action="store_true")
+    ct.set_defaults(func=cmd_coordinator_status)
+
+    cx = csp.add_parser("stop", help="Stop the recorded coordinator process")
+    cx.add_argument("name", help="Experiment name")
+    cx.set_defaults(func=cmd_coordinator_stop)
 
     args = parser.parse_args()
     args.func(args)

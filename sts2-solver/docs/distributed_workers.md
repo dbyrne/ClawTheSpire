@@ -9,7 +9,84 @@ All worker hosts run the same `sts2-solver/Dockerfile.worker` image driven by
 `sts2-solver/scripts/docker_worker_entrypoint.py`, so the only thing that varies
 between deployments is the launcher.
 
-## Image
+## Experiment CLI Control Plane
+
+`sts2-experiment` is the preferred control plane for cloud workers. It knows
+which worktree owns an experiment, records images against the experiment, and
+can plan EC2 capacity from the same fingerprint that distributed workers must
+send to the coordinator.
+
+Start or check the coordinator:
+
+```powershell
+sts2-experiment coordinator start encoder-v2-cpuct3-dist-pilot --port 8765
+sts2-experiment coordinator status encoder-v2-cpuct3-dist-pilot
+```
+
+Build and push one immutable image for the current experiment commit:
+
+```powershell
+sts2-experiment worker-image build encoder-v2-cpuct3-dist-pilot `
+  --repository 700694289572.dkr.ecr.us-east-1.amazonaws.com/sts2-worker `
+  --region us-east-1 `
+  --region us-west-2 `
+  --ensure-repository `
+  --ecr-login `
+  --push
+```
+
+If resuming an already scheduled generation, add `--gen N`. The CLI refuses to
+build from the current worktree if that generation was scheduled with a
+different worker fingerprint.
+
+Plan or launch EC2 workers from the latest recorded compatible image:
+
+```powershell
+sts2-experiment workers plan encoder-v2-cpuct3-dist-pilot `
+  --max-workers 96 `
+  --config .\worker-capacity.json `
+  --coordinator http://100.100.101.1:8765 `
+  --region us-east-1 `
+  --region us-west-2 `
+  --instance-type c7i.4xlarge `
+  --instance-type c7a.4xlarge
+
+sts2-experiment workers launch encoder-v2-cpuct3-dist-pilot `
+  --max-workers 96 `
+  --config .\worker-capacity.json `
+  --coordinator http://100.100.101.1:8765 `
+  --region us-east-1 `
+  --region us-west-2
+```
+
+`--max-workers` caps worker containers, not instances. For shard-size-1 runs,
+keep `--threads-per-worker 1 --worker-count auto`; the planner will set the
+last instance's `WORKER_COUNT` lower when needed so the launch does not exceed
+the requested worker count.
+
+Example capacity config:
+
+```json
+{
+  "coordinator_url": "http://100.100.101.1:8765",
+  "ami": "ami-05cf1e9f73fbad2e2",
+  "security_group_id": "sg-0ab2f9f94bdd40c0d",
+  "iam_instance_profile": "sts2-ec2-worker-profile",
+  "instance_types": ["c7i.4xlarge", "c7a.4xlarge", "m7i.4xlarge"],
+  "regions": {
+    "us-east-1": {
+      "subnet_ids": ["subnet-0020689fdecb2b4f8"]
+    },
+    "us-west-2": {
+      "ami": "ami-for-us-west-2",
+      "subnet_ids": ["subnet-for-us-west-2"],
+      "security_group_id": "sg-for-us-west-2"
+    }
+  }
+}
+```
+
+## Manual Image
 
 ```bash
 docker build -f sts2-solver/Dockerfile.worker -t sts2-worker:latest .
@@ -20,9 +97,10 @@ so the image is the same artifact regardless of where it runs. Each container
 is stamped with `STS2_GIT_SHA` and tagged with `STS2_WORKER_GROUP` (e.g.
 `local`, `ec2`) so companion metrics can be sliced by source.
 
-For EC2 Spot capacity, prefer prebuilding one image per experiment commit and
-pulling it on boot. That avoids spending several minutes compiling Rust on
-instances that may be reclaimed.
+For EC2 Spot capacity, prefer prebuilding one image per experiment commit with
+the CLI and pulling it on boot. That avoids spending several minutes compiling
+Rust on instances that may be reclaimed. The lower-level PowerShell helper is
+still available when you need to build outside the experiment CLI:
 
 ```powershell
 .\sts2-solver\scripts\build_worker_image.ps1 `
@@ -68,7 +146,7 @@ image. Prerequisites:
 - An Ubuntu EC2 AMI with outbound internet access. No inbound security-group
   rule is required for the worker path.
 
-Launch path:
+Manual launch path:
 
 1. Copy `sts2-solver/scripts/ec2_worker_cloud_init.sh`.
 2. Fill in `TAILSCALE_AUTH_KEY`.
@@ -82,7 +160,9 @@ Launch path:
 
 The script installs Docker and Tailscale, joins the tailnet, clones the repo,
 then either pulls `WORKER_IMAGE` or builds `sts2-solver/Dockerfile.worker`, and
-launches one or more worker containers tagged `STS2_WORKER_GROUP=ec2`.
+launches one or more worker containers tagged `STS2_WORKER_GROUP=ec2`. The
+experiment CLI generates the same user-data script automatically when using
+`sts2-experiment workers launch`.
 
 Container logs are capped at three 50 MB json-file logs per worker.
 
