@@ -34,6 +34,12 @@ RUN python -m pip install --upgrade pip wheel maturin \
 
 FROM python:3.11-slim
 
+ARG STS2_GIT_SHA=unknown
+ARG STS2_IMAGE_SOURCE=unknown
+
+LABEL org.opencontainers.image.revision=$STS2_GIT_SHA \
+      org.opencontainers.image.source=$STS2_IMAGE_SOURCE
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
