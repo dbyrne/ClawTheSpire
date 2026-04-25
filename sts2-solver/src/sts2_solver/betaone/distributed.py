@@ -63,7 +63,7 @@ def _git_sha() -> str:
 
 
 def code_fingerprint() -> dict[str, Any]:
-    from .network import ACTION_DIM, ARCH_VERSION, MAX_ACTIONS, MAX_HAND, STATE_DIM
+    from .network_constants import ACTION_DIM, ARCH_VERSION, MAX_ACTIONS, MAX_HAND, STATE_DIM
 
     return {
         "code_protocol": CODE_PROTOCOL_VERSION,
