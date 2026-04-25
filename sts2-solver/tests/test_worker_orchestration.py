@@ -1,4 +1,5 @@
 from sts2_solver.betaone import worker_orchestration as workers
+from datetime import datetime, timezone
 
 
 def test_ecr_repository_for_region_rewrites_region_only():
@@ -116,3 +117,123 @@ def test_launch_plan_requires_recorded_image_region(monkeypatch):
         assert "us-west-2" in str(exc)
     else:
         raise AssertionError("expected missing region image to fail")
+
+
+def test_estimate_ec2_cost_uses_current_spot_price(monkeypatch, tmp_path):
+    exp_dir = tmp_path / "experiments" / "exp-a"
+    exp_dir.mkdir(parents=True)
+
+    class FakeExperiment:
+        def __init__(self, name):
+            self.dir = exp_dir
+
+    monkeypatch.setattr(workers, "Experiment", FakeExperiment)
+    monkeypatch.setattr(
+        workers,
+        "discover_ec2_worker_instances",
+        lambda experiment, regions, include_terminated: [
+            {
+                "_region": "us-east-1",
+                "InstanceId": "i-123",
+                "InstanceType": "c7i.4xlarge",
+                "InstanceLifecycle": "spot",
+                "LaunchTime": "2026-04-25T10:00:00Z",
+                "State": {"Name": "running"},
+                "Placement": {"AvailabilityZone": "us-east-1a"},
+                "Tags": [
+                    {"Key": "STS2Experiment", "Value": "exp-a"},
+                    {"Key": "STS2PlannedWorkers", "Value": "16"},
+                ],
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        workers,
+        "latest_spot_hourly_price",
+        lambda instance_type, region, availability_zone=None: 0.2,
+    )
+
+    summary = workers.estimate_ec2_cost(
+        experiment="exp-a",
+        regions=["us-east-1"],
+        now=datetime(2026, 4, 25, 12, 0, tzinfo=timezone.utc),
+        include_recorded=False,
+    )
+
+    assert summary["estimated_total_cost"] == 0.4
+    assert summary["estimated_hourly_burn"] == 0.2
+    assert summary["instances"][0]["planned_workers"] == 16
+
+
+def test_estimate_ec2_cost_keeps_recorded_missing_instances(monkeypatch, tmp_path):
+    exp_dir = tmp_path / "experiments" / "exp-a"
+    exp_dir.mkdir(parents=True)
+
+    class FakeExperiment:
+        def __init__(self, name):
+            self.dir = exp_dir
+
+    monkeypatch.setattr(workers, "Experiment", FakeExperiment)
+    monkeypatch.setattr(
+        workers,
+        "discover_ec2_worker_instances",
+        lambda experiment, regions, include_terminated: [],
+    )
+    (exp_dir / workers.WORKER_COST_RECORD).write_text(
+        '{"instances": [{"instance_id": "i-old", "region": "us-east-1", '
+        '"instance_type": "c7i.4xlarge", "state": "terminated", '
+        '"market": "spot", "hours": 1.5, "hourly_price": 0.2, "cost": 0.3}]}\n',
+        encoding="utf-8",
+    )
+
+    summary = workers.estimate_ec2_cost(
+        experiment="exp-a",
+        regions=["us-east-1"],
+        include_recorded=True,
+    )
+
+    assert summary["estimated_total_cost"] == 0.3
+    assert summary["instances"][0]["state"] == "terminated"
+    assert summary["instances"][0]["source"] == "recorded"
+
+
+def test_estimate_ec2_cost_never_decreases_recorded_instance_cost(monkeypatch, tmp_path):
+    exp_dir = tmp_path / "experiments" / "exp-a"
+    exp_dir.mkdir(parents=True)
+
+    class FakeExperiment:
+        def __init__(self, name):
+            self.dir = exp_dir
+
+    monkeypatch.setattr(workers, "Experiment", FakeExperiment)
+    monkeypatch.setattr(
+        workers,
+        "discover_ec2_worker_instances",
+        lambda experiment, regions, include_terminated: [
+            {
+                "_region": "us-east-1",
+                "InstanceId": "i-123",
+                "InstanceType": "c7i.4xlarge",
+                "LaunchTime": "2026-04-25T10:00:00Z",
+                "State": {"Name": "running"},
+                "Tags": [{"Key": "STS2Experiment", "Value": "exp-a"}],
+            }
+        ],
+    )
+    (exp_dir / workers.WORKER_COST_RECORD).write_text(
+        '{"instances": [{"instance_id": "i-123", "region": "us-east-1", '
+        '"instance_type": "c7i.4xlarge", "state": "running", '
+        '"market": "on-demand", "hours": 3.0, "hourly_price": 1.0, "cost": 3.0}]}\n',
+        encoding="utf-8",
+    )
+
+    summary = workers.estimate_ec2_cost(
+        experiment="exp-a",
+        regions=["us-east-1"],
+        now=datetime(2026, 4, 25, 11, 0, tzinfo=timezone.utc),
+        default_hourly_price=0.5,
+        include_recorded=True,
+    )
+
+    assert summary["estimated_total_cost"] == 3.0
+    assert summary["instances"][0]["hours"] == 3.0
