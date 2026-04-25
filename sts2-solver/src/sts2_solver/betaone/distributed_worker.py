@@ -163,7 +163,7 @@ def _heartbeat_once(url: str, *, worker_id: str, lease_s: float, active_shard: s
 
 def _download(url: str, path: Path, timeout: float = 120.0) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
     req = urllib.request.Request(url, headers={"Accept": "application/octet-stream"})
     with urllib.request.urlopen(req, timeout=timeout) as resp, open(tmp, "wb") as f:
         while True:

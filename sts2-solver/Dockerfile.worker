@@ -1,0 +1,59 @@
+# syntax=docker/dockerfile:1
+
+FROM python:3.11-slim AS builder
+
+ENV CARGO_HOME=/usr/local/cargo \
+    RUSTUP_HOME=/usr/local/rustup \
+    PATH=/usr/local/cargo/bin:$PATH
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        curl \
+        libssl-dev \
+        pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL https://sh.rustup.rs \
+    | sh -s -- -y --profile minimal --default-toolchain stable
+
+WORKDIR /build
+
+COPY sts2-solver/pyproject.toml sts2-solver/uv.lock ./sts2-solver/
+COPY sts2-solver/src ./sts2-solver/src
+COPY sts2-solver/sts2-engine/Cargo.toml \
+     sts2-solver/sts2-engine/Cargo.lock \
+     sts2-solver/sts2-engine/pyproject.toml \
+     ./sts2-solver/sts2-engine/
+COPY sts2-solver/sts2-engine/src ./sts2-solver/sts2-engine/src
+
+RUN python -m pip install --upgrade pip wheel maturin \
+    && python -m pip wheel --no-deps --wheel-dir /wheels ./sts2-solver \
+    && python -m pip wheel --no-deps --wheel-dir /wheels ./sts2-solver/sts2-engine
+
+FROM python:3.11-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        libgomp1 \
+        libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /wheels /wheels
+RUN python -m pip install --no-cache-dir --no-deps /wheels/*.whl \
+    && rm -rf /wheels
+
+COPY sts2-solver/scripts/docker_worker_entrypoint.py /usr/local/bin/sts2-worker-entrypoint.py
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONUTF8=1 \
+    CACHE_DIR=/cache \
+    LEASE_S=240 \
+    IDLE_SLEEP_S=5 \
+    RAYON_NUM_THREADS=8
+
+VOLUME ["/cache"]
+
+ENTRYPOINT ["python", "/usr/local/bin/sts2-worker-entrypoint.py"]
