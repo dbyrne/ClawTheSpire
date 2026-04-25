@@ -435,6 +435,12 @@ def train(
     # shallower sims mean faster gens until the network is worth searching with.
     sims_ramp_end_gen: int = 0,
     initial_num_sims: int | None = None,
+    distributed_selfplay: bool = False,
+    distributed_shard_size: int = 16,
+    distributed_poll_s: float = 2.0,
+    distributed_lease_s: float = 900.0,
+    distributed_local_fallback_after_s: float | None = 60.0,
+    distributed_timeout_s: float | None = None,
 ):
     os.makedirs(output_dir, exist_ok=True)
     onnx_dir = os.path.join(output_dir, "onnx")
@@ -489,6 +495,7 @@ def train(
 
     history_path = os.path.join(output_dir, "betaone_history.jsonl")
     progress_path = os.path.join(output_dir, "betaone_progress.json")
+    experiment_name = Path(output_dir).name
 
     # Resume if any checkpoint exists. cold_start is advisory: if checkpoints
     # are present we always resume to protect history/progress — the flag was a
@@ -598,6 +605,7 @@ def train(
         train_sec = 0.0
         eval_sec = 0.0
         combat_durations_ms: list[float] = []
+        distributed_stats: dict | None = None
 
         # Apply LR schedule (constant or cosine with warmup).
         current_lr = _lr_at_gen(gen)
@@ -648,31 +656,65 @@ def train(
 
         if flat_encounters:
             selfplay_t0 = time.perf_counter()
-            rollout = sts2_engine.betaone_mcts_selfplay(
-                encounters_json=json.dumps(flat_encounters),
-                decks_json=json.dumps(flat_decks),
-                player_hp=flat_hps[0],
-                player_max_hp=player_max_hp,
-                player_max_energy=3,
-                relics_json=json.dumps(flat_relics),
-                potions_json=json.dumps(flat_potions[0] if flat_potions else []),
-                monster_data_json=monster_json,
-                enemy_profiles_json=profiles_json,
-                onnx_path=onnx_path,
-                card_vocab_json=card_vocab_json,
-                num_sims=current_sims,
-                temperature=temperature,
-                seeds=flat_seeds,
-                gen_id=gen,
-                add_noise=True,
-                turn_boundary_eval=turn_boundary_eval,
-                c_puct=c_puct,
-                pomcp=pomcp,
-                noise_frac=noise_frac,
-                pw_k=pw_k,
-                player_hps_json=json.dumps(flat_hps),
-                potions_per_combat_json=json.dumps(flat_potions),
-            )
+            if distributed_selfplay:
+                from .distributed import merge_rollouts, run_distributed_selfplay_generation
+
+                rollouts, distributed_stats = run_distributed_selfplay_generation(
+                    output_dir=output_dir,
+                    experiment=experiment_name,
+                    gen=gen,
+                    flat_encounters=flat_encounters,
+                    flat_decks=flat_decks,
+                    flat_relics=flat_relics,
+                    flat_hps=flat_hps,
+                    flat_seeds=flat_seeds,
+                    flat_potions=flat_potions,
+                    onnx_path=onnx_path,
+                    card_vocab_json=card_vocab_json,
+                    monster_data_json=monster_json,
+                    enemy_profiles_json=profiles_json,
+                    num_sims=current_sims,
+                    temperature=temperature,
+                    player_max_hp=player_max_hp,
+                    player_max_energy=3,
+                    turn_boundary_eval=turn_boundary_eval,
+                    c_puct=c_puct,
+                    pomcp=pomcp,
+                    noise_frac=noise_frac,
+                    pw_k=pw_k,
+                    shard_size=distributed_shard_size,
+                    poll_s=distributed_poll_s,
+                    lease_s=distributed_lease_s,
+                    local_fallback_after_s=distributed_local_fallback_after_s,
+                    timeout_s=distributed_timeout_s,
+                )
+                rollout = merge_rollouts(rollouts)
+            else:
+                rollout = sts2_engine.betaone_mcts_selfplay(
+                    encounters_json=json.dumps(flat_encounters),
+                    decks_json=json.dumps(flat_decks),
+                    player_hp=flat_hps[0],
+                    player_max_hp=player_max_hp,
+                    player_max_energy=3,
+                    relics_json=json.dumps(flat_relics),
+                    potions_json=json.dumps(flat_potions[0] if flat_potions else []),
+                    monster_data_json=monster_json,
+                    enemy_profiles_json=profiles_json,
+                    onnx_path=onnx_path,
+                    card_vocab_json=card_vocab_json,
+                    num_sims=current_sims,
+                    temperature=temperature,
+                    seeds=flat_seeds,
+                    gen_id=gen,
+                    add_noise=True,
+                    turn_boundary_eval=turn_boundary_eval,
+                    c_puct=c_puct,
+                    pomcp=pomcp,
+                    noise_frac=noise_frac,
+                    pw_k=pw_k,
+                    player_hps_json=json.dumps(flat_hps),
+                    potions_per_combat_json=json.dumps(flat_potions),
+                )
             selfplay_sec += time.perf_counter() - selfplay_t0
             combat_durations_ms.extend(
                 float(ms) for ms in rollout.get("combat_durations_ms", [])
@@ -960,6 +1002,14 @@ def train(
             "combat_max_ms": round(combat_max_ms, 1),
             "combat_sum_ms": round(combat_sum_ms, 1),
         }
+        if distributed_stats:
+            record["distributed"] = True
+            record["distributed_plan_id"] = distributed_stats.get("plan_id")
+            record["distributed_shards"] = distributed_stats.get("num_shards")
+            record["distributed_shard_size"] = distributed_stats.get("shard_size")
+            record["distributed_local_shards"] = distributed_stats.get("local_shards")
+            record["distributed_wait_polls"] = distributed_stats.get("polls")
+            record["distributed_elapsed_s"] = distributed_stats.get("elapsed_s")
         if grad_cos_samples:
             import statistics
             record["grad_cos_pv_mean"] = round(statistics.fmean(grad_cos_samples), 4)
@@ -1096,6 +1146,11 @@ def main():
                         help="Ignore existing checkpoint, start from scratch")
     parser.add_argument("--replay-capacity", type=int, default=200_000,
                         help="Replay buffer capacity in steps")
+    parser.add_argument("--distributed-selfplay", action="store_true",
+                        help="Schedule self-play shards for companion API workers")
+    parser.add_argument("--distributed-shard-size", type=int, default=16)
+    parser.add_argument("--distributed-local-fallback-after-s", type=float, default=60.0,
+                        help="Seconds before coordinator runs unclaimed shards locally")
     args = parser.parse_args()
 
     train(
@@ -1107,6 +1162,9 @@ def main():
         output_dir=args.output_dir,
         cold_start=args.cold_start,
         replay_capacity=args.replay_capacity,
+        distributed_selfplay=args.distributed_selfplay,
+        distributed_shard_size=args.distributed_shard_size,
+        distributed_local_fallback_after_s=args.distributed_local_fallback_after_s,
     )
 
 
