@@ -638,6 +638,44 @@ def load_generation_rollouts(root: Path) -> list[tuple[int, str, dict]]:
     return out
 
 
+def _completed_generation_is_reusable(
+    root: Path,
+    *,
+    experiment: str,
+    gen: int,
+    onnx_path: str,
+    n_combats: int,
+    num_sims: int,
+    shard_size: int,
+) -> bool:
+    if not root_done(root):
+        return False
+    shared = read_json(root / "shared.json")
+    if not shared:
+        return False
+    checks = {
+        "experiment": experiment,
+        "gen": int(gen),
+        "combats": int(n_combats),
+        "num_sims": int(num_sims),
+        "shard_size": int(shard_size),
+    }
+    for key, expected in checks.items():
+        if shared.get(key) != expected:
+            return False
+    expected_hash = shared.get("onnx_sha256")
+    try:
+        if expected_hash == _sha256_file(Path(onnx_path)):
+            return True
+    except OSError:
+        pass
+    try:
+        shared_onnx = root / str(shared.get("onnx_file") or "")
+        return bool(expected_hash) and expected_hash == _sha256_file(shared_onnx)
+    except OSError:
+        return False
+
+
 def run_distributed_selfplay_generation(
     *,
     output_dir: str | Path,
@@ -669,6 +707,29 @@ def run_distributed_selfplay_generation(
     timeout_s: float | None = None,
 ) -> tuple[list[tuple[int, str, dict]], dict]:
     lease_s = normalize_lease_s(lease_s)
+    existing_root = gen_root(output_dir, gen)
+    n_combats = len(flat_encounters)
+    if _completed_generation_is_reusable(
+        existing_root,
+        experiment=experiment,
+        gen=gen,
+        onnx_path=onnx_path,
+        n_combats=n_combats,
+        num_sims=num_sims,
+        shard_size=shard_size,
+    ):
+        rollouts = load_generation_rollouts(existing_root)
+        plan = read_json(existing_root / "plan.json")
+        return rollouts, {
+            "plan_id": plan.get("plan_id"),
+            "num_shards": plan.get("num_shards"),
+            "shard_size": int(shard_size),
+            "local_shards": 0,
+            "polls": 0,
+            "elapsed_s": 0.0,
+            "reused_completed": True,
+        }
+
     plan = schedule_selfplay_generation(
         output_dir=output_dir,
         experiment=experiment,
