@@ -24,8 +24,20 @@ fi
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y --no-install-recommends ca-certificates curl docker.io git
+apt-get install -y --no-install-recommends ca-certificates curl docker.io git unzip
 systemctl enable --now docker
+
+install_aws_cli() {
+  if command -v aws >/dev/null 2>&1; then
+    return
+  fi
+  tmpdir="$(mktemp -d)"
+  curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" \
+    -o "${tmpdir}/awscliv2.zip"
+  unzip -q "${tmpdir}/awscliv2.zip" -d "$tmpdir"
+  "${tmpdir}/aws/install" --update
+  rm -rf "$tmpdir"
+}
 
 if ! command -v tailscale >/dev/null 2>&1; then
   curl -fsSL https://tailscale.com/install.sh | sh
@@ -61,7 +73,7 @@ tailscale up \
 
 if [[ -n "$WORKER_IMAGE" ]]; then
   if [[ "$WORKER_IMAGE" == *".dkr.ecr."*".amazonaws.com"* ]]; then
-    apt-get install -y --no-install-recommends awscli
+    install_aws_cli
     registry="${ECR_LOGIN_REGISTRY:-${WORKER_IMAGE%%/*}}"
     aws ecr get-login-password --region "$AWS_REGION" \
       | docker login --username AWS --password-stdin "$registry"
