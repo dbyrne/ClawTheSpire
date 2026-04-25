@@ -344,7 +344,9 @@ def schedule_selfplay_generation(
 
 
 def _status_is_claimable(status: dict, now: float) -> bool:
-    state = str(status.get("state", "pending")).lower()
+    if not status:
+        return False
+    state = str(status.get("state") or "").lower()
     if state in {"pending", "failed", "stale"}:
         return True
     if state == "running":
@@ -394,6 +396,8 @@ def claim_next_job_in_root(
     with _CLAIM_LOCK:
         for sp in sorted(status_dir(root).glob("*.json")):
             status = read_json(sp)
+            if not status:
+                continue
             if not _status_is_claimable(status, now):
                 continue
             shard_id = str(status.get("shard_id") or sp.stem)
@@ -446,6 +450,8 @@ def heartbeat(root: Path, shard_id: str, *, worker_id: str, lease_s: float) -> d
         status = read_json(sp)
         if not status:
             raise FileNotFoundError(sp)
+        if status.get("state") == "done":
+            return status
         now = utc_ts()
         status.update({
             "state": "running",
