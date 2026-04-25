@@ -609,7 +609,7 @@ class ExperimentConfig:
                 "distributed_selfplay": bool(distributed.get("enabled", False)),
                 "distributed_shard_size": int(distributed.get("shard_size", 16)),
                 "distributed_poll_s": _float(distributed.get("poll_s"), 2.0),
-                "distributed_lease_s": _float(distributed.get("lease_s"), 900.0),
+                "distributed_lease_s": _float(distributed.get("lease_s"), 240.0),
                 "distributed_local_fallback_after_s": (
                     60.0
                     if "local_fallback_after_s" not in distributed

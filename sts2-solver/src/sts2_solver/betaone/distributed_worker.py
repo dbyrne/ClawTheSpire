@@ -206,7 +206,7 @@ def main() -> None:
     parser.add_argument("--experiment", default=None, help="Only claim shards for this experiment")
     parser.add_argument("--worker-id", default=None, help="Stable name shown in the companion app")
     parser.add_argument("--cache-dir", default=None, help="Worker cache dir for downloaded ONNX files")
-    parser.add_argument("--lease-s", type=float, default=900.0, help="Claim lease seconds")
+    parser.add_argument("--lease-s", type=float, default=dist.DEFAULT_LEASE_S, help="Claim lease seconds")
     parser.add_argument("--idle-sleep-s", type=float, default=5.0, help="Sleep between empty polls")
     parser.add_argument("--once", action="store_true", help="Claim at most one shard, then exit")
     args = parser.parse_args()
