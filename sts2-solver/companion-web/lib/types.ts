@@ -45,6 +45,18 @@ export interface ExperimentSummary {
   value_corr_last10: number | null;
   gen_time_last: number | null;
   parent: string | null;
+  worker_cost: WorkerCostSummary | null;
+}
+
+export interface WorkerCostSummary {
+  estimated_total_cost: number | null;
+  estimated_hourly_burn: number | null;
+  active_instance_count: number;
+  instance_count: number;
+  unknown_price_count: number;
+  estimated_at?: string | null;
+  age_s: number | null;
+  source: string;
 }
 
 export interface BenchmarkRow {
