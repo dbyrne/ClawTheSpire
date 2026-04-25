@@ -199,7 +199,13 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
         worker_id = str(payload.get("worker_id") or request.query_params.get("worker_id") or "unknown-worker")
         lease_s = dist.normalize_lease_s(payload.get("lease_s") or request.query_params.get("lease_s"))
         try:
-            return dist.heartbeat(_job_root(experiment, gen), shard_id, worker_id=worker_id, lease_s=lease_s)
+            return dist.heartbeat(
+                _job_root(experiment, gen),
+                shard_id,
+                worker_id=worker_id,
+                lease_s=lease_s,
+                worker_metrics=payload.get("metrics") or payload.get("worker_metrics"),
+            )
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail=f"job '{shard_id}' not found")
 
@@ -238,7 +244,13 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
         worker_id = str(payload.get("worker_id") or request.query_params.get("worker_id") or "unknown-worker")
         error = str(payload.get("error") or "worker failed")
         try:
-            return dist.mark_failed(_job_root(experiment, gen), shard_id, worker_id=worker_id, error=error)
+            return dist.mark_failed(
+                _job_root(experiment, gen),
+                shard_id,
+                worker_id=worker_id,
+                error=error,
+                worker_metrics=payload.get("metrics") or payload.get("worker_metrics"),
+            )
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail=f"job '{shard_id}' not found")
 

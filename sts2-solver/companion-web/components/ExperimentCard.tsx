@@ -1,4 +1,4 @@
-import { ExperimentSummary } from "../lib/types";
+import { ExperimentSummary, ShardWorkerSummary } from "../lib/types";
 import { formatDuration, formatNum, formatPct } from "../lib/api";
 import StatusPill from "./StatusPill";
 import MetricCell from "./MetricCell";
@@ -103,6 +103,15 @@ function formatMs(ms: number | null | undefined): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
+function formatWorker(w: ShardWorkerSummary): string {
+  const parts = [`${w.worker}${w.running ? `:${w.running}` : ""}`];
+  if (w.cpu_pct != null) parts.push(`${Math.round(w.cpu_pct)}% cpu`);
+  if (w.load_per_cpu != null) parts.push(`${w.load_per_cpu.toFixed(2)} load/cpu`);
+  if (w.rayon_threads != null) parts.push(`${w.rayon_threads}t`);
+  if (w.instance_type) parts.push(w.instance_type);
+  return parts.join(" ");
+}
+
 function ShardStrip({ exp }: { exp: ExperimentSummary }) {
   const shards = exp.shards;
   if (!shards?.active || shards.total <= 0) return null;
@@ -117,7 +126,7 @@ function ShardStrip({ exp }: { exp: ExperimentSummary }) {
   const workerNames = shards.workers
     .filter((w) => w.worker && w.worker !== "unknown")
     .slice(0, 3)
-    .map((w) => `${w.worker}${w.running ? `:${w.running}` : ""}`);
+    .map(formatWorker);
 
   return (
     <div className="px-4 pb-3">

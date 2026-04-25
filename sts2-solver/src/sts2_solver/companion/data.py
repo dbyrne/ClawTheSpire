@@ -192,6 +192,9 @@ def _shard_summary(exp_dir: Path) -> dict | None:
         )
         if completed_combats is None and state == "done":
             completed_combats = target_combats
+        metrics = payload.get("worker_metrics")
+        if not isinstance(metrics, dict):
+            metrics = None
         entries.append({
             "gen": _shard_gen(payload, path),
             "shard_id": str(shard_id),
@@ -209,6 +212,7 @@ def _shard_summary(exp_dir: Path) -> dict | None:
             "completed_combats": completed_combats,
             "steps": _as_int(payload.get("steps") or payload.get("samples")),
             "duration_s": _as_float(payload.get("duration_s") or payload.get("elapsed_s")),
+            "worker_metrics": metrics,
             "path": str(path.relative_to(exp_dir)),
         })
 
@@ -249,11 +253,30 @@ def _shard_summary(exp_dir: Path) -> dict | None:
             "failed": 0,
             "stale": 0,
             "last_seen_age_s": None,
+            "cpu_pct": None,
+            "load1": None,
+            "load_per_cpu": None,
+            "cpu_count": None,
+            "rss_mb": None,
+            "rayon_threads": None,
+            "instance_type": None,
+            "instance_id": None,
+            "host": None,
         })
         w[e["state"]] += 1
         age = e["age_s"]
         if w["last_seen_age_s"] is None or age < w["last_seen_age_s"]:
             w["last_seen_age_s"] = age
+            metrics = e.get("worker_metrics") or {}
+            w["cpu_pct"] = _as_float(metrics.get("cpu_pct"))
+            w["load1"] = _as_float(metrics.get("load1"))
+            w["load_per_cpu"] = _as_float(metrics.get("load_per_cpu"))
+            w["cpu_count"] = _as_int(metrics.get("cpu_count"))
+            w["rss_mb"] = _as_float(metrics.get("rss_mb"))
+            w["rayon_threads"] = _as_int(metrics.get("rayon_threads"))
+            w["instance_type"] = metrics.get("instance_type")
+            w["instance_id"] = metrics.get("instance_id")
+            w["host"] = metrics.get("host")
 
     recent = sorted(scoped, key=lambda e: e["updated_at"], reverse=True)[:8]
     latest_update = max(e["updated_at"] for e in scoped) if scoped else None

@@ -128,6 +128,15 @@ export interface ShardWorkerSummary {
   failed: number;
   stale: number;
   last_seen_age_s: number | null;
+  cpu_pct?: number | null;
+  load1?: number | null;
+  load_per_cpu?: number | null;
+  cpu_count?: number | null;
+  rss_mb?: number | null;
+  rayon_threads?: number | null;
+  instance_type?: string | null;
+  instance_id?: string | null;
+  host?: string | null;
 }
 
 export interface ShardRecent {
@@ -140,6 +149,7 @@ export interface ShardRecent {
   completed_combats: number | null;
   steps: number | null;
   duration_s: number | null;
+  worker_metrics?: Record<string, unknown> | null;
   path: string;
 }
 
