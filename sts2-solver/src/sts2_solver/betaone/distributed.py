@@ -558,6 +558,15 @@ def mark_complete(root: Path, shard_id: str, *, worker_id: str, result_bytes: by
             raise FileNotFoundError(sp)
         if str(status.get("state") or "").lower() == "done":
             return status
+        current_worker = str(status.get("worker") or "")
+        if current_worker != worker_id:
+            status["stale_result_ignored"] = {
+                "worker": worker_id,
+                "current_worker": current_worker or None,
+                "ignored_at": utc_ts(),
+            }
+            atomic_write_json(sp, status)
+            return status
         rp = result_path(root, shard_id)
         _atomic_write_bytes(rp, result_bytes)
         now = utc_ts()
