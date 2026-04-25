@@ -564,6 +564,9 @@ class ExperimentConfig:
 
         if self.method == "mcts_selfplay":
             mcts = t.get("mcts", {})
+            distributed = mcts.get("distributed") or mcts.get("distributed_selfplay") or {}
+            if isinstance(distributed, bool):
+                distributed = {"enabled": distributed}
             return {
                 "num_generations": t.get("generations", 3000),
                 "combats_per_gen": t.get("combats_per_gen", 256),
@@ -601,6 +604,24 @@ class ExperimentConfig:
                 "reanalyse_frac": _float(mcts.get("reanalyse_frac"), 0.25),
                 "reanalyse_min_gen": mcts.get("reanalyse_min_gen", 10),
                 "reanalyse_sims": mcts.get("reanalyse_sims"),
+                "distributed_selfplay": bool(distributed.get("enabled", False)),
+                "distributed_shard_size": int(distributed.get("shard_size", 16)),
+                "distributed_poll_s": _float(distributed.get("poll_s"), 2.0),
+                "distributed_lease_s": _float(distributed.get("lease_s"), 900.0),
+                "distributed_local_fallback_after_s": (
+                    60.0
+                    if "local_fallback_after_s" not in distributed
+                    else (
+                        None
+                        if distributed.get("local_fallback_after_s") is None
+                        else _float(distributed.get("local_fallback_after_s"), 60.0)
+                    )
+                ),
+                "distributed_timeout_s": (
+                    None
+                    if distributed.get("timeout_s") is None
+                    else _float(distributed.get("timeout_s"), 0.0)
+                ),
             }
         else:  # ppo
             ppo = t.get("ppo", {})

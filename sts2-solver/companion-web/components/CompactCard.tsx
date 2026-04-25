@@ -5,6 +5,8 @@ import StatusPill from "./StatusPill";
 export default function CompactCard({ exp }: { exp: ExperimentSummary }) {
   const ev = exp.latest_eval;
   const vev = exp.latest_value_eval;
+  const mev = exp.latest_mcts_eval;
+  const realRescue = mev?.real_rescue_rate ?? mev?.rescue_rate;
   const gen = exp.concluded_gen ?? exp.progress?.gen ?? 0;
 
   return (
@@ -55,6 +57,15 @@ export default function CompactCard({ exp }: { exp: ExperimentSummary }) {
               <span className="text-muted text-[9px]">WR </span>
               <span className="text-text">
                 {formatPct(exp.best_win_rate, 0)}
+              </span>
+            </span>
+          )}
+          {realRescue != null && (
+            <span>
+              <span className="text-muted text-[9px]">R </span>
+              <span className={realRescue >= 0 ? "text-good" : "text-bad"}>
+                {realRescue >= 0 ? "+" : ""}
+                {(realRescue * 100).toFixed(0)}%
               </span>
             </span>
           )}

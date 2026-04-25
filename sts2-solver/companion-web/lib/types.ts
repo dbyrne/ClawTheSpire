@@ -22,6 +22,24 @@ export interface Progress {
   kl_mcts_net_mean?: number;
   top1_agree_mean?: number;
   value_corr_mean?: number;
+  selfplay_sec?: number;
+  train_sec?: number;
+  eval_sec?: number;
+  combat_p50_ms?: number;
+  combat_p90_ms?: number;
+  combat_p99_ms?: number;
+  combat_max_ms?: number;
+  combat_sum_ms?: number;
+  combat_decisions_sum?: number;
+  combat_decisions_mean?: number;
+  mcts_search_ms?: number;
+  mcts_search_ms_per_decision?: number;
+  mcts_eval_calls?: number;
+  mcts_value_calls?: number;
+  mcts_eval_ms?: number;
+  mcts_value_ms?: number;
+  mcts_nn_ms_per_call?: number;
+  mcts_nn_ms_share?: number;
   [k: string]: unknown;
 }
 
@@ -53,11 +71,21 @@ export interface ExperimentSummary {
   latest_value_eval: { passed?: number; total?: number; gen?: number } | null;
   latest_mcts_eval: {
     rescue_rate?: number;
+    real_rescue_rate?: number;
+    metric?: string;
     gen?: number;
+    total?: number;
     clean?: number;
     echo?: number;
     fixed?: number;
     broke?: number;
+    mixed?: number;
+    nomatch?: number;
+    num_sims?: number;
+    c_puct?: number;
+    pomcp?: boolean;
+    turn_boundary_eval?: boolean;
+    pw_k?: number;
   } | null;
   peak_eval: {
     passed?: number;
@@ -89,6 +117,49 @@ export interface ExperimentSummary {
   eval_series: EvalSeriesPoint[];
   value_eval_series: EvalSeriesPoint[];
   rescue_series: SeriesPoint[];
+  shards: ShardSummary | null;
+}
+
+export interface ShardWorkerSummary {
+  worker: string;
+  pending: number;
+  running: number;
+  done: number;
+  failed: number;
+  stale: number;
+  last_seen_age_s: number | null;
+}
+
+export interface ShardRecent {
+  gen: number | null;
+  shard_id: string;
+  state: "pending" | "running" | "done" | "failed" | "stale";
+  worker: string;
+  age_s: number;
+  target_combats: number | null;
+  completed_combats: number | null;
+  steps: number | null;
+  duration_s: number | null;
+  path: string;
+}
+
+export interface ShardSummary {
+  active: boolean;
+  root: string;
+  latest_gen: number | null;
+  total: number;
+  total_all: number;
+  pending: number;
+  running: number;
+  done: number;
+  failed: number;
+  stale: number;
+  target_combats: number | null;
+  completed_combats: number | null;
+  completion: number | null;
+  updated_age_s: number | null;
+  workers: ShardWorkerSummary[];
+  recent: ShardRecent[];
 }
 
 export interface SeriesPoint {
@@ -166,5 +237,15 @@ export interface DistillSummary {
   policy_only_wr: number | null;
   latest_eval: { passed?: number; total?: number; gen?: number } | null;
   latest_value_eval: { passed?: number; total?: number; gen?: number } | null;
-  latest_mcts_eval: { rescue_rate?: number; gen?: number } | null;
+  latest_mcts_eval: {
+    rescue_rate?: number;
+    real_rescue_rate?: number;
+    metric?: string;
+    gen?: number;
+    num_sims?: number;
+    c_puct?: number;
+    pomcp?: boolean;
+    turn_boundary_eval?: boolean;
+    pw_k?: number;
+  } | null;
 }

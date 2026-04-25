@@ -7,7 +7,10 @@ _read_progress) so the companion never duplicates discovery logic.
 from __future__ import annotations
 
 import json
+import re
 import statistics
+import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +32,256 @@ def _read_jsonl(path: Path) -> list[dict]:
             except json.JSONDecodeError:
                 continue
     return rows
+
+
+def _read_json(path: Path) -> dict:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        return payload if isinstance(payload, dict) else {}
+    except Exception:
+        return {}
+
+
+def _as_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _as_int(value: Any) -> int | None:
+    x = _as_float(value)
+    return int(x) if x is not None else None
+
+
+def _timestamp(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            return float(text)
+        except ValueError:
+            pass
+        try:
+            if text.endswith("Z"):
+                text = text[:-1] + "+00:00"
+            return datetime.fromisoformat(text).timestamp()
+        except ValueError:
+            return None
+    return None
+
+
+def _shard_gen(payload: dict, path: Path) -> int | None:
+    for key in ("gen", "generation", "gen_id"):
+        gen = _as_int(payload.get(key))
+        if gen is not None:
+            return gen
+    haystack = " ".join([path.stem, *[p.name for p in path.parents[:3]]])
+    match = re.search(r"(?:gen|g)[-_]?(\d+)", haystack, re.IGNORECASE)
+    return int(match.group(1)) if match else None
+
+
+def _shard_state(payload: dict, path: Path, now: float) -> str:
+    raw = (
+        payload.get("state")
+        or payload.get("status")
+        or payload.get("phase")
+        or ""
+    )
+    if not raw:
+        tokens = re.split(r"[^A-Za-z0-9]+", path.stem.lower())
+        raw = next(
+            (
+                t for t in tokens
+                if t in {
+                    "pending", "queued", "claim", "claimed", "running",
+                    "active", "done", "complete", "completed", "finished",
+                    "success", "succeeded", "failed", "error", "errored",
+                    "stale",
+                }
+            ),
+            "",
+        )
+    state = str(raw).strip().lower()
+    if state in {"queued", "claim", "claimed"}:
+        state = "pending"
+    elif state in {"active"}:
+        state = "running"
+    elif state in {"complete", "completed", "finished", "success", "succeeded"}:
+        state = "done"
+    elif state in {"error", "errored"}:
+        state = "failed"
+    elif state not in {"pending", "running", "done", "failed", "stale"}:
+        state = "done" if payload.get("artifact") or payload.get("result") else "pending"
+
+    expires = _timestamp(payload.get("lease_expires_at") or payload.get("expires_at"))
+    updated = _timestamp(
+        payload.get("updated_at")
+        or payload.get("timestamp")
+        or payload.get("heartbeat_at")
+        or payload.get("started_at")
+        or payload.get("claimed_at")
+    ) or path.stat().st_mtime
+    stale_after = _as_float(payload.get("stale_after_s")) or 900.0
+    if state == "running" and ((expires and expires < now) or now - updated > stale_after):
+        return "stale"
+    return state
+
+
+def _shard_summary(exp_dir: Path) -> dict | None:
+    """Summarize distributed self-play shard metadata files.
+
+    Supported layout is intentionally loose for laptop workers:
+      experiments/<name>/shards/**/*.json
+      experiments/<name>/selfplay_shards/**/*.json
+
+    Each file may include {gen, shard_id, status/state, worker, combats,
+    target_combats, updated_at}. Status can also be encoded in the filename
+    such as shard-003.running.json or shard-003.done.json.
+    """
+    paths: list[Path] = []
+    for dirname in ("shards", "selfplay_shards"):
+        root = exp_dir / dirname
+        if root.exists():
+            paths.extend(
+                p for p in root.rglob("*.json")
+                if p.is_file()
+                and p.name not in {"plan.json", "shared.json"}
+                and not ({"jobs", "shared", "results"} & set(p.parts))
+            )
+    if not paths:
+        return None
+
+    now = time.time()
+    entries: list[dict] = []
+    for path in sorted(paths):
+        payload = _read_json(path)
+        stat = path.stat()
+        updated = (
+            _timestamp(payload.get("updated_at"))
+            or _timestamp(payload.get("timestamp"))
+            or _timestamp(payload.get("heartbeat_at"))
+            or _timestamp(payload.get("completed_at"))
+            or _timestamp(payload.get("started_at"))
+            or stat.st_mtime
+        )
+        state = _shard_state(payload, path, now)
+        shard_id = (
+            payload.get("shard_id")
+            or payload.get("id")
+            or payload.get("name")
+            or path.stem
+        )
+        target_combats = _as_int(
+            payload.get("target_combats")
+            or payload.get("combats")
+            or payload.get("num_combats")
+        )
+        completed_combats = _as_int(
+            payload.get("completed_combats")
+            or payload.get("combats_done")
+            or payload.get("finished_combats")
+        )
+        if completed_combats is None and state == "done":
+            completed_combats = target_combats
+        entries.append({
+            "gen": _shard_gen(payload, path),
+            "shard_id": str(shard_id),
+            "state": state,
+            "worker": (
+                payload.get("worker")
+                or payload.get("worker_id")
+                or payload.get("host")
+                or payload.get("hostname")
+                or "unknown"
+            ),
+            "updated_at": updated,
+            "age_s": max(0.0, now - updated),
+            "target_combats": target_combats,
+            "completed_combats": completed_combats,
+            "steps": _as_int(payload.get("steps") or payload.get("samples")),
+            "duration_s": _as_float(payload.get("duration_s") or payload.get("elapsed_s")),
+            "path": str(path.relative_to(exp_dir)),
+        })
+
+    latest_gen_values = [e["gen"] for e in entries if e["gen"] is not None]
+    latest_gen = max(latest_gen_values) if latest_gen_values else None
+    scoped = [e for e in entries if e["gen"] == latest_gen] if latest_gen is not None else entries
+
+    def count(state: str) -> int:
+        return sum(1 for e in scoped if e["state"] == state)
+
+    total = len(scoped)
+    done = count("done")
+    running = count("running")
+    pending = count("pending")
+    failed = count("failed")
+    stale = count("stale")
+    target_combats_vals = [e["target_combats"] for e in scoped if e["target_combats"] is not None]
+    completed_combats_vals = [
+        e["completed_combats"] for e in scoped if e["completed_combats"] is not None
+    ]
+    target_combats = sum(target_combats_vals) if target_combats_vals else None
+    completed_combats = sum(completed_combats_vals) if completed_combats_vals else None
+    completion = (
+        done / total if total
+        else None
+    )
+    if target_combats and completed_combats is not None:
+        completion = min(1.0, completed_combats / max(target_combats, 1))
+
+    workers: dict[str, dict] = {}
+    for e in scoped:
+        worker = str(e["worker"])
+        w = workers.setdefault(worker, {
+            "worker": worker,
+            "pending": 0,
+            "running": 0,
+            "done": 0,
+            "failed": 0,
+            "stale": 0,
+            "last_seen_age_s": None,
+        })
+        w[e["state"]] += 1
+        age = e["age_s"]
+        if w["last_seen_age_s"] is None or age < w["last_seen_age_s"]:
+            w["last_seen_age_s"] = age
+
+    recent = sorted(scoped, key=lambda e: e["updated_at"], reverse=True)[:8]
+    latest_update = max(e["updated_at"] for e in scoped) if scoped else None
+    roots = [name for name in ("shards", "selfplay_shards") if (exp_dir / name).exists()]
+    return {
+        "active": total > 0,
+        "root": roots[0] if roots else "shards",
+        "latest_gen": latest_gen,
+        "total": total,
+        "total_all": len(entries),
+        "pending": pending,
+        "running": running,
+        "done": done,
+        "failed": failed,
+        "stale": stale,
+        "target_combats": target_combats,
+        "completed_combats": completed_combats,
+        "completion": completion,
+        "updated_age_s": max(0.0, now - latest_update) if latest_update else None,
+        "workers": sorted(
+            workers.values(),
+            key=lambda w: (
+                w["last_seen_age_s"] if w["last_seen_age_s"] is not None else 1e18,
+                w["worker"],
+            ),
+        ),
+        "recent": recent,
+    }
 
 
 def _kind(cfg) -> str:
@@ -231,6 +484,9 @@ def list_experiments(*, include_kinds: tuple[str, ...] | None = None) -> list[di
 
         eval_delta = _eval_delta(evals, "score")
         value_eval_delta = _eval_delta(value_evals, "score")
+        for row in mcts_evals:
+            if row.get("real_rescue_rate") is not None:
+                row["rescue_rate"] = row["real_rescue_rate"]
         rescue_delta = _eval_delta(mcts_evals, "rescue_rate")
 
         # Sparkline-ready time series. Each is [{gen, value}] with nulls
@@ -320,6 +576,7 @@ def list_experiments(*, include_kinds: tuple[str, ...] | None = None) -> list[di
             "eval_series": eval_series,
             "value_eval_series": value_eval_series,
             "rescue_series": rescue_series,
+            "shards": _shard_summary(d),
         })
 
     # Sort: running first, then stalled, then stopped/finalized, then alpha
@@ -378,6 +635,7 @@ def get_experiment(name: str) -> dict | None:
             "value_eval_history": value_evals,
             "mcts_eval_history": mcts_evals,
             "benchmarks": bench,
+            "shards": _shard_summary(d),
         }
     return None
 

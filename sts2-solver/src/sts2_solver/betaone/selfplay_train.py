@@ -86,6 +86,9 @@ def _update_phase(progress_path: str, phase: str, gen: int) -> None:
 # Replay buffer
 # ---------------------------------------------------------------------------
 
+REPLAY_BUFFER_SCHEMA_VERSION = 1
+
+
 class ReplayBuffer:
     """Fixed-capacity ring buffer of self-play samples.
 
@@ -141,7 +144,10 @@ class ReplayBuffer:
             state_jsons = [""] * n
         self.state_jsons.extend(state_jsons)
 
-        # Evict oldest generations until under capacity
+        self._evict_to_capacity()
+
+    def _evict_to_capacity(self) -> None:
+        """Evict oldest complete generations until under capacity."""
         while len(self.states) > self.max_steps and len(self._gen_sizes) > 1:
             drop = self._gen_sizes.popleft()
             del self.states[:drop]
@@ -152,6 +158,99 @@ class ReplayBuffer:
             del self.policies[:drop]
             del self.values[:drop]
             del self.state_jsons[:drop]
+
+    def to_checkpoint(self, gen: int) -> dict:
+        """Serialize replay state for durable trainer resume.
+
+        Keep this in a sidecar instead of betaone_latest.pt so eval and
+        benchmark tools don't pay the cost of loading the whole training
+        window just to read network weights.
+        """
+        return {
+            "schema_version": REPLAY_BUFFER_SCHEMA_VERSION,
+            "gen": int(gen),
+            "max_steps": int(self.max_steps),
+            "states": np.asarray(self.states, dtype=np.float32),
+            "act_feat": np.asarray(self.act_feat, dtype=np.float32),
+            "act_masks": np.asarray(self.act_masks, dtype=np.bool_),
+            "hand_ids": np.asarray(self.hand_ids, dtype=np.int64),
+            "action_ids": np.asarray(self.action_ids, dtype=np.int64),
+            "policies": np.asarray(self.policies, dtype=np.float32),
+            "values": np.asarray(self.values, dtype=np.float32),
+            "state_jsons": list(self.state_jsons),
+            "gen_sizes": list(self._gen_sizes),
+        }
+
+    def load_checkpoint(self, payload: dict) -> None:
+        """Restore replay state from a sidecar payload."""
+        schema_version = int(payload.get("schema_version", 0))
+        if schema_version != REPLAY_BUFFER_SCHEMA_VERSION:
+            raise ValueError(
+                f"Unsupported replay buffer schema {schema_version}; "
+                f"expected {REPLAY_BUFFER_SCHEMA_VERSION}"
+            )
+
+        arrays = {
+            "states": np.asarray(payload["states"], dtype=np.float32),
+            "act_feat": np.asarray(payload["act_feat"], dtype=np.float32),
+            "act_masks": np.asarray(payload["act_masks"], dtype=np.bool_),
+            "hand_ids": np.asarray(payload["hand_ids"], dtype=np.int64),
+            "action_ids": np.asarray(payload["action_ids"], dtype=np.int64),
+            "policies": np.asarray(payload["policies"], dtype=np.float32),
+            "values": np.asarray(payload["values"], dtype=np.float32),
+        }
+        n = len(arrays["states"])
+        bad_lengths = {
+            name: len(arr)
+            for name, arr in arrays.items()
+            if len(arr) != n
+        }
+        if bad_lengths:
+            raise ValueError(f"Replay sidecar has misaligned arrays: {bad_lengths}")
+
+        expected_widths = {
+            "states": STATE_DIM,
+            "act_feat": MAX_ACTIONS * ACTION_DIM,
+            "act_masks": MAX_ACTIONS,
+            "hand_ids": MAX_HAND,
+            "action_ids": MAX_ACTIONS,
+            "policies": MAX_ACTIONS,
+        }
+        for name, width in expected_widths.items():
+            arr = arrays[name]
+            if n and (arr.ndim != 2 or arr.shape[1] != width):
+                raise ValueError(
+                    f"Replay sidecar {name} shape {arr.shape} "
+                    f"does not match expected width {width}"
+                )
+        if n and arrays["values"].ndim != 1:
+            raise ValueError(
+                f"Replay sidecar values shape {arrays['values'].shape} "
+                "does not match expected 1D values"
+            )
+
+        state_jsons = list(payload.get("state_jsons", [""] * n))
+        if len(state_jsons) != n:
+            raise ValueError(
+                f"Replay sidecar has {len(state_jsons)} state_jsons for {n} rows"
+            )
+
+        gen_sizes = [int(x) for x in payload.get("gen_sizes", [])]
+        if n and sum(gen_sizes) != n:
+            gen_sizes = [n]
+        elif not n:
+            gen_sizes = []
+
+        self.states = list(arrays["states"])
+        self.act_feat = list(arrays["act_feat"])
+        self.act_masks = list(arrays["act_masks"])
+        self.hand_ids = list(arrays["hand_ids"])
+        self.action_ids = list(arrays["action_ids"])
+        self.policies = list(arrays["policies"])
+        self.values = list(arrays["values"])
+        self.state_jsons = state_jsons
+        self._gen_sizes = deque(gen_sizes)
+        self._evict_to_capacity()
 
     def sample_tensors(self, batch_size: int) -> tuple[
         torch.Tensor, torch.Tensor, torch.Tensor,
@@ -195,6 +294,89 @@ class ReplayBuffer:
         for j, idx in enumerate(indices):
             self.policies[idx] = new_policies[j]
             self.values[idx] = new_values[j]
+
+
+def _atomic_torch_save(payload: dict, path: str) -> None:
+    """Write a torch checkpoint without exposing partial files to readers."""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp_path = f"{path}.tmp-{os.getpid()}"
+    try:
+        torch.save(payload, tmp_path)
+        os.replace(tmp_path, path)
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+
+
+def _replay_sidecar_name(gen: int) -> str:
+    return f"betaone_replay_gen{gen}.pt"
+
+
+def _save_replay_checkpoint(replay: ReplayBuffer, output_dir: str, gen: int) -> str:
+    name = _replay_sidecar_name(gen)
+    path = os.path.join(output_dir, name)
+    _atomic_torch_save(replay.to_checkpoint(gen), path)
+    return name
+
+
+def _cleanup_replay_checkpoints(output_dir: str, keep_count: int = 2) -> None:
+    replay_paths: list[tuple[int, Path]] = []
+    for path in Path(output_dir).glob("betaone_replay_gen*.pt"):
+        try:
+            gen = int(path.stem.replace("betaone_replay_gen", ""))
+        except ValueError:
+            continue
+        replay_paths.append((gen, path))
+
+    for _gen, path in sorted(replay_paths, reverse=True)[keep_count:]:
+        try:
+            path.unlink()
+        except OSError:
+            pass
+
+
+def _try_load_replay_checkpoint(
+    replay: ReplayBuffer,
+    output_dir: str,
+    ckpt: dict,
+) -> bool:
+    """Load the replay sidecar that matches the model checkpoint gen."""
+    expected_gen = ckpt.get("gen")
+    candidates: list[str] = []
+    meta = ckpt.get("replay_buffer") or {}
+    if isinstance(meta, dict) and meta.get("path"):
+        candidates.append(os.path.join(output_dir, str(meta["path"])))
+    if expected_gen is not None:
+        candidates.append(os.path.join(output_dir, _replay_sidecar_name(int(expected_gen))))
+    candidates.append(os.path.join(output_dir, "betaone_replay_latest.pt"))
+
+    seen: set[str] = set()
+    for path in candidates:
+        if path in seen or not os.path.exists(path):
+            continue
+        seen.add(path)
+        try:
+            payload = torch.load(path, weights_only=False)
+            payload_gen = payload.get("gen")
+            if expected_gen is not None and payload_gen != expected_gen:
+                print(
+                    "Replay sidecar skipped: "
+                    f"{os.path.basename(path)} is gen {payload_gen}, "
+                    f"checkpoint is gen {expected_gen}"
+                )
+                continue
+            replay.load_checkpoint(payload)
+            print(
+                f"Loaded replay buffer: {len(replay):,} steps "
+                f"from {os.path.basename(path)}"
+            )
+            return True
+        except Exception as exc:
+            print(f"Replay sidecar skipped: {os.path.basename(path)} ({exc})")
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -408,6 +590,12 @@ def train(
     reanalyse_frac: float = 0.25,          # fraction of buffer refreshed per pass
     reanalyse_min_gen: int = 10,           # start reanalysing only after buffer is seeded
     reanalyse_sims: int | None = None,     # defaults to num_sims
+    distributed_selfplay: bool = False,
+    distributed_shard_size: int = 16,
+    distributed_poll_s: float = 2.0,
+    distributed_lease_s: float = 900.0,
+    distributed_local_fallback_after_s: float | None = 60.0,
+    distributed_timeout_s: float | None = None,
 ):
     os.makedirs(output_dir, exist_ok=True)
     onnx_dir = os.path.join(output_dir, "onnx")
@@ -459,9 +647,11 @@ def train(
 
     best_win_rate = 0.0
     start_gen = 1
+    resume_replay_meta: dict | None = None
 
     history_path = os.path.join(output_dir, "betaone_history.jsonl")
     progress_path = os.path.join(output_dir, "betaone_progress.json")
+    experiment_name = Path(output_dir).name
 
     # Resume if any checkpoint exists. cold_start is advisory: if checkpoints
     # are present we always resume to protect history/progress — the flag was a
@@ -482,6 +672,10 @@ def train(
                 print("Optimizer reset")
             start_gen = ckpt.get("gen", 0) + 1
             best_win_rate = ckpt.get("win_rate", 0.0)
+            resume_replay_meta = {
+                "gen": ckpt.get("gen"),
+                "replay_buffer": ckpt.get("replay_buffer"),
+            }
         except RuntimeError:
             # Dimension-aware warm-start
             old_state = ckpt["model_state_dict"]
@@ -553,10 +747,24 @@ def train(
 
     # Replay buffer
     replay = ReplayBuffer(max_steps=replay_capacity)
+    if resume_replay_meta is not None:
+        if not _try_load_replay_checkpoint(replay, output_dir, resume_replay_meta):
+            print("Replay buffer: no matching durable sidecar found; starting empty")
     print(f"Replay buffer: capacity {replay_capacity:,} steps")
 
     for gen in range(start_gen, num_generations + 1):
-        t0 = time.time()
+        t0 = time.perf_counter()
+        selfplay_sec = 0.0
+        train_sec = 0.0
+        eval_sec = 0.0
+        combat_durations_ms: list[float] = []
+        combat_decisions: list[int] = []
+        combat_search_ms: list[float] = []
+        combat_eval_calls: list[int] = []
+        combat_value_calls: list[int] = []
+        combat_eval_ms: list[float] = []
+        combat_value_ms: list[float] = []
+        distributed_stats: dict | None = None
 
         # Apply LR schedule (constant or cosine with warmup).
         current_lr = _lr_at_gen(gen)
@@ -608,30 +816,86 @@ def train(
                 == len(flat_hps)
                 == len(flat_seeds)
             ), "flattened self-play inputs must stay index-aligned"
-            rollout = sts2_engine.betaone_mcts_selfplay(
-                encounters_json=json.dumps(flat_encounters),
-                decks_json=json.dumps(flat_decks),
-                # Backward-compatible scalar fallback; Rust uses player_hps_json.
-                player_hp=flat_hps[0],
-                player_max_hp=player_max_hp,
-                player_max_energy=3,
-                relics_json=json.dumps(flat_relics),
-                potions_json="[]",
-                monster_data_json=monster_json,
-                enemy_profiles_json=profiles_json,
-                onnx_path=onnx_path,
-                card_vocab_json=card_vocab_json,
-                num_sims=num_sims,
-                temperature=temperature,
-                seeds=flat_seeds,
-                gen_id=gen,
-                add_noise=True,
-                turn_boundary_eval=turn_boundary_eval,
-                c_puct=c_puct,
-                pomcp=pomcp,
-                noise_frac=noise_frac,
-                pw_k=pw_k,
-                player_hps_json=json.dumps(flat_hps),
+            selfplay_t0 = time.perf_counter()
+            if distributed_selfplay:
+                from .distributed import merge_rollouts, run_distributed_selfplay_generation
+
+                rollouts, distributed_stats = run_distributed_selfplay_generation(
+                    output_dir=output_dir,
+                    experiment=experiment_name,
+                    gen=gen,
+                    flat_encounters=flat_encounters,
+                    flat_decks=flat_decks,
+                    flat_relics=flat_relics,
+                    flat_hps=flat_hps,
+                    flat_seeds=flat_seeds,
+                    onnx_path=onnx_path,
+                    card_vocab_json=card_vocab_json,
+                    monster_data_json=monster_json,
+                    enemy_profiles_json=profiles_json,
+                    num_sims=num_sims,
+                    temperature=temperature,
+                    player_max_hp=player_max_hp,
+                    player_max_energy=3,
+                    turn_boundary_eval=turn_boundary_eval,
+                    c_puct=c_puct,
+                    pomcp=pomcp,
+                    noise_frac=noise_frac,
+                    pw_k=pw_k,
+                    shard_size=distributed_shard_size,
+                    poll_s=distributed_poll_s,
+                    lease_s=distributed_lease_s,
+                    local_fallback_after_s=distributed_local_fallback_after_s,
+                    timeout_s=distributed_timeout_s,
+                )
+                rollout = merge_rollouts(rollouts)
+            else:
+                rollout = sts2_engine.betaone_mcts_selfplay(
+                    encounters_json=json.dumps(flat_encounters),
+                    decks_json=json.dumps(flat_decks),
+                    # Backward-compatible scalar fallback; Rust uses player_hps_json.
+                    player_hp=flat_hps[0],
+                    player_max_hp=player_max_hp,
+                    player_max_energy=3,
+                    relics_json=json.dumps(flat_relics),
+                    potions_json="[]",
+                    monster_data_json=monster_json,
+                    enemy_profiles_json=profiles_json,
+                    onnx_path=onnx_path,
+                    card_vocab_json=card_vocab_json,
+                    num_sims=num_sims,
+                    temperature=temperature,
+                    seeds=flat_seeds,
+                    gen_id=gen,
+                    add_noise=True,
+                    turn_boundary_eval=turn_boundary_eval,
+                    c_puct=c_puct,
+                    pomcp=pomcp,
+                    noise_frac=noise_frac,
+                    pw_k=pw_k,
+                    player_hps_json=json.dumps(flat_hps),
+                )
+            selfplay_sec += time.perf_counter() - selfplay_t0
+            combat_durations_ms.extend(
+                float(ms) for ms in rollout.get("combat_durations_ms", [])
+            )
+            combat_decisions.extend(
+                int(x) for x in rollout.get("combat_decisions", [])
+            )
+            combat_search_ms.extend(
+                float(ms) for ms in rollout.get("combat_search_ms", [])
+            )
+            combat_eval_calls.extend(
+                int(x) for x in rollout.get("combat_eval_calls", [])
+            )
+            combat_value_calls.extend(
+                int(x) for x in rollout.get("combat_value_calls", [])
+            )
+            combat_eval_ms.extend(
+                float(ms) for ms in rollout.get("combat_eval_ms", [])
+            )
+            combat_value_ms.extend(
+                float(ms) for ms in rollout.get("combat_value_ms", [])
             )
 
             n_steps = rollout["total_steps"]
@@ -708,9 +972,33 @@ def train(
         win_rate = n_wins / max(n_combats, 1)
         win_hps = [hp for hp, o in zip(all_final_hps, all_outcomes) if o == "win"]
         avg_hp = np.mean(win_hps) if win_hps else 0.0
+        combat_ms = np.array(combat_durations_ms, dtype=np.float64)
+        if combat_ms.size:
+            combat_p50_ms = float(np.percentile(combat_ms, 50))
+            combat_p90_ms = float(np.percentile(combat_ms, 90))
+            combat_p99_ms = float(np.percentile(combat_ms, 99))
+            combat_max_ms = float(np.max(combat_ms))
+            combat_sum_ms = float(np.sum(combat_ms))
+        else:
+            combat_p50_ms = combat_p90_ms = combat_p99_ms = 0.0
+            combat_max_ms = combat_sum_ms = 0.0
+
+        mcts_decisions = int(sum(combat_decisions))
+        mcts_search_ms = float(sum(combat_search_ms))
+        mcts_eval_calls = int(sum(combat_eval_calls))
+        mcts_value_calls = int(sum(combat_value_calls))
+        mcts_eval_ms = float(sum(combat_eval_ms))
+        mcts_value_ms = float(sum(combat_value_ms))
+        mcts_nn_ms = mcts_eval_ms + mcts_value_ms
+        mcts_nn_calls = mcts_eval_calls + mcts_value_calls
+        mcts_search_ms_per_decision = mcts_search_ms / max(mcts_decisions, 1)
+        mcts_nn_ms_per_call = mcts_nn_ms / max(mcts_nn_calls, 1)
+        mcts_nn_ms_share = mcts_nn_ms / max(mcts_search_ms, 1.0)
+        combat_decisions_mean = mcts_decisions / max(len(combat_decisions), 1)
 
         # Train from replay buffer
         _update_phase(progress_path, "TRAINING", gen)
+        train_t0 = time.perf_counter()
         network.train()
         total_ploss = 0.0
         total_vloss = 0.0
@@ -756,6 +1044,7 @@ def train(
                     grad_np_samples.append(metrics["grad_norm_p"])
                     grad_nv_samples.append(metrics["grad_norm_v"])
                 n_updates += 1
+        train_sec = time.perf_counter() - train_t0
 
         n = max(n_updates, 1)
         avg_ploss = total_ploss / n
@@ -849,7 +1138,7 @@ def train(
                     "elapsed": round(time.time() - ra_t0, 2),
                 }
 
-        elapsed = time.time() - t0
+        elapsed = time.perf_counter() - t0
 
         print(
             f"Gen {gen:4d} | "
@@ -883,8 +1172,33 @@ def train(
             "value_loss": round(avg_vloss, 5),
             "num_sims": num_sims,
             "gen_time": round(elapsed, 2),
-            "timestamp": time.time(),
+            "selfplay_sec": round(selfplay_sec, 2),
+            "train_sec": round(train_sec, 2),
+            "eval_sec": round(eval_sec, 2),
+            "combat_p50_ms": round(combat_p50_ms, 1),
+            "combat_p90_ms": round(combat_p90_ms, 1),
+            "combat_p99_ms": round(combat_p99_ms, 1),
+            "combat_max_ms": round(combat_max_ms, 1),
+            "combat_sum_ms": round(combat_sum_ms, 1),
+            "combat_decisions_sum": mcts_decisions,
+            "combat_decisions_mean": round(combat_decisions_mean, 2),
+            "mcts_search_ms": round(mcts_search_ms, 1),
+            "mcts_search_ms_per_decision": round(mcts_search_ms_per_decision, 2),
+            "mcts_eval_calls": mcts_eval_calls,
+            "mcts_value_calls": mcts_value_calls,
+            "mcts_eval_ms": round(mcts_eval_ms, 1),
+            "mcts_value_ms": round(mcts_value_ms, 1),
+            "mcts_nn_ms_per_call": round(mcts_nn_ms_per_call, 4),
+            "mcts_nn_ms_share": round(mcts_nn_ms_share, 4),
         }
+        if distributed_stats:
+            record["distributed"] = True
+            record["distributed_plan_id"] = distributed_stats.get("plan_id")
+            record["distributed_shards"] = distributed_stats.get("num_shards")
+            record["distributed_shard_size"] = distributed_stats.get("shard_size")
+            record["distributed_local_shards"] = distributed_stats.get("local_shards")
+            record["distributed_wait_polls"] = distributed_stats.get("polls")
+            record["distributed_elapsed_s"] = distributed_stats.get("elapsed_s")
         if grad_cos_samples:
             import statistics
             record["grad_cos_pv_mean"] = round(statistics.fmean(grad_cos_samples), 4)
@@ -908,15 +1222,11 @@ def train(
             record["reanalyse_kl"] = round(reanalyse_stats["kl_old_new"], 4)
             record["reanalyse_dv"] = round(reanalyse_stats["dv_mean"], 4)
             record["reanalyse_time"] = reanalyse_stats["elapsed"]
-        with open(history_path, "a") as f:
-            f.write(json.dumps(record) + "\n")
-        with open(progress_path, "w") as f:
-            record["num_generations"] = num_generations
-            record["best_win_rate"] = round(max(best_win_rate, win_rate), 4)
-            json.dump(record, f, indent=2)
 
         best_win_rate = max(best_win_rate, win_rate)
 
+        checkpoint_t0 = time.perf_counter()
+        replay_sidecar = _save_replay_checkpoint(replay, output_dir, gen)
         ckpt_data = {
             "gen": gen,
             "arch_meta": network.arch_meta(),
@@ -924,14 +1234,23 @@ def train(
             "optimizer_state_dict": optimizer.state_dict(),
             "win_rate": win_rate,
             "num_cards": num_cards,
+            "replay_buffer": {
+                "schema_version": REPLAY_BUFFER_SCHEMA_VERSION,
+                "path": replay_sidecar,
+                "gen": gen,
+                "size": len(replay),
+            },
         }
         latest_path = os.path.join(output_dir, "betaone_latest.pt")
-        torch.save(ckpt_data, latest_path)
+        _atomic_torch_save(ckpt_data, latest_path)
         # save_every from config (default 10) — save milestones at that cadence
         # PLUS any new-best WR gens. save_every=1 preserves every gen for
         # post-hoc benchmarking / analysis.
         if gen % max(save_every, 1) == 0 or win_rate >= best_win_rate:
-            torch.save(ckpt_data, os.path.join(output_dir, f"betaone_gen{gen}.pt"))
+            _atomic_torch_save(ckpt_data, os.path.join(output_dir, f"betaone_gen{gen}.pt"))
+        _cleanup_replay_checkpoints(output_dir)
+        record["checkpoint_sec"] = round(time.perf_counter() - checkpoint_t0, 2)
+        record["replay_sidecar"] = replay_sidecar
 
         # Periodic eval curve: append eval.jsonl / value_eval.jsonl so the TUI
         # and downstream plots can track decision-quality progress across
@@ -939,6 +1258,7 @@ def train(
         # skill curve; eval pass rate moves earlier and at higher resolution.
         if eval_every > 0 and gen % eval_every == 0:
             _update_phase(progress_path, "EVALUATING", gen)
+            eval_t0 = time.perf_counter()
             try:
                 from .eval import run_eval, run_value_eval, run_mcts_eval
                 from .suite import compute_eval_suite, suite_id as _suite_id
@@ -947,9 +1267,15 @@ def train(
                 _sid = _suite_id(compute_eval_suite())
                 pol = run_eval(latest_path)
                 val = run_value_eval(latest_path)
-                # MCTS eval: policy-vs-MCTS classification. Rescue rate tracks
-                # value-head bias (how much corrective signal MCTS leaves provide).
-                mce = run_mcts_eval(latest_path)
+                # MCTS eval: policy-vs-MCTS classification. Real rescue tracks
+                # the net corrective signal MCTS leaves provide.
+                mce = run_mcts_eval(
+                    latest_path,
+                    c_puct=c_puct,
+                    pomcp=pomcp,
+                    turn_boundary_eval=turn_boundary_eval,
+                    pw_k=pw_k,
+                )
                 # Mirror Experiment.save_eval / save_value_eval entry shape.
                 pol_entry = {
                     "suite": _sid, "timestamp": time.time(), "gen": gen,
@@ -979,7 +1305,14 @@ def train(
                     "clean": mce["clean"], "echo": mce["echo"],
                     "fixed": mce["fixed"], "broke": mce["broke"],
                     "mixed": mce["mixed"], "nomatch": mce["nomatch"],
+                    "metric": mce.get("metric", "real_rescue"),
+                    "real_rescue_rate": round(mce.get("real_rescue_rate", mce["rescue_rate"]), 4),
                     "rescue_rate": round(mce["rescue_rate"], 4),
+                    "num_sims": mce.get("num_sims"),
+                    "c_puct": mce.get("c_puct"),
+                    "pomcp": mce.get("pomcp"),
+                    "turn_boundary_eval": mce.get("turn_boundary_eval"),
+                    "pw_k": mce.get("pw_k"),
                 }
                 with open(os.path.join(bench_dir, "eval.jsonl"), "a", encoding="utf-8") as f:
                     f.write(json.dumps(pol_entry) + "\n")
@@ -991,9 +1324,21 @@ def train(
                       f"({pol_entry['score']:.0%}) | value: {val['passed']}/{val['total']} "
                       f"({val_entry['score']:.0%}) | "
                       f"mcts: CLEAN={mce['clean']} ECHO={mce['echo']} "
-                      f"FIXED={mce['fixed']} (rescue {mce['rescue_rate']:.0%})")
+                      f"FIXED={mce['fixed']} BROKE={mce['broke']} "
+                      f"(real rescue {mce['real_rescue_rate']:.0%})")
             except Exception as e:
                 print(f"       [eval_every] skipped gen {gen}: {e}")
+            finally:
+                eval_sec = time.perf_counter() - eval_t0
+
+        record["eval_sec"] = round(eval_sec, 2)
+        record["timestamp"] = time.time()
+        with open(history_path, "a") as f:
+            f.write(json.dumps(record) + "\n")
+        with open(progress_path, "w") as f:
+            record["num_generations"] = num_generations
+            record["best_win_rate"] = round(best_win_rate, 4)
+            json.dump(record, f, indent=2)
 
     print(f"\nTraining complete. Best win rate: {best_win_rate:.1%}")
 
@@ -1015,6 +1360,11 @@ def main():
                         help="Ignore existing checkpoint, start from scratch")
     parser.add_argument("--replay-capacity", type=int, default=200_000,
                         help="Replay buffer capacity in steps")
+    parser.add_argument("--distributed-selfplay", action="store_true",
+                        help="Schedule self-play shards for companion API workers")
+    parser.add_argument("--distributed-shard-size", type=int, default=16)
+    parser.add_argument("--distributed-local-fallback-after-s", type=float, default=60.0,
+                        help="Seconds before coordinator runs unclaimed shards locally")
     args = parser.parse_args()
 
     train(
@@ -1026,6 +1376,9 @@ def main():
         output_dir=args.output_dir,
         cold_start=args.cold_start,
         replay_capacity=args.replay_capacity,
+        distributed_selfplay=args.distributed_selfplay,
+        distributed_shard_size=args.distributed_shard_size,
+        distributed_local_fallback_after_s=args.distributed_local_fallback_after_s,
     )
 
 

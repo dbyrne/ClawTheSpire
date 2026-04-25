@@ -10,6 +10,7 @@ use rand::SeedableRng;
 use rand::rngs::StdRng;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::time::Instant;
 
 use crate::actions::enumerate_actions;
 use crate::combat;
@@ -44,11 +45,11 @@ struct Sample {
     action_card_ids: [i64; encode::MAX_ACTIONS],
     action_features: [f32; encode::MAX_ACTIONS * encode::ACTION_DIM],
     action_mask: [bool; encode::MAX_ACTIONS],
-    policy: [f32; encode::MAX_ACTIONS],  // MCTS visit distribution (zero-padded)
-    visits: [u32; encode::MAX_ACTIONS],  // Raw visit counts per action
-    q_values: [f32; encode::MAX_ACTIONS],  // Q value per child action (mean backed-up value)
+    policy: [f32; encode::MAX_ACTIONS], // MCTS visit distribution (zero-padded)
+    visits: [u32; encode::MAX_ACTIONS], // Raw visit counts per action
+    q_values: [f32; encode::MAX_ACTIONS], // Q value per child action (mean backed-up value)
     num_actions: usize,
-    mcts_value: f32,  // MCTS root value (search-backed average for bootstrap targets)
+    mcts_value: f32, // MCTS root value (search-backed average for bootstrap targets)
     // Raw CombatState JSON so reanalyse can re-run MCTS on this decision point
     // with a fresher network. Kept alongside the encoded features to avoid a
     // second "what state was this" lookup path.
@@ -59,6 +60,13 @@ struct SelfPlayResult {
     samples: Vec<Sample>,
     outcome: String,
     final_hp: i32,
+    duration_ms: f64,
+    decisions: u64,
+    mcts_search_ms: f64,
+    mcts_eval_calls: u64,
+    mcts_value_calls: u64,
+    mcts_eval_ms: f64,
+    mcts_value_ms: f64,
 }
 
 // ---------------------------------------------------------------------------
@@ -104,6 +112,13 @@ fn run_selfplay_combat(
             samples: vec![],
             outcome: "win".into(),
             final_hp: player_hp,
+            duration_ms: 0.0,
+            decisions: 0,
+            mcts_search_ms: 0.0,
+            mcts_eval_calls: 0,
+            mcts_value_calls: 0,
+            mcts_eval_ms: 0.0,
+            mcts_value_ms: 0.0,
         };
     }
 
@@ -140,6 +155,12 @@ fn run_selfplay_combat(
 
     let mut samples: Vec<Sample> = Vec::new();
     let mut final_outcome = "lose";
+    let mut decisions = 0u64;
+    let mut mcts_search_ms = 0.0;
+    let mut mcts_eval_calls = 0u64;
+    let mut mcts_value_calls = 0u64;
+    let mut mcts_eval_ms = 0.0;
+    let mut mcts_value_ms = 0.0;
 
     'outer: for _turn in 1..=30 {
         combat::start_turn(&mut state, &mut rng);
@@ -186,6 +207,12 @@ fn run_selfplay_combat(
                 temperature,
                 &mut rng,
             );
+            decisions += 1;
+            mcts_search_ms += result.stats.search_ms;
+            mcts_eval_calls += result.stats.eval_calls;
+            mcts_value_calls += result.stats.value_calls;
+            mcts_eval_ms += result.stats.eval_ms;
+            mcts_value_ms += result.stats.value_ms;
 
             // Store sample: state + MCTS policy + raw visits + Q values
             let mut policy = [0.0f32; encode::MAX_ACTIONS];
@@ -193,11 +220,21 @@ fn run_selfplay_combat(
                 policy[i] = p;
             }
             let mut visits = [0u32; encode::MAX_ACTIONS];
-            for (i, &v) in result.child_visits.iter().enumerate().take(encode::MAX_ACTIONS) {
+            for (i, &v) in result
+                .child_visits
+                .iter()
+                .enumerate()
+                .take(encode::MAX_ACTIONS)
+            {
                 visits[i] = v;
             }
             let mut q_values = [0.0f32; encode::MAX_ACTIONS];
-            for (i, &q) in result.child_values.iter().enumerate().take(encode::MAX_ACTIONS) {
+            for (i, &q) in result
+                .child_values
+                .iter()
+                .enumerate()
+                .take(encode::MAX_ACTIONS)
+            {
                 q_values[i] = q;
             }
 
@@ -230,11 +267,12 @@ fn run_selfplay_combat(
                     }
                     break; // Next turn
                 }
-                Action::PlayCard { card_idx, target_idx } => {
+                Action::PlayCard {
+                    card_idx,
+                    target_idx,
+                } => {
                     if combat::can_play_card(&state, *card_idx) {
-                        combat::play_card(
-                            &mut state, *card_idx, *target_idx, &card_db, &mut rng,
-                        );
+                        combat::play_card(&mut state, *card_idx, *target_idx, &card_db, &mut rng);
                     }
                     if let Some(outcome) = combat::check_combat_end(&mut state) {
                         final_outcome = outcome;
@@ -257,12 +295,23 @@ fn run_selfplay_combat(
         }
     }
 
-    let final_hp = if final_outcome == "win" { state.player.hp.max(0) } else { 0 };
+    let final_hp = if final_outcome == "win" {
+        state.player.hp.max(0)
+    } else {
+        0
+    };
 
     SelfPlayResult {
         samples,
         outcome: final_outcome.to_string(),
         final_hp,
+        duration_ms: 0.0,
+        decisions,
+        mcts_search_ms,
+        mcts_eval_calls,
+        mcts_value_calls,
+        mcts_eval_ms,
+        mcts_value_ms,
     }
 }
 
@@ -332,9 +381,9 @@ pub fn betaone_mcts_selfplay(
     let encounter_list: Vec<Vec<String>> = serde_json::from_str(encounters_json)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("encounters: {e}")))?;
     let card_vocab: CardVocab = serde_json::from_str(card_vocab_json).unwrap_or_default();
-    let relic_lists: Vec<Vec<String>> = serde_json::from_str(relics_json)
-        .unwrap_or_default();
-    let relic_sets: Vec<HashSet<String>> = relic_lists.into_iter()
+    let relic_lists: Vec<Vec<String>> = serde_json::from_str(relics_json).unwrap_or_default();
+    let relic_sets: Vec<HashSet<String>> = relic_lists
+        .into_iter()
         .map(|v| v.into_iter().collect())
         .collect();
     let player_hps: Vec<i32> = if player_hps_json.trim().is_empty() {
@@ -348,8 +397,9 @@ pub fn betaone_mcts_selfplay(
     let potions_per_combat: Vec<Vec<Potion>> = if potions_per_combat_json.trim().is_empty() {
         Vec::new()
     } else {
-        serde_json::from_str(potions_per_combat_json)
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("potions_per_combat_json: {e}")))?
+        serde_json::from_str(potions_per_combat_json).map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!("potions_per_combat_json: {e}"))
+        })?
     };
     let empty_relics: HashSet<String> = HashSet::new();
     let onnx = onnx_path.to_string();
@@ -400,18 +450,31 @@ pub fn betaone_mcts_selfplay(
                     }
 
                     let inference = &cache.as_ref().unwrap().inference;
-                    Some(run_selfplay_combat(
+                    let combat_start = Instant::now();
+                    let mut result = run_selfplay_combat(
                         deck,
-                        combat_hp, player_max_hp, player_max_energy,
-                        enemy_ids, relics, combat_potions,
-                        &monsters, &profiles,
-                        inference, &card_vocab,
-                        num_sims, temperature, seed, add_noise,
-                        turn_boundary_eval, c_puct,
+                        combat_hp,
+                        player_max_hp,
+                        player_max_energy,
+                        enemy_ids,
+                        relics,
+                        combat_potions,
+                        &monsters,
+                        &profiles,
+                        inference,
+                        &card_vocab,
+                        num_sims,
+                        temperature,
+                        seed,
+                        add_noise,
+                        turn_boundary_eval,
+                        c_puct,
                         pomcp,
                         noise_frac,
                         pw_k,
-                    ))
+                    );
+                    result.duration_ms = combat_start.elapsed().as_secs_f64() * 1000.0;
+                    Some(result)
                 })
             })
             .collect::<Vec<_>>()
@@ -438,10 +501,24 @@ fn build_selfplay_py(py: Python<'_>, results: &[Option<SelfPlayResult>]) -> PyRe
     let mut combat_indices: Vec<i64> = Vec::new();
     let mut outcomes: Vec<String> = Vec::new();
     let mut final_hps: Vec<i32> = Vec::new();
+    let mut combat_durations_ms: Vec<f64> = Vec::new();
+    let mut combat_decisions: Vec<i64> = Vec::new();
+    let mut combat_search_ms: Vec<f64> = Vec::new();
+    let mut combat_eval_calls: Vec<i64> = Vec::new();
+    let mut combat_value_calls: Vec<i64> = Vec::new();
+    let mut combat_eval_ms: Vec<f64> = Vec::new();
+    let mut combat_value_ms: Vec<f64> = Vec::new();
     let mut total_steps: i64 = 0;
     let mut combat_idx: i64 = 0;
 
     for result in results.iter().flatten() {
+        combat_durations_ms.push(result.duration_ms);
+        combat_decisions.push(result.decisions as i64);
+        combat_search_ms.push(result.mcts_search_ms);
+        combat_eval_calls.push(result.mcts_eval_calls as i64);
+        combat_value_calls.push(result.mcts_value_calls as i64);
+        combat_eval_ms.push(result.mcts_eval_ms);
+        combat_value_ms.push(result.mcts_value_ms);
         if result.samples.is_empty() {
             continue;
         }
@@ -470,7 +547,10 @@ fn build_selfplay_py(py: Python<'_>, results: &[Option<SelfPlayResult>]) -> PyRe
     dict.set_item("hand_card_ids", &all_hand_ids)?;
     dict.set_item("action_card_ids", &all_action_ids)?;
     dict.set_item("action_features", &all_act_feat)?;
-    dict.set_item("action_masks", PyList::new(py, all_act_masks.iter().map(|&b| b))?)?;
+    dict.set_item(
+        "action_masks",
+        PyList::new(py, all_act_masks.iter().map(|&b| b))?,
+    )?;
     dict.set_item("policies", &all_policies)?;
     dict.set_item("child_visits", &all_visits)?;
     dict.set_item("child_q_values", &all_q_values)?;
@@ -480,6 +560,13 @@ fn build_selfplay_py(py: Python<'_>, results: &[Option<SelfPlayResult>]) -> PyRe
     dict.set_item("combat_indices", &combat_indices)?;
     dict.set_item("outcomes", outcomes)?;
     dict.set_item("final_hps", &final_hps)?;
+    dict.set_item("combat_durations_ms", &combat_durations_ms)?;
+    dict.set_item("combat_decisions", &combat_decisions)?;
+    dict.set_item("combat_search_ms", &combat_search_ms)?;
+    dict.set_item("combat_eval_calls", &combat_eval_calls)?;
+    dict.set_item("combat_value_calls", &combat_value_calls)?;
+    dict.set_item("combat_eval_ms", &combat_eval_ms)?;
+    dict.set_item("combat_value_ms", &combat_value_ms)?;
     dict.set_item("total_steps", total_steps)?;
 
     Ok(dict.into())
@@ -530,7 +617,9 @@ fn run_reanalyse_one(
     // Rebuild enemy AIs from stored enemy IDs + profiles. move_index resets
     // to 0 — a minor bias vs original self-play (where the ai may have been
     // mid-cycle) but far smaller than the stale-target effect we're fixing.
-    let enemy_ais: Vec<enemy::EnemyAI> = state.enemies.iter()
+    let enemy_ais: Vec<enemy::EnemyAI> = state
+        .enemies
+        .iter()
         .map(|e| enemy::create_enemy_ai(&e.id, profiles))
         .collect();
 
@@ -550,9 +639,7 @@ fn run_reanalyse_one(
     mcts_engine.pomcp = pomcp;
     mcts_engine.pw_k = pw_k;
 
-    let sr = mcts_engine.search_with_ais(
-        &state, Some(&enemy_ais), num_sims, temperature, &mut rng,
-    );
+    let sr = mcts_engine.search_with_ais(&state, Some(&enemy_ais), num_sims, temperature, &mut rng);
 
     let mut policy = [0.0f32; encode::MAX_ACTIONS];
     for (i, &p) in sr.policy.iter().enumerate().take(encode::MAX_ACTIONS) {
@@ -616,42 +703,58 @@ pub fn betaone_mcts_reanalyse(
 
     let n = state_jsons.len();
     // Expand seeds to match if underspecified
-    let seeds_full: Vec<u64> = (0..n).map(|i| {
-        seeds.get(i).copied().unwrap_or_else(|| (gen_id as u64).wrapping_mul(1_000_003) + i as u64)
-    }).collect();
+    let seeds_full: Vec<u64> = (0..n)
+        .map(|i| {
+            seeds
+                .get(i)
+                .copied()
+                .unwrap_or_else(|| (gen_id as u64).wrapping_mul(1_000_003) + i as u64)
+        })
+        .collect();
 
     let results = py.allow_threads(move || {
         use rayon::prelude::*;
 
-        (0..n).into_par_iter().map(|i| {
-            SELFPLAY_CACHE.with(|cache| {
-                let mut cache = cache.borrow_mut();
-                let needs_reload = match &*cache {
-                    Some(c) => c.cache_key != cache_key,
-                    None => true,
-                };
-                if needs_reload {
-                    match BetaOneInference::new(&onnx) {
-                        Ok(inf) => {
-                            *cache = Some(CachedSelfPlay {
-                                cache_key: cache_key.clone(),
-                                inference: inf,
-                            });
-                        }
-                        Err(e) => {
-                            eprintln!("Reanalyse ONNX error: {e}");
-                            return None;
+        (0..n)
+            .into_par_iter()
+            .map(|i| {
+                SELFPLAY_CACHE.with(|cache| {
+                    let mut cache = cache.borrow_mut();
+                    let needs_reload = match &*cache {
+                        Some(c) => c.cache_key != cache_key,
+                        None => true,
+                    };
+                    if needs_reload {
+                        match BetaOneInference::new(&onnx) {
+                            Ok(inf) => {
+                                *cache = Some(CachedSelfPlay {
+                                    cache_key: cache_key.clone(),
+                                    inference: inf,
+                                });
+                            }
+                            Err(e) => {
+                                eprintln!("Reanalyse ONNX error: {e}");
+                                return None;
+                            }
                         }
                     }
-                }
-                let inference = &cache.as_ref().unwrap().inference;
-                run_reanalyse_one(
-                    &state_jsons[i], &profiles, &card_vocab, inference,
-                    num_sims, temperature, seeds_full[i],
-                    turn_boundary_eval, c_puct, pomcp, pw_k,
-                )
+                    let inference = &cache.as_ref().unwrap().inference;
+                    run_reanalyse_one(
+                        &state_jsons[i],
+                        &profiles,
+                        &card_vocab,
+                        inference,
+                        num_sims,
+                        temperature,
+                        seeds_full[i],
+                        turn_boundary_eval,
+                        c_puct,
+                        pomcp,
+                        pw_k,
+                    )
+                })
             })
-        }).collect::<Vec<_>>()
+            .collect::<Vec<_>>()
     });
 
     // Build Python output. Missing entries (failed deserialize / no actions)

@@ -80,14 +80,109 @@ function MiniStat({
   );
 }
 
+function PlainStat({
+  label,
+  value,
+}: {
+  label: string;
+  value: React.ReactNode;
+}) {
+  return (
+    <div className="min-w-0">
+      <div className="text-[9px] uppercase tracking-wider text-muted">
+        {label}
+      </div>
+      <div className="mono text-[13px] text-text truncate">{value}</div>
+    </div>
+  );
+}
+
+function formatMs(ms: number | null | undefined): string {
+  if (ms == null) return "-";
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+function ShardStrip({ exp }: { exp: ExperimentSummary }) {
+  const shards = exp.shards;
+  if (!shards?.active || shards.total <= 0) return null;
+
+  const pct =
+    shards.completion != null
+      ? Math.max(0, Math.min(100, Math.round(shards.completion * 100)))
+      : Math.round((shards.done / Math.max(shards.total, 1)) * 100);
+  const donePct = (shards.done / Math.max(shards.total, 1)) * 100;
+  const runningPct = (shards.running / Math.max(shards.total, 1)) * 100;
+  const issueCount = shards.failed + shards.stale;
+  const workerNames = shards.workers
+    .filter((w) => w.worker && w.worker !== "unknown")
+    .slice(0, 3)
+    .map((w) => `${w.worker}${w.running ? `:${w.running}` : ""}`);
+
+  return (
+    <div className="px-4 pb-3">
+      <div className="border border-border bg-panel2/70 rounded-lg px-3 py-2">
+        <div className="flex items-baseline justify-between gap-3 mono text-[11px] mb-1.5">
+          <span className="text-text">
+            shards
+            {shards.latest_gen != null ? ` g${shards.latest_gen}` : ""}{" "}
+            <span className="text-muted">
+              {shards.done}/{shards.total}
+            </span>
+            <span className="text-muted"> - {pct}%</span>
+          </span>
+          <span
+            className={
+              issueCount
+                ? "text-bad"
+                : shards.running
+                  ? "text-info"
+                  : "text-muted"
+            }
+          >
+            {shards.running ? `${shards.running} running` : ""}
+            {shards.running && issueCount ? " - " : ""}
+            {issueCount ? `${issueCount} needs attention` : ""}
+            {!shards.running && !issueCount && shards.updated_age_s != null
+              ? `${formatDuration(shards.updated_age_s)} ago`
+              : ""}
+          </span>
+        </div>
+        <div className="h-1.5 bg-bg rounded overflow-hidden flex">
+          <div className="h-full bg-good" style={{ width: `${donePct}%` }} />
+          <div
+            className="h-full bg-info"
+            style={{ width: `${runningPct}%` }}
+          />
+        </div>
+        <div className="flex justify-between gap-3 text-[10px] mono text-muted mt-1.5">
+          <span className="truncate">
+            {workerNames.length ? workerNames.join("  ") : "no worker id"}
+          </span>
+          <span className="shrink-0">
+            {shards.completed_combats != null && shards.target_combats
+              ? `${shards.completed_combats}/${shards.target_combats} combats`
+              : `${shards.pending} pending`}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function ExperimentCard({ exp }: { exp: ExperimentSummary }) {
   const { progress, status } = exp;
   const ev = exp.latest_eval;
   const vev = exp.latest_value_eval;
   const mev = exp.latest_mcts_eval;
+  const realRescue = mev?.real_rescue_rate ?? mev?.rescue_rate;
   const gen = progress?.gen ?? exp.concluded_gen ?? 0;
   const total = exp.generations_total ?? "?";
   const phase = progress?.phase;
+  const hasPerfTelemetry =
+    progress?.selfplay_sec != null ||
+    progress?.combat_p99_ms != null ||
+    progress?.mcts_nn_ms_share != null;
   const pct =
     typeof total === "number" && total > 0
       ? Math.min(100, Math.round((gen / total) * 100))
@@ -176,6 +271,8 @@ export default function ExperimentCard({ exp }: { exp: ExperimentSummary }) {
       </div>
 
       {/* Primary metrics: 2×2 grid with sparklines */}
+      <ShardStrip exp={exp} />
+
       <div className="px-3 pb-3 grid grid-cols-2 gap-2">
         <MetricCell
           label="P-Eval"
@@ -252,15 +349,15 @@ export default function ExperimentCard({ exp }: { exp: ExperimentSummary }) {
           peakGen={exp.best_win_rate_gen}
         />
         <MetricCell
-          label="Rescue"
+          label="Real Rescue"
           value={
-            mev?.rescue_rate != null
-              ? `${mev.rescue_rate >= 0 ? "+" : ""}${(mev.rescue_rate * 100).toFixed(0)}%`
+            realRescue != null
+              ? `${realRescue >= 0 ? "+" : ""}${(realRescue * 100).toFixed(0)}%`
               : "—"
           }
           hint={
             mev?.clean != null
-              ? `CL${mev.clean} · EC${mev.echo ?? 0} · FX${mev.fixed ?? 0}`
+              ? `CL${mev.clean} · EC${mev.echo ?? 0} · FX${mev.fixed ?? 0} · BR${mev.broke ?? 0}`
               : undefined
           }
           delta={exp.rescue_delta}
@@ -316,6 +413,40 @@ export default function ExperimentCard({ exp }: { exp: ExperimentSummary }) {
             delta={exp.value_corr_delta}
             deltaFormat={(d) => d.toFixed(3)}
             series={exp.vcorr_series}
+          />
+        </div>
+      )}
+
+      {/* Performance telemetry */}
+      {hasPerfTelemetry && (
+        <div className="px-4 py-2.5 border-t border-border grid grid-cols-2 gap-3">
+          <PlainStat
+            label="Selfplay"
+            value={formatDuration(progress?.selfplay_sec)}
+          />
+          <PlainStat
+            label="Train"
+            value={formatDuration(progress?.train_sec)}
+          />
+          <PlainStat
+            label="Combat p99"
+            value={formatMs(progress?.combat_p99_ms)}
+          />
+          <PlainStat
+            label="NN share"
+            value={
+              progress?.mcts_nn_ms_share != null
+                ? formatPct(progress.mcts_nn_ms_share, 1)
+                : "-"
+            }
+          />
+          <PlainStat
+            label="MCTS/decision"
+            value={formatMs(progress?.mcts_search_ms_per_decision)}
+          />
+          <PlainStat
+            label="NN/call"
+            value={formatMs(progress?.mcts_nn_ms_per_call)}
           />
         </div>
       )}

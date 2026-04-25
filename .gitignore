@@ -19,6 +19,9 @@ alphazero_history.jsonl
 alphazero_checkpoints/
 training.log
 sts2-solver/training*.log
+sts2-solver/companion-api*.log
+sts2-solver/overnight_benchmarks.log
+sts2-solver/experiments/_watchdog/
 .env
 .env.local
 supabase/.temp/

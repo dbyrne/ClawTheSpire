@@ -3613,7 +3613,7 @@ def run_value_eval(checkpoint_path: str) -> dict:
 
 
 def _scenario_to_state_json(sc: "Scenario") -> str:
-    """Serialize a Scenario into CombatState JSON for betaone_mcts_search FFI.
+    """Serialize a Scenario into CombatState JSON for MCTS FFI.
 
     Draw/discard/exhaust piles are padded with dummy Strikes since MCTS
     may simulate end-of-turn transitions and need pile contents.
@@ -3691,10 +3691,16 @@ def _match_mcts_to_scenario(mcts_result: dict, sc: "Scenario") -> int | None:
 
 
 def run_mcts_eval(
-    checkpoint_path: str, num_sims: int = 1000, seed: int = 42,
+    checkpoint_path: str,
+    num_sims: int = 1000,
+    seed: int = 42,
     onnx_dir: str | None = None,
+    c_puct: float = 2.5,
+    pomcp: bool = False,
+    turn_boundary_eval: bool = False,
+    pw_k: float = 1.0,
 ) -> dict:
-    """Run combat_eval_mcts diagnostic and return CLEAN/ECHO/FIXED/BROKE/MIXED counts.
+    """Run the real rescue diagnostic.
 
     Cheap (~3-5s at 1000 sims × 128 scenarios) so training can call it every
     gen. Rescue rate = FIXED / (FIXED + ECHO) tracks how much corrective
@@ -3708,6 +3714,7 @@ def run_mcts_eval(
     import tempfile
     import sts2_engine
     from .network import network_kwargs_from_meta, export_onnx
+    from .data_utils import load_solver_json
 
     card_vocab = _load_card_vocab(checkpoint_path)
     vocab_json = json.dumps(card_vocab)
@@ -3729,6 +3736,7 @@ def run_mcts_eval(
     onnx_path = export_onnx(net, str(onnx_dir))
 
     scenarios = build_scenarios()
+    policy_picks: list[int] = []
     tally = {"CLEAN": 0, "ECHO": 0, "FIXED": 0, "BROKE": 0, "MIXED": 0, "NOMATCH": 0}
 
     for sc in scenarios:
@@ -3753,22 +3761,37 @@ def run_mcts_eval(
             out = net(st, af, am, hi, ai)
         logits = out[0][0].numpy()
         n = len(sc.actions)
-        policy_idx = int(logits[:n].argmax())
+        policy_picks.append(int(logits[:n].argmax()))
 
-        # MCTS pick
-        try:
-            mcts_raw = sts2_engine.betaone_mcts_search(
-                state_json=_scenario_to_state_json(sc),
-                onnx_path=onnx_path, card_vocab_json=vocab_json,
-                num_sims=num_sims, temperature=0.0, seed=seed, gen_id=0,
-            )
-            mcts_idx = _match_mcts_to_scenario(mcts_raw, sc)
-        except Exception:
-            mcts_idx = None
+    states = [_scenario_to_state_json(sc) for sc in scenarios]
+    seeds = [seed + i for i in range(len(states))]
+    mcts_out = sts2_engine.betaone_mcts_reanalyse(
+        state_jsons=states,
+        enemy_profiles_json=load_solver_json("enemy_profiles.json"),
+        onnx_path=onnx_path,
+        card_vocab_json=vocab_json,
+        num_sims=num_sims,
+        temperature=0.0,
+        seeds=seeds,
+        gen_id=int(gen),
+        turn_boundary_eval=turn_boundary_eval,
+        c_puct=c_puct,
+        pomcp=pomcp,
+        pw_k=pw_k,
+    )
+    mcts_policies = mcts_out["policies"]
+    mcts_ok = mcts_out["ok"]
 
-        # Classify
+    for i, sc in enumerate(scenarios):
+        policy_idx = policy_picks[i]
         p_ok = policy_idx in sc.best_actions or policy_idx in getattr(sc, "acceptable_idx", [])
         p_bad = policy_idx in sc.bad_actions
+        if not mcts_ok[i]:
+            mcts_idx = None
+        else:
+            n = len(sc.actions)
+            row = mcts_policies[i * MAX_ACTIONS : (i + 1) * MAX_ACTIONS]
+            mcts_idx = max(range(n), key=lambda j: row[j]) if n else None
         if mcts_idx is None:
             tally["NOMATCH"] += 1
             continue
@@ -3803,7 +3826,14 @@ def run_mcts_eval(
         "gen": gen,
         "total": total,
         **{k.lower(): v for k, v in tally.items()},
+        "metric": "real_rescue",
+        "real_rescue_rate": contribution,
         "rescue_rate": contribution,
+        "num_sims": num_sims,
+        "c_puct": c_puct,
+        "pomcp": pomcp,
+        "turn_boundary_eval": turn_boundary_eval,
+        "pw_k": pw_k,
     }
 
 

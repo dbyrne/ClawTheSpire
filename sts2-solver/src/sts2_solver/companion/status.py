@@ -36,7 +36,8 @@ def classify(
         cadence = statistics.median(times)
     else:
         # Fallback when no history yet — very generous window.
-        cadence = 120.0
+        phase = str(progress.get("phase") or "").upper()
+        cadence = 3600.0 if phase in {"SELFPLAY", "TRAIN", "EVAL"} else 120.0
 
     running_cutoff = cadence * 1.5
     stopped_cutoff = cadence * 4.0

@@ -6,7 +6,7 @@ import argparse
 import os
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -22,7 +22,7 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
         CORSMiddleware,
         allow_origins=["*"],
         allow_credentials=False,
-        allow_methods=["GET"],
+        allow_methods=["GET", "POST"],
         allow_headers=["*"],
     )
 
@@ -52,6 +52,195 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
     @app.get("/api/leaderboard")
     def eval_leaderboard():
         return data.leaderboard()
+
+    def _experiment_dir(name: str) -> Path:
+        from ..betaone import experiment as exp_mod
+
+        for n, d in exp_mod._all_experiment_sources():
+            if n == name:
+                return d
+        raise HTTPException(status_code=404, detail=f"experiment '{name}' not found")
+
+    def _job_root(name: str, gen: int) -> Path:
+        from ..betaone import distributed as dist
+
+        root = dist.gen_root(_experiment_dir(name), gen)
+        if not (root / "plan.json").exists():
+            raise HTTPException(
+                status_code=404,
+                detail=f"no distributed plan for {name} gen {gen}",
+            )
+        return root
+
+    def _claim_response(request: Request, claimed) -> dict:
+        shared = dict(claimed.shared)
+        gen = int(shared["gen"])
+        shard_id = claimed.shard_id
+        experiment = claimed.experiment
+        urls = {
+            "onnx": str(request.url_for(
+                "distributed_onnx",
+                experiment=experiment,
+                gen=gen,
+                shard_id=shard_id,
+            )),
+            "heartbeat": str(request.url_for(
+                "distributed_heartbeat",
+                experiment=experiment,
+                gen=gen,
+                shard_id=shard_id,
+            )),
+            "result": str(request.url_for(
+                "distributed_result",
+                experiment=experiment,
+                gen=gen,
+                shard_id=shard_id,
+            )),
+            "fail": str(request.url_for(
+                "distributed_fail",
+                experiment=experiment,
+                gen=gen,
+                shard_id=shard_id,
+            )),
+        }
+        if shared.get("onnx_data_file"):
+            urls["onnx_data"] = str(request.url_for(
+                "distributed_onnx_data",
+                experiment=experiment,
+                gen=gen,
+                shard_id=shard_id,
+            ))
+        return {
+            "job": claimed.job,
+            "shared": shared,
+            "status": claimed.status,
+            "urls": urls,
+        }
+
+    @app.post("/api/distributed/claim")
+    async def distributed_claim(request: Request):
+        from ..betaone import distributed as dist
+        from ..betaone import experiment as exp_mod
+
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        worker_id = str(payload.get("worker_id") or "unknown-worker")
+        experiment_name = payload.get("experiment")
+        lease_s = float(payload.get("lease_s") or 900.0)
+        claimed = dist.claim_next_job(
+            exp_mod._all_experiment_sources(),
+            worker_id=worker_id,
+            experiment=str(experiment_name) if experiment_name else None,
+            lease_s=lease_s,
+        )
+        if not claimed:
+            return {"job": None}
+        return _claim_response(request, claimed)
+
+    @app.get("/api/distributed/jobs/{experiment}/{gen}/{shard_id}")
+    def distributed_job(request: Request, experiment: str, gen: int, shard_id: str):
+        from ..betaone import distributed as dist
+
+        root = _job_root(experiment, gen)
+        job = dist.read_json(dist.job_path(root, shard_id))
+        if not job:
+            raise HTTPException(status_code=404, detail=f"job '{shard_id}' not found")
+        claimed = dist.ClaimedJob(
+            experiment=experiment,
+            root=root,
+            shard_id=shard_id,
+            job=job,
+            shared=dist.read_json(root / "shared.json"),
+            status=dist.read_json(dist.status_path(root, shard_id)),
+        )
+        return _claim_response(request, claimed)
+
+    @app.get("/api/distributed/jobs/{experiment}/{gen}/{shard_id}/onnx", name="distributed_onnx")
+    def distributed_onnx(experiment: str, gen: int, shard_id: str):
+        from ..betaone import distributed as dist
+
+        root = _job_root(experiment, gen)
+        shared = dist.read_json(root / "shared.json")
+        path = root / shared.get("onnx_file", "shared/betaone.onnx")
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="ONNX file not found")
+        return FileResponse(path)
+
+    @app.get(
+        "/api/distributed/jobs/{experiment}/{gen}/{shard_id}/onnx-data",
+        name="distributed_onnx_data",
+    )
+    def distributed_onnx_data(experiment: str, gen: int, shard_id: str):
+        from ..betaone import distributed as dist
+
+        root = _job_root(experiment, gen)
+        shared = dist.read_json(root / "shared.json")
+        rel = shared.get("onnx_data_file")
+        if not rel:
+            raise HTTPException(status_code=404, detail="ONNX external data file not used")
+        path = root / rel
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="ONNX external data file not found")
+        return FileResponse(path)
+
+    @app.post(
+        "/api/distributed/jobs/{experiment}/{gen}/{shard_id}/heartbeat",
+        name="distributed_heartbeat",
+    )
+    async def distributed_heartbeat(request: Request, experiment: str, gen: int, shard_id: str):
+        from ..betaone import distributed as dist
+
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        worker_id = str(payload.get("worker_id") or request.query_params.get("worker_id") or "unknown-worker")
+        lease_s = float(payload.get("lease_s") or request.query_params.get("lease_s") or 900.0)
+        try:
+            return dist.heartbeat(_job_root(experiment, gen), shard_id, worker_id=worker_id, lease_s=lease_s)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail=f"job '{shard_id}' not found")
+
+    @app.post(
+        "/api/distributed/jobs/{experiment}/{gen}/{shard_id}/result",
+        name="distributed_result",
+    )
+    async def distributed_result(request: Request, experiment: str, gen: int, shard_id: str):
+        from ..betaone import distributed as dist
+
+        worker_id = str(request.query_params.get("worker_id") or "unknown-worker")
+        body = await request.body()
+        if not body:
+            raise HTTPException(status_code=400, detail="empty result body")
+        try:
+            return dist.mark_complete(
+                _job_root(experiment, gen),
+                shard_id,
+                worker_id=worker_id,
+                result_bytes=body,
+            )
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail=f"job '{shard_id}' not found")
+
+    @app.post(
+        "/api/distributed/jobs/{experiment}/{gen}/{shard_id}/fail",
+        name="distributed_fail",
+    )
+    async def distributed_fail(request: Request, experiment: str, gen: int, shard_id: str):
+        from ..betaone import distributed as dist
+
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        worker_id = str(payload.get("worker_id") or request.query_params.get("worker_id") or "unknown-worker")
+        error = str(payload.get("error") or "worker failed")
+        try:
+            return dist.mark_failed(_job_root(experiment, gen), shard_id, worker_id=worker_id, error=error)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail=f"job '{shard_id}' not found")
 
     # Serve the built Next.js static export when available (prod). Falls back
     # to an explanatory JSON response if not yet built — dev mode runs the

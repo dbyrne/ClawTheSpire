@@ -32,6 +32,7 @@ export default function DistillCard({ exp }: { exp: DistillSummary }) {
   const ev = exp.latest_eval;
   const vev = exp.latest_value_eval;
   const mev = exp.latest_mcts_eval;
+  const realRescue = mev?.real_rescue_rate ?? mev?.rescue_rate;
 
   return (
     <section className="bg-panel border border-border rounded-xl p-4 mb-3">
@@ -123,10 +124,10 @@ export default function DistillCard({ exp }: { exp: DistillSummary }) {
           hint={vev?.gen != null ? `g${vev.gen}` : undefined}
         />
         <Metric
-          label="rescue"
+          label="real rescue"
           value={
-            mev?.rescue_rate != null
-              ? `${mev.rescue_rate >= 0 ? "+" : ""}${(mev.rescue_rate * 100).toFixed(0)}%`
+            realRescue != null
+              ? `${realRescue >= 0 ? "+" : ""}${(realRescue * 100).toFixed(0)}%`
               : "-"
           }
         />
