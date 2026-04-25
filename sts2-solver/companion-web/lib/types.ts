@@ -118,6 +118,18 @@ export interface ExperimentSummary {
   value_eval_series: EvalSeriesPoint[];
   rescue_series: SeriesPoint[];
   shards: ShardSummary | null;
+  worker_cost: WorkerCostSummary | null;
+}
+
+export interface WorkerCostSummary {
+  estimated_total_cost: number | null;
+  estimated_hourly_burn: number | null;
+  active_instance_count: number;
+  instance_count: number;
+  unknown_price_count: number;
+  estimated_at?: string | null;
+  age_s: number | null;
+  source: string;
 }
 
 export interface ShardWorkerSummary {

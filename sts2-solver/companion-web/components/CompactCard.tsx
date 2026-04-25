@@ -1,5 +1,5 @@
 import { ExperimentSummary } from "../lib/types";
-import { formatPct } from "../lib/api";
+import { formatCost, formatPct } from "../lib/api";
 import StatusPill from "./StatusPill";
 
 export default function CompactCard({ exp }: { exp: ExperimentSummary }) {
@@ -66,6 +66,14 @@ export default function CompactCard({ exp }: { exp: ExperimentSummary }) {
               <span className={realRescue >= 0 ? "text-good" : "text-bad"}>
                 {realRescue >= 0 ? "+" : ""}
                 {(realRescue * 100).toFixed(0)}%
+              </span>
+            </span>
+          )}
+          {exp.worker_cost?.estimated_total_cost != null && (
+            <span>
+              <span className="text-muted text-[9px]">cost </span>
+              <span className="text-text">
+                {formatCost(exp.worker_cost.estimated_total_cost)}
               </span>
             </span>
           )}

@@ -1,5 +1,5 @@
 import { ExperimentSummary, ShardWorkerSummary } from "../lib/types";
-import { formatDuration, formatNum, formatPct } from "../lib/api";
+import { formatCost, formatDuration, formatNum, formatPct } from "../lib/api";
 import StatusPill from "./StatusPill";
 import MetricCell from "./MetricCell";
 import Sparkline from "./Sparkline";
@@ -274,6 +274,26 @@ export default function ExperimentCard({ exp }: { exp: ExperimentSummary }) {
               {exp.training_eta_s != null
                 ? `ETA ${formatDuration(exp.training_eta_s)}`
                 : ""}
+            </span>
+          </div>
+        )}
+        {exp.worker_cost && (
+          <div className="flex justify-between text-[10px] mono text-muted mt-1">
+            <span>
+              cost{" "}
+              <span className="text-text">
+                {formatCost(exp.worker_cost.estimated_total_cost)}
+              </span>
+              {exp.worker_cost.estimated_hourly_burn
+                ? ` · ${formatCost(exp.worker_cost.estimated_hourly_burn)}/hr`
+                : ""}
+            </span>
+            <span>
+              {exp.worker_cost.active_instance_count
+                ? `${exp.worker_cost.active_instance_count} EC2 active`
+                : exp.worker_cost.age_s != null
+                  ? `cost snap ${formatDuration(exp.worker_cost.age_s)} ago`
+                  : ""}
             </span>
           </div>
         )}

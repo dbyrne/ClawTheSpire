@@ -79,6 +79,29 @@ def _timestamp(value: Any) -> float | None:
     return None
 
 
+def _cost_summary(exp_dir: Path) -> dict | None:
+    rows = _read_jsonl(exp_dir / "worker_costs.jsonl")
+    if not rows:
+        return None
+    latest = rows[-1]
+    estimated_at = _timestamp(latest.get("estimated_at"))
+    now = time.time()
+    total = _as_float(latest.get("estimated_total_cost"))
+    hourly_burn = _as_float(latest.get("estimated_hourly_burn")) or 0.0
+    if total is not None and estimated_at is not None and hourly_burn > 0:
+        total += max(0.0, now - estimated_at) / 3600.0 * hourly_burn
+    return {
+        "estimated_total_cost": round(total, 4) if total is not None else None,
+        "estimated_hourly_burn": round(hourly_burn, 4),
+        "active_instance_count": _as_int(latest.get("active_instance_count")) or 0,
+        "instance_count": _as_int(latest.get("instance_count")) or 0,
+        "unknown_price_count": _as_int(latest.get("unknown_price_count")) or 0,
+        "estimated_at": latest.get("estimated_at"),
+        "age_s": max(0.0, now - estimated_at) if estimated_at is not None else None,
+        "source": "worker_costs.jsonl",
+    }
+
+
 def _shard_gen(payload: dict, path: Path) -> int | None:
     for key in ("gen", "generation", "gen_id"):
         gen = _as_int(payload.get(key))
@@ -600,6 +623,7 @@ def list_experiments(*, include_kinds: tuple[str, ...] | None = None) -> list[di
             "value_eval_series": value_eval_series,
             "rescue_series": rescue_series,
             "shards": _shard_summary(d),
+            "worker_cost": _cost_summary(d),
         })
 
     # Sort: running first, then stalled, then stopped/finalized, then alpha
@@ -659,6 +683,7 @@ def get_experiment(name: str) -> dict | None:
             "mcts_eval_history": mcts_evals,
             "benchmarks": bench,
             "shards": _shard_summary(d),
+            "worker_cost": _cost_summary(d),
         }
     return None
 
