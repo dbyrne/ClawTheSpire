@@ -54,7 +54,7 @@ tailscale up \
 rm -rf /opt/sts2
 git clone --depth 1 --branch "$BRANCH" "$REPO_URL" /opt/sts2
 cd /opt/sts2
-GIT_SHA="$(git rev-parse --short HEAD)"
+GIT_SHA="$(git rev-parse HEAD)"
 
 docker build -f sts2-solver/Dockerfile.worker -t sts2-worker:latest .
 

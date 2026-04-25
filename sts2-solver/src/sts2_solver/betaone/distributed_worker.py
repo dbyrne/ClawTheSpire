@@ -154,12 +154,20 @@ def _worker_metrics(*, worker_id: str, active_shard: str | None = None) -> dict[
     return metrics
 
 
-def _heartbeat_once(url: str, *, worker_id: str, lease_s: float, active_shard: str | None) -> dict:
+def _heartbeat_once(
+    url: str,
+    *,
+    worker_id: str,
+    lease_s: float,
+    active_shard: str | None,
+    fingerprint: dict[str, Any],
+) -> dict:
     return _request_json(
         url,
         {
             "worker_id": worker_id,
             "lease_s": lease_s,
+            "fingerprint": fingerprint,
             "metrics": _worker_metrics(worker_id=worker_id, active_shard=active_shard),
         },
         timeout=20.0,
@@ -179,7 +187,14 @@ def _download(url: str, path: Path, timeout: float = 120.0) -> None:
     os.replace(tmp, path)
 
 
-def _post_bytes(url: str, data: bytes, *, worker_id: str, timeout: float = 300.0) -> dict:
+def _post_bytes(
+    url: str,
+    data: bytes,
+    *,
+    worker_id: str,
+    fingerprint: dict[str, Any],
+    timeout: float = 300.0,
+) -> dict:
     sep = "&" if "?" in url else "?"
     url = f"{url}{sep}{urllib.parse.urlencode({'worker_id': worker_id})}"
     req = urllib.request.Request(
@@ -188,6 +203,7 @@ def _post_bytes(url: str, data: bytes, *, worker_id: str, timeout: float = 300.0
         headers={
             "Content-Type": "application/octet-stream",
             "Accept": "application/json",
+            "X-STS2-Fingerprint": json.dumps(fingerprint, sort_keys=True),
         },
         method="POST",
     )
@@ -201,6 +217,7 @@ def _heartbeat_loop(
     *,
     worker_id: str,
     lease_s: float,
+    fingerprint: dict[str, Any],
     interval_s: float,
     active_shard: str,
     stop: threading.Event,
@@ -211,13 +228,21 @@ def _heartbeat_loop(
                 url,
                 worker_id=worker_id,
                 lease_s=lease_s,
+                fingerprint=fingerprint,
                 active_shard=active_shard,
             )
         except Exception as exc:
             print(f"[heartbeat] failed: {exc}", flush=True)
 
 
-def _run_claim(claim: dict, *, worker_id: str, cache_dir: Path, lease_s: float) -> None:
+def _run_claim(
+    claim: dict,
+    *,
+    worker_id: str,
+    fingerprint: dict[str, Any],
+    cache_dir: Path,
+    lease_s: float,
+) -> None:
     job = claim["job"]
     shared = claim["shared"]
     urls = claim["urls"]
@@ -242,6 +267,7 @@ def _run_claim(claim: dict, *, worker_id: str, cache_dir: Path, lease_s: float) 
             "url": urls["heartbeat"],
             "worker_id": worker_id,
             "lease_s": lease_s,
+            "fingerprint": fingerprint,
             "interval_s": min(30.0, max(10.0, lease_s / 4.0)),
             "active_shard": shard_id,
             "stop": stop,
@@ -249,7 +275,13 @@ def _run_claim(claim: dict, *, worker_id: str, cache_dir: Path, lease_s: float) 
         daemon=True,
     )
     try:
-        _heartbeat_once(urls["heartbeat"], worker_id=worker_id, lease_s=lease_s, active_shard=shard_id)
+        _heartbeat_once(
+            urls["heartbeat"],
+            worker_id=worker_id,
+            lease_s=lease_s,
+            fingerprint=fingerprint,
+            active_shard=shard_id,
+        )
     except Exception as exc:
         print(f"[heartbeat] initial failed: {exc}", flush=True)
     hb.start()
@@ -263,10 +295,16 @@ def _run_claim(claim: dict, *, worker_id: str, cache_dir: Path, lease_s: float) 
         rollout = dist.run_selfplay_job(job, shared, onnx_path=onnx_path)
         data = dist.dumps_rollout(rollout)
         try:
-            _heartbeat_once(urls["heartbeat"], worker_id=worker_id, lease_s=lease_s, active_shard=shard_id)
+            _heartbeat_once(
+                urls["heartbeat"],
+                worker_id=worker_id,
+                lease_s=lease_s,
+                fingerprint=fingerprint,
+                active_shard=shard_id,
+            )
         except Exception:
             pass
-        _post_bytes(urls["result"], data, worker_id=worker_id)
+        _post_bytes(urls["result"], data, worker_id=worker_id, fingerprint=fingerprint)
         elapsed = time.perf_counter() - started
         print(
             f"[{experiment} g{gen} {shard_id}] uploaded "
@@ -297,16 +335,17 @@ def run_worker(
     *,
     coordinator: str,
     worker_id: str,
-    experiment: str | None,
+    experiment: str,
     cache_dir: Path,
     lease_s: float,
     idle_sleep_s: float,
     once: bool,
 ) -> int:
     cache_dir.mkdir(parents=True, exist_ok=True)
+    fingerprint = dist.code_fingerprint()
     print(
-        f"STS2 distributed worker: {worker_id} -> {coordinator}"
-        + (f" ({experiment})" if experiment else ""),
+        f"STS2 distributed worker: {worker_id} -> {coordinator} ({experiment}) "
+        f"sha={fingerprint.get('git_sha')}",
         flush=True,
     )
     while True:
@@ -317,6 +356,7 @@ def run_worker(
                     "worker_id": worker_id,
                     "experiment": experiment,
                     "lease_s": lease_s,
+                    "fingerprint": fingerprint,
                 },
                 timeout=30.0,
             )
@@ -326,7 +366,13 @@ def run_worker(
                     return 0
                 _sleep_with_jitter(idle_sleep_s)
                 continue
-            _run_claim(claim, worker_id=worker_id, cache_dir=cache_dir, lease_s=lease_s)
+            _run_claim(
+                claim,
+                worker_id=worker_id,
+                fingerprint=fingerprint,
+                cache_dir=cache_dir,
+                lease_s=lease_s,
+            )
             if once:
                 return 0
         except KeyboardInterrupt:
@@ -348,7 +394,7 @@ def run_worker(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run a laptop self-play worker")
     parser.add_argument("--coordinator", required=True, help="Companion API URL, e.g. http://100.100.101.1:8765")
-    parser.add_argument("--experiment", default=None, help="Only claim shards for this experiment")
+    parser.add_argument("--experiment", required=True, help="Experiment to claim shards for")
     parser.add_argument("--worker-id", default=None, help="Stable name shown in the companion app")
     parser.add_argument("--cache-dir", default=None, help="Worker cache dir for downloaded ONNX files")
     parser.add_argument("--lease-s", type=float, default=dist.DEFAULT_LEASE_S, help="Claim lease seconds")

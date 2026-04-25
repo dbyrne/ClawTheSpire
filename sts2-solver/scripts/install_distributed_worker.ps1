@@ -2,7 +2,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Coordinator,
 
-    [string]$Experiment = "",
+    [Parameter(Mandatory = $true)]
+    [string]$Experiment,
     [string]$WorkerId = $env:COMPUTERNAME,
     [string]$TaskName = "STS2 Distributed Worker",
     [double]$LeaseSeconds = 240,
@@ -25,12 +26,10 @@ if ($LASTEXITCODE -ne 0) {
 $workerArgs = @(
     "-m", "sts2_solver.betaone.distributed_worker",
     "--coordinator", $Coordinator,
+    "--experiment", $Experiment,
     "--worker-id", $WorkerId,
     "--lease-s", "$LeaseSeconds"
 )
-if ($Experiment) {
-    $workerArgs += @("--experiment", $Experiment)
-}
 $argString = ($workerArgs | ForEach-Object {
     if ($_ -match "\s") { '"' + ($_ -replace '"', '\"') + '"' } else { $_ }
 }) -join " "

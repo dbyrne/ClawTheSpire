@@ -13,6 +13,7 @@ import json
 import os
 import pickle
 import shutil
+import subprocess
 import threading
 import time
 from dataclasses import dataclass
@@ -21,6 +22,7 @@ from typing import Any
 
 
 SCHEMA_VERSION = 1
+CODE_PROTOCOL_VERSION = 2
 RESULT_SUFFIX = ".pkl.gz"
 DEFAULT_LEASE_S = 240.0
 MIN_LEASE_S = 60.0
@@ -42,6 +44,49 @@ def normalize_lease_s(lease_s: float | int | str | None) -> float:
     except (TypeError, ValueError):
         value = DEFAULT_LEASE_S
     return max(MIN_LEASE_S, min(MAX_LEASE_S, value))
+
+
+def _git_sha() -> str:
+    env_sha = os.environ.get("STS2_GIT_SHA")
+    if env_sha:
+        return env_sha
+    try:
+        root = Path(__file__).resolve().parents[4]
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=root,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except Exception:
+        return "unknown"
+
+
+def code_fingerprint() -> dict[str, Any]:
+    from .network import ACTION_DIM, ARCH_VERSION, MAX_ACTIONS, MAX_HAND, STATE_DIM
+
+    return {
+        "code_protocol": CODE_PROTOCOL_VERSION,
+        "git_sha": _git_sha(),
+        "network_arch_version": int(ARCH_VERSION),
+        "state_dim": int(STATE_DIM),
+        "action_dim": int(ACTION_DIM),
+        "max_actions": int(MAX_ACTIONS),
+        "max_hand": int(MAX_HAND),
+    }
+
+
+def fingerprint_mismatches(expected: dict | None, actual: dict | None) -> list[str]:
+    if not expected:
+        return []
+    if not isinstance(actual, dict):
+        return ["missing worker fingerprint"]
+    mismatches: list[str] = []
+    for key, expected_value in expected.items():
+        actual_value = actual.get(key)
+        if actual_value != expected_value:
+            mismatches.append(f"{key}: expected {expected_value!r}, got {actual_value!r}")
+    return mismatches
 
 
 def clean_worker_metrics(metrics: Any) -> dict[str, Any] | None:
@@ -331,6 +376,7 @@ def schedule_selfplay_generation(
         "add_noise": True,
         "shard_size": int(shard_size),
         "combats": int(n_combats),
+        "required_worker_fingerprint": code_fingerprint(),
     }
     atomic_write_json(root / "shared.json", shared)
 
@@ -435,11 +481,15 @@ def claim_next_job_in_root(
     root: Path,
     *,
     worker_id: str,
+    worker_fingerprint: dict | None = None,
     lease_s: float = DEFAULT_LEASE_S,
 ) -> ClaimedJob | None:
     now = utc_ts()
     lease_s = normalize_lease_s(lease_s)
     with _CLAIM_LOCK:
+        shared = read_json(root / "shared.json")
+        if fingerprint_mismatches(shared.get("required_worker_fingerprint"), worker_fingerprint):
+            return None
         for sp in sorted(status_dir(root).glob("*.json")):
             status = read_json(sp)
             if not status:
@@ -457,6 +507,8 @@ def claim_next_job_in_root(
                 "lease_expires_at": now + float(lease_s),
                 "attempts": int(status.get("attempts") or 0) + 1,
             })
+            if worker_fingerprint:
+                status["worker_fingerprint"] = worker_fingerprint
             atomic_write_json(sp, status)
             return _load_claimed(root, shard_id)
     return None
@@ -478,6 +530,7 @@ def claim_next_job(
     *,
     worker_id: str,
     experiment: str | None = None,
+    worker_fingerprint: dict | None = None,
     lease_s: float = DEFAULT_LEASE_S,
 ) -> ClaimedJob | None:
     lease_s = normalize_lease_s(lease_s)
@@ -485,7 +538,12 @@ def claim_next_job(
         if experiment and name != experiment:
             continue
         for root in iter_experiment_roots(exp_dir):
-            claimed = claim_next_job_in_root(root, worker_id=worker_id, lease_s=lease_s)
+            claimed = claim_next_job_in_root(
+                root,
+                worker_id=worker_id,
+                worker_fingerprint=worker_fingerprint,
+                lease_s=lease_s,
+            )
             if claimed:
                 return claimed
     return None
@@ -497,6 +555,7 @@ def heartbeat(
     *,
     worker_id: str,
     lease_s: float,
+    worker_fingerprint: dict | None = None,
     worker_metrics: dict | None = None,
 ) -> dict:
     sp = status_path(root, shard_id)
@@ -505,6 +564,19 @@ def heartbeat(
         if not status:
             raise FileNotFoundError(sp)
         if status.get("state") == "done":
+            return status
+        shared = read_json(root / "shared.json")
+        mismatches = fingerprint_mismatches(
+            shared.get("required_worker_fingerprint"),
+            worker_fingerprint or status.get("worker_fingerprint"),
+        )
+        if mismatches:
+            status["stale_heartbeat_ignored"] = {
+                "worker": worker_id,
+                "mismatches": mismatches,
+                "ignored_at": utc_ts(),
+            }
+            atomic_write_json(sp, status)
             return status
         now = utc_ts()
         lease_s = normalize_lease_s(lease_s)
@@ -550,7 +622,14 @@ def mark_failed(
         return status
 
 
-def mark_complete(root: Path, shard_id: str, *, worker_id: str, result_bytes: bytes) -> dict:
+def mark_complete(
+    root: Path,
+    shard_id: str,
+    *,
+    worker_id: str,
+    result_bytes: bytes,
+    worker_fingerprint: dict | None = None,
+) -> dict:
     sp = status_path(root, shard_id)
     with _CLAIM_LOCK:
         status = read_json(sp)
@@ -563,6 +642,19 @@ def mark_complete(root: Path, shard_id: str, *, worker_id: str, result_bytes: by
             status["stale_result_ignored"] = {
                 "worker": worker_id,
                 "current_worker": current_worker or None,
+                "ignored_at": utc_ts(),
+            }
+            atomic_write_json(sp, status)
+            return status
+        shared = read_json(root / "shared.json")
+        mismatches = fingerprint_mismatches(
+            shared.get("required_worker_fingerprint"),
+            worker_fingerprint or status.get("worker_fingerprint"),
+        )
+        if mismatches:
+            status["stale_result_ignored"] = {
+                "worker": worker_id,
+                "mismatches": mismatches,
                 "ignored_at": utc_ts(),
             }
             atomic_write_json(sp, status)
@@ -622,7 +714,13 @@ def run_claimed_job_locally(claimed: ClaimedJob, *, worker_id: str) -> dict:
     start = utc_ts()
     rollout = run_selfplay_job(claimed.job, claimed.shared, onnx_path=claimed.onnx_path)
     data = dumps_rollout(rollout)
-    status = mark_complete(claimed.root, claimed.shard_id, worker_id=worker_id, result_bytes=data)
+    status = mark_complete(
+        claimed.root,
+        claimed.shard_id,
+        worker_id=worker_id,
+        result_bytes=data,
+        worker_fingerprint=claimed.status.get("worker_fingerprint"),
+    )
     status["duration_s"] = round(utc_ts() - start, 3)
     atomic_write_json(status_path(claimed.root, claimed.shard_id), status)
     return rollout
