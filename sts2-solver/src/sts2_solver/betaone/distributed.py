@@ -551,13 +551,15 @@ def mark_failed(
 
 
 def mark_complete(root: Path, shard_id: str, *, worker_id: str, result_bytes: bytes) -> dict:
-    rp = result_path(root, shard_id)
-    _atomic_write_bytes(rp, result_bytes)
     sp = status_path(root, shard_id)
     with _CLAIM_LOCK:
         status = read_json(sp)
         if not status:
             raise FileNotFoundError(sp)
+        if str(status.get("state") or "").lower() == "done":
+            return status
+        rp = result_path(root, shard_id)
+        _atomic_write_bytes(rp, result_bytes)
         now = utc_ts()
         target = int(status.get("target_combats") or 0)
         status.update({

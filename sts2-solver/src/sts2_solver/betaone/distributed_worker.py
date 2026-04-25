@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 import platform
+import random
 import sys
 import tempfile
 import threading
@@ -104,6 +105,10 @@ def _env_int(name: str) -> int | None:
         return int(value)
     except ValueError:
         return None
+
+
+def _sleep_with_jitter(seconds: float) -> None:
+    time.sleep(max(1.0, seconds) * random.uniform(0.5, 1.5))
 
 
 def _worker_metrics(*, worker_id: str, active_shard: str | None = None) -> dict[str, Any]:
@@ -285,6 +290,7 @@ def _run_claim(claim: dict, *, worker_id: str, cache_dir: Path, lease_s: float) 
         raise
     finally:
         stop.set()
+        hb.join(timeout=2.0)
 
 
 def run_worker(
@@ -318,7 +324,7 @@ def run_worker(
                 if once:
                     print("No shard available.", flush=True)
                     return 0
-                time.sleep(max(1.0, idle_sleep_s))
+                _sleep_with_jitter(idle_sleep_s)
                 continue
             _run_claim(claim, worker_id=worker_id, cache_dir=cache_dir, lease_s=lease_s)
             if once:
@@ -331,12 +337,12 @@ def run_worker(
             print(f"[http {exc.code}] {body}", flush=True)
             if once:
                 return 1
-            time.sleep(max(1.0, idle_sleep_s))
+            _sleep_with_jitter(idle_sleep_s)
         except Exception:
             traceback.print_exc()
             if once:
                 return 1
-            time.sleep(max(1.0, idle_sleep_s))
+            _sleep_with_jitter(idle_sleep_s)
 
 
 def main() -> None:

@@ -41,7 +41,17 @@ if ($PrintOnly) {
     exit 0
 }
 
-$action = New-ScheduledTaskAction -Execute $Python -Argument $argString -WorkingDirectory $SolverRoot
+$logsDir = Join-Path $SolverRoot "logs"
+New-Item -ItemType Directory -Path $logsDir -Force | Out-Null
+$logFile = Join-Path $logsDir "distributed_worker.log"
+$launcher = Join-Path $logsDir "distributed_worker_launcher.cmd"
+@"
+@echo off
+cd /d "$SolverRoot"
+"$Python" $argString >> "$logFile" 2>&1
+"@ | Set-Content -Path $launcher -Encoding ASCII
+
+$action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\cmd.exe" -Argument "/c `"$launcher`"" -WorkingDirectory $SolverRoot
 $trigger = New-ScheduledTaskTrigger -AtLogOn
 $settings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
@@ -58,3 +68,4 @@ Register-ScheduledTask `
     -Force | Out-Null
 
 Write-Host "Registered scheduled task: $TaskName"
+Write-Host "Worker log: $logFile"
