@@ -59,6 +59,12 @@ GIT_SHA="$(git rev-parse --short HEAD)"
 docker build -f sts2-solver/Dockerfile.worker -t sts2-worker:latest .
 
 vcpus="$(nproc)"
+if (( THREADS_PER_WORKER < 1 )); then
+  THREADS_PER_WORKER=1
+fi
+if (( THREADS_PER_WORKER > vcpus )); then
+  THREADS_PER_WORKER="$vcpus"
+fi
 if [[ "$WORKER_COUNT" == "auto" ]]; then
   WORKER_COUNT="$(( vcpus / THREADS_PER_WORKER ))"
   if (( WORKER_COUNT < 1 )); then
@@ -76,6 +82,8 @@ for i in $(seq 1 "$WORKER_COUNT"); do
     --name "$name" \
     --network host \
     --cpus="$THREADS_PER_WORKER" \
+    --log-opt max-size=50m \
+    --log-opt max-file=3 \
     -v "/var/cache/sts2-worker:/cache" \
     -e COORDINATOR_URL="$COORDINATOR_URL" \
     -e EXPERIMENT="$EXPERIMENT" \

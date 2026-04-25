@@ -23,11 +23,15 @@ The script installs Docker and Tailscale, joins the tailnet, clones the repo,
 builds `sts2-solver/Dockerfile.worker`, and launches one or more worker
 containers.
 
+Container logs are capped at three 50 MB json-file logs per worker.
+
 ## Sizing
 
 `THREADS_PER_WORKER` defaults to `8`, which matches the current shard size well.
 `WORKER_COUNT=auto` starts `floor(vCPU / THREADS_PER_WORKER)` containers. For a
-16-vCPU instance this starts two containers at eight Rayon threads each.
+16-vCPU instance this starts two containers at eight Rayon threads each. If the
+instance has fewer vCPUs than `THREADS_PER_WORKER`, the bootstrap clamps
+`THREADS_PER_WORKER` down to the instance vCPU count.
 
 Tune the instance shape by watching the companion app worker metrics:
 
@@ -37,6 +41,10 @@ Tune the instance shape by watching the companion app worker metrics:
   `THREADS_PER_WORKER`.
 - If `load_per_cpu` is well above `1.0`, reduce containers or increase instance
   size.
+
+CPU percent, load, load per CPU, and RSS metrics are emitted by Linux workers.
+Windows laptop workers still report identity metadata, but those utilization
+fields are currently blank.
 
 ## Useful Commands
 
