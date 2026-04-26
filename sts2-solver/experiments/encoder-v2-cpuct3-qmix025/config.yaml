@@ -1,0 +1,81 @@
+name: encoder-v2-cpuct3-qmix025
+method: mcts_selfplay
+description: "Encoder v3 (arch_version 3) + 10x capacity bump, cold-start.\n\nEncoder\
+  \ changes (vs v3):\n- +3 turn-counter dims (cards_played, attacks_played, _skills_played)\n\
+  - +18 potion-inventory dims (3 slots \xD7 6 fields)\n- +3 new pile ID tensor inputs\
+  \ (draw[30], discard[30], exhaust[20])\n  embedded + mean-pooled, concatenated to\
+  \ trunk input\n- state_dim 446 -> 467, trunk_input 188 -> 561\n\nCapacity (vs v3\
+  \ 140K):\n- card_embed_dim 16 -> 64 (leverage: now used across hand/action/3 piles)\n\
+  - hand_proj_dim 32 -> 192\n- trunk 2x128 -> 4x768\n- policy_head_type dot_product\
+  \ -> mlp (hidden 512)\n- Estimated 3.1M params, ~10x v3\n\nTraining recipe: identical\
+  \ to reanalyse-v3 (proven baseline).\nOnly deltas: lr 3e-4 -> 1e-4 (bigger model\
+  \ sensitivity),\nreanalyse_min_gen 10 -> 30 (cold-start, needs more gens\nbefore\
+  \ the network produces meaningful MCTS labels).\n\nHypothesis: v3's ceiling (P-Eval\
+  \ ~115, policy-only WR ~48%)\nwas representational, not capacity or algorithm. Richer\
+  \ encoder\n+ capacity unlocks scaling. If false (P-Eval <= 95 at gen 20),\nthe ceiling\
+  \ is elsewhere and we stop spending on this axis.\n\nShip @ gen 50: P-Eval > 130\
+  \ OR V-Eval > 120.\nKill @ gen 20: P-Eval <= 95 (within v3's noise band).\n"
+created: '2026-04-25T11:07:10+00:00'
+parent: encoder-v2-cpuct3
+parent_checkpoint: latest
+network_type: betaone
+architecture:
+  arch_version: 3
+  base_state_dim: 177
+  hidden_dim: 768
+  action_hidden: 64
+  hand_proj_dim: 192
+  card_embed_dim: 64
+  card_stats_dim: 28
+  relic_dim: 27
+  hand_agg_dim: 3
+  turn_counters_dim: 3
+  potions_dim: 18
+  action_dim: 35
+  max_hand: 10
+  max_actions: 30
+  value_head_layers: 1
+  trunk_layers: 4
+  trunk_hidden: 768
+  policy_head_type: mlp
+  policy_mlp_hidden: 512
+  num_cards: 578
+  state_dim: 467
+  trunk_input: 561
+  total_params: 2864740
+training:
+  generations: 200
+  combats_per_gen: 256
+  lr: 0.0001
+  batch_size: 512
+  mcts:
+    num_sims: 1000
+    temperature: 1.0
+    replay_capacity: 50000
+    train_epochs: 4
+    value_coef: 0.1
+    c_puct: 3.0
+    pomcp: true
+    mcts_bootstrap: true
+    turn_boundary_eval: true
+    q_target_mix: 0.25
+    q_target_temp: 0.5
+    eval_every: 1
+    grad_conflict_sample_every: 10
+    reanalyse_every: 2
+    reanalyse_frac: 0.75
+    reanalyse_min_gen: 30
+    initial_num_sims: 1000
+    sims_ramp_end_gen: 0
+    distributed:
+      enabled: true
+      shard_size: 1
+      lease_s: 240
+      local_fallback_after_s: 3600
+data:
+  mode: encounter_set
+  encounter_set: gamma-train-v1
+checkpoints:
+  save_every: 1
+  keep_best: true
+  cold_start: false
