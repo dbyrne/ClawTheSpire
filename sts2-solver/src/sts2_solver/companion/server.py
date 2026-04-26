@@ -7,6 +7,7 @@ import asyncio
 import functools
 import json
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -178,6 +179,132 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
     @app.get("/api/leaderboard")
     async def eval_leaderboard():
         return JSONResponse(await _run_dashboard_io(data.leaderboard))
+
+    # ------------------------------------------------------------------
+    # Human-in-the-loop labeling
+    # ------------------------------------------------------------------
+    # Pool: experiments/_labels/pool/<name>.jsonl  — header + decision records
+    # Labels: experiments/_labels/labels.jsonl    — append-only label log
+    #
+    # User reviews policy decisions where the network's argmax pick can be
+    # flagged "bad". Each "bad" label becomes both a training negative
+    # example (penalize the policy's probability mass on that action) and
+    # a P-Eval scenario (bad_actions populated). "skip" means reviewed-not-bad
+    # — recorded so we don't show the same decision again.
+
+    def _labels_root() -> Path:
+        from ..betaone.paths import EXPERIMENTS_DIR
+        return EXPERIMENTS_DIR / "_labels"
+
+    def _labels_log_path() -> Path:
+        return _labels_root() / "labels.jsonl"
+
+    def _list_pool_files() -> list[Path]:
+        pool_dir = _labels_root() / "pool"
+        if not pool_dir.exists():
+            return []
+        return sorted(pool_dir.glob("*.jsonl"))
+
+    def _read_labeled_ids() -> set[str]:
+        path = _labels_log_path()
+        if not path.exists():
+            return set()
+        seen: set[str] = set()
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    rec = json.loads(line)
+                except Exception:
+                    continue
+                did = rec.get("decision_id")
+                if did:
+                    seen.add(str(did))
+        return seen
+
+    @app.get("/api/labels/pools")
+    async def list_label_pools():
+        pools = _list_pool_files()
+        out = []
+        for p in pools:
+            try:
+                # Read header (first line) for metadata
+                with open(p, "r", encoding="utf-8") as f:
+                    first = f.readline()
+                meta = json.loads(first).get("_meta", {}) if first.strip() else {}
+                # Count records (lines minus header)
+                with open(p, "r", encoding="utf-8") as f:
+                    total = sum(1 for _ in f) - 1
+            except Exception:
+                meta, total = {}, 0
+            out.append({
+                "name": p.stem,
+                "path": str(p),
+                "total": max(0, total),
+                "meta": meta,
+            })
+        labeled = _read_labeled_ids()
+        return JSONResponse({"pools": out, "total_labeled": len(labeled)})
+
+    @app.get("/api/labels/pool/{name}/next")
+    async def next_unlabeled_decision(name: str, offset: int = 0):
+        """Return the next unlabeled decision (or null if pool is exhausted)."""
+        pool_dir = _labels_root() / "pool"
+        path = pool_dir / f"{name}.jsonl"
+        if not path.exists():
+            raise HTTPException(status_code=404, detail=f"pool {name!r} not found")
+        labeled = _read_labeled_ids()
+        with open(path, "r", encoding="utf-8") as f:
+            seen = 0
+            skipped_for_offset = 0
+            total_unlabeled = 0
+            next_decision = None
+            for i, line in enumerate(f):
+                if i == 0:
+                    continue  # skip header
+                try:
+                    rec = json.loads(line)
+                except Exception:
+                    continue
+                did = rec.get("id")
+                if not did or did in labeled:
+                    continue
+                total_unlabeled += 1
+                if skipped_for_offset < offset:
+                    skipped_for_offset += 1
+                    continue
+                if next_decision is None:
+                    next_decision = rec
+                seen += 1
+        return JSONResponse({
+            "decision": next_decision,
+            "remaining": total_unlabeled,
+        })
+
+    @app.post("/api/labels/submit")
+    async def submit_label(request: Request):
+        try:
+            payload = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="invalid JSON body")
+        decision_id = payload.get("decision_id")
+        label = payload.get("label")
+        if not decision_id or label not in {"bad", "skip"}:
+            raise HTTPException(
+                status_code=400,
+                detail="body must be {decision_id: str, label: 'bad'|'skip'}",
+            )
+        bad_action_slot = payload.get("bad_action_slot")
+        log_path = _labels_log_path()
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        record = {
+            "decision_id": str(decision_id),
+            "label": label,
+            "bad_action_slot": bad_action_slot,
+            "labeled_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record) + "\n")
+        return JSONResponse({"ok": True, "record": record})
 
     def _experiment_dir(name: str) -> Path:
         from ..betaone import experiment as exp_mod
