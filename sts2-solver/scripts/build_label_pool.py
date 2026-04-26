@@ -124,6 +124,7 @@ def extract_decisions_from_rollout(
     net: BetaOneNetwork,
     card_id_to_name: dict[int, str],
     source_path: str,
+    id_prefix: str = "",
 ) -> list[dict]:
     """Convert one rollout's per-step data into labelable decision records."""
     state_jsons = rollout.get("state_jsons", []) or []
@@ -199,7 +200,9 @@ def extract_decisions_from_rollout(
             })
 
         out.append({
-            "id": f"{Path(source_path).stem}:c{int(combat_indices[i])}:s{i}",
+            "id": (
+                f"{id_prefix}:" if id_prefix else ""
+            ) + f"{Path(source_path).stem}:c{int(combat_indices[i])}:s{i}",
             "source": source_path,
             "combat_index": int(combat_indices[i]),
             "step_index": i,
@@ -232,6 +235,11 @@ def main() -> None:
         "--prefer-disagreements",
         action="store_true",
         help="Prioritize decisions where network argmax != MCTS played (where labels are most informative)",
+    )
+    p.add_argument(
+        "--id-prefix",
+        default="",
+        help="Prefix decision IDs with this string. Use to keep round-N pool labels distinct from round-(N-1) when re-evaluating the same source rollouts with a new checkpoint.",
     )
     args = p.parse_args()
 
@@ -290,6 +298,7 @@ def main() -> None:
                 net=net,
                 card_id_to_name=card_id_to_name,
                 source_path=str(rf),
+                id_prefix=args.id_prefix,
             )
             all_records.extend(decisions)
             if len(all_records) >= args.max_records * 5 and not args.prefer_disagreements:
