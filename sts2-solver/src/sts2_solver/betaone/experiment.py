@@ -591,6 +591,7 @@ class ExperimentConfig:
                 "q_target_mix": _float(mcts.get("q_target_mix"), 0.0),
                 "q_target_temp": _float(mcts.get("q_target_temp"), 0.5),
                 "eval_every": mcts.get("eval_every", 0),
+                "async_eval_max_jobs": int(mcts.get("async_eval_max_jobs", 1)),
                 "value_head_layers": value_head_layers,
                 "trunk_layers": trunk_layers,
                 "trunk_hidden": trunk_hidden,

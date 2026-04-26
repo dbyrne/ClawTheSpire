@@ -18,6 +18,8 @@ import json
 import math
 import os
 import random as stdlib_random
+import subprocess
+import sys
 import time
 from collections import deque
 from pathlib import Path
@@ -49,6 +51,7 @@ from .network import (
     load_checkpoint,
     ArchitectureMismatchError,
 )
+from .async_eval import append_history_record
 
 
 # ---------------------------------------------------------------------------
@@ -80,6 +83,54 @@ def _update_phase(progress_path: str, phase: str, gen: int) -> None:
     except Exception:
         # Phase marker is cosmetic — never let it block training
         pass
+
+
+def _reap_eval_jobs(eval_jobs: list[tuple[int, subprocess.Popen]]) -> list[tuple[int, subprocess.Popen]]:
+    active: list[tuple[int, subprocess.Popen]] = []
+    for eval_gen, proc in eval_jobs:
+        rc = proc.poll()
+        if rc is None:
+            active.append((eval_gen, proc))
+        elif rc == 0:
+            print(f"       async eval gen {eval_gen} complete")
+        else:
+            print(f"       async eval gen {eval_gen} failed rc={rc}")
+    return active
+
+
+def _launch_eval_job(
+    *,
+    checkpoint_path: str,
+    output_dir: str,
+    history_path: str,
+    gen: int,
+    c_puct: float,
+    pomcp: bool,
+    turn_boundary_eval: bool,
+    pw_k: float,
+) -> subprocess.Popen:
+    cmd = [
+        sys.executable,
+        "-m",
+        "sts2_solver.betaone.async_eval",
+        "--checkpoint",
+        checkpoint_path,
+        "--output-dir",
+        output_dir,
+        "--history",
+        history_path,
+        "--gen",
+        str(gen),
+        "--c-puct",
+        str(c_puct),
+        "--pw-k",
+        str(pw_k),
+    ]
+    if pomcp:
+        cmd.append("--pomcp")
+    if turn_boundary_eval:
+        cmd.append("--turn-boundary-eval")
+    return subprocess.Popen(cmd)
 
 
 # ---------------------------------------------------------------------------
@@ -672,6 +723,7 @@ def train(
     distributed_lease_s: float = 240.0,
     distributed_local_fallback_after_s: float | None = 60.0,
     distributed_timeout_s: float | None = None,
+    async_eval_max_jobs: int = 1,
 ):
     os.makedirs(output_dir, exist_ok=True)
     onnx_dir = os.path.join(output_dir, "onnx")
@@ -728,6 +780,7 @@ def train(
     history_path = os.path.join(output_dir, "betaone_history.jsonl")
     progress_path = os.path.join(output_dir, "betaone_progress.json")
     experiment_name = Path(output_dir).name
+    eval_jobs: list[tuple[int, subprocess.Popen]] = []
 
     # Resume if any checkpoint exists. cold_start is advisory: if checkpoints
     # are present we always resume to protect history/progress — the flag was a
@@ -860,6 +913,7 @@ def train(
             print(f"Replay hydration skipped: {e}")
 
     for gen in range(start_gen, num_generations + 1):
+        eval_jobs = _reap_eval_jobs(eval_jobs)
         t0 = time.perf_counter()
         selfplay_sec = 0.0
         train_sec = 0.0
@@ -1349,103 +1403,63 @@ def train(
             },
         }
         latest_path = os.path.join(output_dir, "betaone_latest.pt")
+        eval_due = eval_every > 0 and gen % eval_every == 0
+        gen_checkpoint_path = os.path.join(output_dir, f"betaone_gen{gen}.pt")
         _atomic_torch_save(ckpt_data, latest_path)
         # save_every from config (default 10) — save milestones at that cadence
         # PLUS any new-best WR gens. save_every=1 preserves every gen for
         # post-hoc benchmarking / analysis.
-        if gen % max(save_every, 1) == 0 or win_rate >= best_win_rate:
-            _atomic_torch_save(ckpt_data, os.path.join(output_dir, f"betaone_gen{gen}.pt"))
+        if gen % max(save_every, 1) == 0 or win_rate >= best_win_rate or eval_due:
+            _atomic_torch_save(ckpt_data, gen_checkpoint_path)
         _cleanup_replay_checkpoints(output_dir)
         record["checkpoint_sec"] = round(time.perf_counter() - checkpoint_t0, 2)
         record["replay_sidecar"] = replay_sidecar
 
-        # Periodic eval curve: append eval.jsonl / value_eval.jsonl so the TUI
-        # and downstream plots can track decision-quality progress across
-        # training, not just win rate. WR is compressed near the top of the
-        # skill curve; eval pass rate moves earlier and at higher resolution.
-        if eval_every > 0 and gen % eval_every == 0:
-            _update_phase(progress_path, "EVALUATING", gen)
-            eval_t0 = time.perf_counter()
-            try:
-                from .eval import run_eval, run_value_eval, run_mcts_eval
-                from .suite import compute_eval_suite, suite_id as _suite_id
-                bench_dir = os.path.join(output_dir, "benchmarks")
-                os.makedirs(bench_dir, exist_ok=True)
-                _sid = _suite_id(compute_eval_suite())
-                pol = run_eval(latest_path)
-                val = run_value_eval(latest_path)
-                # MCTS eval: policy-vs-MCTS classification. Real rescue tracks
-                # the net corrective signal MCTS leaves provide.
-                mce = run_mcts_eval(
-                    latest_path,
-                    c_puct=c_puct,
-                    pomcp=pomcp,
-                    turn_boundary_eval=turn_boundary_eval,
-                    pw_k=pw_k,
-                )
-                # Mirror Experiment.save_eval / save_value_eval entry shape.
-                pol_entry = {
-                    "suite": _sid, "timestamp": time.time(), "gen": gen,
-                    "passed": pol["passed"], "total": pol["total"],
-                    "score": round(pol["passed"] / max(pol["total"], 1), 4),
-                    "end_turn_avg": pol.get("end_turn_avg"),
-                    "end_turn_high": pol.get("end_turn_high", 0),
-                    # Confidence profile (mirror experiment.save_eval).
-                    "bad_count": pol.get("bad_count"),
-                    "conf_bad": pol.get("conf_bad"),
-                    "close_bad": pol.get("close_bad"),
-                    "conf_clean": pol.get("conf_clean"),
-                    "by_category": {
-                        cat: {"passed": sum(1 for r in rs if r["passed"]), "total": len(rs)}
-                        for cat, rs in pol.get("by_category", {}).items()
-                    },
-                }
-                val_entry = {
-                    "suite": _sid, "timestamp": time.time(), "gen": gen,
-                    "passed": val["passed"], "total": val["total"],
-                    "score": round(val["passed"] / max(val["total"], 1), 4),
-                    "by_category": val.get("by_category", {}),
-                }
-                mce_entry = {
-                    "suite": _sid, "timestamp": time.time(), "gen": gen,
-                    "total": mce["total"],
-                    "clean": mce["clean"], "echo": mce["echo"],
-                    "fixed": mce["fixed"], "broke": mce["broke"],
-                    "mixed": mce["mixed"], "nomatch": mce["nomatch"],
-                    "metric": mce.get("metric", "real_rescue"),
-                    "real_rescue_rate": round(mce.get("real_rescue_rate", mce["rescue_rate"]), 4),
-                    "rescue_rate": round(mce["rescue_rate"], 4),
-                    "num_sims": mce.get("num_sims"),
-                    "c_puct": mce.get("c_puct"),
-                    "pomcp": mce.get("pomcp"),
-                    "turn_boundary_eval": mce.get("turn_boundary_eval"),
-                    "pw_k": mce.get("pw_k"),
-                }
-                with open(os.path.join(bench_dir, "eval.jsonl"), "a", encoding="utf-8") as f:
-                    f.write(json.dumps(pol_entry) + "\n")
-                with open(os.path.join(bench_dir, "value_eval.jsonl"), "a", encoding="utf-8") as f:
-                    f.write(json.dumps(val_entry) + "\n")
-                with open(os.path.join(bench_dir, "mcts_eval.jsonl"), "a", encoding="utf-8") as f:
-                    f.write(json.dumps(mce_entry) + "\n")
-                print(f"       eval: {pol['passed']}/{pol['total']} "
-                      f"({pol_entry['score']:.0%}) | value: {val['passed']}/{val['total']} "
-                      f"({val_entry['score']:.0%}) | "
-                      f"mcts: CLEAN={mce['clean']} ECHO={mce['echo']} "
-                      f"FIXED={mce['fixed']} BROKE={mce['broke']} "
-                      f"(real rescue {mce['real_rescue_rate']:.0%})")
-            except Exception as e:
-                print(f"       [eval_every] skipped gen {gen}: {e}")
-            finally:
-                eval_sec = time.perf_counter() - eval_t0
+        eval_launch_allowed = False
+        if eval_due:
+            eval_jobs = _reap_eval_jobs(eval_jobs)
+            eval_launch_allowed = len(eval_jobs) < max(async_eval_max_jobs, 1)
 
         record["eval_sec"] = round(eval_sec, 2)
+        if eval_due:
+            record["eval_async_status"] = "pending" if eval_launch_allowed else "skipped_busy"
+            record["eval_checkpoint"] = gen_checkpoint_path
         record["timestamp"] = time.time()
-        with open(history_path, "a") as f:
-            f.write(json.dumps(record) + "\n")
+        append_history_record(history_path, record)
         with open(progress_path, "w") as f:
             record["num_generations"] = num_generations
             record["best_win_rate"] = round(best_win_rate, 4)
             json.dump(record, f, indent=2)
+
+        # Periodic eval curve: run out-of-process against the stable per-gen
+        # checkpoint so the next gen can start immediately.
+        if eval_due:
+            if not eval_launch_allowed:
+                print(
+                    f"       async eval gen {gen} skipped; "
+                    f"{len(eval_jobs)} eval job(s) still running"
+                )
+                continue
+            proc = _launch_eval_job(
+                checkpoint_path=gen_checkpoint_path,
+                output_dir=output_dir,
+                history_path=history_path,
+                gen=gen,
+                c_puct=c_puct,
+                pomcp=pomcp,
+                turn_boundary_eval=turn_boundary_eval,
+                pw_k=pw_k,
+            )
+            eval_jobs.append((gen, proc))
+            print(f"       async eval gen {gen} launched pid={proc.pid}")
+
+    for eval_gen, proc in eval_jobs:
+        print(f"Waiting for async eval gen {eval_gen}...")
+        rc = proc.wait()
+        if rc == 0:
+            print(f"       async eval gen {eval_gen} complete")
+        else:
+            print(f"       async eval gen {eval_gen} failed rc={rc}")
 
     print(f"\nTraining complete. Best win rate: {best_win_rate:.1%}")
 
@@ -1472,6 +1486,8 @@ def main():
     parser.add_argument("--distributed-shard-size", type=int, default=16)
     parser.add_argument("--distributed-local-fallback-after-s", type=float, default=60.0,
                         help="Seconds before coordinator runs unclaimed shards locally")
+    parser.add_argument("--async-eval-max-jobs", type=int, default=1,
+                        help="Maximum background eval jobs to run at once")
     args = parser.parse_args()
 
     train(
@@ -1486,6 +1502,7 @@ def main():
         distributed_selfplay=args.distributed_selfplay,
         distributed_shard_size=args.distributed_shard_size,
         distributed_local_fallback_after_s=args.distributed_local_fallback_after_s,
+        async_eval_max_jobs=args.async_eval_max_jobs,
     )
 
 
