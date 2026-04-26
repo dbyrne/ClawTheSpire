@@ -94,14 +94,22 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
                 return d
         raise HTTPException(status_code=404, detail=f"experiment '{name}' not found")
 
-    def _job_root(name: str, gen: int) -> Path:
+    def _job_root(name: str, gen: int, kind: str = "selfplay") -> Path:
+        """Resolve a shard root by experiment + gen + kind.
+
+        kind="selfplay" -> shards/gen<N>/  (existing layout)
+        kind="reanalyse" -> shards/gen<N>-reanalyse/  (added 2026-04-26)
+        """
         from ..betaone import distributed as dist
 
-        root = dist.gen_root(_experiment_dir(name), gen)
+        if str(kind).lower() == "reanalyse":
+            root = dist.reanalyse_root(_experiment_dir(name), gen)
+        else:
+            root = dist.gen_root(_experiment_dir(name), gen)
         if not (root / "plan.json").exists():
             raise HTTPException(
                 status_code=404,
-                detail=f"no distributed plan for {name} gen {gen}",
+                detail=f"no distributed plan for {name} gen {gen} (kind={kind})",
             )
         return root
 
@@ -110,39 +118,28 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
         gen = int(shared["gen"])
         shard_id = claimed.shard_id
         experiment = claimed.experiment
+        # Reanalyse shards share the same URL routes as selfplay; the
+        # kind=reanalyse query param tells the handler which root to look
+        # under. Selfplay URLs omit the param (default kind=selfplay).
+        kind = str(shared.get("kind") or claimed.job.get("kind") or "selfplay").lower()
+        kind_qs = "?kind=reanalyse" if kind == "reanalyse" else ""
+
+        def _url(route_name: str) -> str:
+            return str(request.url_for(
+                route_name,
+                experiment=experiment,
+                gen=gen,
+                shard_id=shard_id,
+            )) + kind_qs
+
         urls = {
-            "onnx": str(request.url_for(
-                "distributed_onnx",
-                experiment=experiment,
-                gen=gen,
-                shard_id=shard_id,
-            )),
-            "heartbeat": str(request.url_for(
-                "distributed_heartbeat",
-                experiment=experiment,
-                gen=gen,
-                shard_id=shard_id,
-            )),
-            "result": str(request.url_for(
-                "distributed_result",
-                experiment=experiment,
-                gen=gen,
-                shard_id=shard_id,
-            )),
-            "fail": str(request.url_for(
-                "distributed_fail",
-                experiment=experiment,
-                gen=gen,
-                shard_id=shard_id,
-            )),
+            "onnx": _url("distributed_onnx"),
+            "heartbeat": _url("distributed_heartbeat"),
+            "result": _url("distributed_result"),
+            "fail": _url("distributed_fail"),
         }
         if shared.get("onnx_data_file"):
-            urls["onnx_data"] = str(request.url_for(
-                "distributed_onnx_data",
-                experiment=experiment,
-                gen=gen,
-                shard_id=shard_id,
-            ))
+            urls["onnx_data"] = _url("distributed_onnx_data")
         return {
             "job": claimed.job,
             "shared": shared,
@@ -203,10 +200,10 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
         return _claim_response(request, claimed)
 
     @app.get("/api/distributed/jobs/{experiment}/{gen}/{shard_id}")
-    def distributed_job(request: Request, experiment: str, gen: int, shard_id: str):
+    def distributed_job(request: Request, experiment: str, gen: int, shard_id: str, kind: str = "selfplay"):
         from ..betaone import distributed as dist
 
-        root = _job_root(experiment, gen)
+        root = _job_root(experiment, gen, kind)
         job = dist.read_json(dist.job_path(root, shard_id))
         if not job:
             raise HTTPException(status_code=404, detail=f"job '{shard_id}' not found")
@@ -221,10 +218,10 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
         return _claim_response(request, claimed)
 
     @app.get("/api/distributed/jobs/{experiment}/{gen}/{shard_id}/onnx", name="distributed_onnx")
-    def distributed_onnx(experiment: str, gen: int, shard_id: str):
+    def distributed_onnx(experiment: str, gen: int, shard_id: str, kind: str = "selfplay"):
         from ..betaone import distributed as dist
 
-        root = _job_root(experiment, gen)
+        root = _job_root(experiment, gen, kind)
         shared = dist.read_json(root / "shared.json")
         path = root / shared.get("onnx_file", "shared/betaone.onnx")
         if not path.exists():
@@ -235,10 +232,10 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
         "/api/distributed/jobs/{experiment}/{gen}/{shard_id}/onnx-data",
         name="distributed_onnx_data",
     )
-    def distributed_onnx_data(experiment: str, gen: int, shard_id: str):
+    def distributed_onnx_data(experiment: str, gen: int, shard_id: str, kind: str = "selfplay"):
         from ..betaone import distributed as dist
 
-        root = _job_root(experiment, gen)
+        root = _job_root(experiment, gen, kind)
         shared = dist.read_json(root / "shared.json")
         rel = shared.get("onnx_data_file")
         if not rel:
@@ -252,7 +249,7 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
         "/api/distributed/jobs/{experiment}/{gen}/{shard_id}/heartbeat",
         name="distributed_heartbeat",
     )
-    async def distributed_heartbeat(request: Request, experiment: str, gen: int, shard_id: str):
+    async def distributed_heartbeat(request: Request, experiment: str, gen: int, shard_id: str, kind: str = "selfplay"):
         from ..betaone import distributed as dist
 
         try:
@@ -264,7 +261,7 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
         try:
             return await _run_dist_io(
                 dist.heartbeat,
-                _job_root(experiment, gen),
+                _job_root(experiment, gen, kind),
                 shard_id,
                 worker_id=worker_id,
                 lease_s=lease_s,
@@ -278,7 +275,7 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
         "/api/distributed/jobs/{experiment}/{gen}/{shard_id}/result",
         name="distributed_result",
     )
-    async def distributed_result(request: Request, experiment: str, gen: int, shard_id: str):
+    async def distributed_result(request: Request, experiment: str, gen: int, shard_id: str, kind: str = "selfplay"):
         from ..betaone import distributed as dist
 
         worker_id = str(request.query_params.get("worker_id") or "unknown-worker")
@@ -298,7 +295,7 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
         try:
             return await _run_dist_io(
                 dist.mark_complete,
-                _job_root(experiment, gen),
+                _job_root(experiment, gen, kind),
                 shard_id,
                 worker_id=worker_id,
                 result_bytes=body,
@@ -311,7 +308,7 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
         "/api/distributed/jobs/{experiment}/{gen}/{shard_id}/fail",
         name="distributed_fail",
     )
-    async def distributed_fail(request: Request, experiment: str, gen: int, shard_id: str):
+    async def distributed_fail(request: Request, experiment: str, gen: int, shard_id: str, kind: str = "selfplay"):
         from ..betaone import distributed as dist
 
         try:
@@ -323,7 +320,7 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
         try:
             return await _run_dist_io(
                 dist.mark_failed,
-                _job_root(experiment, gen),
+                _job_root(experiment, gen, kind),
                 shard_id,
                 worker_id=worker_id,
                 error=error,
