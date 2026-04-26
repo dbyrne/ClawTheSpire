@@ -1,3 +1,5 @@
+import time
+
 from sts2_solver.betaone import distributed as dist
 from sts2_solver.betaone import distributed_worker as worker
 
@@ -277,3 +279,29 @@ def test_worker_heartbeats_before_onnx_download(tmp_path, monkeypatch):
 
     assert events[:3] == ["heartbeat", "download", "run"]
     assert events[-1] == "post"
+
+
+def test_claim_skips_completed_locked_root(tmp_path):
+    root = tmp_path / "shards" / "gen0001"
+    dist.status_dir(root).mkdir(parents=True)
+    dist.atomic_write_json(
+        root / "shared.json",
+        {"experiment": "exp-a", "gen": 1, "required_worker_fingerprint": None},
+    )
+    dist.atomic_write_json(
+        dist.status_path(root, "shard-0000"),
+        {
+            "state": "done",
+            "target_combats": 8,
+            "combat_offset": 0,
+            "plan_id": "p1",
+            "shard_id": "shard-0000",
+        },
+    )
+    (root / ".coordination.lock").write_text("stale-ish", encoding="ascii")
+
+    started = time.perf_counter()
+    claimed = dist.claim_next_job_in_root(root, worker_id="worker-a")
+
+    assert claimed is None
+    assert time.perf_counter() - started < 1.0

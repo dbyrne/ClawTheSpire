@@ -502,6 +502,14 @@ def _status_is_claimable(status: dict, now: float) -> bool:
     return False
 
 
+def _root_has_claimable_status(root: Path, now: float) -> bool:
+    for sp in status_dir(root).glob("*.json"):
+        status = read_json(sp)
+        if _status_is_claimable(status, now):
+            return True
+    return False
+
+
 @dataclass
 class ClaimedJob:
     experiment: str
@@ -539,6 +547,8 @@ def claim_next_job_in_root(
 ) -> ClaimedJob | None:
     now = utc_ts()
     lease_s = normalize_lease_s(lease_s)
+    if not _root_has_claimable_status(root, now):
+        return None
     with _CLAIM_LOCK:
         with _coordination_lock(root):
             shared = read_json(root / "shared.json")
