@@ -147,3 +147,62 @@ def test_mark_complete_ignores_stale_worker_result(tmp_path):
     assert stale_status["worker"] == "current-worker"
     assert stale_status["stale_result_ignored"]["worker"] == "old-worker"
     assert not dist.result_path(root, "shard-0000").exists()
+
+
+def test_heartbeat_does_not_steal_reclaimed_shard(tmp_path):
+    root = tmp_path / "shards" / "gen0001"
+    dist.status_dir(root).mkdir(parents=True)
+    dist.atomic_write_json(
+        root / "shared.json",
+        {"experiment": "exp-a", "gen": 1, "required_worker_fingerprint": None},
+    )
+    dist.atomic_write_json(
+        dist.status_path(root, "shard-0000"),
+        {
+            "state": "running",
+            "target_combats": 8,
+            "combat_offset": 0,
+            "plan_id": "p1",
+            "shard_id": "shard-0000",
+            "worker": "current-worker",
+        },
+    )
+
+    status = dist.heartbeat(
+        root,
+        "shard-0000",
+        worker_id="old-worker",
+        lease_s=60,
+    )
+
+    assert status["worker"] == "current-worker"
+    assert status["stale_heartbeat_ignored"]["worker"] == "old-worker"
+    assert status["state"] == "running"
+
+
+def test_mark_failed_does_not_clobber_reclaimed_shard(tmp_path):
+    root = tmp_path / "shards" / "gen0001"
+    dist.status_dir(root).mkdir(parents=True)
+    dist.atomic_write_json(
+        dist.status_path(root, "shard-0000"),
+        {
+            "state": "running",
+            "target_combats": 8,
+            "combat_offset": 0,
+            "plan_id": "p1",
+            "shard_id": "shard-0000",
+            "worker": "current-worker",
+        },
+    )
+
+    status = dist.mark_failed(
+        root,
+        "shard-0000",
+        worker_id="old-worker",
+        error="late failure",
+    )
+
+    assert status["worker"] == "current-worker"
+    assert status["state"] == "running"
+    assert status["stale_failure_ignored"]["worker"] == "old-worker"
+    assert "error" not in status
