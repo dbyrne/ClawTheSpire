@@ -9,13 +9,53 @@ from __future__ import annotations
 import json
 import re
 import statistics
+import threading
 import time
 from datetime import datetime
+from functools import wraps
 from pathlib import Path
 from typing import Any
 
 from ..betaone import experiment as exp_mod
 from . import status as status_mod
+
+
+def _ttl_cache(ttl_s: float):
+    """Thread-safe TTL cache for read-mostly endpoints.
+
+    Companion polling cadence is 2-5s per page; experiments only update
+    once per gen (60s+ apart). TTL must exceed the wrapped function's
+    own runtime — otherwise the cache write timestamp (taken after the
+    slow call returns) is already past TTL, and every call cache-misses.
+    Time the function once before tuning ttl_s.
+
+    Concurrency: in-flight requests with the same key still each call
+    fn() — no de-duplication. Acceptable for our use (calls are
+    idempotent, occasional duplicates are cheap relative to base load).
+    """
+    def decorator(fn):
+        lock = threading.Lock()
+        cache: dict[tuple, tuple[float, Any]] = {}
+
+        @wraps(fn)
+        def wrapper(*args, **kwargs):
+            key = (args, tuple(sorted(kwargs.items())))
+            with lock:
+                entry = cache.get(key)
+                if entry is not None and (time.monotonic() - entry[0]) < ttl_s:
+                    return entry[1]
+            result = fn(*args, **kwargs)
+            with lock:
+                # Stamp expiry from completion time, not call-start: a
+                # cached value is "fresh from when it was computed."
+                cache[key] = (time.monotonic(), result)
+            return result
+
+        # Expose for tests / manual invalidation
+        wrapper._cache = cache  # type: ignore[attr-defined]
+        wrapper._lock = lock  # type: ignore[attr-defined]
+        return wrapper
+    return decorator
 
 
 def _read_jsonl(path: Path) -> list[dict]:
@@ -421,11 +461,17 @@ def _arch_params(cfg) -> int | None:
     return tp if isinstance(tp, int) else None
 
 
+@_ttl_cache(10.0)
 def list_experiments(*, include_kinds: tuple[str, ...] | None = None) -> list[dict]:
     """Every experiment with a summary + liveness state.
 
     If `include_kinds` is given, restrict to those kinds. Default returns
     everything except distill (distill is its own tab — see list_distill()).
+
+    Cached for 3s — companion polls every 2-5s and per-gen updates land
+    minutes apart, so a short TTL eliminates duplicate full-disk-scan work
+    without affecting freshness in practice. Invalidate via
+    list_experiments._cache.clear().
     """
     if include_kinds is None:
         include_kinds = ("betaone", "decknet")
@@ -696,6 +742,7 @@ def get_experiment(name: str) -> dict | None:
     return None
 
 
+@_ttl_cache(10.0)
 def all_benchmarks() -> list[dict]:
     """Flatten results.jsonl across every experiment for cross-comparison."""
     rows: list[dict] = []
@@ -722,6 +769,7 @@ def _collect_eval_rows(filename: str) -> list[dict]:
     return rows
 
 
+@_ttl_cache(10.0)
 def leaderboard() -> dict:
     """Best experiment+gen for each eval category, separately for P-Eval and V-Eval.
 
@@ -792,6 +840,7 @@ def leaderboard() -> dict:
     }
 
 
+@_ttl_cache(10.0)
 def list_distill() -> list[dict]:
     """Distillation experiments with epoch-indexed metrics + dataset.
 
