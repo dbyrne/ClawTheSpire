@@ -564,6 +564,9 @@ class ExperimentConfig:
 
         if self.method == "mcts_selfplay":
             mcts = t.get("mcts", {})
+            distributed = mcts.get("distributed") or mcts.get("distributed_selfplay") or {}
+            if isinstance(distributed, bool):
+                distributed = {"enabled": distributed}
             return {
                 "num_generations": t.get("generations", 3000),
                 "combats_per_gen": t.get("combats_per_gen", 256),
@@ -588,6 +591,7 @@ class ExperimentConfig:
                 "q_target_mix": _float(mcts.get("q_target_mix"), 0.0),
                 "q_target_temp": _float(mcts.get("q_target_temp"), 0.5),
                 "eval_every": mcts.get("eval_every", 0),
+                "async_eval_max_jobs": int(mcts.get("async_eval_max_jobs", 1)),
                 "value_head_layers": value_head_layers,
                 "trunk_layers": trunk_layers,
                 "trunk_hidden": trunk_hidden,
@@ -603,6 +607,24 @@ class ExperimentConfig:
                 "reanalyse_sims": mcts.get("reanalyse_sims"),
                 "sims_ramp_end_gen": mcts.get("sims_ramp_end_gen", 0),
                 "initial_num_sims": mcts.get("initial_num_sims"),
+                "distributed_selfplay": bool(distributed.get("enabled", False)),
+                "distributed_shard_size": int(distributed.get("shard_size", 16)),
+                "distributed_poll_s": _float(distributed.get("poll_s"), 2.0),
+                "distributed_lease_s": _float(distributed.get("lease_s"), 240.0),
+                "distributed_local_fallback_after_s": (
+                    60.0
+                    if "local_fallback_after_s" not in distributed
+                    else (
+                        None
+                        if distributed.get("local_fallback_after_s") is None
+                        else _float(distributed.get("local_fallback_after_s"), 60.0)
+                    )
+                ),
+                "distributed_timeout_s": (
+                    None
+                    if distributed.get("timeout_s") is None
+                    else _float(distributed.get("timeout_s"), 0.0)
+                ),
             }
         else:  # ppo
             ppo = t.get("ppo", {})

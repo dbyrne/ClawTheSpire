@@ -22,6 +22,7 @@ sts2-solver-mcp = "sts2_solver.mcp_server:main"
 sts2-run = "sts2_solver.runner:main"
 sts2-experiment = "sts2_solver.betaone.experiment_cli:main"
 sts2-companion = "sts2_solver.companion:main"
+sts2-distributed-worker = "sts2_solver.betaone.distributed_worker:main"
 
 [dependency-groups]
 dev = ["pytest>=8.0"]

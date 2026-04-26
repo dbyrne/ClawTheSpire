@@ -18,6 +18,8 @@ import json
 import math
 import os
 import random as stdlib_random
+import subprocess
+import sys
 import time
 from collections import deque
 from pathlib import Path
@@ -49,6 +51,7 @@ from .network import (
     load_checkpoint,
     ArchitectureMismatchError,
 )
+from .async_eval import append_history_record
 
 
 # ---------------------------------------------------------------------------
@@ -80,6 +83,54 @@ def _update_phase(progress_path: str, phase: str, gen: int) -> None:
     except Exception:
         # Phase marker is cosmetic — never let it block training
         pass
+
+
+def _reap_eval_jobs(eval_jobs: list[tuple[int, subprocess.Popen]]) -> list[tuple[int, subprocess.Popen]]:
+    active: list[tuple[int, subprocess.Popen]] = []
+    for eval_gen, proc in eval_jobs:
+        rc = proc.poll()
+        if rc is None:
+            active.append((eval_gen, proc))
+        elif rc == 0:
+            print(f"       async eval gen {eval_gen} complete")
+        else:
+            print(f"       async eval gen {eval_gen} failed rc={rc}")
+    return active
+
+
+def _launch_eval_job(
+    *,
+    checkpoint_path: str,
+    output_dir: str,
+    history_path: str,
+    gen: int,
+    c_puct: float,
+    pomcp: bool,
+    turn_boundary_eval: bool,
+    pw_k: float,
+) -> subprocess.Popen:
+    cmd = [
+        sys.executable,
+        "-m",
+        "sts2_solver.betaone.async_eval",
+        "--checkpoint",
+        checkpoint_path,
+        "--output-dir",
+        output_dir,
+        "--history",
+        history_path,
+        "--gen",
+        str(gen),
+        "--c-puct",
+        str(c_puct),
+        "--pw-k",
+        str(pw_k),
+    ]
+    if pomcp:
+        cmd.append("--pomcp")
+    if turn_boundary_eval:
+        cmd.append("--turn-boundary-eval")
+    return subprocess.Popen(cmd)
 
 
 # ---------------------------------------------------------------------------
@@ -266,6 +317,82 @@ def compute_mixed_policy_target(
     return ((1.0 - mix) * visits_norm + mix * softmax_q).astype(np.float32)
 
 
+def _rollout_to_replay_generation(
+    rollout: dict,
+    *,
+    player_max_hp: int,
+    mcts_bootstrap: bool,
+    q_target_mix: float,
+    q_target_temp: float,
+) -> dict | None:
+    n_steps = int(rollout.get("total_steps") or 0)
+    if n_steps == 0:
+        return None
+
+    states = np.array(rollout["states"], dtype=np.float32).reshape(-1, STATE_DIM)
+    act_feat = np.array(rollout["action_features"], dtype=np.float32).reshape(
+        -1, MAX_ACTIONS * ACTION_DIM
+    )
+    act_masks = np.array(rollout["action_masks"]).reshape(-1, MAX_ACTIONS)
+    hand_ids = np.array(rollout["hand_card_ids"], dtype=np.int64).reshape(-1, MAX_HAND)
+    action_ids = np.array(rollout["action_card_ids"], dtype=np.int64).reshape(
+        -1, MAX_ACTIONS
+    )
+    from .network import MAX_DRAW_PILE, MAX_DISCARD_PILE, MAX_EXHAUST_PILE
+    draw_ids = np.array(rollout["draw_pile_ids"], dtype=np.int64).reshape(
+        -1, MAX_DRAW_PILE
+    )
+    discard_ids = np.array(rollout["discard_pile_ids"], dtype=np.int64).reshape(
+        -1, MAX_DISCARD_PILE
+    )
+    exhaust_ids = np.array(rollout["exhaust_pile_ids"], dtype=np.int64).reshape(
+        -1, MAX_EXHAUST_PILE
+    )
+    policies = np.array(rollout["policies"], dtype=np.float32).reshape(-1, MAX_ACTIONS)
+    visits = np.array(rollout["child_visits"], dtype=np.int64).reshape(-1, MAX_ACTIONS)
+    q_values = np.array(rollout["child_q_values"], dtype=np.float32).reshape(
+        -1, MAX_ACTIONS
+    )
+    combat_indices = np.array(rollout["combat_indices"], dtype=np.int64)
+    mcts_values = np.array(rollout["mcts_values"], dtype=np.float32)
+
+    T = len(states)
+    if mcts_bootstrap:
+        values = mcts_values
+    else:
+        values = np.zeros(T, dtype=np.float32)
+        for ci, outcome in enumerate(rollout["outcomes"]):
+            mask = combat_indices == ci
+            if outcome == "win":
+                hp_frac = max(rollout["final_hps"][ci], 0) / max(player_max_hp, 1)
+                values[mask] = 1.0 + 0.3 * hp_frac
+            else:
+                values[mask] = -1.0
+
+    if q_target_mix > 0:
+        policies = compute_mixed_policy_target(
+            visits, q_values, act_masks.astype(bool), q_target_mix, q_target_temp
+        )
+
+    state_jsons = list(rollout.get("state_jsons", []))
+    if len(state_jsons) != T:
+        state_jsons = (state_jsons + [""] * T)[:T]
+
+    return {
+        "states": states,
+        "act_feat": act_feat,
+        "act_masks": act_masks,
+        "hand_ids": hand_ids,
+        "action_ids": action_ids,
+        "draw_ids": draw_ids,
+        "discard_ids": discard_ids,
+        "exhaust_ids": exhaust_ids,
+        "policies": policies,
+        "values": values,
+        "state_jsons": state_jsons,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Training step
 # ---------------------------------------------------------------------------
@@ -435,6 +562,13 @@ def train(
     # shallower sims mean faster gens until the network is worth searching with.
     sims_ramp_end_gen: int = 0,
     initial_num_sims: int | None = None,
+    distributed_selfplay: bool = False,
+    distributed_shard_size: int = 16,
+    distributed_poll_s: float = 2.0,
+    distributed_lease_s: float = 240.0,
+    distributed_local_fallback_after_s: float | None = 60.0,
+    distributed_timeout_s: float | None = None,
+    async_eval_max_jobs: int = 1,
 ):
     os.makedirs(output_dir, exist_ok=True)
     onnx_dir = os.path.join(output_dir, "onnx")
@@ -489,6 +623,8 @@ def train(
 
     history_path = os.path.join(output_dir, "betaone_history.jsonl")
     progress_path = os.path.join(output_dir, "betaone_progress.json")
+    experiment_name = Path(output_dir).name
+    eval_jobs: list[tuple[int, subprocess.Popen]] = []
 
     # Resume if any checkpoint exists. cold_start is advisory: if checkpoints
     # are present we always resume to protect history/progress — the flag was a
@@ -581,6 +717,37 @@ def train(
     # Replay buffer
     replay = ReplayBuffer(max_steps=replay_capacity)
     print(f"Replay buffer: capacity {replay_capacity:,} steps")
+    if distributed_selfplay and start_gen > 1:
+        try:
+            from .distributed import gen_root, load_generation_rollouts, merge_rollouts, root_done
+
+            hydrated_gens = 0
+            hydrated_steps = 0
+            for prev_gen in range(1, start_gen):
+                root = gen_root(output_dir, prev_gen)
+                if not root_done(root):
+                    continue
+                rollout = merge_rollouts(load_generation_rollouts(root))
+                replay_gen = _rollout_to_replay_generation(
+                    rollout,
+                    player_max_hp=player_max_hp,
+                    mcts_bootstrap=mcts_bootstrap,
+                    q_target_mix=q_target_mix,
+                    q_target_temp=q_target_temp,
+                )
+                if replay_gen is None:
+                    continue
+                replay.add_generation(**replay_gen)
+                hydrated_gens += 1
+                hydrated_steps += len(replay_gen["states"])
+            if hydrated_gens:
+                print(
+                    f"Hydrated replay buffer from {hydrated_gens} distributed gens: "
+                    f"{len(replay):,}/{replay_capacity:,} active steps "
+                    f"({hydrated_steps:,} loaded before eviction)"
+                )
+        except Exception as e:
+            print(f"Replay hydration skipped: {e}")
 
     # Sim ramp resolution. If sims_ramp_end_gen>0, linearly interpolate from
     # initial_num_sims (or num_sims//2 fallback) up to num_sims across gen
@@ -593,6 +760,7 @@ def train(
         return int(round(ramp_initial + (num_sims - ramp_initial) * frac))
 
     for gen in range(start_gen, num_generations + 1):
+        eval_jobs = _reap_eval_jobs(eval_jobs)
         t0 = time.perf_counter()
         selfplay_sec = 0.0
         train_sec = 0.0
@@ -604,6 +772,7 @@ def train(
         combat_value_calls: list[int] = []
         combat_eval_ms: list[float] = []
         combat_value_ms: list[float] = []
+        distributed_stats: dict | None = None
 
         # Apply LR schedule (constant or cosine with warmup).
         current_lr = _lr_at_gen(gen)
@@ -654,31 +823,65 @@ def train(
 
         if flat_encounters:
             selfplay_t0 = time.perf_counter()
-            rollout = sts2_engine.betaone_mcts_selfplay(
-                encounters_json=json.dumps(flat_encounters),
-                decks_json=json.dumps(flat_decks),
-                player_hp=flat_hps[0],
-                player_max_hp=player_max_hp,
-                player_max_energy=3,
-                relics_json=json.dumps(flat_relics),
-                potions_json=json.dumps(flat_potions[0] if flat_potions else []),
-                monster_data_json=monster_json,
-                enemy_profiles_json=profiles_json,
-                onnx_path=onnx_path,
-                card_vocab_json=card_vocab_json,
-                num_sims=current_sims,
-                temperature=temperature,
-                seeds=flat_seeds,
-                gen_id=gen,
-                add_noise=True,
-                turn_boundary_eval=turn_boundary_eval,
-                c_puct=c_puct,
-                pomcp=pomcp,
-                noise_frac=noise_frac,
-                pw_k=pw_k,
-                player_hps_json=json.dumps(flat_hps),
-                potions_per_combat_json=json.dumps(flat_potions),
-            )
+            if distributed_selfplay:
+                from .distributed import merge_rollouts, run_distributed_selfplay_generation
+
+                rollouts, distributed_stats = run_distributed_selfplay_generation(
+                    output_dir=output_dir,
+                    experiment=experiment_name,
+                    gen=gen,
+                    flat_encounters=flat_encounters,
+                    flat_decks=flat_decks,
+                    flat_relics=flat_relics,
+                    flat_hps=flat_hps,
+                    flat_seeds=flat_seeds,
+                    flat_potions=flat_potions,
+                    onnx_path=onnx_path,
+                    card_vocab_json=card_vocab_json,
+                    monster_data_json=monster_json,
+                    enemy_profiles_json=profiles_json,
+                    num_sims=current_sims,
+                    temperature=temperature,
+                    player_max_hp=player_max_hp,
+                    player_max_energy=3,
+                    turn_boundary_eval=turn_boundary_eval,
+                    c_puct=c_puct,
+                    pomcp=pomcp,
+                    noise_frac=noise_frac,
+                    pw_k=pw_k,
+                    shard_size=distributed_shard_size,
+                    poll_s=distributed_poll_s,
+                    lease_s=distributed_lease_s,
+                    local_fallback_after_s=distributed_local_fallback_after_s,
+                    timeout_s=distributed_timeout_s,
+                )
+                rollout = merge_rollouts(rollouts)
+            else:
+                rollout = sts2_engine.betaone_mcts_selfplay(
+                    encounters_json=json.dumps(flat_encounters),
+                    decks_json=json.dumps(flat_decks),
+                    player_hp=flat_hps[0],
+                    player_max_hp=player_max_hp,
+                    player_max_energy=3,
+                    relics_json=json.dumps(flat_relics),
+                    potions_json=json.dumps(flat_potions[0] if flat_potions else []),
+                    monster_data_json=monster_json,
+                    enemy_profiles_json=profiles_json,
+                    onnx_path=onnx_path,
+                    card_vocab_json=card_vocab_json,
+                    num_sims=current_sims,
+                    temperature=temperature,
+                    seeds=flat_seeds,
+                    gen_id=gen,
+                    add_noise=True,
+                    turn_boundary_eval=turn_boundary_eval,
+                    c_puct=c_puct,
+                    pomcp=pomcp,
+                    noise_frac=noise_frac,
+                    pw_k=pw_k,
+                    player_hps_json=json.dumps(flat_hps),
+                    potions_per_combat_json=json.dumps(flat_potions),
+                )
             selfplay_sec += time.perf_counter() - selfplay_t0
             combat_durations_ms.extend(
                 float(ms) for ms in rollout.get("combat_durations_ms", [])
@@ -1007,6 +1210,14 @@ def train(
             "mcts_nn_ms_per_call": round(mcts_nn_ms_per_call, 4),
             "mcts_nn_ms_share": round(mcts_nn_ms_share, 4),
         }
+        if distributed_stats:
+            record["distributed"] = True
+            record["distributed_plan_id"] = distributed_stats.get("plan_id")
+            record["distributed_shards"] = distributed_stats.get("num_shards")
+            record["distributed_shard_size"] = distributed_stats.get("shard_size")
+            record["distributed_local_shards"] = distributed_stats.get("local_shards")
+            record["distributed_wait_polls"] = distributed_stats.get("polls")
+            record["distributed_elapsed_s"] = distributed_stats.get("elapsed_s")
         if grad_cos_samples:
             import statistics
             record["grad_cos_pv_mean"] = round(statistics.fmean(grad_cos_samples), 4)
@@ -1042,100 +1253,62 @@ def train(
             "num_cards": num_cards,
         }
         latest_path = os.path.join(output_dir, "betaone_latest.pt")
+        eval_due = eval_every > 0 and gen % eval_every == 0
+        gen_checkpoint_path = os.path.join(output_dir, f"betaone_gen{gen}.pt")
+        checkpoint_t0 = time.perf_counter()
         torch.save(ckpt_data, latest_path)
         # save_every from config (default 10) — save milestones at that cadence
         # PLUS any new-best WR gens. save_every=1 preserves every gen for
         # post-hoc benchmarking / analysis.
-        if gen % max(save_every, 1) == 0 or win_rate >= best_win_rate:
-            torch.save(ckpt_data, os.path.join(output_dir, f"betaone_gen{gen}.pt"))
+        if gen % max(save_every, 1) == 0 or win_rate >= best_win_rate or eval_due:
+            torch.save(ckpt_data, gen_checkpoint_path)
+        record["checkpoint_sec"] = round(time.perf_counter() - checkpoint_t0, 2)
 
-        # Periodic eval curve: append eval.jsonl / value_eval.jsonl so the TUI
-        # and downstream plots can track decision-quality progress across
-        # training, not just win rate. WR is compressed near the top of the
-        # skill curve; eval pass rate moves earlier and at higher resolution.
-        if eval_every > 0 and gen % eval_every == 0:
-            _update_phase(progress_path, "EVALUATING", gen)
-            eval_t0 = time.perf_counter()
-            try:
-                from .eval import run_eval, run_value_eval, run_mcts_eval
-                from .suite import compute_eval_suite, suite_id as _suite_id
-                bench_dir = os.path.join(output_dir, "benchmarks")
-                os.makedirs(bench_dir, exist_ok=True)
-                _sid = _suite_id(compute_eval_suite())
-                pol = run_eval(latest_path)
-                val = run_value_eval(latest_path)
-                # MCTS eval: policy-vs-MCTS classification. Real rescue tracks
-                # the net corrective signal MCTS leaves provide.
-                mce = run_mcts_eval(
-                    latest_path,
-                    c_puct=c_puct,
-                    pomcp=pomcp,
-                    turn_boundary_eval=turn_boundary_eval,
-                    pw_k=pw_k,
-                )
-                # Mirror Experiment.save_eval / save_value_eval entry shape.
-                pol_entry = {
-                    "suite": _sid, "timestamp": time.time(), "gen": gen,
-                    "passed": pol["passed"], "total": pol["total"],
-                    "score": round(pol["passed"] / max(pol["total"], 1), 4),
-                    "end_turn_avg": pol.get("end_turn_avg"),
-                    "end_turn_high": pol.get("end_turn_high", 0),
-                    # Confidence profile (mirror experiment.save_eval).
-                    "bad_count": pol.get("bad_count"),
-                    "conf_bad": pol.get("conf_bad"),
-                    "close_bad": pol.get("close_bad"),
-                    "conf_clean": pol.get("conf_clean"),
-                    "by_category": {
-                        cat: {"passed": sum(1 for r in rs if r["passed"]), "total": len(rs)}
-                        for cat, rs in pol.get("by_category", {}).items()
-                    },
-                }
-                val_entry = {
-                    "suite": _sid, "timestamp": time.time(), "gen": gen,
-                    "passed": val["passed"], "total": val["total"],
-                    "score": round(val["passed"] / max(val["total"], 1), 4),
-                    "by_category": val.get("by_category", {}),
-                }
-                mce_entry = {
-                    "suite": _sid, "timestamp": time.time(), "gen": gen,
-                    "total": mce["total"],
-                    "clean": mce["clean"], "echo": mce["echo"],
-                    "fixed": mce["fixed"], "broke": mce["broke"],
-                    "mixed": mce["mixed"], "nomatch": mce["nomatch"],
-                    "metric": mce.get("metric", "real_rescue"),
-                    "real_rescue_rate": round(mce.get("real_rescue_rate", mce["rescue_rate"]), 4),
-                    "rescue_rate": round(mce["rescue_rate"], 4),
-                    "num_sims": mce.get("num_sims"),
-                    "c_puct": mce.get("c_puct"),
-                    "pomcp": mce.get("pomcp"),
-                    "turn_boundary_eval": mce.get("turn_boundary_eval"),
-                    "pw_k": mce.get("pw_k"),
-                }
-                with open(os.path.join(bench_dir, "eval.jsonl"), "a", encoding="utf-8") as f:
-                    f.write(json.dumps(pol_entry) + "\n")
-                with open(os.path.join(bench_dir, "value_eval.jsonl"), "a", encoding="utf-8") as f:
-                    f.write(json.dumps(val_entry) + "\n")
-                with open(os.path.join(bench_dir, "mcts_eval.jsonl"), "a", encoding="utf-8") as f:
-                    f.write(json.dumps(mce_entry) + "\n")
-                print(f"       eval: {pol['passed']}/{pol['total']} "
-                      f"({pol_entry['score']:.0%}) | value: {val['passed']}/{val['total']} "
-                      f"({val_entry['score']:.0%}) | "
-                      f"mcts: CLEAN={mce['clean']} ECHO={mce['echo']} "
-                      f"FIXED={mce['fixed']} BROKE={mce['broke']} "
-                      f"(real rescue {mce['real_rescue_rate']:.0%})")
-            except Exception as e:
-                print(f"       [eval_every] skipped gen {gen}: {e}")
-            finally:
-                eval_sec = time.perf_counter() - eval_t0
+        eval_launch_allowed = False
+        if eval_due:
+            eval_jobs = _reap_eval_jobs(eval_jobs)
+            eval_launch_allowed = len(eval_jobs) < max(async_eval_max_jobs, 1)
 
         record["eval_sec"] = round(eval_sec, 2)
+        if eval_due:
+            record["eval_async_status"] = "pending" if eval_launch_allowed else "skipped_busy"
+            record["eval_checkpoint"] = gen_checkpoint_path
         record["timestamp"] = time.time()
-        with open(history_path, "a") as f:
-            f.write(json.dumps(record) + "\n")
+        append_history_record(history_path, record)
         with open(progress_path, "w") as f:
             record["num_generations"] = num_generations
             record["best_win_rate"] = round(best_win_rate, 4)
             json.dump(record, f, indent=2)
+
+        # Periodic eval curve: run out-of-process against the stable per-gen
+        # checkpoint so the next gen can start immediately.
+        if eval_due:
+            if not eval_launch_allowed:
+                print(
+                    f"       async eval gen {gen} skipped; "
+                    f"{len(eval_jobs)} eval job(s) still running"
+                )
+                continue
+            proc = _launch_eval_job(
+                checkpoint_path=gen_checkpoint_path,
+                output_dir=output_dir,
+                history_path=history_path,
+                gen=gen,
+                c_puct=c_puct,
+                pomcp=pomcp,
+                turn_boundary_eval=turn_boundary_eval,
+                pw_k=pw_k,
+            )
+            eval_jobs.append((gen, proc))
+            print(f"       async eval gen {gen} launched pid={proc.pid}")
+
+    for eval_gen, proc in eval_jobs:
+        print(f"Waiting for async eval gen {eval_gen}...")
+        rc = proc.wait()
+        if rc == 0:
+            print(f"       async eval gen {eval_gen} complete")
+        else:
+            print(f"       async eval gen {eval_gen} failed rc={rc}")
 
     print(f"\nTraining complete. Best win rate: {best_win_rate:.1%}")
 
@@ -1157,6 +1330,13 @@ def main():
                         help="Ignore existing checkpoint, start from scratch")
     parser.add_argument("--replay-capacity", type=int, default=200_000,
                         help="Replay buffer capacity in steps")
+    parser.add_argument("--distributed-selfplay", action="store_true",
+                        help="Schedule self-play shards for companion API workers")
+    parser.add_argument("--distributed-shard-size", type=int, default=16)
+    parser.add_argument("--distributed-local-fallback-after-s", type=float, default=60.0,
+                        help="Seconds before coordinator runs unclaimed shards locally")
+    parser.add_argument("--async-eval-max-jobs", type=int, default=1,
+                        help="Maximum background eval jobs to run at once")
     args = parser.parse_args()
 
     train(
@@ -1168,6 +1348,10 @@ def main():
         output_dir=args.output_dir,
         cold_start=args.cold_start,
         replay_capacity=args.replay_capacity,
+        distributed_selfplay=args.distributed_selfplay,
+        distributed_shard_size=args.distributed_shard_size,
+        distributed_local_fallback_after_s=args.distributed_local_fallback_after_s,
+        async_eval_max_jobs=args.async_eval_max_jobs,
     )
 
 

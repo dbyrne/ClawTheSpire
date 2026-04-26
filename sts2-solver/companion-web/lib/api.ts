@@ -26,3 +26,10 @@ export function formatNum(
   if (x == null) return "-";
   return x.toFixed(digits);
 }
+
+export function formatCost(x: number | null | undefined): string {
+  if (x == null) return "-";
+  if (x < 10) return `$${x.toFixed(2)}`;
+  if (x < 100) return `$${x.toFixed(1)}`;
+  return `$${Math.round(x)}`;
+}
