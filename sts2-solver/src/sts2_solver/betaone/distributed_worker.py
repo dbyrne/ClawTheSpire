@@ -177,14 +177,24 @@ def _heartbeat_once(
 def _download(url: str, path: Path, timeout: float = 120.0) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
-    req = urllib.request.Request(url, headers={"Accept": "application/octet-stream"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp, open(tmp, "wb") as f:
-        while True:
-            chunk = resp.read(1024 * 1024)
-            if not chunk:
-                break
-            f.write(chunk)
-    os.replace(tmp, path)
+    try:
+        req = urllib.request.Request(url, headers={"Accept": "application/octet-stream"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp, open(tmp, "wb") as f:
+            while True:
+                chunk = resp.read(1024 * 1024)
+                if not chunk:
+                    break
+                f.write(chunk)
+        if path.exists():
+            tmp.unlink()
+            return
+        os.replace(tmp, path)
+    finally:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
 
 
 def _post_bytes(
@@ -252,14 +262,6 @@ def _run_claim(
     onnx_hash = shared.get("onnx_sha256") or f"{experiment}-g{gen}"
     onnx_cache = cache_dir / "onnx" / str(onnx_hash)
     onnx_path = onnx_cache / "betaone.onnx"
-    if not onnx_path.exists():
-        print(f"[{experiment} g{gen} {shard_id}] downloading ONNX", flush=True)
-        _download(urls["onnx"], onnx_path)
-    if shared.get("onnx_data_file"):
-        onnx_data_path = Path(f"{onnx_path}.data")
-        if not onnx_data_path.exists():
-            _download(urls["onnx_data"], onnx_data_path)
-
     stop = threading.Event()
     hb = threading.Thread(
         target=_heartbeat_loop,
@@ -274,6 +276,7 @@ def _run_claim(
         },
         daemon=True,
     )
+    started = time.perf_counter()
     try:
         _heartbeat_once(
             urls["heartbeat"],
@@ -285,8 +288,14 @@ def _run_claim(
     except Exception as exc:
         print(f"[heartbeat] initial failed: {exc}", flush=True)
     hb.start()
-    started = time.perf_counter()
     try:
+        if not onnx_path.exists():
+            print(f"[{experiment} g{gen} {shard_id}] downloading ONNX", flush=True)
+            _download(urls["onnx"], onnx_path)
+        if shared.get("onnx_data_file"):
+            onnx_data_path = Path(f"{onnx_path}.data")
+            if not onnx_data_path.exists():
+                _download(urls["onnx_data"], onnx_data_path)
         print(
             f"[{experiment} g{gen} {shard_id}] running "
             f"{job.get('target_combats', '?')} combats",
