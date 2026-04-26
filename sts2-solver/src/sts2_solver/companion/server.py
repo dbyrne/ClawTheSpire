@@ -3,17 +3,38 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
+import functools
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from starlette.concurrency import run_in_threadpool
 
 from . import data
+
+
+def _executor_size(name: str, default: int) -> int:
+    try:
+        return max(4, int(os.environ.get(name, default)))
+    except ValueError:
+        return default
+
+
+_DIST_EXECUTOR = ThreadPoolExecutor(
+    max_workers=_executor_size("STS2_COMPANION_DIST_THREADS", 32),
+    thread_name_prefix="sts2-dist-api",
+)
+
+
+async def _run_dist_io(func, /, *args, **kwargs):
+    loop = asyncio.get_running_loop()
+    call = functools.partial(func, *args, **kwargs)
+    return await loop.run_in_executor(_DIST_EXECUTOR, call)
 
 
 def create_app(static_dir: Path | None = None) -> FastAPI:
@@ -136,7 +157,7 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
         if not isinstance(worker_fingerprint, dict):
             raise HTTPException(status_code=400, detail="distributed workers must send a code fingerprint")
         lease_s = dist.normalize_lease_s(payload.get("lease_s"))
-        claimed = await run_in_threadpool(
+        claimed = await _run_dist_io(
             dist.claim_next_job,
             exp_mod._all_experiment_sources(),
             worker_id=worker_id,
@@ -162,7 +183,7 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
                         }
                 return None
 
-            conflict = await run_in_threadpool(conflict_detail)
+            conflict = await _run_dist_io(conflict_detail)
             if conflict:
                 raise HTTPException(status_code=409, detail=conflict)
             return {"job": None}
@@ -228,7 +249,7 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
         worker_id = str(payload.get("worker_id") or request.query_params.get("worker_id") or "unknown-worker")
         lease_s = dist.normalize_lease_s(payload.get("lease_s") or request.query_params.get("lease_s"))
         try:
-            return await run_in_threadpool(
+            return await _run_dist_io(
                 dist.heartbeat,
                 _job_root(experiment, gen),
                 shard_id,
@@ -262,7 +283,7 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
         if not body:
             raise HTTPException(status_code=400, detail="empty result body")
         try:
-            return await run_in_threadpool(
+            return await _run_dist_io(
                 dist.mark_complete,
                 _job_root(experiment, gen),
                 shard_id,
@@ -287,7 +308,7 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
         worker_id = str(payload.get("worker_id") or request.query_params.get("worker_id") or "unknown-worker")
         error = str(payload.get("error") or "worker failed")
         try:
-            return await run_in_threadpool(
+            return await _run_dist_io(
                 dist.mark_failed,
                 _job_root(experiment, gen),
                 shard_id,
