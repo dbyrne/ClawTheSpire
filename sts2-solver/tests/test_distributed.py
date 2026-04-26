@@ -1,4 +1,5 @@
 from sts2_solver.betaone import distributed as dist
+from sts2_solver.betaone import distributed_worker as worker
 
 
 def _write_claimable_shard(root, *, fingerprint=None):
@@ -206,3 +207,73 @@ def test_mark_failed_does_not_clobber_reclaimed_shard(tmp_path):
     assert status["state"] == "running"
     assert status["stale_failure_ignored"]["worker"] == "old-worker"
     assert "error" not in status
+
+
+def test_atomic_write_retries_windows_replace_race(tmp_path, monkeypatch):
+    path = tmp_path / "status.json"
+    original_replace = dist.os.replace
+    calls = {"count": 0}
+
+    def flaky_replace(src, dst):
+        calls["count"] += 1
+        if calls["count"] < 3:
+            raise PermissionError("temporarily locked")
+        return original_replace(src, dst)
+
+    monkeypatch.setattr(dist.os, "replace", flaky_replace)
+
+    dist._atomic_write_bytes(path, b'{"ok": true}')
+
+    assert calls["count"] == 3
+    assert path.read_bytes() == b'{"ok": true}'
+
+
+def test_worker_heartbeats_before_onnx_download(tmp_path, monkeypatch):
+    events = []
+    claim = {
+        "job": {
+            "shard_id": "shard-0000",
+            "experiment": "exp-a",
+            "gen": 7,
+            "target_combats": 1,
+        },
+        "shared": {"onnx_sha256": "model-a"},
+        "urls": {
+            "onnx": "http://coordinator/model.onnx",
+            "heartbeat": "http://coordinator/heartbeat",
+            "result": "http://coordinator/result",
+            "fail": "http://coordinator/fail",
+        },
+    }
+
+    def fake_heartbeat(*args, **kwargs):
+        events.append("heartbeat")
+        return {}
+
+    def fake_download(*args, **kwargs):
+        events.append("download")
+
+    def fake_run_selfplay_job(*args, **kwargs):
+        events.append("run")
+        return {"total_steps": 1}
+
+    def fake_post(*args, **kwargs):
+        events.append("post")
+        return {}
+
+    monkeypatch.setattr(worker, "_heartbeat_once", fake_heartbeat)
+    monkeypatch.setattr(worker, "_download", fake_download)
+    monkeypatch.setattr(worker, "_post_bytes", fake_post)
+    monkeypatch.setattr(worker.dist, "run_selfplay_job", fake_run_selfplay_job)
+    monkeypatch.setattr(worker.dist, "dumps_rollout", lambda rollout: b"rollout")
+
+    worker._run_claim(
+        claim,
+        worker_id="worker-a",
+        fingerprint={"code_protocol": 2},
+        cache_dir=tmp_path,
+        lease_s=60,
+    )
+
+    assert events[:3] == ["heartbeat", "download", "run"]
+    assert events[-1] == "post"
