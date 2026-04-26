@@ -8,6 +8,7 @@ const TABS = [
   { href: "/distill", label: "Distill", icon: "⌬" },
   { href: "/benchmarks", label: "Benchmarks", icon: "▤" },
   { href: "/leaderboard", label: "Evals", icon: "★" },
+  { href: "/label", label: "Label", icon: "✎" },
 ];
 
 export default function TabBar() {
