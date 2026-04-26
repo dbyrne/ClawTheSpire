@@ -1233,20 +1233,48 @@ def train(
                 state_jsons_batch = [replay.state_jsons[i] for i in indices]
                 ra_sims = reanalyse_sims if reanalyse_sims is not None else num_sims
                 ra_seeds = [gen * 1_000_003 + i for i in range(len(indices))]
-                ra_out = sts2_engine.betaone_mcts_reanalyse(
-                    state_jsons=state_jsons_batch,
-                    enemy_profiles_json=profiles_json,
-                    onnx_path=ra_onnx_path,
-                    card_vocab_json=card_vocab_json,
-                    num_sims=ra_sims,
-                    temperature=temperature,
-                    seeds=ra_seeds,
-                    gen_id=gen,
-                    turn_boundary_eval=turn_boundary_eval,
-                    c_puct=c_puct,
-                    pomcp=pomcp,
-                    pw_k=pw_k,
-                )
+                if distributed_selfplay:
+                    # Distribute reanalyse to the same EC2 worker fleet that
+                    # ran self-play. Mirrors run_distributed_selfplay_generation;
+                    # local trainer falls back to claiming shards itself if
+                    # workers are slow (or absent entirely).
+                    from .distributed import run_distributed_reanalyse
+                    ra_out, _ra_dist_stats = run_distributed_reanalyse(
+                        output_dir=output_dir,
+                        experiment=experiment_name,
+                        gen=gen,
+                        state_jsons=state_jsons_batch,
+                        seeds=ra_seeds,
+                        onnx_path=ra_onnx_path,
+                        card_vocab_json=card_vocab_json,
+                        enemy_profiles_json=profiles_json,
+                        num_sims=ra_sims,
+                        temperature=temperature,
+                        turn_boundary_eval=turn_boundary_eval,
+                        c_puct=c_puct,
+                        pomcp=pomcp,
+                        pw_k=pw_k,
+                        shard_size=max(distributed_shard_size, 64),
+                        poll_s=distributed_poll_s,
+                        lease_s=distributed_lease_s,
+                        local_fallback_after_s=distributed_local_fallback_after_s,
+                        timeout_s=distributed_timeout_s,
+                    )
+                else:
+                    ra_out = sts2_engine.betaone_mcts_reanalyse(
+                        state_jsons=state_jsons_batch,
+                        enemy_profiles_json=profiles_json,
+                        onnx_path=ra_onnx_path,
+                        card_vocab_json=card_vocab_json,
+                        num_sims=ra_sims,
+                        temperature=temperature,
+                        seeds=ra_seeds,
+                        gen_id=gen,
+                        turn_boundary_eval=turn_boundary_eval,
+                        c_puct=c_puct,
+                        pomcp=pomcp,
+                        pw_k=pw_k,
+                    )
                 ra_ok = list(ra_out["ok"])
                 ra_policies = np.array(ra_out["policies"], dtype=np.float32).reshape(-1, MAX_ACTIONS)
                 ra_visits = np.array(ra_out["child_visits"], dtype=np.int64).reshape(-1, MAX_ACTIONS)

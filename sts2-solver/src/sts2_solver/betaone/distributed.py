@@ -836,6 +836,353 @@ def root_done(root: Path) -> bool:
     return bool(statuses) and all(s.get("state") == "done" for s in statuses)
 
 
+# ---------------------------------------------------------------------------
+# Distributed reanalyse — mirrors selfplay protocol with kind="reanalyse"
+# ---------------------------------------------------------------------------
+#
+# Reanalyse refreshes a slice of the replay buffer by re-running MCTS-N on
+# stored state JSONs with fresh-weights ONNX. Historically this was a single
+# in-process call to sts2_engine.betaone_mcts_reanalyse on the trainer
+# machine, taking 10-15 min/cycle at v3 recipe scale and blocking the
+# trainer's main loop (and the dashboard's RUNNING signal).
+#
+# Distribution mirrors the selfplay shard pattern exactly:
+#   shards/gen<N>-reanalyse/{plan.json, shared.json, jobs/, status/, results/}
+#
+# `iter_experiment_roots()` globs `gen*`, so reanalyse roots are picked up
+# automatically alongside selfplay roots. The claim/lease/heartbeat path is
+# kind-agnostic; only the worker's job runner branches on `job["kind"]`.
+
+def reanalyse_root(output_dir: str | Path, gen: int) -> Path:
+    """Reanalyse shard root for a generation (sibling of gen_root)."""
+    return Path(output_dir) / "shards" / f"gen{int(gen):04d}-reanalyse"
+
+
+def _reanalyse_plan_id(
+    gen: int, onnx_path: str, n_states: int, num_sims: int, shard_size: int
+) -> str:
+    st = os.stat(onnx_path)
+    raw = (
+        f"reanalyse|{gen}|{onnx_path}|{st.st_size}|{st.st_mtime_ns}|"
+        f"{n_states}|{num_sims}|{shard_size}"
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def schedule_reanalyse_generation(
+    *,
+    output_dir: str | Path,
+    experiment: str,
+    gen: int,
+    state_jsons: list[str],
+    seeds: list[int],
+    onnx_path: str,
+    card_vocab_json: str,
+    enemy_profiles_json: str,
+    num_sims: int,
+    temperature: float,
+    turn_boundary_eval: bool,
+    c_puct: float,
+    pomcp: bool,
+    pw_k: float,
+    shard_size: int = 256,
+    lease_s: float = DEFAULT_LEASE_S,
+) -> dict:
+    """Create shard files for a distributed reanalyse pass.
+
+    state_jsons / seeds are length-aligned. shard_size states per shard
+    is a sane default — at MCTS-1000 each state takes ~25ms, so a 256-state
+    shard runs ~6s on a single worker thread.
+    """
+    if len(state_jsons) != len(seeds):
+        raise ValueError(
+            f"state_jsons len={len(state_jsons)} != seeds len={len(seeds)}"
+        )
+
+    n_states = len(state_jsons)
+    if n_states == 0:
+        raise ValueError("schedule_reanalyse_generation called with 0 states")
+
+    root = reanalyse_root(output_dir, gen)
+    for d in (status_dir(root), jobs_dir(root), results_dir(root), shared_dir(root)):
+        d.mkdir(parents=True, exist_ok=True)
+
+    lease_s = normalize_lease_s(lease_s)
+    plan_id = _reanalyse_plan_id(gen, onnx_path, n_states, num_sims, shard_size)
+    onnx_dest = shared_dir(root) / "betaone.onnx"
+    shutil.copy2(onnx_path, onnx_dest)
+    onnx_data_src = Path(f"{onnx_path}.data")
+    onnx_data_dest = Path(f"{onnx_dest}.data")
+    has_onnx_data = onnx_data_src.exists()
+    if has_onnx_data:
+        shutil.copy2(onnx_data_src, onnx_data_dest)
+
+    shared = {
+        "schema_version": SCHEMA_VERSION,
+        "kind": "reanalyse",
+        "experiment": experiment,
+        "gen": int(gen),
+        "plan_id": plan_id,
+        "created_at": utc_ts(),
+        "created_at_iso": iso_ts(),
+        "onnx_file": onnx_dest.relative_to(root).as_posix(),
+        "onnx_sha256": _sha256_file(onnx_dest),
+        "onnx_data_file": (
+            onnx_data_dest.relative_to(root).as_posix() if has_onnx_data else None
+        ),
+        "onnx_data_sha256": _sha256_file(onnx_data_dest) if has_onnx_data else None,
+        "card_vocab_json": card_vocab_json,
+        "enemy_profiles_json": enemy_profiles_json,
+        "num_sims": int(num_sims),
+        "temperature": float(temperature),
+        "turn_boundary_eval": bool(turn_boundary_eval),
+        "c_puct": float(c_puct),
+        "pomcp": bool(pomcp),
+        "pw_k": float(pw_k),
+        "shard_size": int(shard_size),
+        "n_states": int(n_states),
+        "required_worker_fingerprint": code_fingerprint(),
+    }
+    atomic_write_json(root / "shared.json", shared)
+
+    shards: list[dict] = []
+    for shard_index, (start, end) in enumerate(_chunk_ranges(n_states, shard_size)):
+        shard_id = f"shard-{shard_index:04d}"
+        job = {
+            "schema_version": SCHEMA_VERSION,
+            "kind": "reanalyse",
+            "experiment": experiment,
+            "gen": int(gen),
+            "plan_id": plan_id,
+            "shard_id": shard_id,
+            "shard_index": shard_index,
+            # Reuse selfplay's combat_offset semantics (status code shares the
+            # field name) but populate it with the buffer-state offset so the
+            # claim/heartbeat code paths stay kind-agnostic.
+            "combat_offset": int(start),
+            "target_combats": int(end - start),
+            "buffer_offset": int(start),
+            "n_states": int(end - start),
+            "state_jsons": state_jsons[start:end],
+            "seeds": [int(s) for s in seeds[start:end]],
+        }
+        atomic_write_json(job_path(root, shard_id), job)
+        sp = status_path(root, shard_id)
+        current = read_json(sp)
+        if current.get("plan_id") != plan_id or current.get("state") not in {"running", "done"}:
+            _write_pending_status(
+                sp,
+                experiment=experiment,
+                gen=gen,
+                shard_id=shard_id,
+                plan_id=plan_id,
+                combat_offset=start,
+                target_combats=end - start,
+                lease_s=lease_s,
+            )
+        shards.append({
+            "shard_id": shard_id,
+            "buffer_offset": start,
+            "n_states": end - start,
+        })
+
+    plan = {
+        "schema_version": SCHEMA_VERSION,
+        "kind": "reanalyse",
+        "experiment": experiment,
+        "gen": int(gen),
+        "plan_id": plan_id,
+        "root": str(root),
+        "num_shards": len(shards),
+        "n_states": n_states,
+        "shard_size": int(shard_size),
+        "shards": shards,
+    }
+    atomic_write_json(root / "plan.json", plan)
+    return plan
+
+
+def run_reanalyse_job(job: dict, shared: dict, *, onnx_path: str | Path) -> dict:
+    """Execute one reanalyse shard. Mirrors run_selfplay_job's shape.
+
+    Calls sts2_engine.betaone_mcts_reanalyse on the shard's state_jsons
+    slice. The returned dict is *almost* the Rust function's return value
+    pass-through, plus buffer_offset for ordering on the trainer side.
+    """
+    import sts2_engine
+
+    state_jsons = list(job["state_jsons"])
+    seeds = [int(s) for s in job["seeds"]]
+    if not state_jsons:
+        raise ValueError("reanalyse shard has no state_jsons")
+
+    out = sts2_engine.betaone_mcts_reanalyse(
+        state_jsons=state_jsons,
+        enemy_profiles_json=shared["enemy_profiles_json"],
+        onnx_path=str(onnx_path),
+        card_vocab_json=shared["card_vocab_json"],
+        num_sims=int(shared["num_sims"]),
+        temperature=float(shared["temperature"]),
+        seeds=seeds,
+        gen_id=int(shared["gen"]),
+        turn_boundary_eval=bool(shared["turn_boundary_eval"]),
+        c_puct=float(shared["c_puct"]),
+        pomcp=bool(shared["pomcp"]),
+        pw_k=float(shared["pw_k"]),
+    )
+    return {
+        "kind": "reanalyse",
+        "buffer_offset": int(job.get("buffer_offset", job.get("combat_offset") or 0)),
+        "n_states": int(len(state_jsons)),
+        "ok": list(out["ok"]),
+        "policies": list(out["policies"]),
+        "child_visits": list(out["child_visits"]),
+        "child_q_values": list(out["child_q_values"]),
+        "mcts_values": list(out["mcts_values"]),
+    }
+
+
+def merge_reanalyse_results(rollouts: list[tuple[int, str, dict]]) -> dict:
+    """Concatenate shard reanalyse outputs in buffer-offset order.
+
+    Returns the same shape as a single sts2_engine.betaone_mcts_reanalyse
+    call so the trainer's downstream code can stay unchanged.
+    """
+    merged: dict[str, list] = {
+        "ok": [],
+        "policies": [],
+        "child_visits": [],
+        "child_q_values": [],
+        "mcts_values": [],
+    }
+    for offset, _shard_id, rollout in sorted(rollouts, key=lambda x: x[0]):
+        for key in merged:
+            merged[key].extend(list(rollout.get(key, [])))
+    return merged
+
+
+def run_claimed_reanalyse_locally(claimed: ClaimedJob, *, worker_id: str) -> dict:
+    """Run a reanalyse shard in-process and write the standard result file.
+
+    Used by the trainer's local-fallback path when distributed workers are
+    slow to claim — same role as run_claimed_job_locally for selfplay.
+    """
+    start = utc_ts()
+    rollout = run_reanalyse_job(claimed.job, claimed.shared, onnx_path=claimed.onnx_path)
+    data = dumps_rollout(rollout)
+    status = mark_complete(
+        claimed.root,
+        claimed.shard_id,
+        worker_id=worker_id,
+        result_bytes=data,
+        worker_fingerprint=claimed.status.get("worker_fingerprint"),
+    )
+    status["duration_s"] = round(utc_ts() - start, 3)
+    atomic_write_json(status_path(claimed.root, claimed.shard_id), status)
+    return rollout
+
+
+def load_generation_reanalyse_rollouts(
+    root: Path,
+) -> list[tuple[int, str, dict]]:
+    """Like load_generation_rollouts but for reanalyse roots — sorts by
+    buffer_offset (which we stored under combat_offset for protocol parity).
+    """
+    out: list[tuple[int, str, dict]] = []
+    for sp in sorted(status_dir(root).glob("*.json")):
+        status = read_json(sp)
+        if status.get("state") != "done":
+            raise RuntimeError(f"reanalyse shard not done: {sp.name} state={status.get('state')}")
+        shard_id = str(status.get("shard_id") or sp.stem)
+        rp = root / status.get("result_path", str(result_path(root, shard_id).relative_to(root)))
+        rollout = load_rollout(rp)
+        out.append((int(status.get("combat_offset") or 0), shard_id, rollout))
+    out.sort(key=lambda x: x[0])
+    return out
+
+
+def run_distributed_reanalyse(
+    *,
+    output_dir: str | Path,
+    experiment: str,
+    gen: int,
+    state_jsons: list[str],
+    seeds: list[int],
+    onnx_path: str,
+    card_vocab_json: str,
+    enemy_profiles_json: str,
+    num_sims: int,
+    temperature: float,
+    turn_boundary_eval: bool,
+    c_puct: float,
+    pomcp: bool,
+    pw_k: float,
+    shard_size: int = 256,
+    poll_s: float = 2.0,
+    lease_s: float = DEFAULT_LEASE_S,
+    local_fallback_after_s: float | None = 60.0,
+    timeout_s: float | None = None,
+) -> tuple[dict, dict]:
+    """Schedule a reanalyse pass, wait for completion, return merged result.
+
+    Returns (merged_result, stats) where merged_result has the same shape
+    as a single sts2_engine.betaone_mcts_reanalyse call.
+
+    Mirrors run_distributed_selfplay_generation's polling + local-fallback
+    behavior: if no worker has claimed a shard within local_fallback_after_s,
+    the trainer machine itself starts processing shards as a backstop.
+    """
+    lease_s = normalize_lease_s(lease_s)
+    plan = schedule_reanalyse_generation(
+        output_dir=output_dir,
+        experiment=experiment,
+        gen=gen,
+        state_jsons=state_jsons,
+        seeds=seeds,
+        onnx_path=onnx_path,
+        card_vocab_json=card_vocab_json,
+        enemy_profiles_json=enemy_profiles_json,
+        num_sims=num_sims,
+        temperature=temperature,
+        turn_boundary_eval=turn_boundary_eval,
+        c_puct=c_puct,
+        pomcp=pomcp,
+        pw_k=pw_k,
+        shard_size=shard_size,
+        lease_s=lease_s,
+    )
+    root = Path(plan["root"])
+    start = utc_ts()
+    local_worker = f"{os.environ.get('COMPUTERNAME') or 'coordinator'}-local"
+    local_shards = 0
+    polls = 0
+
+    while not root_done(root):
+        elapsed = utc_ts() - start
+        if timeout_s is not None and elapsed > timeout_s:
+            raise TimeoutError(f"distributed reanalyse timed out after {elapsed:.1f}s")
+        if local_fallback_after_s is not None and elapsed >= local_fallback_after_s:
+            claimed = claim_next_job_in_root(root, worker_id=local_worker, lease_s=lease_s)
+            if claimed:
+                run_claimed_reanalyse_locally(claimed, worker_id=local_worker)
+                local_shards += 1
+                continue
+        polls += 1
+        time.sleep(max(float(poll_s), 0.25))
+
+    rollouts = load_generation_reanalyse_rollouts(root)
+    merged = merge_reanalyse_results(rollouts)
+    stats = {
+        "plan_id": plan["plan_id"],
+        "num_shards": plan["num_shards"],
+        "shard_size": int(shard_size),
+        "local_shards": local_shards,
+        "polls": polls,
+        "elapsed_s": round(utc_ts() - start, 2),
+    }
+    return merged, stats
+
+
 def load_generation_rollouts(root: Path) -> list[tuple[int, str, dict]]:
     out: list[tuple[int, str, dict]] = []
     for sp in sorted(status_dir(root).glob("*.json")):

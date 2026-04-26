@@ -296,12 +296,21 @@ def _run_claim(
             onnx_data_path = Path(f"{onnx_path}.data")
             if not onnx_data_path.exists():
                 _download(urls["onnx_data"], onnx_data_path)
-        print(
-            f"[{experiment} g{gen} {shard_id}] running "
-            f"{job.get('target_combats', '?')} combats",
-            flush=True,
-        )
-        rollout = dist.run_selfplay_job(job, shared, onnx_path=onnx_path)
+        kind = str(job.get("kind") or shared.get("kind") or "selfplay").lower()
+        if kind == "reanalyse":
+            print(
+                f"[{experiment} g{gen} {shard_id}] reanalyse "
+                f"{job.get('n_states', '?')} states",
+                flush=True,
+            )
+            rollout = dist.run_reanalyse_job(job, shared, onnx_path=onnx_path)
+        else:
+            print(
+                f"[{experiment} g{gen} {shard_id}] running "
+                f"{job.get('target_combats', '?')} combats",
+                flush=True,
+            )
+            rollout = dist.run_selfplay_job(job, shared, onnx_path=onnx_path)
         data = dist.dumps_rollout(rollout)
         try:
             _heartbeat_once(
@@ -315,11 +324,18 @@ def _run_claim(
             pass
         _post_bytes(urls["result"], data, worker_id=worker_id, fingerprint=fingerprint)
         elapsed = time.perf_counter() - started
-        print(
-            f"[{experiment} g{gen} {shard_id}] uploaded "
-            f"{rollout.get('total_steps', 0)} steps in {elapsed:.1f}s",
-            flush=True,
-        )
+        if kind == "reanalyse":
+            print(
+                f"[{experiment} g{gen} {shard_id}] uploaded "
+                f"{rollout.get('n_states', 0)} states in {elapsed:.1f}s",
+                flush=True,
+            )
+        else:
+            print(
+                f"[{experiment} g{gen} {shard_id}] uploaded "
+                f"{rollout.get('total_steps', 0)} steps in {elapsed:.1f}s",
+                flush=True,
+            )
     except Exception as exc:
         err = "".join(traceback.format_exception_only(type(exc), exc)).strip()
         try:
