@@ -13,7 +13,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from . import data
 
@@ -65,26 +65,26 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
 
     @app.get("/api/experiments")
     async def experiments_list():
-        return await _run_dashboard_io(data.list_experiments)
+        return JSONResponse(await _run_dashboard_io(data.list_experiments))
 
     @app.get("/api/distill")
     async def distill_list():
-        return await _run_dashboard_io(data.list_distill)
+        return JSONResponse(await _run_dashboard_io(data.list_distill))
 
     @app.get("/api/experiments/{name}")
     async def experiment_detail(name: str):
         exp = await _run_dashboard_io(data.get_experiment, name)
         if not exp:
             raise HTTPException(status_code=404, detail=f"experiment '{name}' not found")
-        return exp
+        return JSONResponse(exp)
 
     @app.get("/api/benchmarks")
     async def benchmarks():
-        return await _run_dashboard_io(data.all_benchmarks)
+        return JSONResponse(await _run_dashboard_io(data.all_benchmarks))
 
     @app.get("/api/leaderboard")
     async def eval_leaderboard():
-        return await _run_dashboard_io(data.leaderboard)
+        return JSONResponse(await _run_dashboard_io(data.leaderboard))
 
     def _experiment_dir(name: str) -> Path:
         from ..betaone import experiment as exp_mod
