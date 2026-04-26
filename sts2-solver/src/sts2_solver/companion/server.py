@@ -11,6 +11,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from starlette.concurrency import run_in_threadpool
 
 from . import data
 
@@ -28,7 +29,7 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
     )
 
     @app.get("/api/health")
-    def health():
+    async def health():
         return {"ok": True}
 
     @app.get("/api/experiments")
@@ -135,7 +136,8 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
         if not isinstance(worker_fingerprint, dict):
             raise HTTPException(status_code=400, detail="distributed workers must send a code fingerprint")
         lease_s = dist.normalize_lease_s(payload.get("lease_s"))
-        claimed = dist.claim_next_job(
+        claimed = await run_in_threadpool(
+            dist.claim_next_job,
             exp_mod._all_experiment_sources(),
             worker_id=worker_id,
             experiment=str(experiment_name),
@@ -143,23 +145,26 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
             lease_s=lease_s,
         )
         if not claimed:
-            exp_dir = _experiment_dir(str(experiment_name))
-            for root in dist.iter_experiment_roots(exp_dir):
-                shared = dist.read_json(root / "shared.json")
-                mismatches = dist.fingerprint_mismatches(
-                    shared.get("required_worker_fingerprint"),
-                    worker_fingerprint,
-                )
-                if mismatches:
-                    raise HTTPException(
-                        status_code=409,
-                        detail={
+            def conflict_detail() -> dict | None:
+                exp_dir = _experiment_dir(str(experiment_name))
+                for root in dist.iter_experiment_roots(exp_dir):
+                    shared = dist.read_json(root / "shared.json")
+                    mismatches = dist.fingerprint_mismatches(
+                        shared.get("required_worker_fingerprint"),
+                        worker_fingerprint,
+                    )
+                    if mismatches:
+                        return {
                             "message": "worker code fingerprint does not match experiment",
                             "mismatches": mismatches,
                             "expected": shared.get("required_worker_fingerprint"),
                             "actual": worker_fingerprint,
-                        },
-                    )
+                        }
+                return None
+
+            conflict = await run_in_threadpool(conflict_detail)
+            if conflict:
+                raise HTTPException(status_code=409, detail=conflict)
             return {"job": None}
         return _claim_response(request, claimed)
 
@@ -223,7 +228,8 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
         worker_id = str(payload.get("worker_id") or request.query_params.get("worker_id") or "unknown-worker")
         lease_s = dist.normalize_lease_s(payload.get("lease_s") or request.query_params.get("lease_s"))
         try:
-            return dist.heartbeat(
+            return await run_in_threadpool(
+                dist.heartbeat,
                 _job_root(experiment, gen),
                 shard_id,
                 worker_id=worker_id,
@@ -256,7 +262,8 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
         if not body:
             raise HTTPException(status_code=400, detail="empty result body")
         try:
-            return dist.mark_complete(
+            return await run_in_threadpool(
+                dist.mark_complete,
                 _job_root(experiment, gen),
                 shard_id,
                 worker_id=worker_id,
@@ -280,7 +287,8 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
         worker_id = str(payload.get("worker_id") or request.query_params.get("worker_id") or "unknown-worker")
         error = str(payload.get("error") or "worker failed")
         try:
-            return dist.mark_failed(
+            return await run_in_threadpool(
+                dist.mark_failed,
                 _job_root(experiment, gen),
                 shard_id,
                 worker_id=worker_id,
