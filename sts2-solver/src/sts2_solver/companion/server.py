@@ -29,12 +29,22 @@ _DIST_EXECUTOR = ThreadPoolExecutor(
     max_workers=_executor_size("STS2_COMPANION_DIST_THREADS", 32),
     thread_name_prefix="sts2-dist-api",
 )
+_DASHBOARD_EXECUTOR = ThreadPoolExecutor(
+    max_workers=_executor_size("STS2_COMPANION_DASHBOARD_THREADS", 4),
+    thread_name_prefix="sts2-dashboard-api",
+)
 
 
 async def _run_dist_io(func, /, *args, **kwargs):
     loop = asyncio.get_running_loop()
     call = functools.partial(func, *args, **kwargs)
     return await loop.run_in_executor(_DIST_EXECUTOR, call)
+
+
+async def _run_dashboard_io(func, /, *args, **kwargs):
+    loop = asyncio.get_running_loop()
+    call = functools.partial(func, *args, **kwargs)
+    return await loop.run_in_executor(_DASHBOARD_EXECUTOR, call)
 
 
 def create_app(static_dir: Path | None = None) -> FastAPI:
@@ -54,27 +64,27 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
         return {"ok": True}
 
     @app.get("/api/experiments")
-    def experiments_list():
-        return data.list_experiments()
+    async def experiments_list():
+        return await _run_dashboard_io(data.list_experiments)
 
     @app.get("/api/distill")
-    def distill_list():
-        return data.list_distill()
+    async def distill_list():
+        return await _run_dashboard_io(data.list_distill)
 
     @app.get("/api/experiments/{name}")
-    def experiment_detail(name: str):
-        exp = data.get_experiment(name)
+    async def experiment_detail(name: str):
+        exp = await _run_dashboard_io(data.get_experiment, name)
         if not exp:
             raise HTTPException(status_code=404, detail=f"experiment '{name}' not found")
         return exp
 
     @app.get("/api/benchmarks")
-    def benchmarks():
-        return data.all_benchmarks()
+    async def benchmarks():
+        return await _run_dashboard_io(data.all_benchmarks)
 
     @app.get("/api/leaderboard")
-    def eval_leaderboard():
-        return data.leaderboard()
+    async def eval_leaderboard():
+        return await _run_dashboard_io(data.leaderboard)
 
     def _experiment_dir(name: str) -> Path:
         from ..betaone import experiment as exp_mod
