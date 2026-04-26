@@ -598,6 +598,12 @@ def train(
         train_sec = 0.0
         eval_sec = 0.0
         combat_durations_ms: list[float] = []
+        combat_decisions: list[int] = []
+        combat_search_ms: list[float] = []
+        combat_eval_calls: list[int] = []
+        combat_value_calls: list[int] = []
+        combat_eval_ms: list[float] = []
+        combat_value_ms: list[float] = []
 
         # Apply LR schedule (constant or cosine with warmup).
         current_lr = _lr_at_gen(gen)
@@ -676,6 +682,24 @@ def train(
             selfplay_sec += time.perf_counter() - selfplay_t0
             combat_durations_ms.extend(
                 float(ms) for ms in rollout.get("combat_durations_ms", [])
+            )
+            combat_decisions.extend(
+                int(x) for x in rollout.get("combat_decisions", [])
+            )
+            combat_search_ms.extend(
+                float(ms) for ms in rollout.get("combat_search_ms", [])
+            )
+            combat_eval_calls.extend(
+                int(x) for x in rollout.get("combat_eval_calls", [])
+            )
+            combat_value_calls.extend(
+                int(x) for x in rollout.get("combat_value_calls", [])
+            )
+            combat_eval_ms.extend(
+                float(ms) for ms in rollout.get("combat_eval_ms", [])
+            )
+            combat_value_ms.extend(
+                float(ms) for ms in rollout.get("combat_value_ms", [])
             )
 
             n_steps = rollout["total_steps"]
@@ -771,6 +795,19 @@ def train(
         else:
             combat_p50_ms = combat_p90_ms = combat_p99_ms = 0.0
             combat_max_ms = combat_sum_ms = 0.0
+
+        mcts_decisions = int(sum(combat_decisions))
+        mcts_search_ms = float(sum(combat_search_ms))
+        mcts_eval_calls = int(sum(combat_eval_calls))
+        mcts_value_calls = int(sum(combat_value_calls))
+        mcts_eval_ms = float(sum(combat_eval_ms))
+        mcts_value_ms = float(sum(combat_value_ms))
+        mcts_nn_ms = mcts_eval_ms + mcts_value_ms
+        mcts_nn_calls = mcts_eval_calls + mcts_value_calls
+        mcts_search_ms_per_decision = mcts_search_ms / max(mcts_decisions, 1)
+        mcts_nn_ms_per_call = mcts_nn_ms / max(mcts_nn_calls, 1)
+        mcts_nn_ms_share = mcts_nn_ms / max(mcts_search_ms, 1.0)
+        combat_decisions_mean = mcts_decisions / max(len(combat_decisions), 1)
 
         # Train from replay buffer
         _update_phase(progress_path, "TRAINING", gen)
@@ -959,6 +996,16 @@ def train(
             "combat_p99_ms": round(combat_p99_ms, 1),
             "combat_max_ms": round(combat_max_ms, 1),
             "combat_sum_ms": round(combat_sum_ms, 1),
+            "combat_decisions_sum": mcts_decisions,
+            "combat_decisions_mean": round(combat_decisions_mean, 2),
+            "mcts_search_ms": round(mcts_search_ms, 1),
+            "mcts_search_ms_per_decision": round(mcts_search_ms_per_decision, 2),
+            "mcts_eval_calls": mcts_eval_calls,
+            "mcts_value_calls": mcts_value_calls,
+            "mcts_eval_ms": round(mcts_eval_ms, 1),
+            "mcts_value_ms": round(mcts_value_ms, 1),
+            "mcts_nn_ms_per_call": round(mcts_nn_ms_per_call, 4),
+            "mcts_nn_ms_share": round(mcts_nn_ms_share, 4),
         }
         if grad_cos_samples:
             import statistics
@@ -1017,9 +1064,15 @@ def train(
                 _sid = _suite_id(compute_eval_suite())
                 pol = run_eval(latest_path)
                 val = run_value_eval(latest_path)
-                # MCTS eval: policy-vs-MCTS classification. Rescue rate tracks
-                # value-head bias (how much corrective signal MCTS leaves provide).
-                mce = run_mcts_eval(latest_path)
+                # MCTS eval: policy-vs-MCTS classification. Real rescue tracks
+                # the net corrective signal MCTS leaves provide.
+                mce = run_mcts_eval(
+                    latest_path,
+                    c_puct=c_puct,
+                    pomcp=pomcp,
+                    turn_boundary_eval=turn_boundary_eval,
+                    pw_k=pw_k,
+                )
                 # Mirror Experiment.save_eval / save_value_eval entry shape.
                 pol_entry = {
                     "suite": _sid, "timestamp": time.time(), "gen": gen,
@@ -1049,7 +1102,14 @@ def train(
                     "clean": mce["clean"], "echo": mce["echo"],
                     "fixed": mce["fixed"], "broke": mce["broke"],
                     "mixed": mce["mixed"], "nomatch": mce["nomatch"],
+                    "metric": mce.get("metric", "real_rescue"),
+                    "real_rescue_rate": round(mce.get("real_rescue_rate", mce["rescue_rate"]), 4),
                     "rescue_rate": round(mce["rescue_rate"], 4),
+                    "num_sims": mce.get("num_sims"),
+                    "c_puct": mce.get("c_puct"),
+                    "pomcp": mce.get("pomcp"),
+                    "turn_boundary_eval": mce.get("turn_boundary_eval"),
+                    "pw_k": mce.get("pw_k"),
                 }
                 with open(os.path.join(bench_dir, "eval.jsonl"), "a", encoding="utf-8") as f:
                     f.write(json.dumps(pol_entry) + "\n")
@@ -1061,7 +1121,8 @@ def train(
                       f"({pol_entry['score']:.0%}) | value: {val['passed']}/{val['total']} "
                       f"({val_entry['score']:.0%}) | "
                       f"mcts: CLEAN={mce['clean']} ECHO={mce['echo']} "
-                      f"FIXED={mce['fixed']} (rescue {mce['rescue_rate']:.0%})")
+                      f"FIXED={mce['fixed']} BROKE={mce['broke']} "
+                      f"(real rescue {mce['real_rescue_rate']:.0%})")
             except Exception as e:
                 print(f"       [eval_every] skipped gen {gen}: {e}")
             finally:

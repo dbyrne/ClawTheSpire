@@ -4,6 +4,7 @@
 //! State cloning uses Rust's #[derive(Clone)] (~2us vs ~50us Python deepcopy).
 
 use rand::Rng;
+use std::time::Instant;
 
 use crate::actions::enumerate_actions;
 use crate::combat::{self, is_combat_over};
@@ -17,12 +18,12 @@ use crate::types::*;
 struct Node {
     state: Option<CombatState>,
     enemy_ais: Option<Vec<crate::enemy::EnemyAI>>,
-    parent: Option<usize>,      // Arena index
-    parent_action_idx: usize,   // Index into parent's legal_actions
+    parent: Option<usize>,    // Arena index
+    parent_action_idx: usize, // Index into parent's legal_actions
     visit_count: u32,
     value_sum: f64,
     prior: f32,
-    children: Vec<(usize, usize)>,  // (action_idx, child_node_idx)
+    children: Vec<(usize, usize)>, // (action_idx, child_node_idx)
     legal_actions: Vec<Action>,
     is_expanded: bool,
     is_terminal: bool,
@@ -64,13 +65,17 @@ impl Node {
     }
 
     fn value(&self) -> f64 {
-        if self.visit_count == 0 { 0.0 } else { self.value_sum / self.visit_count as f64 }
+        if self.visit_count == 0 {
+            0.0
+        } else {
+            self.value_sum / self.visit_count as f64
+        }
     }
 
     fn ucb_score(&self, parent_visits: u32, c_puct: f32) -> f32 {
         let exploitation = self.value() as f32;
-        let exploration = c_puct * self.prior
-            * (parent_visits as f32).sqrt() / (1.0 + self.visit_count as f32);
+        let exploration =
+            c_puct * self.prior * (parent_visits as f32).sqrt() / (1.0 + self.visit_count as f32);
         exploitation + exploration
     }
 }
@@ -85,7 +90,9 @@ struct Arena {
 
 impl Arena {
     fn with_capacity(cap: usize) -> Self {
-        Arena { nodes: Vec::with_capacity(cap) }
+        Arena {
+            nodes: Vec::with_capacity(cap),
+        }
     }
 
     fn alloc(&mut self, node: Node) -> usize {
@@ -103,8 +110,18 @@ pub struct SearchResult {
     pub action: Action,
     pub policy: Vec<f32>,
     pub root_value: f64,
-    pub child_values: Vec<f32>,  // Per-action average values from MCTS
-    pub child_visits: Vec<u32>,  // Per-action visit counts
+    pub child_values: Vec<f32>, // Per-action average values from MCTS
+    pub child_visits: Vec<u32>, // Per-action visit counts
+    pub stats: SearchStats,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SearchStats {
+    pub search_ms: f64,
+    pub eval_calls: u64,
+    pub value_calls: u64,
+    pub eval_ms: f64,
+    pub value_ms: f64,
 }
 
 /// Outcome of `prepare_for_priors`: either the leaf is fully done (terminal,
@@ -176,9 +193,15 @@ pub struct MCTS<'a> {
 impl<'a> MCTS<'a> {
     pub fn new(card_db: &'a CardDB, inference: &'a dyn Inference) -> Self {
         MCTS {
-            card_db, inference, add_noise: false, turn_boundary_eval: false,
-            c_puct: DEFAULT_C_PUCT, terminal_scale: (1.0, 0.3, -1.0),
-            pomcp: false, noise_frac: 0.25, pw_k: 1.0,
+            card_db,
+            inference,
+            add_noise: false,
+            turn_boundary_eval: false,
+            c_puct: DEFAULT_C_PUCT,
+            terminal_scale: (1.0, 0.3, -1.0),
+            pomcp: false,
+            noise_frac: 0.25,
+            pw_k: 1.0,
         }
     }
 
@@ -214,21 +237,25 @@ impl<'a> MCTS<'a> {
         temperature: f32,
         rng: &mut impl Rng,
     ) -> SearchResult {
+        let search_start = Instant::now();
+        let mut stats = SearchStats::default();
         let mut arena = Arena::with_capacity(num_simulations * 2);
 
         // Create and expand root
         let mut root = Node::new(Some(state.clone()), None, 0);
         root.enemy_ais = enemy_ais.map(|ais| ais.to_vec());
         let root_idx = arena.alloc(root);
-        let root_value = self.expand(&mut arena, root_idx, rng);
+        let root_value = self.expand(&mut arena, root_idx, rng, &mut stats);
 
         if arena.nodes[root_idx].is_terminal || arena.nodes[root_idx].legal_actions.is_empty() {
+            stats.search_ms = search_start.elapsed().as_secs_f64() * 1000.0;
             return SearchResult {
                 action: Action::EndTurn,
                 policy: vec![1.0],
                 root_value: root_value as f64,
                 child_values: vec![],
                 child_visits: vec![],
+                stats,
             };
         }
 
@@ -236,8 +263,11 @@ impl<'a> MCTS<'a> {
         if self.add_noise {
             let alpha = 0.3;
             let noise_frac: f32 = self.noise_frac;
-            let child_indices: Vec<usize> = arena.nodes[root_idx].children.iter()
-                .map(|&(_, child_idx)| child_idx).collect();
+            let child_indices: Vec<usize> = arena.nodes[root_idx]
+                .children
+                .iter()
+                .map(|&(_, child_idx)| child_idx)
+                .collect();
             let noise = dirichlet(alpha, child_indices.len(), rng);
             for (i, child_idx) in child_indices.into_iter().enumerate() {
                 let old_prior = arena.nodes[child_idx].prior;
@@ -253,18 +283,20 @@ impl<'a> MCTS<'a> {
             let (value, backup_from) = if arena.nodes[leaf_idx].is_terminal {
                 (arena.nodes[leaf_idx].terminal_value, leaf_idx)
             } else if arena.nodes[leaf_idx].is_chance {
-                self.sample_chance_child(&mut arena, leaf_idx, rng)
+                self.sample_chance_child(&mut arena, leaf_idx, rng, &mut stats)
             } else {
-                let v = self.expand(&mut arena, leaf_idx, rng);
+                let v = self.expand(&mut arena, leaf_idx, rng, &mut stats);
                 (v, leaf_idx)
             };
 
             self.backup(&mut arena, backup_from, value);
         }
 
-        self.extract_result(&arena, root_idx, temperature, rng)
+        let mut result = self.extract_result(&arena, root_idx, temperature, rng);
+        stats.search_ms = search_start.elapsed().as_secs_f64() * 1000.0;
+        result.stats = stats;
+        result
     }
-
 
     /// Extract SearchResult from a completed search tree.
     fn extract_result(
@@ -276,13 +308,17 @@ impl<'a> MCTS<'a> {
     ) -> SearchResult {
         let root = &arena.nodes[root_idx];
         let actions: Vec<Action> = root.legal_actions.clone();
-        let visits: Vec<f32> = root.children.iter()
+        let visits: Vec<f32> = root
+            .children
+            .iter()
             .map(|&(_, child_idx)| arena.nodes[child_idx].visit_count as f32)
             .collect();
         let total_visits: f32 = visits.iter().sum();
 
         let (action_idx, policy) = if temperature < 0.01 || total_visits == 0.0 {
-            let best = visits.iter().enumerate()
+            let best = visits
+                .iter()
+                .enumerate()
                 .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
                 .map(|(i, _)| i)
                 .unwrap_or(0);
@@ -290,7 +326,8 @@ impl<'a> MCTS<'a> {
             p[best] = 1.0;
             (best, p)
         } else {
-            let scaled: Vec<f64> = visits.iter()
+            let scaled: Vec<f64> = visits
+                .iter()
                 .map(|&v| (v as f64).powf(1.0 / temperature as f64))
                 .collect();
             let total: f64 = scaled.iter().sum();
@@ -309,10 +346,14 @@ impl<'a> MCTS<'a> {
             (chosen, policy)
         };
 
-        let child_values: Vec<f32> = root.children.iter()
+        let child_values: Vec<f32> = root
+            .children
+            .iter()
             .map(|&(_, child_idx)| arena.nodes[child_idx].value() as f32)
             .collect();
-        let child_visits: Vec<u32> = root.children.iter()
+        let child_visits: Vec<u32> = root
+            .children
+            .iter()
             .map(|&(_, child_idx)| arena.nodes[child_idx].visit_count)
             .collect();
 
@@ -322,6 +363,7 @@ impl<'a> MCTS<'a> {
             root_value: root.value(),
             child_values,
             child_visits,
+            stats: SearchStats::default(),
         }
     }
 
@@ -351,11 +393,15 @@ impl<'a> MCTS<'a> {
 
             // PUCT selection
             let parent_visits = node.visit_count;
-            let best_child = node.children.iter()
+            let best_child = node
+                .children
+                .iter()
                 .max_by(|&&(_, a), &&(_, b)| {
                     let score_a = arena.nodes[a].ucb_score(parent_visits, self.c_puct);
                     let score_b = arena.nodes[b].ucb_score(parent_visits, self.c_puct);
-                    score_a.partial_cmp(&score_b).unwrap_or(std::cmp::Ordering::Equal)
+                    score_a
+                        .partial_cmp(&score_b)
+                        .unwrap_or(std::cmp::Ordering::Equal)
                 })
                 .map(|&(_, idx)| idx)
                 .unwrap();
@@ -374,13 +420,26 @@ impl<'a> MCTS<'a> {
     // Batched search collects NeedPriors outcomes across K leaves and runs
     // one batched NN call before finalizing all of them.
 
-    fn expand(&self, arena: &mut Arena, node_idx: usize, rng: &mut impl Rng) -> f32 {
-        match self.prepare_for_priors(arena, node_idx, rng) {
+    fn expand(
+        &self,
+        arena: &mut Arena,
+        node_idx: usize,
+        rng: &mut impl Rng,
+        stats: &mut SearchStats,
+    ) -> f32 {
+        match self.prepare_for_priors(arena, node_idx, rng, stats) {
             LeafOutcome::Done(value) => value,
-            LeafOutcome::NeedPriors { value, actions, cached_logits } => {
+            LeafOutcome::NeedPriors {
+                value,
+                actions,
+                cached_logits,
+            } => {
                 let logits = cached_logits.unwrap_or_else(|| {
                     let state = arena.nodes[node_idx].state.as_ref().unwrap();
+                    let eval_start = Instant::now();
                     let (l, _) = self.inference.evaluate(state, &actions);
+                    stats.eval_calls += 1;
+                    stats.eval_ms += eval_start.elapsed().as_secs_f64() * 1000.0;
                     l
                 });
                 self.finalize_with_priors(arena, node_idx, actions, &logits);
@@ -401,6 +460,7 @@ impl<'a> MCTS<'a> {
         arena: &mut Arena,
         node_idx: usize,
         rng: &mut impl Rng,
+        stats: &mut SearchStats,
     ) -> LeafOutcome {
         // Lazy state computation for non-root nodes
         if arena.nodes[node_idx].state.is_none() {
@@ -425,7 +485,7 @@ impl<'a> MCTS<'a> {
                 arena.nodes[node_idx].is_expanded = true;
                 // Evaluate pre-draw state for this node's leaf value
                 let state = arena.nodes[node_idx].state.as_ref().unwrap();
-                let v = self.estimate_leaf_value(state);
+                let v = self.estimate_leaf_value(state, stats);
                 return LeafOutcome::Done(v);
             }
         }
@@ -451,10 +511,10 @@ impl<'a> MCTS<'a> {
         let (value, cached_logits): (f32, Option<Vec<f32>>) = if self.turn_boundary_eval {
             let state = arena.nodes[node_idx].state.as_ref().unwrap();
             let ais = arena.nodes[node_idx].enemy_ais.clone();
-            self.estimate_leaf_value_turn_boundary(state, &ais, rng)
+            self.estimate_leaf_value_turn_boundary(state, &ais, rng, stats)
         } else {
             let state = arena.nodes[node_idx].state.as_ref().unwrap();
-            (self.estimate_leaf_value(state), None)
+            (self.estimate_leaf_value(state, stats), None)
         };
 
         // For EndTurn nodes: resolve end-of-turn effects NOW so children
@@ -564,7 +624,11 @@ impl<'a> MCTS<'a> {
         actions: Vec<Action>,
         logits: &[f32],
     ) {
-        let priors = if !actions.is_empty() { softmax(logits) } else { vec![] };
+        let priors = if !actions.is_empty() {
+            softmax(logits)
+        } else {
+            vec![]
+        };
 
         let mut children = Vec::with_capacity(actions.len());
         for (i, _action) in actions.iter().enumerate() {
@@ -592,12 +656,19 @@ impl<'a> MCTS<'a> {
     }
 
     // --- Leaf value estimation ---
-    fn estimate_leaf_value(&self, state: &CombatState) -> f32 {
+    fn estimate_leaf_value(&self, state: &CombatState, stats: &mut SearchStats) -> f32 {
         if let Some(outcome) = is_combat_over(state) {
             return terminal_value_scaled(outcome, state, self.terminal_scale);
         }
+        let value_start = Instant::now();
         let v = self.inference.value_only(state);
-        if v.is_finite() { v } else { 0.0 }
+        stats.value_calls += 1;
+        stats.value_ms += value_start.elapsed().as_secs_f64() * 1000.0;
+        if v.is_finite() {
+            v
+        } else {
+            0.0
+        }
     }
 
     /// Play out the rest of the current turn using greedy policy, resolve
@@ -616,9 +687,13 @@ impl<'a> MCTS<'a> {
         state: &CombatState,
         enemy_ais: &Option<Vec<crate::enemy::EnemyAI>>,
         rng: &mut impl Rng,
+        stats: &mut SearchStats,
     ) -> (f32, Option<Vec<f32>>) {
         if let Some(outcome) = is_combat_over(state) {
-            return (terminal_value_scaled(outcome, state, self.terminal_scale), None);
+            return (
+                terminal_value_scaled(outcome, state, self.terminal_scale),
+                None,
+            );
         }
 
         // If turn already ended (EndTurn node), skip the playout — we just
@@ -639,7 +714,10 @@ impl<'a> MCTS<'a> {
                 }
 
                 // Get greedy action from policy network
+                let eval_start = Instant::now();
                 let (logits, _) = self.inference.evaluate(&sim, &actions);
+                stats.eval_calls += 1;
+                stats.eval_ms += eval_start.elapsed().as_secs_f64() * 1000.0;
 
                 // On step 0, sim is still bit-identical to the entry state
                 // (no mutation yet). These logits are reusable as the entry
@@ -649,14 +727,19 @@ impl<'a> MCTS<'a> {
                     first_step_logits = Some(logits.clone());
                 }
 
-                let chosen = logits.iter().enumerate()
+                let chosen = logits
+                    .iter()
+                    .enumerate()
                     .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
                     .map(|(i, _)| i)
                     .unwrap_or(0);
 
                 match &actions[chosen] {
                     Action::EndTurn => break,
-                    Action::PlayCard { card_idx, target_idx } => {
+                    Action::PlayCard {
+                        card_idx,
+                        target_idx,
+                    } => {
                         if combat::can_play_card(&sim, *card_idx) {
                             combat::play_card(&mut sim, *card_idx, *target_idx, self.card_db, rng);
                         }
@@ -692,7 +775,10 @@ impl<'a> MCTS<'a> {
             crate::enemy::set_enemy_intents(&mut sim, &mut ai_clone, rng);
         }
 
+        let value_start = Instant::now();
         let v = self.inference.value_only(&sim);
+        stats.value_calls += 1;
+        stats.value_ms += value_start.elapsed().as_secs_f64() * 1000.0;
         let v = if v.is_finite() { v } else { 0.0 };
         (v, first_step_logits)
     }
@@ -710,7 +796,10 @@ impl<'a> MCTS<'a> {
         rng: &mut impl Rng,
     ) -> Option<(i32, Option<Card>, i32)> {
         match action {
-            Action::PlayCard { card_idx, target_idx } => {
+            Action::PlayCard {
+                card_idx,
+                target_idx,
+            } => {
                 if !combat::can_play_card(state, *card_idx) {
                     return None;
                 }
@@ -771,6 +860,7 @@ impl<'a> MCTS<'a> {
         arena: &mut Arena,
         chance_idx: usize,
         rng: &mut impl Rng,
+        stats: &mut SearchStats,
     ) -> (f32, usize) {
         let pending = arena.nodes[chance_idx].pending_draws;
 
@@ -797,7 +887,13 @@ impl<'a> MCTS<'a> {
         // would silently bias chance-node evaluation otherwise.
         let mut drawn_ids: Vec<String> = draw_state.player.hand[hand_before..]
             .iter()
-            .map(|c| if c.upgraded { format!("{}+", c.id) } else { c.id.clone() })
+            .map(|c| {
+                if c.upgraded {
+                    format!("{}+", c.id)
+                } else {
+                    c.id.clone()
+                }
+            })
             .collect();
         drawn_ids.sort();
         let obs_key = drawn_ids.join("|");
@@ -810,7 +906,8 @@ impl<'a> MCTS<'a> {
         }
 
         // Look for existing observation child with this key
-        let existing_idx = arena.nodes[chance_idx].observation_children
+        let existing_idx = arena.nodes[chance_idx]
+            .observation_children
             .iter()
             .find(|(k, _)| k == &obs_key)
             .map(|(_, idx)| *idx);
@@ -823,14 +920,14 @@ impl<'a> MCTS<'a> {
                     (arena.nodes[leaf].terminal_value, leaf)
                 } else if arena.nodes[leaf].is_chance {
                     // Nested chance node (draw after draw)
-                    self.sample_chance_child(arena, leaf, rng)
+                    self.sample_chance_child(arena, leaf, rng, stats)
                 } else {
-                    let v = self.expand(arena, leaf, rng);
+                    let v = self.expand(arena, leaf, rng, stats);
                     (v, leaf)
                 };
                 (value, backup_from)
             } else {
-                let v = self.expand(arena, child_idx, rng);
+                let v = self.expand(arena, child_idx, rng, stats);
                 (v, child_idx)
             }
         } else if num_obs < max_children {
@@ -838,15 +935,18 @@ impl<'a> MCTS<'a> {
             let mut child = Node::new(Some(draw_state), Some(chance_idx), 0);
             child.enemy_ais = draw_ais;
             let child_idx = arena.alloc(child);
-            arena.nodes[chance_idx].observation_children.push((obs_key, child_idx));
-            let v = self.expand(arena, child_idx, rng);
+            arena.nodes[chance_idx]
+                .observation_children
+                .push((obs_key, child_idx));
+            let v = self.expand(arena, child_idx, rng, stats);
             (v, child_idx)
         } else {
             // Over widening limit: route to an existing child sampled by visit
             // count. Visit counts encode the empirical observation probability
             // — uniform sampling here would erase that, biasing rare-but-tracked
             // observations to be revisited as often as common ones.
-            let visit_counts: Vec<u32> = arena.nodes[chance_idx].observation_children
+            let visit_counts: Vec<u32> = arena.nodes[chance_idx]
+                .observation_children
                 .iter()
                 .map(|(_, idx)| arena.nodes[*idx].visit_count)
                 .collect();
@@ -857,14 +957,14 @@ impl<'a> MCTS<'a> {
                 let (value, backup_from) = if arena.nodes[leaf].is_terminal {
                     (arena.nodes[leaf].terminal_value, leaf)
                 } else if arena.nodes[leaf].is_chance {
-                    self.sample_chance_child(arena, leaf, rng)
+                    self.sample_chance_child(arena, leaf, rng, stats)
                 } else {
-                    let v = self.expand(arena, leaf, rng);
+                    let v = self.expand(arena, leaf, rng, stats);
                     (v, leaf)
                 };
                 (value, backup_from)
             } else {
-                let v = self.expand(arena, child_idx, rng);
+                let v = self.expand(arena, child_idx, rng, stats);
                 (v, child_idx)
             }
         }
@@ -920,7 +1020,9 @@ pub fn sample_weighted(weights: &[u32], rng: &mut impl Rng) -> usize {
 // ---------------------------------------------------------------------------
 
 fn dirichlet(alpha: f64, n: usize, rng: &mut impl Rng) -> Vec<f64> {
-    if n == 0 { return vec![]; }
+    if n == 0 {
+        return vec![];
+    }
     // Gamma(alpha, 1) sampling via Marsaglia and Tsang's method for alpha < 1
     let samples: Vec<f64> = (0..n).map(|_| gamma_sample(alpha, rng)).collect();
     let total: f64 = samples.iter().sum();
@@ -949,7 +1051,9 @@ fn gamma_sample(alpha: f64, rng: &mut impl Rng) -> f64 {
             (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos()
         };
         let v = (1.0 + c * x).powi(3);
-        if v <= 0.0 { continue; }
+        if v <= 0.0 {
+            continue;
+        }
         let u: f64 = rng.random();
         if u < 1.0 - 0.0331 * x.powi(4) {
             return d * v;
