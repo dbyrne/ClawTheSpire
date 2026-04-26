@@ -293,7 +293,7 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
     # Serve the built Next.js static export when available (prod). Falls back
     # to an explanatory JSON response if not yet built — dev mode runs the
     # Next.js dev server separately on :3000.
-    if static_dir and static_dir.exists():
+    if static_dir and static_dir.exists() and (static_dir / "_next").exists():
         # Next.js static export puts the HTML/JS under `out/`.
         app.mount("/_next", StaticFiles(directory=str(static_dir / "_next")), name="next-assets")
 
