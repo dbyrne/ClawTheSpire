@@ -168,7 +168,10 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
         if not claimed:
             def conflict_detail() -> dict | None:
                 exp_dir = _experiment_dir(str(experiment_name))
+                now = dist.utc_ts()
                 for root in dist.iter_experiment_roots(exp_dir):
+                    if not dist._root_has_claimable_status(root, now):
+                        continue
                     shared = dist.read_json(root / "shared.json")
                     mismatches = dist.fingerprint_mismatches(
                         shared.get("required_worker_fingerprint"),
