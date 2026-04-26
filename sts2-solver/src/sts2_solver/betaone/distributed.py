@@ -29,6 +29,8 @@ DEFAULT_LEASE_S = 240.0
 MIN_LEASE_S = 60.0
 MAX_LEASE_S = 240.0
 _CLAIM_LOCK = threading.Lock()
+_CLAIMABLE_CACHE_LOCK = threading.Lock()
+_CLAIMABLE_CACHE: dict[Path, tuple[float, bool]] = {}
 
 
 @contextmanager
@@ -502,11 +504,19 @@ def _status_is_claimable(status: dict, now: float) -> bool:
     return False
 
 
-def _root_has_claimable_status(root: Path, now: float) -> bool:
+def _root_has_claimable_status(root: Path, now: float, *, ttl_s: float = 1.0) -> bool:
+    with _CLAIMABLE_CACHE_LOCK:
+        cached = _CLAIMABLE_CACHE.get(root)
+        if cached and now - cached[0] < ttl_s:
+            return cached[1]
     for sp in status_dir(root).glob("*.json"):
         status = read_json(sp)
         if _status_is_claimable(status, now):
+            with _CLAIMABLE_CACHE_LOCK:
+                _CLAIMABLE_CACHE[root] = (now, True)
             return True
+    with _CLAIMABLE_CACHE_LOCK:
+        _CLAIMABLE_CACHE[root] = (now, False)
     return False
 
 
@@ -607,7 +617,8 @@ def claim_next_job(
     for name, exp_dir in experiments:
         if experiment and name != experiment:
             continue
-        for root in iter_experiment_roots(exp_dir):
+        roots = iter_experiment_roots(exp_dir)
+        for root in roots[:1]:
             claimed = claim_next_job_in_root(
                 root,
                 worker_id=worker_id,

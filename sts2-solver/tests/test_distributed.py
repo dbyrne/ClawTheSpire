@@ -305,3 +305,31 @@ def test_claim_skips_completed_locked_root(tmp_path):
 
     assert claimed is None
     assert time.perf_counter() - started < 1.0
+
+
+def test_claim_only_considers_latest_generation(tmp_path):
+    exp_dir = tmp_path / "exp-a"
+    older = exp_dir / "shards" / "gen0001"
+    latest = exp_dir / "shards" / "gen0002"
+    _write_claimable_shard(older)
+    dist.atomic_write_json(older / "plan.json", {"gen": 1})
+    dist.status_dir(latest).mkdir(parents=True)
+    dist.atomic_write_json(latest / "plan.json", {"gen": 2})
+    dist.atomic_write_json(
+        latest / "shared.json",
+        {"experiment": "exp-a", "gen": 2, "required_worker_fingerprint": None},
+    )
+    dist.atomic_write_json(
+        dist.status_path(latest, "shard-0000"),
+        {
+            "state": "done",
+            "target_combats": 8,
+            "combat_offset": 0,
+            "plan_id": "p2",
+            "shard_id": "shard-0000",
+        },
+    )
+
+    claimed = dist.claim_next_job([("exp-a", exp_dir)], worker_id="worker-a")
+
+    assert claimed is None
