@@ -224,6 +224,7 @@ class BetaOneNetwork(nn.Module):
         layers=0: tiny head (hidden → 32 → 1, ~4K params at hidden=128) — rebalanced.
         layers=1: legacy v2 head (hidden → 64 → 1, ~8K params).
         layers=3: deeper head (hidden → 256 → 128 → 64 → 1, ~74K params at hidden=128) — v3.
+        layers=5: wider+deeper head (hidden → 384 → 256 → 128 → 64 → 32 → 1, ~190K).
         """
         if layers == 0:
             return nn.Sequential(
@@ -241,6 +242,15 @@ class BetaOneNetwork(nn.Module):
                 nn.Linear(256, 128), nn.ReLU(),
                 nn.Linear(128, 64), nn.ReLU(),
                 nn.Linear(64, 1),
+            )
+        if layers == 5:
+            return nn.Sequential(
+                nn.Linear(hidden, 384), nn.ReLU(),
+                nn.Linear(384, 256), nn.ReLU(),
+                nn.Linear(256, 128), nn.ReLU(),
+                nn.Linear(128, 64), nn.ReLU(),
+                nn.Linear(64, 32), nn.ReLU(),
+                nn.Linear(32, 1),
             )
         raise ValueError(
             f"unsupported value_head_layers={layers}; add a new branch in "
