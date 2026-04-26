@@ -47,8 +47,101 @@ async def _run_dashboard_io(func, /, *args, **kwargs):
     return await loop.run_in_executor(_DASHBOARD_EXECUTOR, call)
 
 
+_COST_POLL_INTERVAL_S = float(os.environ.get("STS2_COMPANION_COST_POLL_S", "60"))
+
+
+def _discover_cost_configs() -> list[tuple[str, Path, Path]]:
+    """List (experiment_name, exp_dir, capacity_config_path) for all experiments
+    that have at least one worker-capacity*.json file. Used by the cost poller
+    so the dashboard sees fresh worker_costs.jsonl entries without any human
+    needing to run `sts2-experiment workers cost`.
+
+    First matching capacity file per experiment wins; multi-region setups are
+    expected to live in a single config file with a `regions` block.
+    """
+    from ..betaone import experiment as exp_mod
+
+    found: list[tuple[str, Path, Path]] = []
+    for name, exp_dir in exp_mod._all_experiment_sources():
+        configs = sorted(exp_dir.glob("worker-capacity*.json"))
+        if configs:
+            found.append((name, exp_dir, configs[0]))
+    return found
+
+
+def _poll_one_experiment_cost(name: str, capacity_path: Path) -> None:
+    """Snapshot one experiment's EC2 cost into its worker_costs.jsonl ledger.
+
+    Designed to be called from the cost poller. Swallows errors so one
+    experiment's misconfig (missing AWS creds, bad capacity file, etc.)
+    can't kill the polling loop for the rest. Logs to stderr.
+    """
+    import sys
+    from ..betaone import worker_orchestration as workers
+    try:
+        config = workers.load_capacity_config(str(capacity_path))
+        summary = workers.estimate_ec2_cost(
+            experiment=name,
+            config=config,
+            include_terminated=True,
+            include_recorded=True,
+        )
+        workers.record_cost_snapshot(name, summary)
+    except Exception as exc:
+        print(f"[cost-poller] {name}: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+
+
+async def _cost_poller_loop(interval_s: float) -> None:
+    """Periodically refresh every-experiment cost snapshots.
+
+    The dashboard reads the tail of worker_costs.jsonl via _cost_summary
+    in companion/data.py — without this poller, the ledger only updates
+    when someone manually runs `sts2-experiment workers cost`, leaving
+    the dashboard's "cost" panel blank for hours-long runs.
+    """
+    loop = asyncio.get_running_loop()
+    while True:
+        try:
+            configs = await loop.run_in_executor(_DASHBOARD_EXECUTOR, _discover_cost_configs)
+            for name, _exp_dir, capacity_path in configs:
+                # Run AWS query in a thread; it's blocking subprocess work.
+                await loop.run_in_executor(
+                    _DASHBOARD_EXECUTOR,
+                    _poll_one_experiment_cost,
+                    name,
+                    capacity_path,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            import sys
+            print(f"[cost-poller] loop error: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+        await asyncio.sleep(interval_s)
+
+
 def create_app(static_dir: Path | None = None) -> FastAPI:
     app = FastAPI(title="BetaOne Companion")
+
+    _cost_poller_task: list[asyncio.Task] = []  # holder; populated on startup
+
+    @app.on_event("startup")
+    async def _start_cost_poller():
+        if _COST_POLL_INTERVAL_S <= 0:
+            return  # disabled via env var
+        task = asyncio.create_task(
+            _cost_poller_loop(_COST_POLL_INTERVAL_S),
+            name="cost-poller",
+        )
+        _cost_poller_task.append(task)
+
+    @app.on_event("shutdown")
+    async def _stop_cost_poller():
+        for task in _cost_poller_task:
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
 
     # Dev: allow Next.js dev server to call the API cross-origin.
     app.add_middleware(
