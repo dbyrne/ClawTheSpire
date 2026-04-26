@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,43 @@ DEFAULT_LEASE_S = 240.0
 MIN_LEASE_S = 60.0
 MAX_LEASE_S = 240.0
 _CLAIM_LOCK = threading.Lock()
+
+
+@contextmanager
+def _coordination_lock(root: Path, *, timeout_s: float = 30.0, stale_s: float = 120.0):
+    """Cross-process lock for shard status mutations.
+
+    The in-process lock is not enough because the trainer can run local
+    fallback in a separate process, and the companion server can be restarted
+    while workers are polling. Keep this lock small: only status JSON reads and
+    writes should happen inside it.
+    """
+    lock_path = root / ".coordination.lock"
+    deadline = time.time() + timeout_s
+    fd: int | None = None
+    while fd is None:
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(fd, f"{os.getpid()} {time.time()}".encode("ascii"))
+        except FileExistsError:
+            try:
+                if time.time() - lock_path.stat().st_mtime > stale_s:
+                    lock_path.unlink()
+                    continue
+            except FileNotFoundError:
+                continue
+            if time.time() >= deadline:
+                raise TimeoutError(f"timed out waiting for coordinator lock: {lock_path}")
+            time.sleep(0.02)
+    try:
+        yield
+    finally:
+        if fd is not None:
+            os.close(fd)
+        try:
+            lock_path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def utc_ts() -> float:
@@ -487,30 +525,37 @@ def claim_next_job_in_root(
     now = utc_ts()
     lease_s = normalize_lease_s(lease_s)
     with _CLAIM_LOCK:
-        shared = read_json(root / "shared.json")
-        if fingerprint_mismatches(shared.get("required_worker_fingerprint"), worker_fingerprint):
-            return None
-        for sp in sorted(status_dir(root).glob("*.json")):
-            status = read_json(sp)
-            if not status:
-                continue
-            if not _status_is_claimable(status, now):
-                continue
-            shard_id = str(status.get("shard_id") or sp.stem)
-            if not job_path(root, shard_id).exists():
-                continue
-            status.update({
-                "state": "running",
-                "worker": worker_id,
-                "claimed_at": status.get("claimed_at") or now,
-                "updated_at": now,
-                "lease_expires_at": now + float(lease_s),
-                "attempts": int(status.get("attempts") or 0) + 1,
-            })
-            if worker_fingerprint:
-                status["worker_fingerprint"] = worker_fingerprint
-            atomic_write_json(sp, status)
-            return _load_claimed(root, shard_id)
+        with _coordination_lock(root):
+            shared = read_json(root / "shared.json")
+            if fingerprint_mismatches(shared.get("required_worker_fingerprint"), worker_fingerprint):
+                return None
+            for sp in sorted(status_dir(root).glob("*.json")):
+                status = read_json(sp)
+                if not status:
+                    continue
+                if not _status_is_claimable(status, now):
+                    continue
+                shard_id = str(status.get("shard_id") or sp.stem)
+                if not job_path(root, shard_id).exists():
+                    continue
+                previous_worker = status.get("worker")
+                first_claimed_at = status.get("first_claimed_at") or status.get("claimed_at") or now
+                status.update({
+                    "state": "running",
+                    "worker": worker_id,
+                    "first_claimed_at": first_claimed_at,
+                    "claimed_at": now,
+                    "updated_at": now,
+                    "lease_expires_at": now + float(lease_s),
+                    "attempts": int(status.get("attempts") or 0) + 1,
+                })
+                if previous_worker and previous_worker != worker_id:
+                    status["reclaimed_from"] = previous_worker
+                    status["reclaimed_at"] = now
+                if worker_fingerprint:
+                    status["worker_fingerprint"] = worker_fingerprint
+                atomic_write_json(sp, status)
+                return _load_claimed(root, shard_id)
     return None
 
 
@@ -560,38 +605,48 @@ def heartbeat(
 ) -> dict:
     sp = status_path(root, shard_id)
     with _CLAIM_LOCK:
-        status = read_json(sp)
-        if not status:
-            raise FileNotFoundError(sp)
-        if status.get("state") == "done":
-            return status
-        shared = read_json(root / "shared.json")
-        mismatches = fingerprint_mismatches(
-            shared.get("required_worker_fingerprint"),
-            worker_fingerprint or status.get("worker_fingerprint"),
-        )
-        if mismatches:
-            status["stale_heartbeat_ignored"] = {
+        with _coordination_lock(root):
+            status = read_json(sp)
+            if not status:
+                raise FileNotFoundError(sp)
+            if status.get("state") == "done":
+                return status
+            now = utc_ts()
+            current_worker = str(status.get("worker") or "")
+            if current_worker and current_worker != worker_id:
+                status["stale_heartbeat_ignored"] = {
+                    "worker": worker_id,
+                    "current_worker": current_worker,
+                    "ignored_at": now,
+                }
+                atomic_write_json(sp, status)
+                return status
+            shared = read_json(root / "shared.json")
+            mismatches = fingerprint_mismatches(
+                shared.get("required_worker_fingerprint"),
+                worker_fingerprint or status.get("worker_fingerprint"),
+            )
+            if mismatches:
+                status["stale_heartbeat_ignored"] = {
+                    "worker": worker_id,
+                    "mismatches": mismatches,
+                    "ignored_at": now,
+                }
+                atomic_write_json(sp, status)
+                return status
+            lease_s = normalize_lease_s(lease_s)
+            metrics = clean_worker_metrics(worker_metrics)
+            status.update({
+                "state": "running",
                 "worker": worker_id,
-                "mismatches": mismatches,
-                "ignored_at": utc_ts(),
-            }
+                "updated_at": now,
+                "heartbeat_at": now,
+                "lease_expires_at": now + float(lease_s),
+            })
+            if metrics:
+                status["worker_metrics"] = metrics
             atomic_write_json(sp, status)
             return status
-        now = utc_ts()
-        lease_s = normalize_lease_s(lease_s)
-        metrics = clean_worker_metrics(worker_metrics)
-        status.update({
-            "state": "running",
-            "worker": worker_id,
-            "updated_at": now,
-            "heartbeat_at": now,
-            "lease_expires_at": now + float(lease_s),
-        })
-        if metrics:
-            status["worker_metrics"] = metrics
-        atomic_write_json(sp, status)
-        return status
 
 
 def mark_failed(
@@ -604,22 +659,35 @@ def mark_failed(
 ) -> dict:
     sp = status_path(root, shard_id)
     with _CLAIM_LOCK:
-        status = read_json(sp)
-        if not status:
-            raise FileNotFoundError(sp)
-        now = utc_ts()
-        metrics = clean_worker_metrics(worker_metrics)
-        status.update({
-            "state": "failed",
-            "worker": worker_id,
-            "updated_at": now,
-            "failed_at": now,
-            "error": error[-1000:],
-        })
-        if metrics:
-            status["worker_metrics"] = metrics
-        atomic_write_json(sp, status)
-        return status
+        with _coordination_lock(root):
+            status = read_json(sp)
+            if not status:
+                raise FileNotFoundError(sp)
+            if str(status.get("state") or "").lower() == "done":
+                return status
+            now = utc_ts()
+            current_worker = str(status.get("worker") or "")
+            if current_worker and current_worker != worker_id:
+                status["stale_failure_ignored"] = {
+                    "worker": worker_id,
+                    "current_worker": current_worker,
+                    "ignored_at": now,
+                    "error": error[-1000:],
+                }
+                atomic_write_json(sp, status)
+                return status
+            metrics = clean_worker_metrics(worker_metrics)
+            status.update({
+                "state": "failed",
+                "worker": worker_id,
+                "updated_at": now,
+                "failed_at": now,
+                "error": error[-1000:],
+            })
+            if metrics:
+                status["worker_metrics"] = metrics
+            atomic_write_json(sp, status)
+            return status
 
 
 def mark_complete(
@@ -632,49 +700,50 @@ def mark_complete(
 ) -> dict:
     sp = status_path(root, shard_id)
     with _CLAIM_LOCK:
-        status = read_json(sp)
-        if not status:
-            raise FileNotFoundError(sp)
-        if str(status.get("state") or "").lower() == "done":
-            return status
-        current_worker = str(status.get("worker") or "")
-        if current_worker != worker_id:
-            status["stale_result_ignored"] = {
+        with _coordination_lock(root):
+            status = read_json(sp)
+            if not status:
+                raise FileNotFoundError(sp)
+            if str(status.get("state") or "").lower() == "done":
+                return status
+            current_worker = str(status.get("worker") or "")
+            if current_worker != worker_id:
+                status["stale_result_ignored"] = {
+                    "worker": worker_id,
+                    "current_worker": current_worker or None,
+                    "ignored_at": utc_ts(),
+                }
+                atomic_write_json(sp, status)
+                return status
+            shared = read_json(root / "shared.json")
+            mismatches = fingerprint_mismatches(
+                shared.get("required_worker_fingerprint"),
+                worker_fingerprint or status.get("worker_fingerprint"),
+            )
+            if mismatches:
+                status["stale_result_ignored"] = {
+                    "worker": worker_id,
+                    "mismatches": mismatches,
+                    "ignored_at": utc_ts(),
+                }
+                atomic_write_json(sp, status)
+                return status
+            rp = result_path(root, shard_id)
+            _atomic_write_bytes(rp, result_bytes)
+            now = utc_ts()
+            target = int(status.get("target_combats") or 0)
+            status.update({
+                "state": "done",
                 "worker": worker_id,
-                "current_worker": current_worker or None,
-                "ignored_at": utc_ts(),
-            }
+                "updated_at": now,
+                "completed_at": now,
+                "completed_combats": target,
+                "result_path": rp.relative_to(root).as_posix(),
+                "result_bytes": len(result_bytes),
+                "lease_expires_at": None,
+            })
             atomic_write_json(sp, status)
             return status
-        shared = read_json(root / "shared.json")
-        mismatches = fingerprint_mismatches(
-            shared.get("required_worker_fingerprint"),
-            worker_fingerprint or status.get("worker_fingerprint"),
-        )
-        if mismatches:
-            status["stale_result_ignored"] = {
-                "worker": worker_id,
-                "mismatches": mismatches,
-                "ignored_at": utc_ts(),
-            }
-            atomic_write_json(sp, status)
-            return status
-        rp = result_path(root, shard_id)
-        _atomic_write_bytes(rp, result_bytes)
-        now = utc_ts()
-        target = int(status.get("target_combats") or 0)
-        status.update({
-            "state": "done",
-            "worker": worker_id,
-            "updated_at": now,
-            "completed_at": now,
-            "completed_combats": target,
-            "result_path": rp.relative_to(root).as_posix(),
-            "result_bytes": len(result_bytes),
-            "lease_expires_at": None,
-        })
-        atomic_write_json(sp, status)
-        return status
 
 
 def run_selfplay_job(job: dict, shared: dict, *, onnx_path: str | Path) -> dict:

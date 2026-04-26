@@ -180,6 +180,8 @@ export interface ShardSummary {
   completed_combats: number | null;
   completion: number | null;
   updated_age_s: number | null;
+  worker_count: number;
+  active_worker_count: number;
   workers: ShardWorkerSummary[];
   recent: ShardRecent[];
 }

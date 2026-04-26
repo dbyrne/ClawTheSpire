@@ -123,6 +123,8 @@ function ShardStrip({ exp }: { exp: ExperimentSummary }) {
   const donePct = (shards.done / Math.max(shards.total, 1)) * 100;
   const runningPct = (shards.running / Math.max(shards.total, 1)) * 100;
   const issueCount = shards.failed + shards.stale;
+  const workerCount = shards.worker_count ?? shards.workers.length;
+  const activeWorkerCount = shards.active_worker_count ?? 0;
   const workerNames = shards.workers
     .filter((w) => w.worker && w.worker !== "unknown")
     .slice(0, 3)
@@ -149,7 +151,9 @@ function ShardStrip({ exp }: { exp: ExperimentSummary }) {
                   : "text-muted"
             }
           >
-            {shards.running ? `${shards.running} running` : ""}
+            {shards.running
+              ? `${shards.running} shards on ${activeWorkerCount || workerCount} workers`
+              : ""}
             {shards.running && issueCount ? " - " : ""}
             {issueCount ? `${issueCount} needs attention` : ""}
             {!shards.running && !issueCount && shards.updated_age_s != null

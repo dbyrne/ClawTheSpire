@@ -301,6 +301,12 @@ def _shard_summary(exp_dir: Path) -> dict | None:
             w["instance_id"] = metrics.get("instance_id")
             w["host"] = metrics.get("host")
 
+    known_workers = [
+        w for w in workers.values()
+        if w["worker"] and w["worker"] != "unknown"
+    ]
+    active_worker_count = sum(1 for w in known_workers if w["running"] > 0)
+
     recent = sorted(scoped, key=lambda e: e["updated_at"], reverse=True)[:8]
     latest_update = max(e["updated_at"] for e in scoped) if scoped else None
     roots = [name for name in ("shards", "selfplay_shards") if (exp_dir / name).exists()]
@@ -319,6 +325,8 @@ def _shard_summary(exp_dir: Path) -> dict | None:
         "completed_combats": completed_combats,
         "completion": completion,
         "updated_age_s": max(0.0, now - latest_update) if latest_update else None,
+        "worker_count": len(known_workers),
+        "active_worker_count": active_worker_count,
         "workers": sorted(
             workers.values(),
             key=lambda w: (
