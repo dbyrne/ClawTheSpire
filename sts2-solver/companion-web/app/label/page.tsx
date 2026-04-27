@@ -196,6 +196,7 @@ function DecisionView({
             <ActionRow
               key={a.slot}
               action={a}
+              card={lookupCard(player.hand ?? [], a.card_id)}
               totalVisits={totalVisits}
               onMarkBad={() => onSubmit("bad", a.slot)}
               disabled={disabled}
@@ -245,15 +246,24 @@ function PlayerPanel({ player }: { player: any }) {
       )}
       <div className="mt-2 text-xs">
         <div className="text-muted mb-1">Hand ({hand.length}):</div>
-        <div className="flex flex-wrap gap-1">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1">
           {hand.map((c: any, i: number) => (
-            <span
+            <div
               key={i}
-              className="mono px-1 py-0.5 bg-zinc-800 rounded border border-border"
+              className="mono px-2 py-1 bg-zinc-800 rounded border border-border"
             >
-              {c.id}
-              {c.upgraded ? "+" : ""} <span className="text-muted">({c.cost ?? "?"}E)</span>
-            </span>
+              <div className="flex justify-between items-baseline">
+                <span className="font-bold">
+                  {c.name ?? c.id}
+                  {c.upgraded ? "+" : ""}
+                </span>
+                <span className="text-muted text-[10px]">
+                  {c.is_x_cost ? "X" : (c.cost ?? "?")}E ·{" "}
+                  {(c.card_type ?? "?")[0]}
+                </span>
+              </div>
+              <CardEffectsLine card={c} />
+            </div>
           ))}
         </div>
       </div>
@@ -295,55 +305,188 @@ function EnemiesPanel({ enemies }: { enemies: any[] }) {
 
 function ActionRow({
   action,
+  card,
   totalVisits,
   onMarkBad,
   disabled,
 }: {
   action: Action;
+  card: any | null;
   totalVisits: number;
   onMarkBad: () => void;
   disabled: boolean;
 }) {
   const visitFrac = totalVisits > 0 ? action.mcts_visits / totalVisits : 0;
   const isHighlighted = action.is_network_argmax || action.is_mcts_played;
+  const verb =
+    action.type === "play_card"
+      ? "play"
+      : action.type === "choose_card"
+        ? "discard"
+        : action.type === "use_potion"
+          ? "use"
+          : "";
   return (
     <button
       onClick={onMarkBad}
       disabled={disabled}
-      className={`w-full text-left flex items-center gap-2 px-2 py-1.5 rounded border transition-colors disabled:opacity-50 ${
+      className={`w-full text-left px-2 py-1.5 rounded border transition-colors disabled:opacity-50 ${
         isHighlighted
           ? "border-accent bg-accent/10"
           : "border-border bg-panel/50 hover:border-red-500/50"
       }`}
       title="Click to mark THIS specific action as bad"
     >
-      <span className="mono text-xs text-muted w-6">[{action.slot}]</span>
-      <span className="mono text-sm flex-1">
-        {action.type === "play_card"
-          ? `play ${action.card_id}`
-          : action.type === "choose_card"
-            ? `discard ${action.card_id}`
-            : action.type === "use_potion"
-              ? `use_potion ${action.card_id}`
-              : action.type}
-      </span>
-      <div className="flex items-center gap-3 text-xs mono">
-        {action.is_network_argmax && (
-          <span className="text-accent font-bold">⭐NET</span>
-        )}
-        {action.is_mcts_played && (
-          <span className="text-yellow-400 font-bold">▶MCTS</span>
-        )}
-        <span className="w-16 text-right">
-          net {(action.net_prob * 100).toFixed(0)}%
+      <div className="flex items-center gap-2">
+        <span className="mono text-xs text-muted w-6">[{action.slot}]</span>
+        <span className="mono text-sm flex-1 truncate">
+          {action.type === "end_turn" ? (
+            <span className="italic">end turn</span>
+          ) : (
+            <>
+              {verb} <span className="font-bold">{card?.name ?? action.card_id}</span>
+              {card?.upgraded ? "+" : ""}
+            </>
+          )}
         </span>
-        <span className="w-16 text-right">
-          mcts {(visitFrac * 100).toFixed(0)}%
-        </span>
-        <span className="w-12 text-right text-muted">
-          q {action.mcts_q.toFixed(2)}
-        </span>
+        <div className="flex items-center gap-2 text-xs mono shrink-0">
+          {action.is_network_argmax && (
+            <span className="text-accent font-bold">⭐NET</span>
+          )}
+          {action.is_mcts_played && (
+            <span className="text-yellow-400 font-bold">▶MCTS</span>
+          )}
+          <span className="w-12 text-right">
+            net {(action.net_prob * 100).toFixed(0)}%
+          </span>
+          <span className="w-12 text-right">
+            mcts {(visitFrac * 100).toFixed(0)}%
+          </span>
+          <span className="w-10 text-right text-muted">
+            q {action.mcts_q.toFixed(2)}
+          </span>
+        </div>
       </div>
+      {card && action.type !== "end_turn" && (
+        <div className="ml-8 mt-0.5 text-[11px] text-muted">
+          <CardEffectsLine card={card} />
+        </div>
+      )}
     </button>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Card effect rendering — turns the structured card JSON into a one-line
+// "what does this do?" summary so the labeler doesn't need every card
+// memorized. Mirrors what the in-game card text would say.
+// ---------------------------------------------------------------------------
+
+function CardEffectsLine({ card }: { card: any }) {
+  if (!card) return null;
+  const parts: string[] = [];
+
+  // Damage
+  if (card.damage && card.damage > 0) {
+    const hits = card.hit_count ?? 1;
+    const target = formatTarget(card.target);
+    parts.push(
+      hits > 1
+        ? `${card.damage}×${hits} dmg${target ? ` ${target}` : ""}`
+        : `${card.damage} dmg${target ? ` ${target}` : ""}`,
+    );
+  }
+
+  // Block
+  if (card.block && card.block > 0) {
+    parts.push(`+${card.block} block`);
+  }
+
+  // Energy gain
+  if (card.energy_gain && card.energy_gain !== 0) {
+    parts.push(`${card.energy_gain > 0 ? "+" : ""}${card.energy_gain}E`);
+  }
+
+  // Card draw
+  if (card.cards_draw && card.cards_draw > 0) {
+    parts.push(`draw ${card.cards_draw}`);
+  }
+
+  // Self HP loss (e.g. Hemokinesis)
+  if (card.hp_loss && card.hp_loss > 0) {
+    parts.push(`lose ${card.hp_loss} HP`);
+  }
+
+  // Powers applied (Vulnerable, Weak, Poison, Strength, etc.)
+  for (const pa of card.powers_applied ?? []) {
+    if (Array.isArray(pa) && pa.length >= 2) {
+      const [name, amt] = pa;
+      const sign = amt > 0 ? "+" : "";
+      parts.push(`${sign}${amt} ${shortPower(name)}`);
+    }
+  }
+
+  // Spawned cards (e.g., Knife Trap → SHIV, Wraith Form → Smoke)
+  for (const sp of card.spawns_cards ?? []) {
+    parts.push(`spawn ${sp}`);
+  }
+
+  // Tags + keywords (Strike tag = synergizes with Pummel/etc.; Sly = discard sub-bonus)
+  const tags = (card.tags ?? []).filter(Boolean);
+  const keywords = (card.keywords ?? []).filter(Boolean);
+  const annotations = [...tags, ...keywords].filter(
+    (t: string) => !["Defend", "Strike"].includes(t), // hide redundant generic tags
+  );
+
+  return (
+    <span>
+      {parts.length > 0 ? parts.join(" · ") : <span className="italic">no direct effect</span>}
+      {annotations.length > 0 && (
+        <span className="ml-2 opacity-60">
+          {annotations.map((a: string) => `[${a}]`).join(" ")}
+        </span>
+      )}
+      {card.is_x_cost && <span className="ml-2 opacity-60">[X-cost: scales with energy]</span>}
+    </span>
+  );
+}
+
+function formatTarget(target: string | undefined): string {
+  switch (target) {
+    case "AnyEnemy":
+      return "→ enemy";
+    case "AllEnemies":
+      return "→ all enemies";
+    case "RandomEnemy":
+      return "→ random";
+    case "Self":
+      return "(self)";
+    default:
+      return "";
+  }
+}
+
+function shortPower(name: string): string {
+  // Common power abbreviations to keep the line dense
+  const map: Record<string, string> = {
+    Vulnerable: "Vuln",
+    Strength: "Str",
+    Dexterity: "Dex",
+    Poison: "Poison",
+    Weak: "Weak",
+    Frail: "Frail",
+    Intangible: "Intangible",
+    Artifact: "Artifact",
+    Block: "Block",
+    Plated_Armor: "Plate",
+    Thorns: "Thorns",
+  };
+  return map[name] ?? name;
+}
+
+function lookupCard(hand: any[], cardId: string): any | null {
+  if (!cardId || cardId === "<PAD>") return null;
+  // First match by id; multiple copies in hand are functionally identical
+  // for labeling purposes, so we don't bother distinguishing them.
+  return hand.find((c: any) => c?.id === cardId) ?? null;
 }

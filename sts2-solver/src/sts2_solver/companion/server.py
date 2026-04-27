@@ -181,6 +181,49 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
         return JSONResponse(await _run_dashboard_io(data.leaderboard))
 
     # ------------------------------------------------------------------
+    # Card descriptions (for the labeling UI)
+    # ------------------------------------------------------------------
+    # Structured stats fields (damage, block, powers_applied) miss
+    # CONDITIONAL effects like Blade of Ink ("this turn, on attack,
+    # gain Strength"). The cards.json description_raw field is the real
+    # in-game tooltip. Serve a slim {id: {description_raw, ...}} map so
+    # the labeling UI can show real text alongside structured stats.
+
+    _CARD_DATA_CACHE: dict[str, dict] | None = None
+
+    def _load_card_data() -> dict[str, dict]:
+        nonlocal _CARD_DATA_CACHE
+        if _CARD_DATA_CACHE is not None:
+            return _CARD_DATA_CACHE
+        from ..betaone.paths import REPO_ROOT
+        path = REPO_ROOT / "STS2-Agent" / "mcp_server" / "data" / "eng" / "cards.json"
+        if not path.exists():
+            _CARD_DATA_CACHE = {}
+            return _CARD_DATA_CACHE
+        with open(path, "r", encoding="utf-8") as f:
+            cards = json.load(f)
+        out: dict[str, dict] = {}
+        for c in cards:
+            cid = c.get("id")
+            if not cid:
+                continue
+            out[cid] = {
+                "name": c.get("name", cid),
+                "description": c.get("description", ""),
+                "description_raw": c.get("description_raw", ""),
+                "cost": c.get("cost"),
+                "type": c.get("type"),
+                "rarity": c.get("rarity"),
+                "target": c.get("target"),
+            }
+        _CARD_DATA_CACHE = out
+        return out
+
+    @app.get("/api/card-data")
+    async def card_data_lookup():
+        return JSONResponse(await _run_dashboard_io(_load_card_data))
+
+    # ------------------------------------------------------------------
     # Human-in-the-loop labeling
     # ------------------------------------------------------------------
     # Pool: experiments/_labels/pool/<name>.jsonl  — header + decision records
