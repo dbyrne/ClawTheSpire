@@ -145,8 +145,14 @@ Shows arch, config, progress, eval/value-eval scores (pinned to concluded_gen if
 Compare `timestamp` in progress.json to `date +%s`:
 - **< 2 min old**: Running
 - **2-10 min old**: Possibly stalled
-- **> 10 min old**: Stopped — show when it last ran
+- **> 10 min old**: Stopped — BUT verify before declaring dead. See "stopped vs reanalysing" below.
 - **Finalized (concluded_gen set)**: Done. Report the concluded gen's scores, not latest. Include `concluded_reason`.
+
+**"Stopped" vs "reanalysing" (don't kill a live trainer)**: progress.json only updates between gens. Reanalyse cycles run synchronously on the trainer machine for ~10-15 min at v3 recipe scale (`reanalyse_every=2`, `frac=0.75`, ~37.5K MCTS-1000 evaluations on a 50K-row buffer). During that window the dashboard marks the experiment STOPPED but the trainer is fine. Verify "actually stopped" by checking the python process is alive:
+```powershell
+Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.CommandLine -like "*<exp-name>*train*" }
+```
+If the trainer process is alive AND the prior gen's `betaone_history.jsonl` row has a `reanalyse_time` field with hundreds of seconds, it's reanalysing not crashed. See `feedback_reanalyse_blocks_locally.md`.
 
 ### Step 3: Compute metrics from history
 
@@ -295,5 +301,88 @@ Give ONE concrete next step, framed by the strategic context:
 **Promote heuristic:** After finalizing, a finalized gen becomes a *promotion candidate* when it beats the current `FRONTIER.md` on the primary axes (combined P+V, narrow-set combat WR on lean-decks-v1). Promotion is separate from finalize — finalize is "this is the canonical output of *this experiment*"; promote is "this is now the frontier for the runner." Don't auto-promote every finalize. A finalize with lower combined eval than current frontier but a useful Pareto trade (e.g., higher V at the cost of P) usually isn't promotion-worthy. Only promote when the new gen is the clear default. Run `sts2-experiment promote <name> <gen>` — it backs up the previous frontier and writes the scores-at-promotion into `FRONTIER.md`.
 
 **"60 gens is often too short for trunk-arch experiments" (2026-04-19):** trunk-baseline-v2 extending past gen 60 showed P-Eval +3-4 scenarios (specifically in `draw` category, which had been noise-dominated at n=4 before suite expansion). But V-Eval can regress past gen 60 as the net drifts into echo-chamber basins. Net gain over `gen 60` finalize is NOT guaranteed. Consider: does this architecture plateau by gen 30 (hploss-aux), by gen 60 (trunk-v1-ish), or still climbing past gen 60? Differs by arch — instrument first, don't assume.
+
+## Operational gotchas (debug paths)
+
+These are common failure modes you'll hit when checking on an experiment. Knowing the signature avoids the wrong-debug spiral.
+
+### Async eval failing silently with Windows encoding error
+
+**FIXED on main 2026-04-26 in commit `4e25060`** — `__init__.py` now reconfigures stdout/stderr to UTF-8 on package import.
+
+Symptom (old worktrees only): `eval_async_status: failed` for every gen in `betaone_history.jsonl`; `benchmarks/eval.jsonl` and `value_eval.jsonl` are empty or stale.
+
+Diagnostic: `cat experiments/<name>/benchmarks/eval_jobs.jsonl | tail -1` — error text says `'charmap' codec can't encode character '→' in position N`.
+
+Cause: Windows default stdout is cp1252; eval functions print em-dashes/arrows. Pre-`4e25060` code didn't reconfigure stdout.
+
+If you hit this in a worktree branched before `4e25060`:
+1. Copy `sts2-solver/src/sts2_solver/__init__.py` from main into the worktree (no need to commit; `__init__.py` doesn't affect worker fingerprint as long as you don't bump git_sha).
+2. Restart the trainer to pick up the patched module.
+3. Backfill missed gens with manual `PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m sts2_solver.betaone.experiment_cli eval <name> --checkpoint genN`.
+
+See `feedback_windows_utf8_permanent_fix.md`.
+
+### Distributed workers idle / 200/409 mix in coordinator log
+
+Symptom: `shards/genXXXX/results/` empty after expected wallclock, EC2 instances running but burning idle, `shards/genXXXX/status/shard-*.json` all `state: pending` `worker: null`.
+
+Diagnostic: `tail -50 experiments/<name>/logs/companion-api-<port>.log` — if you see a mix of `200 OK` and `409 Conflict` claim responses, it's fingerprint mismatch (per cad9756).
+
+Cause: Worker image was built at git_sha X, but the trainer's gen N plan was generated at a later git_sha Y (you committed a fix to the worktree branch after the image build).
+
+Diagnostic command: compare `shards/gen<N>/shared.json` `required_worker_fingerprint.git_sha` vs the image fingerprint in `worker_images.jsonl`.
+
+Fix: rebuild worker image (`sts2-experiment worker-image build <name> --repository ... --push`), kill old EC2 instances (`aws ec2 terminate-instances --instance-ids ...`), launch fresh fleet. Trainer continues from the same buffer sidecar — no progress lost. See `feedback_fingerprint_diagnosis.md`.
+
+### Coordinator subprocess fails on a fresh worktree
+
+Symptom: `sts2-experiment coordinator start <name> --port <p>` reports a PID but API isn't reachable; `experiments/<name>/logs/companion-api-<port>.err.log` shows `ModuleNotFoundError: No module named 'fastapi'`.
+
+Cause: `experiment_cli create/fork` doesn't install fastapi+uvicorn into the worktree venv; companion deps were historically only on main's venv.
+
+Fix:
+```
+<worktree>/sts2-solver/.venv/Scripts/pip.exe install fastapi uvicorn
+```
+Then re-start coordinator. See `feedback_worktree_companion_deps.md`.
+
+### Companion API is slow / dashboard janky
+
+Symptom: `/api/experiments` takes 4-5s+ per request; dashboard polling backs up.
+
+Cause (pre-Apr-26): no caching, full-disk-rescan per request. Fixed in main commit `0623a8d` with TTL cache. If a worktree branched off before that commit, copy `companion/data.py` from main into the worktree, commit, restart coordinator.
+
+Diagnostic: `curl -s -w "%{time_starttransfer}s\n" -o /dev/null http://127.0.0.1:<port>/api/experiments` 2-3 times. First call should be 4-5s (cold cache), subsequent calls within 10s should be <50ms. If still 4-5s, the patched data.py isn't loaded — check the running coordinator's source path. See `feedback_companion_api_caching.md`.
+
+### Reanalyse blocking trainer
+
+**Largely FIXED on main 2026-04-26** — distributed reanalyse landed in commits `effec7f` + `045bcf7`. New experiments forking from main with `distributed.enabled: true` now shard reanalyse to the EC2 worker fleet. ~2-4 min wallclock instead of 12 min, trainer doesn't freeze.
+
+If you encounter the symptom (Trainer marked STOPPED on dashboard, but the python process is alive at high RAM, gen counter doesn't advance) it's an old worktree that pre-dates the EC2 reanalyse landing. Three options:
+- Old experiment: wait it out, or set `reanalyse_every: 0` and accept the no-reanalyse compromise (compares cleanly to non-reanalyse baselines like encoder-v2-cpuct3).
+- New experiment forked from main with `distributed.enabled: true`: this should not happen — verify the worker image was built at a commit that includes `effec7f`.
+
+See `project_distributed_reanalyse.md` (architecture, `kind` shard discriminator, `shards/gen<N>-reanalyse/` layout) and `feedback_reanalyse_blocks_locally.md` (legacy / SUPERSEDED).
+
+### Cost panel blank on the dashboard
+
+**FIXED on main 2026-04-26** — `companion/server.py` now runs a 60s background poller that calls `estimate_ec2_cost` + `record_cost_snapshot` for every experiment with a `worker-capacity*.json` file. Dashboard's `worker_cost` field populates within ~60s of coordinator startup.
+
+If a coordinator pre-dates this fix (commit `eabed43`), copy `companion/server.py` from main into the worktree's src/ and restart the coordinator. The patch doesn't affect worker fingerprint — server-side only.
+
+To force an immediate refresh: `sts2-experiment workers cost <name> --config <path> --region us-east-1` (writes a snapshot directly; the API picks it up immediately).
+
+To disable polling: `STS2_COMPANION_COST_POLL_S=0` in the coordinator env (e.g., for tests). See `project_companion_cost_poller.md`.
+
+### Worktree config.yaml dropping derived arch fields (params, state_dim, trunk_input)
+
+Symptom: `params: None` in the API response for an experiment, or dashboard's "params" panel is blank.
+
+Cause: someone (often Claude) used `Write` instead of `Edit` to modify the worktree's `config.yaml`. `Experiment.create` populates `architecture.total_params` / `state_dim` / `trunk_input` at creation; these are derived fields that need explicit preservation when rewriting the file. `Write` clobbers them.
+
+Fix: re-add the missing fields via `Edit`. To compute them: load the network with the right kwargs and `sum(p.numel() for p in net.parameters())`. STATE_DIM and BASE_STATE_DIM are module-level constants in network.py; trunk_input == BASE_STATE_DIM + HAND_PROJ_DIM (+ pile contributions if arch_version=3).
+
+See `feedback_config_rewrite_drops_derived.md` (memory captures this as a recurring pattern). Going forward: prefer `Edit` over `Write` for config.yaml tweaks.
 
 Always show both the raw numbers AND their interpretation in the larger context. A flat combat WR + climbing eval is a success story under our framing; an old report template would call it "no progress" incorrectly.
