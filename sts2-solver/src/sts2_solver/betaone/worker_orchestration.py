@@ -34,6 +34,8 @@ DEFAULT_INSTANCE_TYPES = [
     "m7a.4xlarge",
     "m6i.4xlarge",
 ]
+DEFAULT_THREADS_PER_WORKER = 1
+DEFAULT_WORKER_COUNT: str | int = "auto"
 
 FINGERPRINT_PATHS = [
     "sts2-solver/Dockerfile.worker",
@@ -613,8 +615,8 @@ def make_launch_plan(
     image: str | None = None,
     image_record: dict[str, Any] | None = None,
     coordinator_url: str | None = None,
-    threads_per_worker: int = 1,
-    worker_count: str | int = "auto",
+    threads_per_worker: int | None = None,
+    worker_count: str | int | None = None,
     market: str = "spot",
 ) -> LaunchPlan:
     config = config or {}
@@ -632,6 +634,11 @@ def make_launch_plan(
             image = str(image_record["image"])
         else:
             raise ValueError("worker image is required; build one or pass --image")
+
+    if threads_per_worker is None:
+        threads_per_worker = config.get("threads_per_worker", DEFAULT_THREADS_PER_WORKER)
+    if worker_count is None:
+        worker_count = config.get("worker_count", DEFAULT_WORKER_COUNT)
 
     max_workers = int(max_workers)
     if max_workers < 1:

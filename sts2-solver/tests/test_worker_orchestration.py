@@ -58,6 +58,31 @@ def test_launch_plan_caps_last_instance_worker_count(monkeypatch):
     assert plan.planned_workers == 17
 
 
+def test_launch_plan_reads_worker_shape_from_capacity_config(monkeypatch):
+    monkeypatch.setattr(workers, "experiment_git_sha", lambda name: "abc")
+    monkeypatch.setattr(workers, "describe_instance_vcpus", lambda instance_type, region: 32)
+    config = {
+        "coordinator_url": "http://100.100.101.1:8765",
+        "ami": "ami-test",
+        "security_group_id": "sg-test",
+        "subnet_id": "subnet-test",
+        "threads_per_worker": 1,
+        "worker_count": 16,
+    }
+
+    plan = workers.make_launch_plan(
+        experiment="exp-a",
+        max_workers=32,
+        config=config,
+        regions=["us-east-1"],
+        instance_types=["c7i.8xlarge"],
+        image="700694289572.dkr.ecr.us-east-1.amazonaws.com/sts2-worker:exp-a-abc",
+    )
+
+    assert [unit.workers for unit in plan.units] == [16, 16]
+    assert [unit.threads_per_worker for unit in plan.units] == [1, 1]
+
+
 def test_latest_image_record_can_select_generation_sha(tmp_path, monkeypatch):
     exp_dir = tmp_path / "experiments" / "exp-a"
     gen_root = exp_dir / "shards" / "gen0005"

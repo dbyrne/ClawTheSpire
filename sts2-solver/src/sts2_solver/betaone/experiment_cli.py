@@ -1710,9 +1710,10 @@ def main():
                             help="AWS region; repeat or comma-separate for region diversity")
         parser.add_argument("--instance-type", action="append", default=[],
                             help="Allowed EC2 instance type; repeat or comma-separate")
-        parser.add_argument("--threads-per-worker", type=int, default=1)
-        parser.add_argument("--worker-count", default="auto",
-                            help="'auto' or an explicit worker count per instance")
+        parser.add_argument("--threads-per-worker", type=int, default=None,
+                            help="Threads per worker container (default: capacity config, otherwise 1)")
+        parser.add_argument("--worker-count", default=None,
+                            help="'auto' or an explicit worker count per instance (default: capacity config, otherwise auto)")
         parser.add_argument("--market", choices=["spot", "on-demand"], default="spot")
 
     wp = wsp.add_parser("plan", help="Show an EC2 launch plan without launching")
