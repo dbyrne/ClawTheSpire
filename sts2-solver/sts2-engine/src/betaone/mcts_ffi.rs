@@ -7,7 +7,7 @@ use rand::rngs::StdRng;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
-use crate::actions::enumerate_actions;
+use crate::actions::{enumerate_actions, MaskEndTurnGuard};
 use crate::combat;
 use crate::enemy;
 use crate::mcts::MCTS;
@@ -77,7 +77,11 @@ pub fn run_betaone_combat_core(
     num_sims: usize,
     temperature: f32,
     rng: &mut StdRng,
+    mask_end_turn: bool,
 ) -> BetaOneCombatOutcome {
+    // Active for the lifetime of this combat. Restored on drop, so callers
+    // running back-to-back combats on the same thread don't leak the flag.
+    let _mask_guard = MaskEndTurnGuard::new(mask_end_turn);
     let adapter = BetaOneMCTSAdapter::new(inference, card_vocab);
     let card_db = CardDB::default();
 
@@ -258,7 +262,8 @@ pub fn run_betaone_combat_core(
     num_sims = 100,
     temperature = 0.0,
     seed = 42,
-    gen_id = 0
+    gen_id = 0,
+    mask_end_turn = false,
 ))]
 pub fn betaone_mcts_fight_combat(
     py: Python<'_>,
@@ -277,6 +282,7 @@ pub fn betaone_mcts_fight_combat(
     temperature: f32,
     seed: u64,
     gen_id: i64,
+    mask_end_turn: bool,
 ) -> PyResult<PyObject> {
     let deck: Vec<Card> = serde_json::from_str(deck_json)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("deck: {e}")))?;
@@ -320,6 +326,7 @@ pub fn betaone_mcts_fight_combat(
                 &monsters, &profiles,
                 &card_vocab, inference,
                 num_sims, temperature, &mut rng,
+                mask_end_turn,
             );
 
             Ok((outcome.outcome, outcome.final_hp, outcome.decisions))

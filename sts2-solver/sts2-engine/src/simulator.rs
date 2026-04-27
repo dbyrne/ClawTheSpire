@@ -1231,6 +1231,7 @@ fn run_combat_internal_betaone(
         &game_data.monsters, &game_data.profiles,
         card_vocab, betaone_inference,
         mcts_sims, temperature, rng,
+        false,
     );
     CombatResult {
         samples: vec![],

@@ -3,9 +3,39 @@
 //! Port of actions.py — enumerate_actions with deduplication.
 
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::combat;
 use crate::types::*;
+
+/// Process-global flag controlling whether `enumerate_actions` includes
+/// EndTurn in the candidate set. Static (not thread-local) so rayon worker
+/// threads in selfplay/rollout see the same value as the FFI-calling thread.
+/// Single-process benchmarks set/restore via `MaskEndTurnGuard` around a
+/// batch; concurrent benchmark batches with different mask values from one
+/// process aren't supported.
+static MASK_END_TURN: AtomicBool = AtomicBool::new(false);
+
+/// RAII guard that temporarily masks EndTurn from the candidate set returned
+/// by `enumerate_actions`. Used by benchmarks to test whether removing the
+/// EndTurn slot when other plays exist improves combat WR (end-turn bias
+/// diagnostic). Restores the previous value on drop.
+pub struct MaskEndTurnGuard {
+    prev: bool,
+}
+
+impl MaskEndTurnGuard {
+    pub fn new(mask: bool) -> Self {
+        let prev = MASK_END_TURN.swap(mask, Ordering::SeqCst);
+        Self { prev }
+    }
+}
+
+impl Drop for MaskEndTurnGuard {
+    fn drop(&mut self) {
+        MASK_END_TURN.store(self.prev, Ordering::SeqCst);
+    }
+}
 
 /// List all legal actions from the current state.
 pub fn enumerate_actions(state: &CombatState) -> Vec<Action> {
@@ -50,7 +80,11 @@ pub fn enumerate_actions(state: &CombatState) -> Vec<Action> {
     // If no cards/potions are playable, the caller auto-ends the turn
     // without asking the network — this keeps EndTurn semantically
     // meaningful ("I'm choosing to stop despite having options").
-    if !actions.is_empty() {
+    //
+    // When MASK_END_TURN is set (benchmark-only), we skip pushing EndTurn
+    // entirely; the caller's empty-actions path still auto-ends when no
+    // cards/potions are playable.
+    if !actions.is_empty() && !MASK_END_TURN.load(Ordering::Relaxed) {
         actions.push(Action::EndTurn);
     }
     actions

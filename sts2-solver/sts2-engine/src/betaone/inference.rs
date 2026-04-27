@@ -20,16 +20,38 @@ pub struct BetaOneInference {
 
 impl BetaOneInference {
     pub fn new(model_path: &str) -> Result<Self, ort::Error> {
+        Self::new_with_options(model_path, false)
+    }
+
+    /// `deterministic=true` enables ORT's deterministic compute kernels
+    /// and forces sequential inter-op execution. This eliminates the
+    /// run-to-run variability that ONNX's parallel-reduction kernels
+    /// introduce in float ops at intra=1, which (per A/B benchmarks)
+    /// produces ~15% paired-discordance noise even with fixed RNG seeds.
+    /// Comes at a perf cost; only use for benchmarks/diagnostics.
+    pub fn new_with_options(model_path: &str, deterministic: bool) -> Result<Self, ort::Error> {
         // CPU stays as the default. GPU (DirectML / CUDA) was benchmarked
         // and loses at batch=1 — kernel launch + transfer overhead swamps
         // the compute win for a 72K-param model. GPU only beats CPU once
         // batch ≥ ~32 (see examples/bench_inference.rs). Getting there
         // requires virtual-loss MCTS or cross-thread request batching,
         // neither of which is in place yet.
-        let session = Session::builder()?
+        let mut builder = Session::builder()?
             .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level3)?
-            .with_intra_threads(1)?
-            .commit_from_file(model_path)?;
+            .with_intra_threads(1)?;
+        if deterministic {
+            builder = builder
+                .with_inter_threads(1)?
+                .with_parallel_execution(false)?
+                .with_deterministic_compute(true)?
+                // Memory-pattern optimization reuses tensor allocations
+                // across runs. The reuse pattern depends on prior calls'
+                // shapes, which subtly shifts float-summation order in
+                // some kernels and produces run-to-run differences. Off
+                // for benchmarks. (Adds maybe 5-10% per-call latency.)
+                .with_memory_pattern(false)?;
+        }
+        let session = builder.commit_from_file(model_path)?;
         Ok(BetaOneInference {
             session: RefCell::new(session),
         })

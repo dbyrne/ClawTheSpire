@@ -12,7 +12,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
-use crate::actions::enumerate_actions;
+use crate::actions::{enumerate_actions, MaskEndTurnGuard};
 use crate::combat;
 use crate::enemy;
 use crate::mcts::MCTS;
@@ -342,7 +342,9 @@ fn run_selfplay_combat(
     noise_frac = 0.25,
     pw_k = 1.0,
     player_hps_json = "",
-    potions_per_combat_json = ""
+    potions_per_combat_json = "",
+    mask_end_turn = false,
+    deterministic = false,
 ))]
 pub fn betaone_mcts_selfplay(
     py: Python<'_>,
@@ -369,6 +371,8 @@ pub fn betaone_mcts_selfplay(
     pw_k: f32,
     player_hps_json: &str,
     potions_per_combat_json: &str,
+    mask_end_turn: bool,
+    deterministic: bool,
 ) -> PyResult<PyObject> {
     let decks: Vec<Vec<Card>> = serde_json::from_str(decks_json)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("decks: {e}")))?;
@@ -403,11 +407,20 @@ pub fn betaone_mcts_selfplay(
     };
     let empty_relics: HashSet<String> = HashSet::new();
     let onnx = onnx_path.to_string();
-    let cache_key = format!("{}:{}", onnx_path, gen_id);
+    // Determinism flag is part of cache_key so flipping the mode forces a
+    // session reload — otherwise a prior non-deterministic session would
+    // be reused for a deterministic call and we'd silently keep the
+    // run-to-run noise we are trying to remove.
+    let cache_key = format!("{}:{}:det={}", onnx_path, gen_id, deterministic);
 
     // Release GIL and run combats in parallel
     let results = py.allow_threads(move || {
         use rayon::prelude::*;
+
+        // Guard sets a process-global atomic that enumerate_actions reads;
+        // dropped at end-of-block, so per-batch mask_end_turn=true does not
+        // leak into a subsequent unmasked batch from the same process.
+        let _mask_guard = MaskEndTurnGuard::new(mask_end_turn);
 
         seeds
             .into_par_iter()
@@ -435,7 +448,7 @@ pub fn betaone_mcts_selfplay(
                         None => true,
                     };
                     if needs_reload {
-                        match BetaOneInference::new(&onnx) {
+                        match BetaOneInference::new_with_options(&onnx, deterministic) {
                             Ok(inf) => {
                                 *cache = Some(CachedSelfPlay {
                                     cache_key: cache_key.clone(),

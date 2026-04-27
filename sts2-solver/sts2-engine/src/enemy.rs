@@ -178,8 +178,13 @@ impl EnemyAI {
             };
         }
 
-        // Weighted random selection
-        let keys: Vec<&String> = weights.keys().collect();
+        // Weighted random selection. Keys must be sorted: HashMap iteration
+        // order in Rust depends on a per-process RandomState seeded from
+        // system entropy, so without a sort the same RNG draw selects
+        // different intents across runs — verified as the source of the
+        // 12-15% paired-discordance noise floor in mask A/B benchmarks.
+        let mut keys: Vec<&String> = weights.keys().collect();
+        keys.sort();
         let total: f64 = weights.values().sum();
         let r = rng.random::<f64>() * total;
         let mut cumulative = 0.0;
