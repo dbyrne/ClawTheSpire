@@ -22,6 +22,8 @@ sts2-solver/training*.log
 sts2-solver/companion-api*.log
 sts2-solver/overnight_benchmarks.log
 sts2-solver/experiments/_watchdog/
+sts2-solver/experiments/_labels/
+*.tsbuildinfo
 .env
 .env.local
 supabase/.temp/
